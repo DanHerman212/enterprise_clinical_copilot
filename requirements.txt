@@ -1,0 +1,15 @@
+# Core data-representation phase only.
+# Modeling/serving libraries are deliberately omitted; they will be added
+# in their own requirements file when those phases begin.
+
+# --- BigQuery access ---
+google-cloud-bigquery>=3.25.0
+google-cloud-bigquery-storage>=2.25.0
+google-auth>=2.30.0
+db-dtypes>=1.2.0          # required for BQ -> pandas with DATE/TIME types
+pyarrow>=16.0.0           # BigQuery Storage API + parquet
+
+# --- Notebook / dataframes ---
+pandas>=2.2.0
+ipykernel>=6.29.0
+jupyter>=1.0.0

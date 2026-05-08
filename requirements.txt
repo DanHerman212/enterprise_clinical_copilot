@@ -16,3 +16,7 @@ jupyter>=1.0.0
 
 # --- Clinical baselines (LACE / HOSPITAL evaluation) ---
 scikit-learn>=1.5.0       # AUROC / AUPRC for baseline scores
+
+# --- Experiment tracking (Phase B) ---
+google-cloud-aiplatform>=1.71.0   # Vertex AI Experiments SDK
+google-cloud-storage>=2.18.0      # write artifacts (test scores, eval CSV) to GCS

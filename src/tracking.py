@@ -169,6 +169,21 @@ def upload_html(run_name: str, name: str, html: str) -> str:
     return upload_text(run_name, name, html, content_type="text/html; charset=utf-8")
 
 
+def gcs_view_url(uri: str) -> str:
+    """Return the authenticated browser URL for a ``gs://bucket/path`` URI.
+
+    ``https://storage.cloud.google.com/<bucket>/<path>`` resolves through
+    the user's Google sign-in (no public exposure) and lets the browser
+    render the object inline — for ``text/html`` that means the page
+    renders directly instead of forcing a download.
+
+    Pass-through for non-``gs://`` inputs so callers can use it blindly.
+    """
+    if not uri.startswith("gs://"):
+        return uri
+    return "https://storage.cloud.google.com/" + uri[len("gs://"):]
+
+
 def register_artifact(
     uri: str,
     *,
@@ -184,6 +199,11 @@ def register_artifact(
     exists in the MetadataStore but does not appear in the run's Artifacts
     tab in the console — the lineage edge is what the UI keys on.
 
+    For ``gs://`` URIs this also injects ``view_url`` into the artifact
+    metadata so the artifact detail page in the Vertex console shows a
+    clickable browser-renderable link (e.g. HTML reports open inline
+    instead of forcing a GCS download).
+
     Must be called inside an active ``log_run`` / ``aiplatform.start_run``
     block so the execution is associated with the right run.
 
@@ -191,11 +211,15 @@ def register_artifact(
 
     Returns the artifact resource name.
     """
+    md: dict[str, Any] = dict(metadata) if metadata else {}
+    if uri.startswith("gs://") and "view_url" not in md:
+        md["view_url"] = gcs_view_url(uri)
+
     art = aiplatform.Artifact.create(
         schema_title=schema_title,
         uri=uri,
         display_name=display_name,
-        metadata=dict(metadata) if metadata else None,
+        metadata=md or None,
     )
     with aiplatform.start_execution(
         schema_title="system.ContainerExecution",

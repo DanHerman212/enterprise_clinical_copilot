@@ -16,6 +16,7 @@ jupyter>=1.0.0
 
 # --- Clinical baselines (LACE / HOSPITAL evaluation) ---
 scikit-learn>=1.5.0       # AUROC / AUPRC for baseline scores
+matplotlib>=3.8.0         # ROC / PR / calibration plots logged to Vertex runs
 
 # --- Experiment tracking (Phase B) ---
 google-cloud-aiplatform>=1.71.0   # Vertex AI Experiments SDK

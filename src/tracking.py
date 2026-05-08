@@ -149,6 +149,90 @@ def upload_text(run_name: str, name: str, text: str, content_type: str = "text/p
     return f"{config.GCS_BUCKET_URI}/{blob_path}"
 
 
+def upload_figure(run_name: str, name: str, fig: Any, *, dpi: int = 120) -> str:
+    """Upload a matplotlib ``Figure`` as PNG under the run's artifact prefix.
+
+    ``matplotlib`` is imported lazily so it is not required at module import.
+    Returns the full ``gs://...`` URI.
+    """
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight")
+    buf.seek(0)
+    blob_path = f"artifacts/{run_name}/{name}"
+    blob = _bucket().blob(blob_path)
+    blob.upload_from_string(buf.getvalue(), content_type="image/png")
+    return f"{config.GCS_BUCKET_URI}/{blob_path}"
+
+
+def upload_html(run_name: str, name: str, html: str) -> str:
+    """Upload an HTML report under the run's artifact prefix."""
+    return upload_text(run_name, name, html, content_type="text/html; charset=utf-8")
+
+
+def register_artifact(
+    uri: str,
+    *,
+    display_name: str,
+    schema_title: str = "system.Artifact",
+    metadata: Mapping[str, Any] | None = None,
+) -> str:
+    """Register a GCS object as a Vertex AI Artifact tied to the active run.
+
+    Creates the Artifact in the MetadataStore *and* links it to the active
+    :func:`log_run` via a short-lived :class:`Execution` (lineage edge:
+    ``execution -> output -> artifact``). Without this lineage the Artifact
+    exists in the MetadataStore but does not appear in the run's Artifacts
+    tab in the console — the lineage edge is what the UI keys on.
+
+    Must be called inside an active ``log_run`` / ``aiplatform.start_run``
+    block so the execution is associated with the right run.
+
+    Schemas: ``system.Artifact`` (generic), ``system.HTML``, ``system.Metrics``.
+
+    Returns the artifact resource name.
+    """
+    art = aiplatform.Artifact.create(
+        schema_title=schema_title,
+        uri=uri,
+        display_name=display_name,
+        metadata=dict(metadata) if metadata else None,
+    )
+    with aiplatform.start_execution(
+        schema_title="system.ContainerExecution",
+        display_name=f"register:{display_name}",
+    ) as exc:
+        exc.assign_output_artifacts([art])
+    return art.resource_name
+
+
+def log_classification_curve(
+    y_true: Any,
+    y_score: Any,
+    *,
+    display_name: str,
+) -> None:
+    """Log a Vertex-native classification ROC curve for one classifier.
+
+    Renders interactively in the Vertex Experiments console under the
+    current run. Call once per classifier (e.g. once for LACE, once for
+    HOSPITAL); ``display_name`` distinguishes them.
+    """
+    import numpy as np
+    from sklearn.metrics import roc_curve
+
+    y_true_arr = np.asarray(y_true).astype(int)
+    fpr, tpr, thr = roc_curve(y_true_arr, y_score)
+    # roc_curve prepends inf to thresholds; clip to a finite value so the
+    # payload serializes cleanly.
+    thr = np.where(np.isfinite(thr), thr, 1.0)
+    aiplatform.log_classification_metrics(
+        fpr=fpr.tolist(),
+        tpr=tpr.tolist(),
+        threshold=thr.tolist(),
+        display_name=display_name,
+    )
+
+
 def run_console_url(run_name: str, experiment: str = config.EXPERIMENT_NAME) -> str:
     return (
         f"https://console.cloud.google.com/vertex-ai/experiments/locations/"

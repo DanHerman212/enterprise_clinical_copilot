@@ -41,6 +41,19 @@ SPLITS_TABLE: str         = f"{BQ_DATASET_FQN}.cohort_splits"
 # Created in Phase C:
 FEATURES_TABLE: str       = f"{BQ_DATASET_FQN}.cohort_features"
 
+# Feature-set version. Logged as a run param by every later model run
+# so each experiment row is traceable to a specific feature contract.
+# Bump whenever the schema of `cohort_features` changes.
+FEATURES_VERSION: str = "v1"
+
+# --- MIMIC-IV source datasets (PhysioNet public project) --------------
+MIMIC_PROJECT: str  = "physionet-data"
+MIMIC_HOSP: str     = f"{MIMIC_PROJECT}.mimiciv_3_1_hosp"
+MIMIC_ICU: str      = f"{MIMIC_PROJECT}.mimiciv_3_1_icu"
+MIMIC_DERIVED: str  = f"{MIMIC_PROJECT}.mimiciv_3_1_derived"
+MIMIC_ED: str       = f"{MIMIC_PROJECT}.mimiciv_ed"
+MIMIC_NOTE: str     = f"{MIMIC_PROJECT}.mimiciv_note"
+
 # --- Data versioning --------------------------------------------------
 MIMIC_VERSION: str = "v3_1"
 

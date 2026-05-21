@@ -114,6 +114,22 @@ Source of record: [MIMIC-IV Readmission Prediction Research.txt](../MIMIC-IV%20R
   2026-05-04. Splits ordered by index `admittime` to simulate prospective
   deployment; no patient appears in more than one fold.
 
+## 11. Time anchor for vitals (last-24h window)
+- **Why it matters:** Issue #6 fixed the default prediction-time anchor at
+  hospital `dischtime`. Applying that literally to vitals is wrong in
+  practice: `mimiciv_3_1_derived.vitalsign` is the ICU-only pivot of
+  `chartevents`, and most ICU patients are stepped down to a floor before
+  hospital discharge. A `[dischtime − 24h, dischtime]` window therefore
+  matches ~3 % of the cohort even though ~17 % had an ICU stay.
+- **Status:** RESOLVED — anchor vitals to `icustays.outtime` — 2026-05-21.
+  Window is `[icu_outtime − 24h, icu_outtime]` with a safety guard
+  `icu_outtime <= dischtime`. For admissions with multiple ICU stays, events
+  from any stay's last 24 h are aggregated; `*_last_24h` resolves to the
+  most recent reading overall (i.e. before final ICU discharge for the
+  admission). Coverage rose from 0.027 → 0.157, tracking the cohort's
+  severity (ICU) coverage of 0.174. Documented in
+  `feature_engineering.ipynb` Family 5 markdown.
+
 ---
 
 ## Resolution log

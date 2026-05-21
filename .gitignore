@@ -41,6 +41,7 @@ data/
 *.h5
 *.onnx
 models/
+artifacts/
 
 # --- Editor / OS -----------------------------------------------------------
 .DS_Store

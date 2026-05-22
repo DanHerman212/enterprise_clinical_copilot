@@ -39,12 +39,16 @@ HOSPITAL_TABLE: str       = f"{BQ_DATASET_FQN}.cohort_hospital"
 BASELINES_TABLE: str      = f"{BQ_DATASET_FQN}.cohort_baselines"
 SPLITS_TABLE: str         = f"{BQ_DATASET_FQN}.cohort_splits"
 # Created in Phase C:
-FEATURES_TABLE: str       = f"{BQ_DATASET_FQN}.cohort_features"
+FEATURES_TABLE: str       = f"{BQ_DATASET_FQN}.cohort_features_v2"
 
 # Feature-set version. Logged as a run param by every later model run
 # so each experiment row is traceable to a specific feature contract.
 # Bump whenever the schema of `cohort_features` changes.
-FEATURES_VERSION: str = "v1"
+# v1: 74 raw features (Phase C output).
+# v2: 68 features after Phase E selection + per-feature missingness policy
+#     (see docs/feature_shortlist_v2.md). Materialized as a BQ view that
+#     projects from cohort_features.
+FEATURES_VERSION: str = "v2"
 
 # --- MIMIC-IV source datasets (PhysioNet public project) --------------
 MIMIC_PROJECT: str  = "physionet-data"

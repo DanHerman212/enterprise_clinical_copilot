@@ -18,6 +18,15 @@ jupyter>=1.0.0
 scikit-learn>=1.5.0       # AUROC / AUPRC for baseline scores
 matplotlib>=3.8.0         # ROC / PR / calibration plots logged to Vertex runs
 
+# --- Phase D: data validation (Evidently OSS) ---
+evidently>=0.6            # schema, data quality, and drift detection (PSI/KS/chi-square) with HTML reports
+
+# --- Phase E: EDA + feature selection ---
+scipy>=1.13               # hierarchical clustering (linkage) for redundancy analysis
+lightgbm>=4.3             # multivariate signal baseline for permutation importance
+shap>=0.46                # tree-SHAP explanations for the LightGBM baseline
+seaborn>=0.13             # correlation heatmaps / bivariate plots
+
 # --- Experiment tracking (Phase B) ---
 google-cloud-aiplatform>=1.71.0   # Vertex AI Experiments SDK
 google-cloud-storage>=2.18.0      # write artifacts (test scores, eval CSV) to GCS

@@ -8,73 +8,14 @@
 
 ```mermaid
 flowchart LR
-  %% ---- Sources ----
-  subgraph SRC["Sources"]
-    MIMIC[(MIMIC-IV<br/>PhysioNet)]
-  end
+  DATA["Data<br/>(warehouse + features)"]
+  PIPE["Pipelines<br/>(orchestration)"]
+  TRAIN["Training<br/>(experiments + registry)"]
+  SERVE["Serving<br/>(inference API)"]
+  MON["Monitoring<br/>(drift + logs + UI)"]
 
-  %% ---- Step 2: Data representation ----
-  subgraph DATA["2 · Data representation"]
-    direction TB
-    S2A["2a · Cohort<br/>creation"]
-    S2B["2b · Feature<br/>engineering"]
-    S2C["2c · Missingness<br/>+ validation"]
-    S2D["2d · EDA"]
-    S2E["2e · Feature<br/>selection"]
-    S2A --> S2B --> S2C --> S2D --> S2E
-  end
-
-  %% ---- Step 3: Model development ----
-  subgraph MODEL["3 · Model development"]
-    direction TB
-    M_BASE["Baseline<br/>(logistic reg.)"]
-    M_PROD["Candidate<br/>(GBM, calibrated)"]
-    M_EVAL["Evaluate<br/>(AUPRC, calib.)"]
-    M_BASE --> M_EVAL
-    M_PROD --> M_EVAL
-  end
-
-  %% ---- Step 4: Deployment ----
-  subgraph DEPLOY["4 · Deployment"]
-    direction TB
-    SVC["Inference<br/>service (HTTP)"]
-    REG["Model registry<br/>(versioned)"]
-    REG --> SVC
-  end
-
-  %% ---- Step 5: Monitoring ----
-  subgraph MON["5 · Monitoring (separate workspace)"]
-    direction TB
-    LOGS[("Prediction<br/>logs")]
-    UI["Monitoring UI<br/>(drift · volume · health)"]
-    LOGS --> UI
-  end
-
-  %% ---- Tools (annotations) ----
-  T_BQ[/"BigQuery"/]:::tool
-  T_EV[/"Evidently"/]:::tool
-  T_ZEN[/"ZenML Pro"/]:::tool
-  T_CR[/"Cloud Run /<br/>Vertex Endpoint"/]:::tool
-
-  %% ---- Wiring ----
-  S1["1 · Define<br/>prediction task"] --> DATA
-  MIMIC --> S2A
-  DATA --> MODEL
-  MODEL --> REG
-  SVC --> LOGS
-  S2C -. drift baseline .-> UI
-
-  %% Tool attachments
-  T_BQ -.-> S2A
-  T_BQ -.-> S2B
-  T_EV -.-> S2C
-  T_ZEN -.-> MODEL
-  T_ZEN -.-> REG
-  T_CR -.-> SVC
-
-  classDef tool fill:#eef,stroke:#88a,color:#225,font-size:11px;
-  classDef step fill:#fff,stroke:#444;
-  class S1,S2A,S2B,S2C,S2D,S2E,M_BASE,M_PROD,M_EVAL,SVC,REG,UI step;
+  DATA --> PIPE --> TRAIN --> SERVE --> MON
+  MON -. feedback .-> DATA
 ```
 
 ---

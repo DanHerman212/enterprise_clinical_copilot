@@ -10,11 +10,12 @@
 flowchart LR
   DATA["Data<br/>(warehouse + features)"]
   PIPE["Pipelines<br/>(orchestration)"]
+  PREP["Validation +<br/>Preprocessing"]
   TRAIN["Training<br/>(experiments + registry)"]
   SERVE["Serving<br/>(inference API)"]
   MON["Monitoring<br/>(drift + logs + UI)"]
 
-  DATA --> PIPE --> TRAIN --> SERVE --> MON
+  DATA --> PIPE --> PREP --> TRAIN --> SERVE --> MON
   MON -. feedback .-> DATA
 ```
 
@@ -53,7 +54,7 @@ Drop features that are constant, redundant, leaky, or have too little signal. Fo
 ## 3. Model development
 
 Build two models:
-1. **Common-sense baseline** — logistic regression with class weighting. The number every fancy model has to beat.
+1. **Common-sense baseline** — an existing published risk equation (e.g., the **HOSPITAL score**) computed from our features. No training; just the formula applied to each admission. This is the number every fancy model has to beat. Report AUROC and AUPRC on our cohort.
 2. **Production candidate** — gradient-boosted trees, calibrated.
 
 Use group-aware cross-validation (no patient leaks across folds). Report AUPRC as the headline metric (prevalence is ~18%), plus calibration and a chosen operating threshold.

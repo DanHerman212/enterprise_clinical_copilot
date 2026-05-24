@@ -49,3 +49,8 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# do not upload the archive folder to github
+Archive/
+
+.vscode/

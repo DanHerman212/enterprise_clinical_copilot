@@ -113,7 +113,7 @@ _Gate:_ validation must pass before feature matrix proceeds to modeling.
 
 **Goal.** Establish a clinical common-sense floor, then train a model with statistical power that **beats that floor on PR-AUC (average precision)**. Three artifacts are produced and compared head-to-head on the locked `test` split: (1) the **HOSPITAL score** clinical baseline, (2) an **untuned XGBoost** benchmark, (3) a **hyperparameter-tuned XGBoost** candidate. Every artifact is logged to the experiment tracker.
 
-**Scope.** This phase ends at a chosen, evaluated model. Deployment, the real-time endpoint, production monitoring/drift, and pipeline containerization are **out of scope** here and handled in Phase 4 / Phase 5. The `demo` and `production_test` splits are **not touched** in this phase.
+**Scope.** This phase delivers an orchestrated **Vertex AI / Agent-Platform training pipeline** that ends at a registered, evaluated model carrying a baseline-gate verdict. The actual real-time endpoint, production monitoring/drift, and live traffic are **out of scope** here and handled in Phase 4 / Phase 5. The `demo` and `production_test` splits are **not touched** in this phase.
 
 ### 3.0 — Split amendment (prerequisite)
 
@@ -163,6 +163,17 @@ All three artifacts are compared on the **same locked `test` split**:
 - **Confidence:** bootstrap 95% CIs on each model's AUPRC, plus a **paired bootstrap** test of (tuned XGBoost − HOSPITAL) and (tuned − default) so the improvement over the floor is shown to exclude 0.
 
 **Promotion criterion.** The candidate is accepted only if its test-AUPRC CI lies **above** the HOSPITAL floor and the paired-bootstrap difference vs HOSPITAL excludes 0.
+
+### 3.4a — Pipeline architecture: two pipelines, a baseline gate, manual promotion
+
+Phase 3 is delivered as a **Vertex AI / Agent-Platform pipeline**, deliberately kept **separate from deployment**:
+
+- **Training pipeline (this phase).** Steps: data extraction → preprocessing → train default XGBoost (§3.2) → Optuna HPO (§3.3) → refit on best params → evaluate vs the HOSPITAL floor (§3.4) → **register the model + emit a promotion-decision artifact**. Re-run on every experiment; low-privilege (BigQuery + training compute only).
+- **Deployment pipeline (Phase 4, separate).** Consumes a specific *chosen* registered model version: deploy to endpoint → acceptance test on `production_test` → enable monitoring → manual traffic promotion. Triggered deliberately by a person, not by every training run.
+
+**The baseline gate (built now, controls a tag — not deployment).** A `dsl.Condition` step runs the §3.4 promotion criterion (candidate test-AUPRC CI above the HOSPITAL floor **and** paired-bootstrap difference excludes 0). On pass, the pipeline **stamps the registered model version with a `promotable` label** in the Model Registry and records the verdict in experiment tracking. It does **not** deploy. A human reviews `promotable` versions — checking calibration, operating-point PPV, and subgroup fairness, which are not yet automatable into a single boolean — and manually triggers the deployment pipeline on the version they choose.
+
+**Rationale.** Beating HOSPITAL on AUPRC is *necessary but not sufficient* for a clinical model, so a human sign-off stays between training and go-live. Separating the pipelines keeps experimental training runs fast and low-privilege, and lets the `production_test` acceptance test sit naturally in the deploy pipeline. The gate **logic** is identical to what a future fully-automated continuous-training loop would use; maturing from "gate the tag" to "gate the deployment" then becomes a one-line change rather than a rearchitecture.
 
 ### 3.5 — Experiment tracking contract
 

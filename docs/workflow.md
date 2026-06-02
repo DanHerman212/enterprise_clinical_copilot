@@ -70,6 +70,25 @@ Predict the probability that a discharged patient is readmitted within 30 days, 
 - **Domain-driven:** impute ICU severity scores (SOFA, SAPS) = 0 for non-ICU patients (normal baseline / no acute organ failure). Do **not** use median imputation (it assigns false ICU-level severity to stable floor patients).
 - **Algorithmic:** leave derived vitals as raw `NaN` and feed them to a gradient-boosted tree (XGBoost / LightGBM). Combined with `has_icu_stay`, the model learns that this missingness is informative ("stable enough to stay on the general ward").
 
+### Dataset Splits
+
+Partition by **patient** (`subject_id`) before EDA/validation so no patient's admissions span multiple subsets (~223,452 patients / ~546k admissions). **Five disjoint splits**, all carved from the same deterministic patient hash so that no `subject_id` ever appears in more than one split.
+- **Method:** `ABS(MOD(FARM_FINGERPRINT(CAST(subject_id AS STRING)), 10000))` → a deterministic, reproducible bucket (0–9999) per patient; all of a patient's admissions share one bucket.
+- **Demo (disjoint partition, carved first):** buckets 0–44 ≈ 0.45% (fraction 0.0045) ≈ ~1,000 patients. Held out from train/val/test so evaluation metrics stay pure and the notes-filtered demo doesn't bias the test set. Powers the application/agent demo (prediction endpoint + agentic RAG over discharge notes).
+- **Production test (disjoint partition, carved second):** buckets 45–94 ≈ 0.5% ≈ ~1,100 patients (≈ ~200 positive readmissions at the ~18% base rate). This is the **production holdout** — reserved now and **never touched by any model** during Phase 3. It is consumed only at deployment, to confirm that live endpoint predictions match ground-truth labels (acceptance test + drift / skew / accuracy monitoring). Sizing rationale: confidence on ranking metrics (AUPRC/AUROC) is driven by the *count of positive events*, not total rows; ~200 positives yields ≈ ±3% bootstrap CIs — tight enough to trust the pre-production acceptance gate while costing the train/test splits almost nothing.
+- **Remainder (buckets 95–9999) split 70/15/15 by patient:** train / validation / test.
+- Proportions apply to patients; per-split row counts are approximately proportional (~2.44 admissions/patient).
+- **Demo selection** additionally requires available unstructured data (see below) so the RAG demo has notes to read.
+- **Diagnostics (carved once, asserted every run):** per-split patient and admission counts, per-split readmission prevalence (expect ~18% across all five), and a hard assertion that the five buckets are mutually exclusive and exhaustive (zero patients span splits).
+
+### Unstructured Data Inventory
+
+Cursory coverage scan to confirm per-patient unstructured data for the agentic RAG demo and to validate the narrative features:
+- **Discharge summaries** — `mimiciv_note.discharge`.
+- **Radiology reports** — `mimiciv_note.radiology`.
+- **ED chief complaint** — `mimiciv_ed.triage` / `edstays`.
+- Report coverage (% of `hadm_id` / `subject_id` per source); note MIMIC-IV has no nursing/physician progress notes and coverage is partial. Prioritize demo patients who have a discharge summary.
+
 ### Exploratory Data Analysis (EDA)
 
 Purpose-driven discovery on the **training split**; its output is a data profile plus a set of expectations that feed validation and Phase 3. Answers four questions:
@@ -91,7 +110,73 @@ Operationalizes EDA's expectations as a repeatable, pass/fail gate run before Ph
 _Gate:_ validation must pass before feature matrix proceeds to modeling.
 
 ## Phase 3 — Model Training
-_TBD — train a model with statistical power that beats the common-sense baseline on PR-AUC._
+
+**Goal.** Establish a clinical common-sense floor, then train a model with statistical power that **beats that floor on PR-AUC (average precision)**. Three artifacts are produced and compared head-to-head on the locked `test` split: (1) the **HOSPITAL score** clinical baseline, (2) an **untuned XGBoost** benchmark, (3) a **hyperparameter-tuned XGBoost** candidate. Every artifact is logged to the experiment tracker.
+
+**Scope.** This phase ends at a chosen, evaluated model. Deployment, the real-time endpoint, production monitoring/drift, and pipeline containerization are **out of scope** here and handled in Phase 4 / Phase 5. The `demo` and `production_test` splits are **not touched** in this phase.
+
+### 3.0 — Split amendment (prerequisite)
+
+Phase 2's split definition is extended from four buckets to **five** (see _Dataset Splits_): `train` / `val` / `test` / `demo` / `production_test`. The `production_test` holdout (~1,100 patients, ~200 positives) is carved **now** so it is provably unseen later, but it is reserved for Phase 4/5 and never enters any Phase 3 fit or evaluation. Re-run split diagnostics and assert mutual exclusivity before proceeding.
+
+### 3.1 — Common-sense baseline: the HOSPITAL score (`test` split only)
+
+**Why HOSPITAL.** A published, externally validated risk equation for 30-day readmission, computed entirely from data available **at discharge** — no training, no leakage. It is the number every learned model must beat. The trivial floor (base-rate AP ≈ prevalence ≈ 0.18) is reported alongside it so the value-add story is unambiguous: random = prevalence, HOSPITAL = clinical floor, ML = must beat both.
+
+**Components (ordinal 0–13).**
+
+| Letter | Component | Points | Source |
+|---|---|---|---|
+| **H** | Hemoglobin < 12 g/dL at discharge | 1 | Reuse — `*_last` hematology feature |
+| **O** | Discharge from an **Oncology** service | 2 | Supplemental — `services` |
+| **S** | Sodium < 135 mEq/L at discharge | 1 | Reuse — `*_last` chemistry feature |
+| **P** | Any **procedure** during the index admission | 1 | Supplemental — `procedures_icd` |
+| **I** | Index admission is **non-elective** (urgent/emergent) | 1 | Reuse — `admission_type` feature |
+| **T** | Admissions in the **previous 365 days**: 0–1 → 0, 2–5 → 2, > 5 → 5 | 0 / 2 / 5 | Supplemental — 365-day window |
+| **AL** | Length of stay **≥ 5 days** | 2 | Derive — `dischtime` − `admittime` |
+
+Risk bands (for the secondary operating-point report only): **0–4** low, **5–6** intermediate, **≥ 7** high.
+
+**Data sourcing — reuse + one supplemental query.** Four of seven components come straight from the engineered `test`-split feature matrix; the remaining three (O, P, T) are not currently engineered features and are fetched by **one supplemental BigQuery query keyed on the test `(subject_id, hadm_id)`**, then left-joined onto the test matrix. No fully separate dataset is built. The supplemental query inherits the same temporal-cutoff discipline ($\le$ `dischtime`); the 365-day prior-admission window (T) reuses the strict leakage rule from Phase 1/2 (source `admittime` strictly < index `admittime`).
+
+**Scoring metric — continuous, not thresholded.** Average precision requires a **continuous ranking score**. The raw **0–13 HOSPITAL ordinal** is fed directly into `average_precision_score` (PR-AUC). The literature threshold (≥ 7 = high risk) is **not** used to compute AP — binarizing first would collapse the PR curve to a single degenerate point. The threshold is reported only as a **secondary operating point** (sensitivity / PPV / specificity / NPV at the ≥ 7 cut). Add a bootstrap 95% CI on the AP. Log the result as a tracked run.
+
+### 3.2 — Benchmark model: untuned XGBoost (default params)
+
+An out-of-the-box XGBoost classifier (default hyperparameters, native NaN handling per the Phase 2 missingness policy) trained on `train`, evaluated on `test`. This establishes "what a competent model with zero tuning achieves" — the second number the tuned candidate must improve upon, and a cheap leakage smell-test (a default model scoring suspiciously near-perfect signals a leak). Log as a tracked run.
+
+### 3.3 — Candidate model: Optuna-tuned XGBoost
+
+**Search engine.** Hyperparameter optimization uses **Optuna** (TPE sampler + Hyperband/median pruning) executing **inside a single Vertex / Agent-Platform custom job** — one container, all trials in-process. Optuna is chosen over the managed Vertex HPO tuning job (Vizier engine) because tabular XGBoost trials are cheap and numerous: the managed product's per-trial job provisioning overhead would dominate runtime with no accuracy benefit, whereas Optuna's in-process trials + aggressive pruning minimize compute, and the identical code runs locally in a notebook and unchanged in the container.
+
+**Validation protocol.** `GroupKFold(groups=subject_id)` **within `train`** so no patient leaks across folds; the held-out `test` split is never seen during the search. XGBoost early stopping is paired with Optuna pruning to terminate weak trials early. Seed the study for reproducibility.
+
+**Search space (initial).** `n_estimators`, `max_depth`, `learning_rate`, `min_child_weight`, `subsample`, `colsample_bytree`, `reg_alpha`, `reg_lambda`, `gamma`, and `scale_pos_weight` (class imbalance, ~18% prevalence). CV objective = mean fold AUPRC.
+
+**Refit & evaluate.** Retrain on the **full `train`** split with the best parameters, then score **once** on `test`. Log the study, the best trial's parameters, and the final test metrics as a tracked run.
+
+### 3.4 — Model comparison & selection
+
+All three artifacts are compared on the **same locked `test` split**:
+- **Headline:** PR-AUC (average precision) — the Phase 1 evaluation metric. Prevalence is ~18%, so AUPRC is the decision metric.
+- **Secondary:** AUROC, calibration (reliability curve + Brier score), and a chosen operating threshold with its confusion-matrix metrics.
+- **Confidence:** bootstrap 95% CIs on each model's AUPRC, plus a **paired bootstrap** test of (tuned XGBoost − HOSPITAL) and (tuned − default) so the improvement over the floor is shown to exclude 0.
+
+**Promotion criterion.** The candidate is accepted only if its test-AUPRC CI lies **above** the HOSPITAL floor and the paired-bootstrap difference vs HOSPITAL excludes 0.
+
+### 3.5 — Experiment tracking contract
+
+Tracking runs on the **GCP Agent Platform** experiment tracker (Vertex AI Experiments; SDK surface unchanged from Vertex AI), single experiment **`readmission-30d`**, one run per artifact (`hospital-baseline`, `xgb-default`, `xgb-tuned`). Each run logs:
+- **Params** — cohort/feature version, split sizes & prevalence per split, random seed, git SHA, model hyperparameters (or HOSPITAL component definitions).
+- **Metrics** — test AUPRC (headline) + bootstrap CI, AUROC, Brier, secondary operating-point metrics.
+- **Artifacts** — the supplemental-query SQL (baseline), Optuna study object / importance plots (tuned), reliability and PR curves.
+
+### 3.6 — Correctness checks
+
+Lightweight, fast assertions guarding the most error-prone steps (not yet the full pipeline CI suite, which lands with deployment in Phase 4):
+- **HOSPITAL computation** — spot-check component scores against the published rubric on a handful of hand-verified admissions; assert score ∈ [0, 13].
+- **Metric integrity** — assert AP is computed on the continuous score (PR curve has multiple distinct points, not a single degenerate one); assert the base-rate AP ≈ prevalence.
+- **Leakage guards** — assert the `test` split is never referenced inside the Optuna CV loop; assert the supplemental 365-day window excludes the index admission.
 
 ## Phase 4 — Production Deployment (GCP)
 _TBD — deploy the trained model to production on GCP._

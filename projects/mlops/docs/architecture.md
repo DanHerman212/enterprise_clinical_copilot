@@ -41,10 +41,10 @@ flowchart TB
         EVAL --> PS
     end
 
-    EV --> PIPE
-    REG --> ART
-    XAI --> MON
-    XAI --> EVAL
+    P2 --> P3
+    P3 --> P4
+    P4 --> P5
+    P5 -.retraining signal.-> P3
 ```
 
 ## Components by Phase

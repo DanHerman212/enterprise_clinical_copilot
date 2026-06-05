@@ -7,6 +7,7 @@ The **HOW (design)** for the readmission-risk MLOps project: the exact component
 ```mermaid
 flowchart TB
     subgraph P2["Phase 2 — Data Representation"]
+        direction LR
         BQ["BigQuery<br/>(source tables)"]
         DF["Dataform<br/>(ELT)"]
         SPLIT["Deterministic Split<br/>(FARM_FINGERPRINT)"]
@@ -15,6 +16,7 @@ flowchart TB
     end
 
     subgraph P3["Phase 3 — Model Training"]
+        direction LR
         PIPE["Vertex AI Pipelines"]
         HPO["Optuna<br/>(HPO)"]
         SHAP["SHAP<br/>(interpretability + fairness)"]
@@ -23,6 +25,7 @@ flowchart TB
     end
 
     subgraph P4["Phase 4 — Production Deployment"]
+        direction LR
         ART["Serving Artifact<br/>(model + transforms)"]
         EP["Vertex Endpoint"]
         XAI["Explainable AI<br/>(Sampled Shapley)"]
@@ -30,6 +33,7 @@ flowchart TB
     end
 
     subgraph P5["Phase 5 — Monitoring & Correctness"]
+        direction LR
         MON["Vertex Model Monitoring<br/>(input + attribution drift)"]
         EVAL["Scheduled Eval Job<br/>(AUCPR vs baseline)"]
         PS["Pub/Sub<br/>(retraining signal)"]

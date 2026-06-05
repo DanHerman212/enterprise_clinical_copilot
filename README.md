@@ -15,11 +15,15 @@ flowchart LR
   ML["Vertex AI Pipelines<br/>(train + endpoint)"]
   RAG["Agentic RAG<br/>(Vector Search)"]
   AG["Orchestration Agent<br/>(Agent Engine)"]
+  SP[" "]:::spacer
   DJ["Django + A2UI<br/>(UI / harness)"]
 
   BQ --> DF --> ML --> AG
   RAG --> AG --> DJ
   DF -.notes.-> RAG
+  AG ~~~ SP
+
+  classDef spacer fill:none,stroke:none;
 ```
 
 ## Status

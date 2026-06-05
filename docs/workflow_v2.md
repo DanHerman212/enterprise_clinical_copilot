@@ -1,5 +1,37 @@
  # Readmission Risk — ML Workflow
 
+## Table of Contents
+
+- [Phase 1 — Prediction Task](#phase-1--prediction-task)
+  - [1. Inputs (Features and Entities)](#1-inputs-features-and-entities)
+  - [2. Output (Target Variable)](#2-output-target-variable)
+  - [3. Time Horizon and Wait Period](#3-time-horizon-and-wait-period)
+  - [4. Baseline Heuristic](#4-baseline-heuristic)
+- [Phase 2 — Data Representation](#phase-2--data-representation)
+  - [1. Cohort Definition](#1-cohort-definition)
+  - [2. Data Splitting](#2-data-splitting)
+  - [3. Core Features](#3-core-features)
+  - [4. Data Transformation Strategies](#4-data-transformation-strategies)
+  - [5. Feature Selection Process](#5-feature-selection-process)
+  - [6. Data Validation](#6-data-validation)
+- [Phase 3 — Model Training](#phase-3--model-training)
+  - [1. Common-Sense Baseline](#1-common-sense-baseline)
+  - [2. Benchmark Model](#2-benchmark-model)
+  - [3. Hyperparameter Optimization](#3-hyperparameter-optimization)
+  - [4. Final Training](#4-final-training)
+  - [5. Interpretability](#5-interpretability)
+  - [6. Fairness](#6-fairness)
+- [Phase 4 — Production Deployment](#phase-4--production-deployment)
+  - [1. Serving Artifact](#1-serving-artifact)
+  - [2. Endpoint Deployment](#2-endpoint-deployment)
+  - [3. Production Validation](#3-production-validation)
+  - [4. Promotion](#4-promotion)
+- [Phase 5 — Monitoring & Correctness](#phase-5--monitoring--correctness)
+  - [1. Holdout Evaluation Set](#1-holdout-evaluation-set)
+  - [2. Input Monitoring](#2-input-monitoring)
+  - [3. Outcome Monitoring](#3-outcome-monitoring)
+  - [4. Retraining Signal](#4-retraining-signal)
+
 ## Phase 1 — Prediction Task
 
 ### 1. Inputs (Features and Entities)

@@ -22,6 +22,35 @@ flowchart LR
   DF -.notes.-> RAG
 ```
 
+## Repository Structure
+
+The monorepo is organized in two documentation tiers. The **master tier** (`docs/`) describes the whole system; each **project** under `projects/` carries its own Workflow (the WHAT), Architecture (the design HOW), and Runbook (the execution HOW).
+
+```text
+.
+├── docs/                        # Master tier — the monorepo as a whole
+│   ├── workflow.md              #   WHAT: the three projects and how they connect
+│   ├── architecture.md          #   HOW (design): shared infrastructure + project seams
+│   └── runbook.md               #   HOW (execution): repo & cloud bootstrap
+│
+└── projects/
+    ├── mlops/                   # Readmission-risk ML system
+    │   └── docs/
+    │       ├── workflow.md
+    │       ├── architecture.md
+    │       └── runbook.md
+    ├── agentic-rag/             # Retrieval over unstructured EHR data
+    │   └── docs/
+    │       ├── workflow.md
+    │       ├── architecture.md
+    │       └── runbook.md
+    └── agent-harness/           # Orchestration agent + Django/A2UI UI
+        └── docs/
+            ├── workflow.md
+            ├── architecture.md
+            └── runbook.md
+```
+
 ## Status
 
 🚧 This repo is under construction and expected to be completed at end of June.

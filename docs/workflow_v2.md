@@ -66,6 +66,8 @@ Readmission risk is predicted for the 30 days following discharge.
 
 The HOSPITAL risk equation, measured with AUCPR (average precision). This is the baseline the machine learning model must beat to be considered valid.
 
+---
+
 ## Phase 2 — Data Representation
 
 ### 1. Cohort Definition
@@ -115,6 +117,8 @@ _Placeholder — to be filled after the full feature set is reviewed._
 
 Define the data contract for the constructed dataset — schema, allowed value ranges, null policy, and the reference distribution baseline. Evidently AI generates the data-quality and drift report that checks each new dataset against this baseline. The contract is defined here once and executed as a blocking gate inside the ML pipeline: a breach fails the run before training. The same baseline is the reference used by Phase 5 input monitoring at serving time.
 
+---
+
 ## Phase 3 — Model Training
 
 Training will be initiated through automated ML pipelines on Gemini Agent Platform Pipelines with the full experiment and metadata tracking suite.
@@ -143,6 +147,8 @@ Run SHAP on the final model to attribute each feature's contribution to the pred
 
 Evaluate the final model across demographic subgroups (e.g., race, ethnicity, age, gender, insurance type). For each subgroup, compute Negative Predictive Value (NPV) and Positive Predictive Value (PPV) and compare them across groups. Large gaps indicate the model is more reliable for some populations than others. The model passes the fairness check only when NPV and PPV hold within an acceptable tolerance across all subgroups.
 
+---
+
 ## Phase 4 — Production Deployment
 
 ### 1. Serving Artifact
@@ -160,6 +166,8 @@ Run the locked Phase 3 holdout test set through the live endpoint and confirm tw
 ### 4. Promotion
 
 Mark the validated model version as production-ready in the registry once both checks pass.
+
+---
 
 ## Phase 5 — Monitoring & Correctness
 
@@ -180,3 +188,5 @@ A scheduled evaluation job joins matured labels to the stored predictions and re
 ### 4. Retraining Signal
 
 A threshold breach on either track publishes a message to a retraining-signal topic identifying the change in inputs or the erosion in correctness. The message is the deliverable: a downstream subscriber would trigger retraining, but that automation is decoupled and out of scope for the demo.
+
+---

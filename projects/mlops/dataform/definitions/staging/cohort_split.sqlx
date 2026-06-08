@@ -1,21 +1,42 @@
 config {
   type: "table",
   schema: "readmission_staging",
-  description: "Cohort with a deterministic split label. Split on subject_id to keep all of a patient's admissions in one group (no leakage)."
+  description: "Cohort with a deterministic, weighted split label (70/14/14/1/1 → train/validation/test/prod_test/demo). Hashed on subject_id so all of a patient's admissions land in one group (no leakage)."
 }
 
 -- Phase 2 §2 — Data Splitting.
--- Deterministic, reproducible bucketing via FARM_FINGERPRINT(subject_id).
--- Buckets map to: training, validation, testing, production endpoint test,
--- demo holdout. Bucket count comes from dataform.json vars.
+-- Deterministic, reproducible split via FARM_FINGERPRINT(subject_id) hashed
+-- into 100 buckets (1% resolution), mapped to groups by range:
 --
--- PLACEHOLDER — bucket-to-name mapping to be finalized.
+--   buckets  0..13  -> validation  (14%)
+--   buckets 14..27  -> test        (14%)
+--   bucket  28      -> prod_test   ( 1%)  production endpoint test
+--   bucket  29      -> demo        ( 1%)  demo holdout
+--   buckets 30..99  -> train       (70%)
+--
+-- Hashing on subject_id (not hadm_id) keeps every admission for a patient in
+-- one group — the leakage guard, enforced by assertions/split_is_disjoint.
+--
+-- Prototyped and validated in notebooks/data_representation.ipynb.
+
+WITH hashed AS (
+  SELECT
+    c.*,
+    MOD(ABS(FARM_FINGERPRINT(CAST(c.subject_id AS STRING))), 100) AS h
+  FROM ${ref("cohort")} AS c
+)
 
 SELECT
-  c.*,
-  MOD(
-    ABS(FARM_FINGERPRINT(CAST(c.subject_id AS STRING))),
-    CAST(${dataform.projectConfig.vars.split_buckets} AS INT64)
-  ) AS split_bucket
-  -- TODO: CASE split_bucket -> 'train' / 'validation' / 'test' / 'prod_test' / 'demo'
-FROM ${ref("cohort")} AS c
+  subject_id,
+  hadm_id,
+  admittime,
+  dischtime,
+  h AS split_bucket,
+  CASE
+    WHEN h < 14  THEN 'validation'
+    WHEN h < 28  THEN 'test'
+    WHEN h < 29  THEN 'prod_test'
+    WHEN h < 30  THEN 'demo'
+    WHEN h < 100 THEN 'train'
+  END AS split_name
+FROM hashed

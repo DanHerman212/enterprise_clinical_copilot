@@ -5,8 +5,7 @@
   "assertionSchema": "readmission_assertions",
   "vars": {
     "mimic_database": "physionet-data",
-    "mimic_hosp_schema": "mimiciv_hosp",
-    "mimic_icu_schema": "mimiciv_icu",
-    "split_buckets": "5"
+    "mimic_hosp_schema": "mimiciv_3_1_hosp",
+    "mimic_icu_schema": "mimiciv_3_1_icu"
   }
 }

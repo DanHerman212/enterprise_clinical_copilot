@@ -1,21 +1,58 @@
 config {
   type: "table",
   schema: "readmission_staging",
-  description: "Cohort after Phase 2 inclusion/exclusion filters. One row per qualifying admission."
+  description: "Cohort spine: one row per qualifying admission after Phase 2 inclusion/exclusion filters. Identity + timing only (subject_id, hadm_id, admittime, dischtime); demographics and the 30-day label join on in later layers."
 }
 
--- Phase 2 §1 — Cohort Definition.
--- Inclusion: adult inpatient admissions, discharged alive.
--- Exclusion: died during index admission, LOS < 1 day, administrative
---            transfers / contiguous stays, planned follow-up visits.
+-- Phase 2 §1 — Cohort Definition (the spine).
+-- Grain: one row per qualifying hadm_id. subject_id carried for the
+-- subject-level split (leakage guard). Skinny by design.
 --
--- PLACEHOLDER — filter logic to be written. Shape only.
+-- Inclusion: adult, discharged alive.
+-- Exclusion: died during index admission, LOS < 1 day, planned
+--            (ELECTIVE / SURGICAL SAME DAY ADMISSION), and contiguous
+--            stays (re-admit within 24h of prior discharge -> keep first).
+--
+-- Prototyped and validated in notebooks/data_representation.ipynb.
+-- Expected output: 352,699 admissions.
+
+WITH base AS (
+  SELECT
+    a.subject_id,
+    a.hadm_id,
+    a.admittime,
+    a.dischtime,
+    p.anchor_age,
+    a.hospital_expire_flag,
+    a.deathtime,
+    a.admission_type,
+    TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) AS los_hours,
+    LAG(a.dischtime) OVER (
+      PARTITION BY a.subject_id ORDER BY a.admittime
+    ) AS prev_dischtime
+  FROM ${ref("admissions")} AS a
+  JOIN ${ref("patients")} AS p
+    USING (subject_id)
+),
+
+flagged AS (
+  SELECT
+    *,
+    (
+      prev_dischtime IS NOT NULL
+      AND TIMESTAMP_DIFF(admittime, prev_dischtime, HOUR) <= 24
+    ) AS is_continuation
+  FROM base
+)
 
 SELECT
-  a.subject_id,
-  a.hadm_id,
-  -- TODO: admit/discharge timestamps, derived LOS, label, demographics join
-FROM ${ref("admissions")} AS a
-JOIN ${ref("patients")} AS p
-  USING (subject_id)
--- WHERE <inclusion/exclusion predicates>
+  subject_id,
+  hadm_id,
+  admittime,
+  dischtime
+FROM flagged
+WHERE anchor_age >= 18                                              -- adult
+  AND hospital_expire_flag = 0 AND deathtime IS NULL                -- discharged alive
+  AND los_hours >= 24                                               -- LOS >= 1 day
+  AND admission_type NOT IN ('ELECTIVE', 'SURGICAL SAME DAY ADMISSION')  -- exclude planned
+  AND NOT is_continuation                                           -- collapse contiguous stays

@@ -1,0 +1,65 @@
+config {
+  type: "table",
+  schema: "readmission_features",
+  description: "Historical utilization features, one row per hadm_id. Past healthcare use (prior admissions, prior inpatient days, recent ED visits, index LOS). History is computed STRICTLY before the index admittime to prevent leakage. Joined onto cohort_split by features.sqlx."
+}
+
+-- Phase 2 §3 — Core Features / Historical Utilization.
+-- Grain: one row per hadm_id (history CTEs pre-aggregate, so the LEFT JOINs
+-- stay 1:1 and never fan out the spine).
+--
+-- Leakage guard: every "prior" metric keys on admittime STRICTLY before the
+-- index (a.admittime < c.admittime); recent ED visits use the
+-- (index - ED_LOOKBACK_DAYS, index) window. index_los_days is the one metric
+-- about the index stay itself — allowed, since LOS is known at the discharge
+-- forecast origin.
+--
+-- History reads RAW admissions/edstays (full history counts, not just cohort
+-- admissions) — a patient's earlier planned/short stays still signal utilization.
+--
+-- Data-quality guard: raw admissions (unlike the LOS-gated cohort) contains a
+-- few records with dischtime < admittime; each prior LOS is floored at 0 with
+-- GREATEST(..., 0) so a malformed row contributes 0 days, never a negative.
+--
+-- Absence of history is a 0, not a null (~40% first-admissions, ~55% no recent
+-- ED) — every history metric LEFT JOINs and COALESCEs to 0.
+--
+-- ED_LOOKBACK_DAYS = 180.
+--
+-- Prototyped and validated in notebooks/data_representation.ipynb (§3b):
+--   352,699 rows, hadm_id unique, 0 nulls, all metrics non-negative,
+--   index_los_days min = 1.00 (LOS gate holds).
+
+WITH prior_adm AS (
+  SELECT
+    c.hadm_id,
+    COUNT(a.hadm_id) AS prior_admission_count,
+    COALESCE(SUM(GREATEST(TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR), 0)) / 24.0, 0) AS prior_inpatient_days
+  FROM ${ref("cohort_split")} AS c
+  JOIN ${ref("admissions")} AS a
+    ON a.subject_id = c.subject_id
+   AND a.admittime < c.admittime
+  GROUP BY c.hadm_id
+),
+
+recent_ed AS (
+  SELECT
+    c.hadm_id,
+    COUNT(e.stay_id) AS recent_ed_visits
+  FROM ${ref("cohort_split")} AS c
+  JOIN ${ref("edstays")} AS e
+    ON e.subject_id = c.subject_id
+   AND e.intime <  c.admittime
+   AND e.intime >= TIMESTAMP_SUB(c.admittime, INTERVAL 180 DAY)
+  GROUP BY c.hadm_id
+)
+
+SELECT
+  c.hadm_id,
+  COALESCE(pa.prior_admission_count, 0)                  AS prior_admission_count,
+  COALESCE(pa.prior_inpatient_days, 0)                   AS prior_inpatient_days,
+  COALESCE(re.recent_ed_visits, 0)                       AS recent_ed_visits,
+  TIMESTAMP_DIFF(c.dischtime, c.admittime, HOUR) / 24.0  AS index_los_days
+FROM ${ref("cohort_split")} AS c
+LEFT JOIN prior_adm AS pa USING (hadm_id)
+LEFT JOIN recent_ed AS re USING (hadm_id)

@@ -1,0 +1,48 @@
+config {
+  type: "table",
+  schema: "readmission_features",
+  description: "Structured clinical code features, one row per hadm_id. Counts of distinct billed ICD diagnoses and procedures for the index admission, plus a has_procedure flag. Joined onto cohort_split by features.sqlx."
+}
+
+-- Phase 2 §3 — Core Features / Structured Clinical Codes.
+-- Grain: one row per hadm_id (the dx/px CTEs pre-aggregate by hadm_id, so the
+-- LEFT JOINs stay 1:1 and never fan out the spine).
+--
+-- No leakage concern: ICD codes are assigned FOR the index stay and are
+-- complete at the discharge forecast origin, so they're read straight off the
+-- index hadm_id (no "strictly prior" window like utilization).
+--
+-- COUNT(DISTINCT icd_code) (not COUNT(*)) is safe across the MIMIC-IV ICD-9/10
+-- mix: we count how many distinct conditions/procedures, never compare the raw
+-- code strings (which aren't comparable across versions). Per-code flags are
+-- deferred until codes are mapped to a common vocabulary.
+--
+-- Absence is a real 0, not a null: validated coverage is ~99.9% for diagnoses
+-- but only ~56.5% for procedures, so both counts LEFT JOIN + COALESCE to 0.
+-- has_procedure surfaces "had any procedure" as a cleaner signal than the count
+-- for the ~43.5% of stays with none.
+--
+-- Validated against the cohort (352,699 rows): unique hadm_id, 0 nulls,
+-- diagnosis_count [0,56] mean 13.33, procedure_count [0,37] mean 1.56,
+-- has_procedure 56.5%. Encoding/scaling deferred to features_clean.
+
+WITH dx AS (
+  -- distinct diagnosis codes on the index admission (comorbidity load).
+  SELECT hadm_id, COUNT(DISTINCT icd_code) AS diagnosis_count
+  FROM ${ref("diagnoses_icd")}
+  GROUP BY hadm_id
+),
+px AS (
+  -- distinct procedure codes on the index admission (intervention intensity).
+  SELECT hadm_id, COUNT(DISTINCT icd_code) AS procedure_count
+  FROM ${ref("procedures_icd")}
+  GROUP BY hadm_id
+)
+SELECT
+  c.hadm_id,
+  COALESCE(dx.diagnosis_count, 0)     AS diagnosis_count,
+  COALESCE(px.procedure_count, 0)     AS procedure_count,
+  COALESCE(px.procedure_count, 0) > 0 AS has_procedure
+FROM ${ref("cohort_split")} AS c
+LEFT JOIN dx USING (hadm_id)
+LEFT JOIN px USING (hadm_id)

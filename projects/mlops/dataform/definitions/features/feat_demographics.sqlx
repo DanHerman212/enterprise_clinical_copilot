@@ -1,0 +1,33 @@
+config {
+  type: "table",
+  schema: "readmission_features",
+  description: "Demographics & admin features, one row per hadm_id. Baseline patient profile (physical vulnerability + socioeconomic resources). Mostly 1:1 attributes; age is the only derivation. Joined onto cohort_split by features.sqlx."
+}
+
+-- Phase 2 §3 — Core Features / Demographics & Admin.
+-- Grain: one row per hadm_id (joins in features.sqlx stay 1:1).
+-- Categoricals pass through RAW — encoding is a modeling concern, and the
+-- missingness policy (e.g. discharge_location ~15% null) is handled later in
+-- features_clean, NOT here.
+--
+-- Prototyped and validated in notebooks/data_representation.ipynb (§3a):
+--   352,699 rows, hadm_id unique, age range [18, 90] (median 63).
+
+SELECT
+  c.hadm_id,
+  -- Age at admission from MIMIC's anchor scheme, capped at 90: MIMIC shifts
+  -- every patient over 89 to a synthetic anchor, so ages above 90 aren't real.
+  LEAST(
+    p.anchor_age + (EXTRACT(YEAR FROM c.admittime) - p.anchor_year),
+    90
+  ) AS age,
+  p.gender,
+  a.marital_status,
+  a.language,
+  a.race,
+  a.admission_type,
+  a.insurance,
+  a.discharge_location
+FROM ${ref("cohort_split")} AS c
+JOIN ${ref("patients")}   AS p USING (subject_id)
+JOIN ${ref("admissions")} AS a USING (hadm_id)

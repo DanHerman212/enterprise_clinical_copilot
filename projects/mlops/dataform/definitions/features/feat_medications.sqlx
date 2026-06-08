@@ -1,0 +1,70 @@
+config {
+  type: "table",
+  schema: "readmission_features",
+  description: "Medication features, one row per hadm_id. Polypharmacy counts (distinct drugs, order volume) and high-risk drug-class flags (anticoagulant, insulin) over the index admission's in-stay orders. Joined onto cohort_split by features.sqlx."
+}
+
+-- Phase 2 §3 — Core Features / Medications.
+-- Grain: one row per hadm_id (the rx CTE pre-aggregates by hadm_id, so the
+-- LEFT JOIN stays 1:1 and never fans out the spine).
+--
+-- In-stay leakage gate: prescriptions rows carry starttime/stoptime, and some
+-- orders (discharge meds, the occasional malformed timestamp) sit at or past
+-- dischtime. Every aggregate is gated to starttime <= dischtime so a feature
+-- never reflects an order placed after the discharge forecast origin. Validated:
+-- the gate drops 119,424 after-discharge rows; the 17,728 NULL-starttime rows
+-- are kept as in-stay (starttime IS NULL OR ...).
+--
+-- Absence is a real 0, not a null: validated rx coverage is ~96.9%, so the 3.1%
+-- of stays with no in-stay order LEFT JOIN + COALESCE to 0 / false.
+--
+-- medication_count = COUNT(DISTINCT drug) is a COARSE polypharmacy proxy: drug
+-- is free-text (brand/formulation variants inflate the distinct count), useful
+-- as a relative signal, not a clean ingredient tally.
+--
+-- Drug-class flags are case-insensitive LIKE matches on a small keyword list.
+-- heparin is intentionally excluded — in MIMIC nearly every inpatient gets it as
+-- DVT prophylaxis or line/catheter flushes (swept ~79% of the cohort, no
+-- discriminative value); the list targets therapeutic anticoagulation.
+--
+-- Counts ship UNCAPPED: the extreme tails (max 196 drugs / 2811 orders) were
+-- validated as real long-stay signal — smooth percentile tails and a strong
+-- correlation with length-of-stay (corr ~0.81 orders, ~0.70 drugs), with the
+-- top admissions all multi-week stays at a sane orders/day rate.
+--
+-- Validated against the cohort (352,699 rows): unique hadm_id, 0 nulls,
+-- medication_count [0,196] median 21, medication_order_count [0,2811] median 28,
+-- no-rx 3.1%, on_anticoagulant 25.4%, on_insulin 32.0%. Encoding/scaling
+-- deferred to features_clean.
+
+WITH rx AS (
+  -- In-stay orders only (the gate drops the 119k rows placed after dischtime).
+  SELECT
+    p.hadm_id,
+    COUNT(DISTINCT p.drug) AS medication_count,
+    COUNT(*)               AS medication_order_count,
+    MAX(CASE
+      WHEN LOWER(p.drug) LIKE '%warfarin%'
+        OR LOWER(p.drug) LIKE '%enoxaparin%'
+        OR LOWER(p.drug) LIKE '%apixaban%'
+        OR LOWER(p.drug) LIKE '%rivaroxaban%'
+        OR LOWER(p.drug) LIKE '%dabigatran%'
+        OR LOWER(p.drug) LIKE '%fondaparinux%'
+      THEN 1 ELSE 0 END)   AS on_anticoagulant,
+    MAX(CASE
+      WHEN LOWER(p.drug) LIKE '%insulin%'
+      THEN 1 ELSE 0 END)   AS on_insulin
+  FROM ${ref("cohort_split")} AS c
+  JOIN ${ref("prescriptions")} AS p
+    ON p.hadm_id = c.hadm_id
+   AND (p.starttime IS NULL OR p.starttime <= c.dischtime)
+  GROUP BY p.hadm_id
+)
+SELECT
+  c.hadm_id,
+  COALESCE(rx.medication_count, 0)       AS medication_count,
+  COALESCE(rx.medication_order_count, 0) AS medication_order_count,
+  COALESCE(rx.on_anticoagulant, 0) = 1   AS on_anticoagulant,
+  COALESCE(rx.on_insulin, 0) = 1         AS on_insulin
+FROM ${ref("cohort_split")} AS c
+LEFT JOIN rx USING (hadm_id)

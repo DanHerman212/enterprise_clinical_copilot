@@ -6,6 +6,7 @@
   "vars": {
     "mimic_database": "physionet-data",
     "mimic_hosp_schema": "mimiciv_3_1_hosp",
-    "mimic_icu_schema": "mimiciv_3_1_icu"
+    "mimic_icu_schema": "mimiciv_3_1_icu",
+    "mimic_ed_schema": "mimiciv_ed"
   }
 }

@@ -1,0 +1,21 @@
+config {
+  type: "table",
+  schema: "readmission_staging",
+  description: "Cohort with a deterministic split label. Split on subject_id to keep all of a patient's admissions in one group (no leakage)."
+}
+
+-- Phase 2 §2 — Data Splitting.
+-- Deterministic, reproducible bucketing via FARM_FINGERPRINT(subject_id).
+-- Buckets map to: training, validation, testing, production endpoint test,
+-- demo holdout. Bucket count comes from dataform.json vars.
+--
+-- PLACEHOLDER — bucket-to-name mapping to be finalized.
+
+SELECT
+  c.*,
+  MOD(
+    ABS(FARM_FINGERPRINT(CAST(c.subject_id AS STRING))),
+    CAST(${dataform.projectConfig.vars.split_buckets} AS INT64)
+  ) AS split_bucket
+  -- TODO: CASE split_bucket -> 'train' / 'validation' / 'test' / 'prod_test' / 'demo'
+FROM ${ref("cohort")} AS c

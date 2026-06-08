@@ -1,0 +1,10 @@
+-- Declarations: register the raw MIMIC-IV tables so Dataform can ref() them.
+-- Declarations carry no SQL logic; they only tell Dataform these tables exist
+-- upstream. Schemas/database come from dataform.json vars.
+
+config {
+  type: "declaration",
+  database: dataform.projectConfig.vars.mimic_database,
+  schema: dataform.projectConfig.vars.mimic_hosp_schema,
+  name: "patients"
+}

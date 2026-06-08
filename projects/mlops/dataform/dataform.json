@@ -1,0 +1,12 @@
+{
+  "defaultSchema": "readmission",
+  "defaultDatabase": "your-gcp-project-id",
+  "defaultLocation": "us-east1",
+  "assertionSchema": "readmission_assertions",
+  "vars": {
+    "mimic_database": "physionet-data",
+    "mimic_hosp_schema": "mimiciv_hosp",
+    "mimic_icu_schema": "mimiciv_icu",
+    "split_buckets": "5"
+  }
+}

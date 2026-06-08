@@ -1,0 +1,22 @@
+config {
+  type: "table",
+  schema: "readmission",
+  description: "Final model-ready dataset consumed by the training pipeline. The single source of truth for Phase 3.",
+  assertions: {
+    nonNull: ["subject_id", "hadm_id", "split_bucket"],
+    rowConditions: [
+      "split_bucket IN ('train', 'validation', 'test', 'prod_test', 'demo')"
+    ]
+  }
+}
+
+-- Final mart. Exposes the cleaned feature table as the contract surface the
+-- training pipeline reads. Inline assertions above encode the hard rules of
+-- the Phase 2 §6 data contract; Evidently handles distributional drift
+-- separately.
+--
+-- PLACEHOLDER — final column selection / ordering to be finalized.
+
+SELECT
+  *
+FROM ${ref("features_clean")}

@@ -1,0 +1,20 @@
+config {
+  type: "table",
+  schema: "readmission_features",
+  description: "Wide feature table joined to the split cohort. Built AFTER the split so feature logic never crosses the train/val/test boundary."
+}
+
+-- Phase 2 §3 — Core Features.
+-- One wide row per admission. In practice each feature group (demographics,
+-- utilization, codes, meds, labs, notes) can be its own intermediate model
+-- ref()'d here; kept as a single stub for now.
+--
+-- PLACEHOLDER — feature SQL to be written per feature group.
+
+SELECT
+  s.subject_id,
+  s.hadm_id,
+  s.split_bucket,
+  -- TODO: demographics, historical utilization, structured codes,
+  --       medications, physiology/labs, note-derived features
+FROM ${ref("cohort_split")} AS s

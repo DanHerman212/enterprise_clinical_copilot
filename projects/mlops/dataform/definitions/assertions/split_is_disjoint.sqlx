@@ -1,0 +1,17 @@
+config {
+  type: "assertion",
+  schema: "readmission_assertions",
+  description: "Standalone data-contract check: every patient lands in exactly one split bucket (no subject_id leakage across groups)."
+}
+
+-- Phase 2 §6 — Data Validation (hard rule).
+-- Returns rows that VIOLATE the rule; an empty result = pass.
+-- A subject_id appearing under more than one split_bucket would mean the
+-- split leaked across groups.
+
+SELECT
+  subject_id,
+  COUNT(DISTINCT split_bucket) AS bucket_count
+FROM ${ref("analytics_dataset")}
+GROUP BY subject_id
+HAVING COUNT(DISTINCT split_bucket) > 1

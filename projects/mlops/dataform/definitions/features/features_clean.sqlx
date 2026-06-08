@@ -1,0 +1,27 @@
+config {
+  type: "table",
+  schema: "readmission_features",
+  description: "Feature table after missingness handling. Imputation statistics are computed from training rows only to avoid leakage."
+}
+
+-- Phase 2 §4 — Data Transformation / Missingness.
+-- Policy per column: impute (train-derived statistic), add a missingness
+-- indicator, or drop. Fill values are computed from split_bucket = 'train'
+-- ONLY, then joined back to all rows — this is the leak-safe pattern.
+--
+-- PLACEHOLDER — imputation policy to be finalized per column.
+
+-- Example shape of the train-only statistics CTE (values are illustrative):
+-- WITH train_stats AS (
+--   SELECT
+--     APPROX_QUANTILES(some_lab, 2)[OFFSET(1)] AS some_lab_median
+--   FROM ${ref("features")}
+--   WHERE split_bucket = 'train'  -- train rows only
+-- )
+
+SELECT
+  f.*
+  -- TODO: COALESCE(f.some_lab, train_stats.some_lab_median) AS some_lab,
+  -- TODO: CAST(f.some_lab IS NULL AS INT64) AS some_lab_is_missing
+FROM ${ref("features")} AS f
+-- CROSS JOIN train_stats

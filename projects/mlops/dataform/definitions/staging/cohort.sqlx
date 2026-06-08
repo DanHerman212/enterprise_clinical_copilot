@@ -1,0 +1,21 @@
+config {
+  type: "table",
+  schema: "readmission_staging",
+  description: "Cohort after Phase 2 inclusion/exclusion filters. One row per qualifying admission."
+}
+
+-- Phase 2 §1 — Cohort Definition.
+-- Inclusion: adult inpatient admissions, discharged alive.
+-- Exclusion: died during index admission, LOS < 1 day, administrative
+--            transfers / contiguous stays, planned follow-up visits.
+--
+-- PLACEHOLDER — filter logic to be written. Shape only.
+
+SELECT
+  a.subject_id,
+  a.hadm_id,
+  -- TODO: admit/discharge timestamps, derived LOS, label, demographics join
+FROM ${ref("admissions")} AS a
+JOIN ${ref("patients")} AS p
+  USING (subject_id)
+-- WHERE <inclusion/exclusion predicates>

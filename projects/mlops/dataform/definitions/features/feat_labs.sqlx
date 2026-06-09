@@ -1,0 +1,132 @@
+config {
+  type: "table",
+  schema: "readmission_features",
+  description: "Physiology & lab features, one row per hadm_id. Per analyte (RBC, RDW, glucose, monocytes): last/max/min value, delta (last-first), and a measured flag, over the index admission's in-stay results. Joined onto cohort_split by features.sqlx."
+}
+
+-- Phase 2 §3 — Core Features / Physiology & Labs.
+-- Grain: one row per hadm_id (the agg CTE pre-aggregates by hadm_id, so the
+-- LEFT JOIN stays 1:1 and never fans out the spine).
+--
+-- Research-grounded analyte set (strong, near-linear readmission predictors in
+-- MIMIC-IV work): RBC, RDW (strongest), glucose, monocytes. Scope is labevents
+-- only (hosp-wide labs); bedside vitals in chartevents are held for a separate
+-- ICU-physiology group.
+--
+-- Locked blood itemids (resolved by the notebook's locate probe; validated
+-- coverage on the cohort in parentheses):
+--   rbc       51279  Red Blood Cells, Blood (m/uL)        ~89.6%
+--   rdw       51277  RDW, Blood (%)                        ~89.6%
+--   glucose   50931  Glucose, Blood (mg/dL)                ~85.8%
+--   monocytes 52074  Absolute Monocyte Count (K/uL)        ~16.4%
+-- The monocyte ABSOLUTE count is chosen over the percent variant for clinical
+-- fidelity; its lower coverage is carried by the _measured flag + downstream
+-- imputation, and feature selection later prunes whatever doesn't earn its place.
+--
+-- In-stay leakage gate: each result carries a charttime, and labs are often
+-- drawn around — or resulted after — discharge. Every aggregate is gated to
+-- admittime <= charttime <= dischtime so no feature reflects a value observed
+-- after the discharge forecast origin.
+--
+-- valuenum > 0: text-only results have no valuenum, and a 0/negative reading is
+-- a physiologically impossible junk value for all four analytes (an RBC of 0 is
+-- incompatible with life). Dropping it at the source keeps a junk 0 from
+-- poisoning _min / _delta; a stay whose only reading was junk reads as not
+-- measured (NULL), which is the correct contract.
+--
+-- Missing is NULL, not 0 (the key difference from the count groups): a lab never
+-- drawn has no value, not a value of zero, so unmeasured analytes stay NULL (no
+-- COALESCE on the value columns). Those NULLs flow to features_clean, which
+-- imputes them with TRAIN-ONLY statistics (the leakage guard) and keeps each
+-- _measured flag as its own feature.
+--
+-- Per analyte, 5 features (20 columns total):
+--   _last      last in-stay value before discharge (the prediction-origin state)
+--   _max       stay maximum (how deranged it got)
+--   _min       stay minimum
+--   _delta     _last - _first (late-stay instability; _first exists only here)
+--   _measured  was it drawn at all (ordering is itself signal)
+--
+-- Validated against the cohort (352,699 rows): unique hadm_id, the NULL contract
+-- holds (value cols NULL iff not measured), min <= last <= max on measured rows,
+-- all values strictly positive, and measured coverage matches the locate probe
+-- (rbc/rdw 89.6%, glucose 85.8%, monocytes 16.4%).
+
+WITH le AS (
+  -- In-stay numeric results for the locked itemids only, tagged by analyte.
+  SELECT
+    c.hadm_id,
+    CASE l.itemid
+      WHEN 51279 THEN 'rbc'
+      WHEN 51277 THEN 'rdw'
+      WHEN 50931 THEN 'glucose'
+      WHEN 52074 THEN 'monocytes'
+    END AS analyte,
+    l.charttime,
+    l.valuenum
+  FROM ${ref("cohort_split")} AS c
+  JOIN ${ref("labevents")} AS l
+    ON l.hadm_id = c.hadm_id
+   AND l.charttime >= c.admittime
+   AND l.charttime <= c.dischtime
+   AND l.itemid IN (51279, 51277, 50931, 52074)
+   AND l.valuenum > 0
+),
+agg AS (
+  SELECT
+    hadm_id,
+    -- rbc
+    ARRAY_AGG(IF(analyte = 'rbc', valuenum, NULL) IGNORE NULLS ORDER BY charttime DESC LIMIT 1)[SAFE_OFFSET(0)] AS rbc_last,
+    ARRAY_AGG(IF(analyte = 'rbc', valuenum, NULL) IGNORE NULLS ORDER BY charttime ASC  LIMIT 1)[SAFE_OFFSET(0)] AS rbc_first,
+    MAX(IF(analyte = 'rbc', valuenum, NULL)) AS rbc_max,
+    MIN(IF(analyte = 'rbc', valuenum, NULL)) AS rbc_min,
+    COUNTIF(analyte = 'rbc')                 AS rbc_n,
+    -- rdw
+    ARRAY_AGG(IF(analyte = 'rdw', valuenum, NULL) IGNORE NULLS ORDER BY charttime DESC LIMIT 1)[SAFE_OFFSET(0)] AS rdw_last,
+    ARRAY_AGG(IF(analyte = 'rdw', valuenum, NULL) IGNORE NULLS ORDER BY charttime ASC  LIMIT 1)[SAFE_OFFSET(0)] AS rdw_first,
+    MAX(IF(analyte = 'rdw', valuenum, NULL)) AS rdw_max,
+    MIN(IF(analyte = 'rdw', valuenum, NULL)) AS rdw_min,
+    COUNTIF(analyte = 'rdw')                 AS rdw_n,
+    -- glucose
+    ARRAY_AGG(IF(analyte = 'glucose', valuenum, NULL) IGNORE NULLS ORDER BY charttime DESC LIMIT 1)[SAFE_OFFSET(0)] AS glucose_last,
+    ARRAY_AGG(IF(analyte = 'glucose', valuenum, NULL) IGNORE NULLS ORDER BY charttime ASC  LIMIT 1)[SAFE_OFFSET(0)] AS glucose_first,
+    MAX(IF(analyte = 'glucose', valuenum, NULL)) AS glucose_max,
+    MIN(IF(analyte = 'glucose', valuenum, NULL)) AS glucose_min,
+    COUNTIF(analyte = 'glucose')                 AS glucose_n,
+    -- monocytes
+    ARRAY_AGG(IF(analyte = 'monocytes', valuenum, NULL) IGNORE NULLS ORDER BY charttime DESC LIMIT 1)[SAFE_OFFSET(0)] AS monocytes_last,
+    ARRAY_AGG(IF(analyte = 'monocytes', valuenum, NULL) IGNORE NULLS ORDER BY charttime ASC  LIMIT 1)[SAFE_OFFSET(0)] AS monocytes_first,
+    MAX(IF(analyte = 'monocytes', valuenum, NULL)) AS monocytes_max,
+    MIN(IF(analyte = 'monocytes', valuenum, NULL)) AS monocytes_min,
+    COUNTIF(analyte = 'monocytes')                 AS monocytes_n
+  FROM le
+  GROUP BY hadm_id
+)
+SELECT
+  c.hadm_id,
+  -- rbc
+  agg.rbc_last                  AS rbc_last,
+  agg.rbc_max                   AS rbc_max,
+  agg.rbc_min                   AS rbc_min,
+  agg.rbc_last - agg.rbc_first  AS rbc_delta,
+  COALESCE(agg.rbc_n, 0) > 0    AS rbc_measured,
+  -- rdw
+  agg.rdw_last                  AS rdw_last,
+  agg.rdw_max                   AS rdw_max,
+  agg.rdw_min                   AS rdw_min,
+  agg.rdw_last - agg.rdw_first  AS rdw_delta,
+  COALESCE(agg.rdw_n, 0) > 0    AS rdw_measured,
+  -- glucose
+  agg.glucose_last                      AS glucose_last,
+  agg.glucose_max                       AS glucose_max,
+  agg.glucose_min                       AS glucose_min,
+  agg.glucose_last - agg.glucose_first  AS glucose_delta,
+  COALESCE(agg.glucose_n, 0) > 0        AS glucose_measured,
+  -- monocytes
+  agg.monocytes_last                        AS monocytes_last,
+  agg.monocytes_max                         AS monocytes_max,
+  agg.monocytes_min                         AS monocytes_min,
+  agg.monocytes_last - agg.monocytes_first  AS monocytes_delta,
+  COALESCE(agg.monocytes_n, 0) > 0          AS monocytes_measured
+FROM ${ref("cohort_split")} AS c
+LEFT JOIN agg USING (hadm_id)

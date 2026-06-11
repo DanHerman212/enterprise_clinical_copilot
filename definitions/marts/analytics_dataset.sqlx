@@ -3,9 +3,9 @@ config {
   schema: "readmission",
   description: "Final model-ready dataset consumed by the training pipeline. The single source of truth for Phase 3.",
   assertions: {
-    nonNull: ["subject_id", "hadm_id", "split_bucket"],
+    nonNull: ["subject_id", "hadm_id", "split_name"],
     rowConditions: [
-      "split_bucket IN ('train', 'validation', 'test', 'prod_test', 'demo')"
+      "split_name IN ('train', 'validation', 'test', 'prod_test', 'demo')"
     ]
   }
 }

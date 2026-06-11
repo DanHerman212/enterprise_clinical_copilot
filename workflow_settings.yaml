@@ -1,4 +1,3 @@
-dataformCoreVersion: "3.0.0"
 defaultProject: "your-gcp-project-id"
 defaultLocation: "us-east1"
 defaultDataset: "readmission"

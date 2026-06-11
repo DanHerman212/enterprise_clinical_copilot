@@ -1,0 +1,10 @@
+dataformCoreVersion: "3.0.0"
+defaultProject: "your-gcp-project-id"
+defaultLocation: "us-east1"
+defaultDataset: "readmission"
+defaultAssertionDataset: "readmission_assertions"
+vars:
+  mimic_database: "physionet-data"
+  mimic_hosp_schema: "mimiciv_3_1_hosp"
+  mimic_icu_schema: "mimiciv_3_1_icu"
+  mimic_ed_schema: "mimiciv_ed"

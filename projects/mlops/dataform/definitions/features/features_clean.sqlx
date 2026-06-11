@@ -9,19 +9,11 @@ config {
 -- indicator, or drop. Fill values are computed from split_bucket = 'train'
 -- ONLY, then joined back to all rows — this is the leak-safe pattern.
 --
--- PLACEHOLDER — imputation policy to be finalized per column.
-
--- Example shape of the train-only statistics CTE (values are illustrative):
--- WITH train_stats AS (
---   SELECT
---     APPROX_QUANTILES(some_lab, 2)[OFFSET(1)] AS some_lab_median
---   FROM ${ref("features")}
---   WHERE split_bucket = 'train'  -- train rows only
--- )
+-- IMPUTATION DEFERRED: We are passing missing values (NULLs) through directly
+-- to the analytics dataset. Missingness will be handled natively by the model 
+-- algorithm (e.g. LightGBM / XGBoost) or via BigQuery ML's TRANSFORM clause 
+-- during training.
 
 SELECT
   f.*
-  -- TODO: COALESCE(f.some_lab, train_stats.some_lab_median) AS some_lab,
-  -- TODO: CAST(f.some_lab IS NULL AS INT64) AS some_lab_is_missing
 FROM ${ref("features")} AS f
--- CROSS JOIN train_stats

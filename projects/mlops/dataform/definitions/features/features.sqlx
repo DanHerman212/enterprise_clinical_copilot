@@ -9,12 +9,19 @@ config {
 -- utilization, codes, meds, labs, notes) can be its own intermediate model
 -- ref()'d here; kept as a single stub for now.
 --
--- PLACEHOLDER — feature SQL to be written per feature group.
+-- Data is joined from per-group feature models. Note-derived features 
+-- to be added here once BioClinicalBERT/triage extraction is complete.
 
 SELECT
-  s.subject_id,
-  s.hadm_id,
-  s.split_bucket,
-  -- TODO: demographics, historical utilization, structured codes,
-  --       medications, physiology/labs, note-derived features
+  s.*,
+  fd.* EXCEPT(hadm_id),
+  fu.* EXCEPT(hadm_id),
+  fc.* EXCEPT(hadm_id),
+  fm.* EXCEPT(hadm_id),
+  fl.* EXCEPT(hadm_id)
 FROM ${ref("cohort_split")} AS s
+LEFT JOIN ${ref("feat_demographics")} AS fd USING (hadm_id)
+LEFT JOIN ${ref("feat_utilization")}  AS fu USING (hadm_id)
+LEFT JOIN ${ref("feat_codes")}        AS fc USING (hadm_id)
+LEFT JOIN ${ref("feat_medications")}  AS fm USING (hadm_id)
+LEFT JOIN ${ref("feat_labs")}         AS fl USING (hadm_id)

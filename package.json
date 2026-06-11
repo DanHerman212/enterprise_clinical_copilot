@@ -1,5 +1,6 @@
 {
   "dependencies": {
-    "@dataform/core": "3.0.0"
+    "@dataform/core": "3.0.0",
+    "@google-cloud/bigquery": "^8.3.1"
   }
 }

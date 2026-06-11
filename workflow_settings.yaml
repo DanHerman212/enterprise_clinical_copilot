@@ -1,4 +1,4 @@
-defaultProject: "your-gcp-project-id"
+defaultProject: "trim-icon-498815-a0"
 defaultLocation: "us-east1"
 defaultDataset: "readmission"
 defaultAssertionDataset: "readmission_assertions"

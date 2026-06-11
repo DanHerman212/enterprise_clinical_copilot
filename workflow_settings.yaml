@@ -1,5 +1,5 @@
 defaultProject: "trim-icon-498815-a0"
-defaultLocation: "us-east1"
+defaultLocation: "US"
 defaultDataset: "readmission"
 defaultAssertionDataset: "readmission_assertions"
 vars:

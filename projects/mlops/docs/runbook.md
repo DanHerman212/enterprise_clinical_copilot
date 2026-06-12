@@ -67,6 +67,7 @@ These models have no dependencies on each other and **execute in parallel** to m
 | `feat_codes` | `diagnoses_icd`, `procedures_icd` | Binary flags for presence of specific ICD diagnosis and procedure codes |
 | `feat_medications` | `prescriptions` | Drug class counts and timing relative to admission |
 | `feat_utilization` | `admissions`, `edstays` | Prior admission count, total prior inpatient days, recent ED visits, index length of stay |
+| `feat_target` | `admissions` | 30-day all-cause readmission label: 1 if any subsequent admission exists within 30 days of discharge, 0 otherwise |
 
 ### Phase 4 — Feature Assembly (`features/`)
 
@@ -90,8 +91,8 @@ Dataform automatically runs these tests against the materialized table immediate
 
 | Assertion | Type | Rule |
 |---|---|---|
-| `nonNull` | Column constraint | `subject_id`, `hadm_id`, and `split_name` must never be `NULL` |
-| `rowConditions` | Row constraint | `split_name` must be one of `train`, `validation`, `test`, `prod_test`, `demo` |
+| `nonNull` | Column constraint | `subject_id`, `hadm_id`, `split_name`, and `readmission_30d` must never be `NULL` |
+| `rowConditions` | Row constraint | `split_name` must be one of `train`, `validation`, `test`, `prod_test`, `demo`; `readmission_30d` must be 0 or 1 |
 | `split_is_disjoint` | Cross-row assertion | No `subject_id` may appear under more than one `split_bucket` |
 
 A green run on all three assertions certifies the dataset as structurally sound and production-ready. Any failure blocks the pipeline and must be resolved before downstream training can consume the data.

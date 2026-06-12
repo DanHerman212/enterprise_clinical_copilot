@@ -1,0 +1,35 @@
+config {
+  type: "table",
+  schema: "readmission_features",
+  description: "30-day all-cause readmission target label. 1 if the patient had any subsequent inpatient admission within 30 days of discharge; 0 otherwise. Computed against the raw admissions source (not the cohort) to capture all readmissions regardless of whether the subsequent stay would itself qualify for the cohort."
+}
+
+-- Target: readmission_30d ∈ {0, 1}.
+-- For each index admission in the cohort, scan the full admissions table for
+-- any subsequent admission for the same subject_id where admittime falls within
+-- [dischtime, dischtime + 30 days]. MIN(admittime) captures the earliest.
+--
+-- Using the source admissions table (not the cohort) is intentional: we want to
+-- flag any return to the hospital, even if that return would not itself meet
+-- the cohort inclusion criteria (e.g., it was elective, or LOS < 1 day).
+-- This matches the all-cause readmission definition used in clinical ML benchmarks.
+
+WITH next_admission AS (
+  SELECT
+    c.hadm_id,
+    MIN(a.admittime) AS next_admittime
+  FROM ${ref("cohort")} AS c
+  LEFT JOIN ${ref("admissions")} AS a
+    ON c.subject_id = a.subject_id
+   AND a.admittime > c.dischtime
+   AND a.admittime <= TIMESTAMP_ADD(c.dischtime, INTERVAL 30 DAY)
+  GROUP BY c.hadm_id
+)
+
+SELECT
+  hadm_id,
+  COALESCE(
+    CASE WHEN next_admittime IS NOT NULL THEN 1 ELSE 0 END,
+    0
+  ) AS readmission_30d
+FROM next_admission

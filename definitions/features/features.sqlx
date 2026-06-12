@@ -11,6 +11,7 @@ config {
 --
 -- Data is joined from per-group feature models. Note-derived features 
 -- to be added here once BioClinicalBERT/triage extraction is complete.
+-- feat_target produces the 30-day readmission label (supervised target).
 
 SELECT
   s.*,
@@ -18,10 +19,12 @@ SELECT
   fu.* EXCEPT(hadm_id),
   fc.* EXCEPT(hadm_id),
   fm.* EXCEPT(hadm_id),
-  fl.* EXCEPT(hadm_id)
+  fl.* EXCEPT(hadm_id),
+  ft.* EXCEPT(hadm_id)
 FROM ${ref("cohort_split")} AS s
 LEFT JOIN ${ref("feat_demographics")} AS fd USING (hadm_id)
 LEFT JOIN ${ref("feat_utilization")}  AS fu USING (hadm_id)
 LEFT JOIN ${ref("feat_codes")}        AS fc USING (hadm_id)
 LEFT JOIN ${ref("feat_medications")}  AS fm USING (hadm_id)
 LEFT JOIN ${ref("feat_labs")}         AS fl USING (hadm_id)
+LEFT JOIN ${ref("feat_target")}       AS ft USING (hadm_id)

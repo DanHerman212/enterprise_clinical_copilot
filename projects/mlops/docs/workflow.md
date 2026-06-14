@@ -143,6 +143,10 @@ Run hyperparameter optimization with Optuna, selecting the parameter set that ma
 
 Train the final XGBoost model using the best parameters from optimization. Save the final model as an artifact in the model registry.
 
+### 7. Feature Store Creation
+
+During the pipeline run, after the feature shortlist is finalized, create or update a Vertex AI Feature Store instance. Register each selected feature with its name, type, and BigQuery source, then ingest the offline values from `analytics_dataset` into the online store. This runs in parallel with the training chain (benchmark → Optuna → train-final) so that feature serving infrastructure is ready when the model is registered. The feature store reference is bundled into the serving artifact so the inference endpoint knows where to look up features at request time.
+
 ### 5. Interpretability
 
 Run SHAP on the final model to attribute each feature's contribution to the predictions. Produce global importance to confirm the model relies on clinically sensible signals, and per-patient explanations to support clinician review. These explanations are also surfaced at serving time (see Phase 5).
@@ -155,19 +159,23 @@ Evaluate the final model across demographic subgroups (e.g., race, ethnicity, ag
 
 ## Phase 4 — Production Deployment
 
-### 1. Serving Artifact
+### 1. Feature Store
 
-During the training pipeline run, save the model together with its preprocessing and postprocessing logic as a single serving artifact in the model registry. Bundling the transforms with the model guarantees training and serving apply identical logic, preventing training/serving skew.
+Vertex AI Feature Store serves as the online feature lookup layer for inference. The feature store is created during the Phase 3 pipeline run (see Phase 3 §7) once the feature shortlist is finalized. It registers every selected feature — name, type, and BigQuery source column — and ingests the offline values from `analytics_dataset` into the online store. The feature store reference is bundled into the serving artifact so the inference endpoint queries the same feature definitions used at training time, eliminating training/serving skew at the feature level.
 
-### 2. Endpoint Deployment
+### 2. Serving Artifact
+
+During the training pipeline run, save the model together with its preprocessing and postprocessing logic — and the feature store reference — as a single serving artifact in the model registry. Bundling the transforms with the model guarantees training and serving apply identical logic, preventing training/serving skew.
+
+### 3. Endpoint Deployment
 
 Build the server container from the registered artifact and deploy it to a real-time inference endpoint. Configure Vertex AI Explainable AI with Sampled Shapley so the endpoint returns per-prediction feature attributions alongside each risk score, giving clinicians the top features driving an individual patient's prediction.
 
-### 3. Production Validation
+### 4. Production Validation
 
 Run the locked Phase 3 holdout test set through the live endpoint and confirm two things: prediction parity with the offline results (catches serving bugs and skew), and AUCPR that clears the HOSPITAL baseline (confirms model quality).
 
-### 4. Promotion
+### 5. Promotion
 
 Mark the validated model version as production-ready in the registry once both checks pass.
 

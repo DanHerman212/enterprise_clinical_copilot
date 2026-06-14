@@ -32,25 +32,28 @@ flowchart TB
         BENCH["benchmark-xgboost<br/>(default params)"]
         HPO["optuna-hpo<br/>(maximize AUCPR)"]
         TRAIN["train-final<br/>(best params)"]
+        FS_STORE["create-feature-store<br/>(Vertex Feature Store)"]
         SHAP["shap-explain<br/>(global + per-patient)"]
         FAIRNESS["fairness-audit<br/>(NPV/PPV by subgroup)"]
-        REG["register-model<br/>(model + transforms → registry)"]
+        REG["register-model<br/>(model + transforms +<br/>feature store → registry)"]
 
         LOAD --> IMPUTE
         IMPUTE --> FS
         IMPUTE --> HOSPITAL
         FS --> BENCH
+        FS --> FS_STORE
         HOSPITAL --> BENCH
         BENCH --> HPO --> TRAIN
         TRAIN --> SHAP
         TRAIN --> FAIRNESS
         SHAP --> REG
         FAIRNESS --> REG
+        FS_STORE --> REG
     end
 
     subgraph P4["Phase 4 — Production Deployment"]
         direction LR
-        ART["Serving Artifact<br/>(model + imputer + scaler + feature list)"]
+        ART["Serving Artifact<br/>(model + imputer + scaler<br/>+ feature list + feature store config)"]
         EP["Vertex Endpoint"]
         XAI["Explainable AI<br/>(Sampled Shapley)"]
         ART --> EP --> XAI
@@ -79,7 +82,7 @@ BigQuery stores the mirrored MIMIC-IV source tables. Dataform executes the ELT D
 
 ### Phase 3 — Model Training
 
-Runs as a Vertex AI Pipeline. The DAG proceeds through: data load → imputation (ColumnTransformer fit on train only) → feature selection (5 methods in two parallel tiers, vote-aggregated) in parallel with the HOSPITAL clinical baseline → benchmark XGBoost (default params, gated to beat HOSPITAL) → Optuna HPO (TPE sampler, median pruner, 100 trials) → final XGBoost training → SHAP interpretability (global importance + per-patient attributions) in parallel with fairness audit (NPV/PPV by demographic subgroup) → model registration (model + imputer + scaler + feature list bundled as a single serving artifact).
+Runs as a Vertex AI Pipeline. The DAG proceeds through: data load → imputation (ColumnTransformer fit on train only) → feature selection (5 methods in two parallel tiers, vote-aggregated) in parallel with the HOSPITAL clinical baseline. Once the feature shortlist is determined, the pipeline forks: the training chain (benchmark XGBoost gated to beat HOSPITAL → Optuna HPO with TPE sampler and median pruner → final XGBoost training → SHAP interpretability → fairness audit) runs in parallel with Vertex AI Feature Store creation (registers the selected features and ingests the offline values for online serving). Both forks converge at model registration, where the model, imputer, scaler, feature list, and feature store reference are bundled into a single serving artifact.
 
 ### Phase 4 — Production Deployment
 

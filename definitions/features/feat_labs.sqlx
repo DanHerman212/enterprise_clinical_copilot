@@ -19,7 +19,7 @@ config {
 --   rdw        51277  RDW, Blood (%)                        ~89.6%
 --   glucose    50931  Glucose, Blood (mg/dL)                ~85.8%
 --   monocytes  52074  Absolute Monocyte Count (K/uL)        ~16.4%
---   hemoglobin 50811  Hemoglobin, Blood (g/dL)              ~89%  (HOSPITAL score)
+--   hemoglobin 51222  Hemoglobin, Blood (g/dL)              ~89%  (HOSPITAL score)
 --   sodium     50983  Sodium, Blood (mEq/L)                 ~85%  (HOSPITAL score)
 -- The monocyte ABSOLUTE count is chosen over the percent variant for clinical
 -- fidelity; its lower coverage is carried by the _measured flag + downstream
@@ -65,7 +65,7 @@ WITH le AS (
       WHEN 51277 THEN 'rdw'
       WHEN 50931 THEN 'glucose'
       WHEN 52074 THEN 'monocytes'
-      WHEN 50811 THEN 'hemoglobin'
+      WHEN 51222 THEN 'hemoglobin'
       WHEN 50983 THEN 'sodium'
     END AS analyte,
     l.charttime,
@@ -75,7 +75,7 @@ WITH le AS (
     ON l.hadm_id = c.hadm_id
    AND l.charttime >= c.admittime
    AND l.charttime <= c.dischtime
-   AND l.itemid IN (51279, 51277, 50931, 52074, 50811, 50983)
+   AND l.itemid IN (51279, 51277, 50931, 52074, 51222, 50983)
    AND l.valuenum > 0
 ),
 agg AS (

@@ -17,27 +17,15 @@ config {
 --
 -- Risk tiers: 0–4 = low, 5–6 = intermediate, ≥7 = high.
 --
--- Missing labs (hemoglobin/sodium not drawn): imputed from the TRAIN-split
--- median. This avoids the HOSPITAL score being artificially degraded (missing
--- → 0 points, "patient looked fine") or inflated (missing → 1 point, "unknown
--- = abnormal"). The median represents a typical patient for whom the test was
--- not clinically indicated.
+-- Missing labs (hemoglobin/sodium not drawn): scored as 0 points — a NULL lab
+-- means the test wasn't ordered (patient appeared stable), so no anemia /
+-- hyponatremia is assumed. The raw NULLs are preserved in the output columns
+-- hemoglobin_last / sodium_last for a downstream missingness check before any
+-- imputation strategy is finalized.
 --
 -- Reference: Donzé J, Aujesky D, Williams D, Schnipper JL.
---   Potentially avoidable 30-day hospital readmissions in medical patients.
---   JAMA Intern Med. 2013;173(8):632-638.
 
-WITH train_medians AS (
-  -- Imputation anchors: median hemoglobin and sodium on the train split only.
-  SELECT
-    APPROX_QUANTILES(fl.hemoglobin_last, 100)[OFFSET(50)] AS median_hgb,
-    APPROX_QUANTILES(fl.sodium_last, 100)[OFFSET(50)]     AS median_na
-  FROM ${ref("feat_labs")} AS fl
-  JOIN ${ref("cohort_split")} AS c ON fl.hadm_id = c.hadm_id
-  WHERE c.split_name = 'train'
-),
-
-prior_12m AS (
+WITH prior_12m AS (
   -- T: count of admissions in the 12 months before the index admission.
   SELECT
     c.hadm_id,
@@ -56,49 +44,48 @@ scored AS (
     c.subject_id,
     c.split_name,
 
-    -- Impute missing labs with train median
-    COALESCE(fl.hemoglobin_last, m.median_hgb) AS hemoglobin_for_score,
-    COALESCE(fl.sodium_last, m.median_na)      AS sodium_for_score,
+    -- Raw lab values (NULL when not drawn)
+    fl.hemoglobin_last,
+    fl.sodium_last,
 
-    -- Raw binary flags (for auditability)
-    COALESCE(fl.hemoglobin_last, m.median_hgb) < 12   AS h_anemia,
-    COALESCE(fo.oncology_flag, FALSE)                 AS o_oncology,
-    COALESCE(fl.sodium_last, m.median_na) < 135       AS s_hyponatremia,
-    COALESCE(fc.has_procedure, FALSE)                 AS p_procedure,
-    fd.admission_type IN ('EMERGENCY', 'URGENT')      AS i_urgent,
-    COALESCE(p12.prior_admits_12m, 0)                 AS t_prior_admits,
-    COALESCE(fu.index_los_days >= 5, FALSE)           AS a_long_stay,
+    -- Raw binary flags (for auditability; NULL lab → flag is NULL)
+    fl.hemoglobin_last < 12                         AS h_anemia,
+    COALESCE(fo.oncology_flag, FALSE)               AS o_oncology,
+    fl.sodium_last < 135                            AS s_hyponatremia,
+    COALESCE(fc.has_procedure, FALSE)               AS p_procedure,
+    fd.admission_type IN ('EMERGENCY', 'URGENT')    AS i_urgent,
+    COALESCE(p12.prior_admits_12m, 0)               AS t_prior_admits,
+    COALESCE(fu.index_los_days >= 5, FALSE)         AS a_long_stay,
 
-    -- H: Hemoglobin < 12 → +1
-    IF(COALESCE(fl.hemoglobin_last, m.median_hgb) < 12, 1, 0) AS points_h,
+    -- H: Hemoglobin < 12 → +1  (NULL lab → 0 points)
+    IF(fl.hemoglobin_last < 12, 1, 0)              AS points_h,
 
     -- O: Oncology service → +2
-    IF(COALESCE(fo.oncology_flag, FALSE), 2, 0)               AS points_o,
+    IF(COALESCE(fo.oncology_flag, FALSE), 2, 0)    AS points_o,
 
-    -- S: Sodium < 135 → +1
-    IF(COALESCE(fl.sodium_last, m.median_na) < 135, 1, 0)     AS points_s,
+    -- S: Sodium < 135 → +1  (NULL lab → 0 points)
+    IF(fl.sodium_last < 135, 1, 0)                 AS points_s,
 
     -- P: Procedure → +1
-    IF(COALESCE(fc.has_procedure, FALSE), 1, 0)               AS points_p,
+    IF(COALESCE(fc.has_procedure, FALSE), 1, 0)    AS points_p,
 
     -- I: Urgent or emergent → +1 (elective/observation → 0)
-    IF(fd.admission_type IN ('EMERGENCY', 'URGENT'), 1, 0)    AS points_i,
+    IF(fd.admission_type IN ('EMERGENCY', 'URGENT'), 1, 0) AS points_i,
 
     -- T: Prior admits in 12 months → 0-1=0, 2-5=+2, >5=+5
     CASE
       WHEN COALESCE(p12.prior_admits_12m, 0) <= 1 THEN 0
       WHEN COALESCE(p12.prior_admits_12m, 0) <= 5 THEN 2
       ELSE 5
-    END                                                       AS points_t,
+    END                                            AS points_t,
 
     -- A: LOS ≥ 5 days → +2
-    IF(COALESCE(fu.index_los_days, 0) >= 5, 2, 0)            AS points_a,
+    IF(COALESCE(fu.index_los_days, 0) >= 5, 2, 0) AS points_a,
 
     -- Target label for evaluation
     ft.readmission_30d
 
   FROM ${ref("cohort_split")} AS c
-  CROSS JOIN train_medians AS m
   LEFT JOIN ${ref("feat_labs")}         AS fl ON fl.hadm_id = c.hadm_id
   LEFT JOIN ${ref("feat_oncology")}     AS fo ON fo.hadm_id = c.hadm_id
   LEFT JOIN ${ref("feat_codes")}        AS fc ON fc.hadm_id = c.hadm_id

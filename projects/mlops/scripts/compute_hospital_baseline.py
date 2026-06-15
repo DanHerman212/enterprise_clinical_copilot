@@ -59,11 +59,15 @@ def log_to_vertex_experiments(
     """
     from google.cloud import aiplatform
 
-    aiplatform.init(project=PROJECT_ID)
+    aiplatform.init(
+        project=PROJECT_ID,
+        location="us-east1",
+        experiment=EXPERIMENT_NAME,
+    )
 
-    run_name = f"hospital-baseline-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+    run_name = f"hospital-baseline-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
 
-    with aiplatform.start_run(run_name, experiment=EXPERIMENT_NAME) as run:
+    with aiplatform.start_run(run_name) as run:
         run.log_params({
             "method": "HOSPITAL_score",
             "split": "train",
@@ -139,8 +143,7 @@ def main() -> int:
         print(f"  ✓ Run: {run_name}")
     except Exception as e:
         print(f"  ⚠ Vertex AI Experiments logging failed: {e}")
-        print(f"  (AUCPR was computed successfully — retry logging after "
-              f"authenticating with 'gcloud auth application-default login')")
+        print(f"  (AUCPR was computed successfully)")
         return 1
 
     # 4. Write local summary for downstream consumers

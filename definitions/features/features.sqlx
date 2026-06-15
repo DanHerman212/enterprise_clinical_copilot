@@ -20,6 +20,7 @@ SELECT
   fc.* EXCEPT(hadm_id),
   fm.* EXCEPT(hadm_id),
   fl.* EXCEPT(hadm_id),
+  fo.* EXCEPT(hadm_id),
   ft.* EXCEPT(hadm_id)
 FROM ${ref("cohort_split")} AS s
 LEFT JOIN ${ref("feat_demographics")} AS fd USING (hadm_id)
@@ -27,4 +28,5 @@ LEFT JOIN ${ref("feat_utilization")}  AS fu USING (hadm_id)
 LEFT JOIN ${ref("feat_codes")}        AS fc USING (hadm_id)
 LEFT JOIN ${ref("feat_medications")}  AS fm USING (hadm_id)
 LEFT JOIN ${ref("feat_labs")}         AS fl USING (hadm_id)
+LEFT JOIN ${ref("feat_oncology")}     AS fo USING (hadm_id)
 LEFT JOIN ${ref("feat_target")}       AS ft USING (hadm_id)

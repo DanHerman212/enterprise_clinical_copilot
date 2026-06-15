@@ -111,6 +111,13 @@ FEATURE_FAMILIES: dict[str, list[str]] = {
         "glucose_measured",
         "monocytes_last", "monocytes_max", "monocytes_min",
         "monocytes_delta", "monocytes_measured",
+        "hemoglobin_last", "hemoglobin_max", "hemoglobin_min",
+        "hemoglobin_delta", "hemoglobin_measured",
+        "sodium_last", "sodium_max", "sodium_min",
+        "sodium_delta", "sodium_measured",
+    ],
+    "oncology": [
+        "oncology_flag",
     ],
 }
 
@@ -128,6 +135,8 @@ NUMERIC_FEATURES: list[str] = [
     "rdw_last", "rdw_max", "rdw_min", "rdw_delta",
     "glucose_last", "glucose_max", "glucose_min", "glucose_delta",
     "monocytes_last", "monocytes_max", "monocytes_min", "monocytes_delta",
+    "hemoglobin_last", "hemoglobin_max", "hemoglobin_min", "hemoglobin_delta",
+    "sodium_last", "sodium_max", "sodium_min", "sodium_delta",
 ]
 
 CATEGORICAL_FEATURES: list[str] = [
@@ -135,6 +144,8 @@ CATEGORICAL_FEATURES: list[str] = [
     "admission_type", "insurance", "discharge_location",
     "has_procedure", "on_anticoagulant", "on_insulin",
     "rbc_measured", "rdw_measured", "glucose_measured", "monocytes_measured",
+    "hemoglobin_measured", "sodium_measured",
+    "oncology_flag",
 ]
 
 # ---------------------------------------------------------------------------

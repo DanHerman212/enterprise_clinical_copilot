@@ -1,0 +1,32 @@
+config {
+  type: "table",
+  schema: "readmission_features",
+  description: "Oncology service flag, one row per hadm_id. Derived from ICD diagnosis codes (neoplasm chapter) for the HOSPITAL score baseline. Joined onto cohort_split by features.sqlx."
+}
+
+-- HOSPITAL score §O — Oncology service.
+-- Approximated by checking whether any billed ICD diagnosis code for the index
+-- admission falls in the neoplasm chapter:
+--   ICD-9:  140–239
+--   ICD-10: C00–D49
+-- This is a reasonable proxy for "patient was on an oncology service" when the
+-- actual service assignment is not available in MIMIC-IV.
+--
+-- Grain: one row per hadm_id (DISTINCT over dx codes, stays 1:1 on LEFT JOIN).
+-- Absence = FALSE (no oncology dx → not an oncology patient).
+
+WITH onco_dx AS (
+  SELECT DISTINCT hadm_id
+  FROM ${ref("diagnoses_icd")}
+  WHERE
+    -- ICD-9 neoplasms (140–239): codes starting with 14–23
+    (REGEXP_CONTAINS(icd_code, r'^1[4-9]') OR REGEXP_CONTAINS(icd_code, r'^2[0-3]'))
+    -- ICD-10 neoplasms (C00–D49): codes starting with C or D0–D4
+    OR REGEXP_CONTAINS(icd_code, r'^C')
+    OR REGEXP_CONTAINS(icd_code, r'^D[0-4]')
+)
+SELECT
+  c.hadm_id,
+  COALESCE(o.hadm_id IS NOT NULL, FALSE) AS oncology_flag
+FROM ${ref("cohort_split")} AS c
+LEFT JOIN onco_dx AS o USING (hadm_id)

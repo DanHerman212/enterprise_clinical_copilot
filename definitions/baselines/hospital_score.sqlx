@@ -1,0 +1,126 @@
+config {
+  type: "table",
+  schema: "readmission",
+  description: "HOSPITAL score computed per hadm_id (Donzé et al., JAMA Intern Med 2013). A validated 7-variable clinical risk score for 30-day potentially avoidable readmission. This table is the clinical baseline the ML model must beat. Not joined into analytics_dataset — queried independently by the baseline evaluation script."
+}
+
+-- HOSPITAL Score — Clinical Baseline
+--
+-- 7 variables (max 13 points):
+--   H — Hemoglobin < 12 g/dL at discharge .................. +1 point
+--   O — Discharged from oncology service .................... +2 points
+--   S — Sodium < 135 mEq/L at discharge .................... +1 point
+--   P — Procedure performed during stay .................... +1 point
+--   I — Index admission urgent or emergent ................. +1 point
+--   T — Hospital admissions in previous year ............... 0–1=0, 2–5=+2, >5=+5
+--   A — Length of stay ≥ 5 days ............................ +2 points
+--
+-- Risk tiers: 0–4 = low, 5–6 = intermediate, ≥7 = high.
+--
+-- Missing labs (hemoglobin/sodium not drawn): imputed from the TRAIN-split
+-- median. This avoids the HOSPITAL score being artificially degraded (missing
+-- → 0 points, "patient looked fine") or inflated (missing → 1 point, "unknown
+-- = abnormal"). The median represents a typical patient for whom the test was
+-- not clinically indicated.
+--
+-- Reference: Donzé J, Aujesky D, Williams D, Schnipper JL.
+--   Potentially avoidable 30-day hospital readmissions in medical patients.
+--   JAMA Intern Med. 2013;173(8):632-638.
+
+WITH train_medians AS (
+  -- Imputation anchors: median hemoglobin and sodium on the train split only.
+  SELECT
+    APPROX_QUANTILES(fl.hemoglobin_last, 100)[OFFSET(50)] AS median_hgb,
+    APPROX_QUANTILES(fl.sodium_last, 100)[OFFSET(50)]     AS median_na
+  FROM ${ref("feat_labs")} AS fl
+  JOIN ${ref("cohort_split")} AS c ON fl.hadm_id = c.hadm_id
+  WHERE c.split_name = 'train'
+),
+
+prior_12m AS (
+  -- T: count of admissions in the 12 months before the index admission.
+  SELECT
+    c.hadm_id,
+    COUNT(a.hadm_id) AS prior_admits_12m
+  FROM ${ref("cohort_split")} AS c
+  JOIN ${ref("admissions")} AS a
+    ON a.subject_id = c.subject_id
+   AND a.admittime < c.admittime
+   AND a.admittime >= TIMESTAMP_SUB(c.admittime, INTERVAL 12 MONTH)
+  GROUP BY c.hadm_id
+),
+
+scored AS (
+  SELECT
+    c.hadm_id,
+    c.subject_id,
+    c.split_name,
+
+    -- Impute missing labs with train median
+    COALESCE(fl.hemoglobin_last, m.median_hgb) AS hemoglobin_for_score,
+    COALESCE(fl.sodium_last, m.median_na)      AS sodium_for_score,
+
+    -- Raw binary flags (for auditability)
+    COALESCE(fl.hemoglobin_last, m.median_hgb) < 12   AS h_anemia,
+    COALESCE(fo.oncology_flag, FALSE)                 AS o_oncology,
+    COALESCE(fl.sodium_last, m.median_na) < 135       AS s_hyponatremia,
+    COALESCE(fc.has_procedure, FALSE)                 AS p_procedure,
+    fd.admission_type IN ('EMERGENCY', 'URGENT')      AS i_urgent,
+    COALESCE(p12.prior_admits_12m, 0)                 AS t_prior_admits,
+    COALESCE(fu.index_los_days >= 5, FALSE)           AS a_long_stay,
+
+    -- H: Hemoglobin < 12 → +1
+    IF(COALESCE(fl.hemoglobin_last, m.median_hgb) < 12, 1, 0) AS points_h,
+
+    -- O: Oncology service → +2
+    IF(COALESCE(fo.oncology_flag, FALSE), 2, 0)               AS points_o,
+
+    -- S: Sodium < 135 → +1
+    IF(COALESCE(fl.sodium_last, m.median_na) < 135, 1, 0)     AS points_s,
+
+    -- P: Procedure → +1
+    IF(COALESCE(fc.has_procedure, FALSE), 1, 0)               AS points_p,
+
+    -- I: Urgent or emergent → +1 (elective/observation → 0)
+    IF(fd.admission_type IN ('EMERGENCY', 'URGENT'), 1, 0)    AS points_i,
+
+    -- T: Prior admits in 12 months → 0-1=0, 2-5=+2, >5=+5
+    CASE
+      WHEN COALESCE(p12.prior_admits_12m, 0) <= 1 THEN 0
+      WHEN COALESCE(p12.prior_admits_12m, 0) <= 5 THEN 2
+      ELSE 5
+    END                                                       AS points_t,
+
+    -- A: LOS ≥ 5 days → +2
+    IF(COALESCE(fu.index_los_days, 0) >= 5, 2, 0)            AS points_a,
+
+    -- Target label for evaluation
+    ft.readmission_30d
+
+  FROM ${ref("cohort_split")} AS c
+  CROSS JOIN train_medians AS m
+  LEFT JOIN ${ref("feat_labs")}         AS fl ON fl.hadm_id = c.hadm_id
+  LEFT JOIN ${ref("feat_oncology")}     AS fo ON fo.hadm_id = c.hadm_id
+  LEFT JOIN ${ref("feat_codes")}        AS fc ON fc.hadm_id = c.hadm_id
+  LEFT JOIN ${ref("feat_demographics")} AS fd ON fd.hadm_id = c.hadm_id
+  LEFT JOIN ${ref("feat_utilization")}  AS fu ON fu.hadm_id = c.hadm_id
+  LEFT JOIN ${ref("feat_target")}       AS ft ON ft.hadm_id = c.hadm_id
+  LEFT JOIN prior_12m                   AS p12 ON p12.hadm_id = c.hadm_id
+)
+
+SELECT
+  *,
+  -- Total score (sum of 7 components)
+  points_h + points_o + points_s + points_p
+    + points_i + points_t + points_a AS hospital_score,
+
+  -- Risk tier
+  CASE
+    WHEN points_h + points_o + points_s + points_p
+       + points_i + points_t + points_a >= 7 THEN 'high'
+    WHEN points_h + points_o + points_s + points_p
+       + points_i + points_t + points_a >= 5 THEN 'intermediate'
+    ELSE 'low'
+  END AS risk_tier
+
+FROM scored

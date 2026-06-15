@@ -15,13 +15,17 @@ config {
 --
 -- Locked blood itemids (resolved by the notebook's locate probe; validated
 -- coverage on the cohort in parentheses):
---   rbc       51279  Red Blood Cells, Blood (m/uL)        ~89.6%
---   rdw       51277  RDW, Blood (%)                        ~89.6%
---   glucose   50931  Glucose, Blood (mg/dL)                ~85.8%
---   monocytes 52074  Absolute Monocyte Count (K/uL)        ~16.4%
+--   rbc        51279  Red Blood Cells, Blood (m/uL)        ~89.6%
+--   rdw        51277  RDW, Blood (%)                        ~89.6%
+--   glucose    50931  Glucose, Blood (mg/dL)                ~85.8%
+--   monocytes  52074  Absolute Monocyte Count (K/uL)        ~16.4%
+--   hemoglobin 50811  Hemoglobin, Blood (g/dL)              ~89%  (HOSPITAL score)
+--   sodium     50983  Sodium, Blood (mEq/L)                 ~85%  (HOSPITAL score)
 -- The monocyte ABSOLUTE count is chosen over the percent variant for clinical
 -- fidelity; its lower coverage is carried by the _measured flag + downstream
 -- imputation, and feature selection later prunes whatever doesn't earn its place.
+-- Hemoglobin and sodium are included primarily to support the HOSPITAL score
+-- baseline; they are clinically strong readmission predictors in their own right.
 --
 -- In-stay leakage gate: each result carries a charttime, and labs are often
 -- drawn around — or resulted after — discharge. Every aggregate is gated to
@@ -61,6 +65,8 @@ WITH le AS (
       WHEN 51277 THEN 'rdw'
       WHEN 50931 THEN 'glucose'
       WHEN 52074 THEN 'monocytes'
+      WHEN 50811 THEN 'hemoglobin'
+      WHEN 50983 THEN 'sodium'
     END AS analyte,
     l.charttime,
     l.valuenum
@@ -69,7 +75,7 @@ WITH le AS (
     ON l.hadm_id = c.hadm_id
    AND l.charttime >= c.admittime
    AND l.charttime <= c.dischtime
-   AND l.itemid IN (51279, 51277, 50931, 52074)
+   AND l.itemid IN (51279, 51277, 50931, 52074, 50811, 50983)
    AND l.valuenum > 0
 ),
 agg AS (
@@ -98,7 +104,19 @@ agg AS (
     ARRAY_AGG(IF(analyte = 'monocytes', valuenum, NULL) IGNORE NULLS ORDER BY charttime ASC  LIMIT 1)[SAFE_OFFSET(0)] AS monocytes_first,
     MAX(IF(analyte = 'monocytes', valuenum, NULL)) AS monocytes_max,
     MIN(IF(analyte = 'monocytes', valuenum, NULL)) AS monocytes_min,
-    COUNTIF(analyte = 'monocytes')                 AS monocytes_n
+    COUNTIF(analyte = 'monocytes')                 AS monocytes_n,
+    -- hemoglobin
+    ARRAY_AGG(IF(analyte = 'hemoglobin', valuenum, NULL) IGNORE NULLS ORDER BY charttime DESC LIMIT 1)[SAFE_OFFSET(0)] AS hemoglobin_last,
+    ARRAY_AGG(IF(analyte = 'hemoglobin', valuenum, NULL) IGNORE NULLS ORDER BY charttime ASC  LIMIT 1)[SAFE_OFFSET(0)] AS hemoglobin_first,
+    MAX(IF(analyte = 'hemoglobin', valuenum, NULL)) AS hemoglobin_max,
+    MIN(IF(analyte = 'hemoglobin', valuenum, NULL)) AS hemoglobin_min,
+    COUNTIF(analyte = 'hemoglobin')                 AS hemoglobin_n,
+    -- sodium
+    ARRAY_AGG(IF(analyte = 'sodium', valuenum, NULL) IGNORE NULLS ORDER BY charttime DESC LIMIT 1)[SAFE_OFFSET(0)] AS sodium_last,
+    ARRAY_AGG(IF(analyte = 'sodium', valuenum, NULL) IGNORE NULLS ORDER BY charttime ASC  LIMIT 1)[SAFE_OFFSET(0)] AS sodium_first,
+    MAX(IF(analyte = 'sodium', valuenum, NULL)) AS sodium_max,
+    MIN(IF(analyte = 'sodium', valuenum, NULL)) AS sodium_min,
+    COUNTIF(analyte = 'sodium')                 AS sodium_n
   FROM le
   GROUP BY hadm_id
 )
@@ -127,6 +145,18 @@ SELECT
   agg.monocytes_max                         AS monocytes_max,
   agg.monocytes_min                         AS monocytes_min,
   agg.monocytes_last - agg.monocytes_first  AS monocytes_delta,
-  COALESCE(agg.monocytes_n, 0) > 0          AS monocytes_measured
+  COALESCE(agg.monocytes_n, 0) > 0          AS monocytes_measured,
+  -- hemoglobin
+  agg.hemoglobin_last                        AS hemoglobin_last,
+  agg.hemoglobin_max                         AS hemoglobin_max,
+  agg.hemoglobin_min                         AS hemoglobin_min,
+  agg.hemoglobin_last - agg.hemoglobin_first AS hemoglobin_delta,
+  COALESCE(agg.hemoglobin_n, 0) > 0          AS hemoglobin_measured,
+  -- sodium
+  agg.sodium_last                        AS sodium_last,
+  agg.sodium_max                         AS sodium_max,
+  agg.sodium_min                         AS sodium_min,
+  agg.sodium_last - agg.sodium_first     AS sodium_delta,
+  COALESCE(agg.sodium_n, 0) > 0          AS sodium_measured
 FROM ${ref("cohort_split")} AS c
 LEFT JOIN agg USING (hadm_id)

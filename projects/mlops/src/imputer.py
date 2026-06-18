@@ -35,8 +35,11 @@ class MissingnessImputer:
         self.indicator_cols_: list[str] = []
         self.fitted_ = False
 
-    def fit(self, X: pd.DataFrame) -> "MissingnessImputer":
-        """Learn imputation values from *train* data only."""
+    def fit(self, X: pd.DataFrame, y=None) -> "MissingnessImputer":
+        """Learn imputation values from *train* data only.
+
+        Accepts optional ``y`` for sklearn Pipeline compatibility (ignored).
+        """
         policy = pd.read_csv(self.policy_path)
         self.policy_ = policy.set_index("column")
 
@@ -87,9 +90,13 @@ class MissingnessImputer:
 
         return X
 
-    def fit_transform(self, X: pd.DataFrame) -> pd.DataFrame:
-        """Fit on X, then transform X."""
-        return self.fit(X).transform(X)
+    def fit_transform(self, X: pd.DataFrame, y=None, **fit_params) -> pd.DataFrame:
+        """Fit on X, then transform X.
+
+        Accepts optional ``y`` and ``**fit_params`` for sklearn Pipeline
+        compatibility (passed through to ``fit``, then ignored).
+        """
+        return self.fit(X, y=y).transform(X)
 
     @property
     def n_features_before(self) -> int:

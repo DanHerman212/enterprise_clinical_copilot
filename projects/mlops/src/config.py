@@ -173,4 +173,4 @@ BASELINE_DIR = ARTIFACTS_DIR / "baseline"
 # Missingness policy (output of missingness_analysis.ipynb)
 # ---------------------------------------------------------------------------
 
-MISSINGNESS_POLICY_CSV = ARTIFACTS_DIR / "missingness_policy.csv"
+MISSINGNESS_POLICY_CSV = Path(__file__).resolve().parent.parent / "artifacts" / "missingness_policy.csv"

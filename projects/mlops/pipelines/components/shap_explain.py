@@ -24,6 +24,9 @@ def run_shap_explain(
     x_test_path: str,
     model_artifact_path: str,
     shap_summary_png: str,
+    shap_beeswarm_png: str,
+    shap_waterfall_png: str,
+    shap_local_plots_dir: str,
     shap_values_parquet: str,
     top_n: int = 20,
 ) -> dict[str, float]:
@@ -42,18 +45,59 @@ def run_shap_explain(
     else:
         X_sample = X_test
 
+    import xgboost as xgb
+    X_matrix = xgb.DMatrix(X_sample, enable_categorical=True)
     explainer = shap.TreeExplainer(booster)
-    shap_values = explainer.shap_values(X_sample)
+    shap_values = explainer.shap_values(X_matrix)
+    explanation = explainer(X_matrix)
+    explanation.feature_names = X_sample.columns.tolist()
 
-    # --- Global importance plot ---
+    # --- Global importance plot (Bar) ---
     fig, ax = plt.subplots(figsize=(10, max(8, top_n * 0.35)))
     shap.summary_plot(
         shap_values, X_sample, plot_type="bar", max_display=top_n, show=False,
     )
-    ax.set_title("SHAP Feature Importance (Top Features)", fontsize=14, fontweight="bold")
+    ax.set_title("SHAP Feature Importance (Bar)", fontsize=14, fontweight="bold")
     plt.tight_layout()
     plt.savefig(shap_summary_png, dpi=150, bbox_inches="tight")
     plt.close()
+
+    # --- Global interpretability plot (Beeswarm) ---
+    # This matches the user's provided example image.
+    fig, ax = plt.subplots(figsize=(10, max(8, top_n * 0.35)))
+    shap.summary_plot(
+        shap_values, X_sample, plot_type="dot", max_display=top_n, show=False,
+    )
+    ax.set_title("SHAP Feature Importance (Beeswarm)", fontsize=14, fontweight="bold")
+    plt.tight_layout()
+    plt.savefig(shap_beeswarm_png, dpi=150, bbox_inches="tight")
+    plt.close()
+
+    # --- Local interpretability plots (Waterfall) ---
+    import os
+    os.makedirs(shap_local_plots_dir, exist_ok=True)
+    
+    # We select 3 different samples: min, median, and max predicted risk
+    preds = booster.predict(X_matrix)
+    indices_to_plot = [
+        np.argmin(preds),             # lowest risk
+        np.argsort(preds)[len(preds)//2],  # median risk
+        np.argmax(preds)              # highest risk
+    ]
+    labels = ["lowest_risk", "median_risk", "highest_risk"]
+    
+    for idx, label in zip(indices_to_plot, labels):
+        # We need an Explanation object for the waterfall plot
+        fig, ax = plt.subplots(figsize=(10, 6))
+        shap.plots.waterfall(explanation[idx], max_display=top_n, show=False)
+        plt.title(f"Local SHAP Explanation ({label}: pred={preds[idx]:.4f})", fontsize=14)
+        plt.tight_layout()
+        plt.savefig(f"{shap_local_plots_dir}/shap_waterfall_{label}.png", dpi=150, bbox_inches="tight")
+        plt.close()
+        
+    # Also save one representative waterfall plot to output artifact
+    import shutil
+    shutil.copy(f"{shap_local_plots_dir}/shap_waterfall_highest_risk.png", shap_waterfall_png)
 
     # --- Feature importance as dict ---
     importance = {
@@ -84,13 +128,28 @@ def shap_explain(
     model_artifact_path: dsl.Input[dsl.Artifact],
 ) -> NamedTuple(
     "SHAPOutputs",
-    [("shap_summary_png", str), ("shap_values_parquet", str)],
+    [
+        ("shap_summary_png", str), 
+        ("shap_beeswarm_png", str),
+        ("shap_waterfall_png", str),
+        ("shap_local_plots_dir", str),
+        ("shap_values_parquet", str)
+    ],
 ):
     """KFP component: Tree SHAP global importance + per-patient values."""
     run_shap_explain(
         x_test_path=x_test_path,
         model_artifact_path=model_artifact_path,
         shap_summary_png=shap_summary_png,
+        shap_beeswarm_png=shap_beeswarm_png,
+        shap_waterfall_png=shap_waterfall_png,
+        shap_local_plots_dir=shap_local_plots_dir,
         shap_values_parquet=shap_values_parquet,
     )
-    return (shap_summary_png, shap_values_parquet)
+    return (
+        shap_summary_png, 
+        shap_beeswarm_png,
+        shap_waterfall_png,
+        shap_local_plots_dir,
+        shap_values_parquet
+    )

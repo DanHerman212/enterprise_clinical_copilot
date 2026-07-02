@@ -18,7 +18,7 @@ from sklearn.metrics import (
     roc_curve,
 )
 from kfp import dsl
-from ._image import TRAINING_IMAGE
+from ._image import TRAINING_IMAGE, component
 
 MAX_VAL_TEST_DEGRADATION = 0.02  # max absolute AUCPR drop val → test
 _ROC_MAX_POINTS = 300  # downsample ROC points for a responsive UI chart
@@ -97,7 +97,7 @@ def run_evaluate_test(
     }
 
 
-@dsl.component(
+@component(
     base_image=TRAINING_IMAGE,
     packages_to_install=[],
 )

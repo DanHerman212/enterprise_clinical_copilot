@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 import shap
 from kfp import dsl
-from ._image import TRAINING_IMAGE
+from ._image import TRAINING_IMAGE, component
 
 
 def run_shap_explain(
@@ -117,7 +117,7 @@ def run_shap_explain(
     return sorted_importance
 
 
-@dsl.component(
+@component(
     base_image=TRAINING_IMAGE,
     packages_to_install=[],
 )

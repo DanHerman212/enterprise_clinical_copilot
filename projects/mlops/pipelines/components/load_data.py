@@ -14,7 +14,7 @@ import pandas as pd
 from google.cloud import bigquery
 from kfp import dsl
 
-from ._image import TRAINING_IMAGE
+from ._image import TRAINING_IMAGE, component
 from .data import prepare_splits
 
 
@@ -103,7 +103,7 @@ def run_load_data(
     )
 
 
-@dsl.component(
+@component(
     base_image=TRAINING_IMAGE,
     packages_to_install=["google-cloud-bigquery", "pandas", "pyarrow", "joblib"],
 )

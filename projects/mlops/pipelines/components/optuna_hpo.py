@@ -18,7 +18,7 @@ from sklearn.metrics import average_precision_score
 from sklearn.model_selection import StratifiedGroupKFold
 from xgboost import XGBClassifier
 from kfp import dsl
-from ._image import TRAINING_IMAGE
+from ._image import TRAINING_IMAGE, component
 
 
 def _scale_pos_weight(y: pd.Series) -> float:
@@ -111,7 +111,7 @@ def run_optuna_hpo(
     return float(study.best_value)
 
 
-@dsl.component(
+@component(
     base_image=TRAINING_IMAGE,
     packages_to_install=["optuna", "xgboost", "scikit-learn", "pandas", "pyarrow"],
 )

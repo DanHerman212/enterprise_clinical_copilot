@@ -15,7 +15,7 @@ from evidently.metric_preset import DataDriftPreset, DataQualityPreset
 from evidently.report import Report
 from kfp import dsl
 
-from ._image import TRAINING_IMAGE
+from ._image import TRAINING_IMAGE, component
 
 
 def _drift_share(report: Report) -> float:
@@ -67,7 +67,7 @@ def run_validate_data(
     return passed
 
 
-@dsl.component(
+@component(
     base_image=TRAINING_IMAGE,
     packages_to_install=["evidently==0.4.34", "numpy<2", "pandas", "pyarrow"],
 )

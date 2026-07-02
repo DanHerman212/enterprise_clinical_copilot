@@ -9,7 +9,7 @@ import pandas as pd
 from sklearn.metrics import average_precision_score
 from xgboost import XGBClassifier
 from kfp import dsl
-from ._image import TRAINING_IMAGE
+from ._image import TRAINING_IMAGE, component
 
 
 def run_benchmark_xgboost(
@@ -52,7 +52,7 @@ def run_benchmark_xgboost(
     return aucpr
 
 
-@dsl.component(
+@component(
     base_image=TRAINING_IMAGE,
     packages_to_install=["xgboost", "scikit-learn", "pandas", "pyarrow", "joblib"],
 )

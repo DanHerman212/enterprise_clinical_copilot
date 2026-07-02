@@ -9,7 +9,7 @@ hardcoded here.
 from typing import NamedTuple
 
 from kfp import dsl
-from ._image import TRAINING_IMAGE
+from ._image import TRAINING_IMAGE, component
 
 
 def run_benchmark_gate(*, benchmark_aucpr: float, hospital_aucpr: float) -> bool:
@@ -26,7 +26,7 @@ def run_benchmark_gate(*, benchmark_aucpr: float, hospital_aucpr: float) -> bool
     return passed
 
 
-@dsl.component(base_image=TRAINING_IMAGE, packages_to_install=[])
+@component(base_image=TRAINING_IMAGE, packages_to_install=[])
 def benchmark_gate(
     benchmark_aucpr: float,
     hospital_aucpr: float,

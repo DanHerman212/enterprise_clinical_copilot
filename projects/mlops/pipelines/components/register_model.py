@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from typing import NamedTuple
 
 from kfp import dsl
-from ._image import TRAINING_IMAGE
+from ._image import TRAINING_IMAGE, component
 
 
 def assemble_serving_bundle(
@@ -85,7 +85,7 @@ def run_register_model(
     return model.resource_name
 
 
-@dsl.component(
+@component(
     base_image=TRAINING_IMAGE,
     packages_to_install=["google-cloud-aiplatform"],
 )

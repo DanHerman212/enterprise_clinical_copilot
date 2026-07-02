@@ -11,7 +11,7 @@ import joblib
 import numpy as np
 import pandas as pd
 from kfp import dsl
-from ._image import TRAINING_IMAGE
+from ._image import TRAINING_IMAGE, component
 
 # Subgroup columns and how to derive them from the feature set.
 # Age is bucketed; race/gender/insurance are categorical features
@@ -121,7 +121,7 @@ def run_fairness_audit(
     return (ppv_ok, npv_ok)
 
 
-@dsl.component(
+@component(
     base_image=TRAINING_IMAGE,
     packages_to_install=[],
 )

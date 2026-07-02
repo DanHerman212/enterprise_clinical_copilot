@@ -13,7 +13,7 @@ import joblib
 from google.cloud import bigquery
 from kfp import dsl
 
-from ._image import TRAINING_IMAGE
+from ._image import TRAINING_IMAGE, component
 from .data import fit_imputer
 
 
@@ -39,7 +39,7 @@ def run_fit_imputer(
     print(f"  Fit imputer on {len(train_df):,} train rows -> {imputer_output_path}")
 
 
-@dsl.component(
+@component(
     base_image=TRAINING_IMAGE,
     packages_to_install=["google-cloud-bigquery", "pandas", "pyarrow", "joblib"],
 )

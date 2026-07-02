@@ -35,7 +35,15 @@ def _resolve_project_id() -> str:
     )
 
 
-PROJECT_ID = _resolve_project_id()
+def get_project_id() -> str:
+    """Resolve the GCP project id lazily — only when actually needed.
+
+    Prefer this over importing ``PROJECT_ID`` so that merely importing this
+    module (e.g. transitively from the serving predictor, which never touches
+    BigQuery) does not require a project id to be configured.
+    """
+    return _resolve_project_id()
+
 
 # ---------------------------------------------------------------------------
 # BigQuery — analytics dataset (built by Dataform)
@@ -43,7 +51,24 @@ PROJECT_ID = _resolve_project_id()
 
 BQ_DATASET = "readmission"
 BQ_TABLE = "analytics_dataset"
-FULL_TABLE_REF = f"{PROJECT_ID}.{BQ_DATASET}.{BQ_TABLE}"
+
+
+def _full_table_ref() -> str:
+    return f"{get_project_id()}.{BQ_DATASET}.{BQ_TABLE}"
+
+
+def __getattr__(name: str):
+    """Resolve PROJECT_ID / FULL_TABLE_REF lazily (PEP 562).
+
+    They remain importable (``from src.config import PROJECT_ID``) but are only
+    resolved on first access, so importing this module never fails when no
+    project id is configured (e.g. inside the serving container).
+    """
+    if name == "PROJECT_ID":
+        return _resolve_project_id()
+    if name == "FULL_TABLE_REF":
+        return _full_table_ref()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # ---------------------------------------------------------------------------
 # Splits (mirrors definitions/staging/cohort_split.sqlx)

@@ -18,9 +18,6 @@ COPY pipelines/components /app/pipelines/components
 COPY pipelines/serving /app/pipelines/serving
 
 ENV PYTHONPATH=/app
-# src.config resolves a GCP project id at import; serving does no BigQuery, so a
-# placeholder keeps the import from failing.
-ENV PROJECT_ID=serving
 ENV AIP_HTTP_PORT=8080
 EXPOSE 8080
 

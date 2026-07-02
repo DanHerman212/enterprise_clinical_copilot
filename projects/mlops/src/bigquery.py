@@ -10,12 +10,12 @@ from __future__ import annotations
 import pandas as pd
 from google.cloud import bigquery
 
-from src.config import PROJECT_ID
+from src.config import get_project_id
 
 
 def get_client() -> bigquery.Client:
     """Return a BigQuery client authorised against the configured project."""
-    return bigquery.Client(project=PROJECT_ID)
+    return bigquery.Client(project=get_project_id())
 
 
 def run_query(sql: str, *, use_bqstorage: bool = True) -> pd.DataFrame:

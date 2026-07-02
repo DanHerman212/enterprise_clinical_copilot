@@ -4,8 +4,6 @@ fairness_audit — Subgroup NPV/PPV analysis across demographic slices.
 Runs in parallel with evaluate_test after train-final.
 """
 
-from __future__ import annotations
-
 import json
 from typing import NamedTuple
 

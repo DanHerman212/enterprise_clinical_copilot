@@ -2,8 +2,6 @@
 benchmark_xgboost — Train XGBoost with default parameters.
 """
 
-from __future__ import annotations
-
 from typing import NamedTuple
 
 import joblib
@@ -59,19 +57,18 @@ def run_benchmark_xgboost(
     packages_to_install=["xgboost", "scikit-learn", "pandas", "pyarrow", "joblib"],
 )
 def benchmark_xgboost(
-    x_train_path: dsl.InputPath("Dataset"),
-    y_train_path: dsl.InputPath("Dataset"),
-    x_val_path: dsl.InputPath("Dataset"),
-    y_val_path: dsl.InputPath("Dataset"),
+    x_train: dsl.Input[dsl.Dataset],
+    y_train: dsl.Input[dsl.Dataset],
+    x_val: dsl.Input[dsl.Dataset],
+    y_val: dsl.Input[dsl.Dataset],
     xgb_params: dict,
     cat_features: list,
-    model_artifact: dsl.OutputPath("Model"),
+    model_artifact: dsl.Output[dsl.Model],
 ) -> float:
     """KFP component: train benchmark XGBoost."""
-    aucpr = run_benchmark_xgboost(
-        x_train_path=x_train_path, y_train_path=y_train_path,
-        x_val_path=x_val_path, y_val_path=y_val_path,
+    return run_benchmark_xgboost(
+        x_train_path=x_train.path, y_train_path=y_train.path,
+        x_val_path=x_val.path, y_val_path=y_val.path,
         xgb_params=xgb_params, cat_features=cat_features,
-        model_artifact_path=model_artifact,
+        model_artifact_path=model_artifact.path,
     )
-    return aucpr

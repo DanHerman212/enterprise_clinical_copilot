@@ -4,8 +4,6 @@ shap_explain — Tree SHAP global importance and per-patient attributions.
 Runs in parallel with evaluate_test after train-final.
 """
 
-from __future__ import annotations
-
 from typing import NamedTuple
 
 import joblib

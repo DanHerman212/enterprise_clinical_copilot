@@ -66,20 +66,27 @@ def run_evaluate_test(
     packages_to_install=[],
 )
 def evaluate_test(
-    x_test_path: dsl.Input[dsl.Dataset],
-    y_test_path: dsl.Input[dsl.Dataset],
-    model_artifact_path: dsl.Input[dsl.Artifact],
+    x_test: dsl.Input[dsl.Dataset],
+    y_test: dsl.Input[dsl.Dataset],
+    model_artifact: dsl.Input[dsl.Model],
     final_val_aucpr: float,
     benchmark_aucpr: float,
+    metrics: dsl.Output[dsl.Metrics],
 ) -> NamedTuple(
     "TestOutputs",
     [("test_aucpr", float), ("beat_hospital", bool), ("stable", bool)],
 ):
     """KFP component: evaluate model on held-out test set."""
     test_aucpr, beat_hospital, stable = run_evaluate_test(
-        x_test_path=x_test_path, y_test_path=y_test_path,
-        model_artifact_path=model_artifact_path,
+        x_test_path=x_test.path, y_test_path=y_test.path,
+        model_artifact_path=model_artifact.path,
         final_val_aucpr=final_val_aucpr,
         benchmark_aucpr=benchmark_aucpr,
     )
+    
+    # Expose exactly as KFP Metrics so it populates the Vertex UI metrics tab.
+    metrics.log_metric("test_aucpr", test_aucpr)
+    metrics.log_metric("val_aucpr", final_val_aucpr)
+    metrics.log_metric("benchmark_aucpr", benchmark_aucpr)
+
     return (test_aucpr, beat_hospital, stable)

@@ -84,21 +84,19 @@ def run_optuna_hpo(
 
 @dsl.component(
     base_image=TRAINING_IMAGE,
-    packages_to_install=[],
+    packages_to_install=["optuna", "xgboost", "scikit-learn", "pandas", "pyarrow"],
 )
 def optuna_hpo(
-    x_train_path: dsl.Input[dsl.Dataset],
-    y_train_path: dsl.Input[dsl.Dataset],
+    x_train_path: dsl.InputPath("Dataset"),
+    y_train_path: dsl.InputPath("Dataset"),
     cat_features: list,
     n_trials: int,
-) -> NamedTuple(
-    "HPOOutputs",
-    [("best_aucpr", float), ("best_params_path", str)],
-):
+    best_params: dsl.OutputPath("Artifact"),
+) -> float:
     """KFP component: Optuna hyperparameter optimization."""
     aucpr = run_optuna_hpo(
         x_train_path=x_train_path, y_train_path=y_train_path,
         cat_features=cat_features, n_trials=n_trials,
-        best_params_path=best_params_path,
+        best_params_path=best_params,
     )
-    return (aucpr, best_params_path)
+    return aucpr

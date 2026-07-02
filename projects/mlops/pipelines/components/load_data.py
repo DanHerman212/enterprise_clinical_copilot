@@ -97,7 +97,7 @@ def run_load_data(
 
 @dsl.component(
     base_image=TRAINING_IMAGE,
-    packages_to_install=[],
+    packages_to_install=["google-cloud-storage", "google-cloud-bigquery", "pandas", "pyarrow", "joblib"],
 )
 def load_data(
     project_id: str,
@@ -110,11 +110,12 @@ def load_data(
     selected_features: list,
     cat_features: list,
     imputer_gcs_path: str,
-) -> NamedTuple(
-    "DataOutputs",
-    [("x_train_path", str), ("y_train_path", str),
-     ("x_val_path", str), ("y_val_path", str),
-     ("x_test_path", str), ("y_test_path", str)],
+    x_train: dsl.OutputPath("Dataset"),
+    y_train: dsl.OutputPath("Dataset"),
+    x_val: dsl.OutputPath("Dataset"),
+    y_val: dsl.OutputPath("Dataset"),
+    x_test: dsl.OutputPath("Dataset"),
+    y_test: dsl.OutputPath("Dataset"),
 ):
     """KFP component: load, impute, encode, return parquet paths."""
     run_load_data(
@@ -124,7 +125,7 @@ def load_data(
         test_split=test_split,
         selected_features=selected_features, cat_features=cat_features,
         imputer_gcs_path=imputer_gcs_path,
-        x_train_path=x_train_path, y_train_path=y_train_path,
-        x_val_path=x_val_path, y_val_path=y_val_path,
-        x_test_path=x_test_path, y_test_path=y_test_path,
+        x_train_path=x_train, y_train_path=y_train,
+        x_val_path=x_val, y_val_path=y_val,
+        x_test_path=x_test, y_test_path=y_test,
     )

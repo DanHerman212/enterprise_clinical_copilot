@@ -52,7 +52,7 @@ def run_register_model(
 )
 def register_model(
     project_id: str,
-    model_artifact_path: dsl.Input[dsl.Artifact],
+    model_artifact: dsl.Input[dsl.Model],
     test_aucpr: float,
     final_val_aucpr: float,
     benchmark_aucpr: float,
@@ -60,7 +60,7 @@ def register_model(
     """KFP component: register final model in Vertex AI Model Registry."""
     model_id = run_register_model(
         project_id=project_id,
-        model_artifact_uri=model_artifact_path.uri,
+        model_artifact_uri=model_artifact.uri,
         test_aucpr=test_aucpr,
         final_val_aucpr=final_val_aucpr,
         benchmark_aucpr=benchmark_aucpr,

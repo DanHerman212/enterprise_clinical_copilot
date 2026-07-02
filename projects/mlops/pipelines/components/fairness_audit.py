@@ -57,6 +57,7 @@ def run_fairness_audit(
     y_test_path: str,
     model_artifact_path: str,
     fairness_report_json: str,
+    fairness_html_path: str,
     max_ppv_gap: float = 0.15,
     max_npv_gap: float = 0.15,
 ) -> tuple[bool, bool]:
@@ -105,6 +106,11 @@ def run_fairness_audit(
     with open(fairness_report_json, "w") as f:
         json.dump(report, f, indent=2)
 
+    # Dump a simple HTML version so the UI can render it.
+    html_content = "<h2>Fairness Audit Report</h2><pre>" + json.dumps(report, indent=2) + "</pre>"
+    with open(fairness_html_path, "w") as f:
+        f.write(html_content)
+
     print(f"  PPV across subgroups: {'PASS' if ppv_ok else 'GAP > {:.0%}'.format(max_ppv_gap)}")
     print(f"  NPV across subgroups: {'PASS' if npv_ok else 'GAP > {:.0%}'.format(max_npv_gap)}")
     for subgroup_name, metrics in report.items():
@@ -122,17 +128,24 @@ def run_fairness_audit(
     packages_to_install=[],
 )
 def fairness_audit(
-    x_test_path: dsl.Input[dsl.Dataset],
-    y_test_path: dsl.Input[dsl.Dataset],
-    model_artifact_path: dsl.Input[dsl.Artifact],
+    x_test: dsl.Input[dsl.Dataset],
+    y_test: dsl.Input[dsl.Dataset],
+    model_artifact: dsl.Input[dsl.Model],
+    fairness_html: dsl.Output[dsl.HTML],
 ) -> NamedTuple(
     "FairnessOutputs",
-    [("fairness_report_json", str), ("ppv_pass", bool), ("npv_pass", bool)],
+    [("ppv_pass", bool), ("npv_pass", bool)],
 ):
     """KFP component: subgroup fairness audit (NPV/PPV)."""
+    # KFP v2 doesn't native output raw JSON as an artifact type perfectly, 
+    # but the HTML artifact guarantees UI rendering.
+    import os
+    fairness_report_json = os.path.join(os.path.dirname(fairness_html.path), "report.json")
+    
     ppv_pass, npv_pass = run_fairness_audit(
-        x_test_path=x_test_path, y_test_path=y_test_path,
-        model_artifact_path=model_artifact_path,
+        x_test_path=x_test.path, y_test_path=y_test.path,
+        model_artifact_path=model_artifact.path,
         fairness_report_json=fairness_report_json,
+        fairness_html_path=fairness_html.path,
     )
-    return (fairness_report_json, ppv_pass, npv_pass)
+    return (ppv_pass, npv_pass)

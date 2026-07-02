@@ -55,24 +55,22 @@ def run_train_final(
 
 @dsl.component(
     base_image=TRAINING_IMAGE,
-    packages_to_install=[],
+    packages_to_install=["xgboost", "scikit-learn", "pandas", "pyarrow", "joblib"],
 )
 def train_final(
-    x_train_path: dsl.Input[dsl.Dataset],
-    y_train_path: dsl.Input[dsl.Dataset],
-    x_val_path: dsl.Input[dsl.Dataset],
-    y_val_path: dsl.Input[dsl.Dataset],
-    best_params_path: dsl.Input[dsl.Artifact],
+    x_train_path: dsl.InputPath("Dataset"),
+    y_train_path: dsl.InputPath("Dataset"),
+    x_val_path: dsl.InputPath("Dataset"),
+    y_val_path: dsl.InputPath("Dataset"),
+    best_params_path: dsl.InputPath("Artifact"),
     cat_features: list,
-) -> NamedTuple(
-    "FinalOutputs",
-    [("final_aucpr", float), ("model_artifact_path", str)],
-):
+    model_artifact: dsl.OutputPath("Model"),
+) -> float:
     """KFP component: train final XGBoost with best HPO params."""
     aucpr = run_train_final(
         x_train_path=x_train_path, y_train_path=y_train_path,
         x_val_path=x_val_path, y_val_path=y_val_path,
         best_params_path=best_params_path, cat_features=cat_features,
-        model_artifact_path=model_artifact_path,
+        model_artifact_path=model_artifact,
     )
-    return (aucpr, model_artifact_path)
+    return aucpr

@@ -42,21 +42,20 @@ def run_validate_data(
 
 @dsl.component(
     base_image=TRAINING_IMAGE,
-    packages_to_install=[],
+    packages_to_install=["evidently", "pandas", "pyarrow"],
 )
 def validate_data(
-    x_train_path: dsl.Input[dsl.Dataset],
-    x_val_path: dsl.Input[dsl.Dataset],
+    x_train_path: dsl.InputPath("Dataset"),
+    x_val_path: dsl.InputPath("Dataset"),
     max_drifted_share: float,
-) -> NamedTuple(
-    "ValidationOutputs",
-    [("drift_report_html", str), ("quality_report_html", str), ("passed", bool)],
-):
+    drift_html: dsl.OutputPath("HTML"),
+    quality_html: dsl.OutputPath("HTML"),
+) -> bool:
     """KFP component: Evidently AI data validation gate."""
     passed = run_validate_data(
         x_train_path=x_train_path, x_val_path=x_val_path,
-        drift_report_html=drift_report_html,
-        quality_report_html=quality_report_html,
+        drift_report_html=drift_html,
+        quality_report_html=quality_html,
         max_drifted_share=max_drifted_share,
     )
-    return (drift_report_html, quality_report_html, passed)
+    return passed

@@ -22,7 +22,7 @@ from pipelines.training_pipeline import (
 _MLOPS_ROOT = Path(__file__).resolve().parents[2]
 _RUN_SUMMARY = (
     _MLOPS_ROOT
-    / "artifacts" / "feature_selection" / "20260701t225649" / "run_summary.json"
+    / "artifacts" / "feature_selection" / "20260702t163137" / "run_summary.json"
 )
 
 EXPECTED_TASKS = {

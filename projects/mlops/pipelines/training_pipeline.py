@@ -45,22 +45,24 @@ from pipelines.components.validate_data import validate_data
 
 PIPELINE_NAME = "readmission-training"
 
-# --- PINNED feature contract (source: run_summary.json 20260701t225649) -------
+# --- PINNED feature contract (source: run_summary.json 20260702t163137) -------
+# Leakage-controlled selection: grouped CV (StratifiedGroupKFold on subject_id),
+# native categoricals, scale_pos_weight, 1-standard-error parsimony rule.
+# 22 features (down from 50), grouped-CV AUCPR 0.4078 — statistically tied with
+# the full set (0.4084) but 56% smaller.
 SELECTED_FEATURES = [
-    "age", "gender", "race", "admission_type", "insurance", "discharge_location",
+    "age", "gender", "race", "admission_type", "discharge_location",
     "prior_admission_count", "prior_inpatient_days", "recent_ed_visits",
-    "index_los_days", "diagnosis_count", "procedure_count", "has_procedure",
-    "medication_count", "medication_order_count", "on_anticoagulant",
-    "rbc_last", "rbc_max", "rbc_min", "rdw_last", "rdw_max",
-    "glucose_max", "glucose_delta", "monocytes_last", "monocytes_min",
-    "monocytes_delta", "hemoglobin_last", "hemoglobin_min",
-    "sodium_last", "sodium_max", "sodium_min", "sodium_delta", "oncology_flag",
+    "index_los_days", "procedure_count", "has_procedure",
+    "medication_count", "medication_order_count",
+    "rbc_last", "rbc_min", "rdw_max", "monocytes_min", "hemoglobin_min",
+    "sodium_last", "sodium_max", "sodium_min", "oncology_flag",
 ]
 
 # Categorical subset of SELECTED_FEATURES (config.CATEGORICAL_FEATURES ∩ pinned).
 CAT_FEATURES = [
-    "gender", "race", "admission_type", "insurance", "discharge_location",
-    "has_procedure", "on_anticoagulant", "oncology_flag",
+    "gender", "race", "admission_type", "discharge_location",
+    "has_procedure", "oncology_flag",
 ]
 
 # Benchmark XGBoost defaults (mirror the feature-selection reference model).

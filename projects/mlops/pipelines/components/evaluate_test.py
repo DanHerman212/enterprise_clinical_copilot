@@ -115,6 +115,8 @@ def evaluate_test(
     [("test_aucpr", float), ("beat_hospital", bool), ("stable", bool)],
 ):
     """KFP component: evaluate model on held-out test set."""
+    from pipelines.components.evaluate_test import run_evaluate_test
+
     result = run_evaluate_test(
         x_test_path=x_test.path, y_test_path=y_test.path,
         model_artifact_path=model_artifact.path,

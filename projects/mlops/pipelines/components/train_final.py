@@ -77,6 +77,8 @@ def train_final(
     model_artifact: dsl.Output[dsl.Model],
 ) -> float:
     """KFP component: train final XGBoost with best HPO params."""
+    from pipelines.components.train_final import run_train_final
+
     return run_train_final(
         x_train_path=x_train.path, y_train_path=y_train.path,
         x_val_path=x_val.path, y_val_path=y_val.path,

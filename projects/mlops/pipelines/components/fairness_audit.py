@@ -135,6 +135,8 @@ def fairness_audit(
     [("ppv_pass", bool), ("npv_pass", bool)],
 ):
     """KFP component: subgroup fairness audit (NPV/PPV)."""
+    from pipelines.components.fairness_audit import run_fairness_audit
+
     # KFP v2 doesn't native output raw JSON as an artifact type perfectly, 
     # but the HTML artifact guarantees UI rendering.
     import os

@@ -124,6 +124,8 @@ def optuna_hpo(
     best_params: dsl.Output[dsl.Artifact],
 ) -> float:
     """KFP component: patient-grouped-CV Optuna hyperparameter optimization."""
+    from pipelines.components.optuna_hpo import run_optuna_hpo
+
     return run_optuna_hpo(
         x_train_path=x_train.path, y_train_path=y_train.path,
         groups_path=groups.path,

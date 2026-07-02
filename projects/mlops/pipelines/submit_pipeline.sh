@@ -6,6 +6,10 @@
 # Usage:
 #   bash projects/mlops/pipelines/submit_pipeline.sh
 #
+# PREREQUISITE: the training image must be built first (it bakes in the project
+# source that the components import at runtime):
+#   bash projects/mlops/scripts/build_images.sh all
+#
 # Override any value by exporting it first, e.g. a full run with serving image:
 #   N_TRIALS=50 \
 #   SERVING_IMAGE_URI=us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/serving:latest \
@@ -25,7 +29,8 @@ export PIPELINE_ROOT="${PIPELINE_ROOT:-gs://trim-icon-498815-a0-mlops/pipeline-r
 export N_TRIALS="${N_TRIALS:-5}"                     # dry-run default; use 50 for a full run
 export SERVING_IMAGE_URI="${SERVING_IMAGE_URI:-}"    # empty -> register_model step will fail
 export PIPELINE_SA="${PIPELINE_SA:-mlops-pipeline@trim-icon-498815-a0.iam.gserviceaccount.com}"
-# export TRAINING_IMAGE_URI=...                      # optional pinned training image
+# REQUIRED: components import their helpers from source baked into this image.
+export TRAINING_IMAGE_URI="${TRAINING_IMAGE_URI:-us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest}"
 
 if [[ ! -x "$VENV_PY" ]]; then
   echo "ERROR: project venv not found at $VENV_PY" >&2
@@ -43,7 +48,6 @@ echo "  PIPELINE_ROOT     : $PIPELINE_ROOT"
 echo "  N_TRIALS          : $N_TRIALS   (dry run = 5, full run = 50)"
 echo "  PIPELINE_SA       : $PIPELINE_SA"
 echo "  SERVING_IMAGE_URI : ${SERVING_IMAGE_URI:-<unset — register_model step will fail>}"
-echo "  TRAINING_IMAGE_URI: ${TRAINING_IMAGE_URI:-<unset — steps use prebuilt base + pip>}"
+echo "  TRAINING_IMAGE_URI: $TRAINING_IMAGE_URI"
 echo
-
 "$VENV_PY" "$MLOPS_DIR/pipelines/training_pipeline.py" submit

@@ -80,6 +80,8 @@ def validate_data(
     fail_on_drift: bool = True,
 ) -> bool:
     """KFP component: Evidently AI data validation gate (hard-fail on drift)."""
+    from pipelines.components.validate_data import run_validate_data
+
     return run_validate_data(
         x_train_path=x_train.path, x_val_path=x_val.path,
         drift_report_html=drift_html.path,

@@ -66,6 +66,8 @@ def benchmark_xgboost(
     model_artifact: dsl.Output[dsl.Model],
 ) -> float:
     """KFP component: train benchmark XGBoost."""
+    from pipelines.components.benchmark_xgboost import run_benchmark_xgboost
+
     return run_benchmark_xgboost(
         x_train_path=x_train.path, y_train_path=y_train.path,
         x_val_path=x_val.path, y_val_path=y_val.path,

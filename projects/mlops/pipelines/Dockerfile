@@ -17,4 +17,14 @@ RUN pip install --no-cache-dir \
     pyarrow>=15 \
     "google-cloud-bigquery[pandas]>=3.20" \
     google-cloud-bigquery-storage>=2.25 \
-    google-cloud-aiplatform>=1.60
+    google-cloud-aiplatform>=1.60 \
+    kfp==2.16.1
+
+# Bake the project source into the image so the thin @dsl.component wrappers can
+# `import` their `run_*` helpers at runtime. KFP lightweight components only
+# serialize the decorated function body, so shared module-level code must be
+# present on PYTHONPATH inside the container (build context is projects/mlops).
+WORKDIR /app
+COPY src /app/src
+COPY pipelines /app/pipelines
+ENV PYTHONPATH=/app

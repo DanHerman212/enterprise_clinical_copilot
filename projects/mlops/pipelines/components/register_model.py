@@ -102,6 +102,8 @@ def register_model(
     location: str = "us-east1",
 ) -> NamedTuple("RegistryOutputs", [("model_id", str)]):
     """KFP component: assemble serving bundle and register in Vertex AI."""
+    from pipelines.components.register_model import run_register_model
+
     model_id = run_register_model(
         project_id=project_id,
         location=location,

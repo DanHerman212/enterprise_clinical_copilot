@@ -129,6 +129,8 @@ def load_data(
     id_col: str = "subject_id",
 ):
     """KFP component: load, impute, encode, and write parquet splits."""
+    from pipelines.components.load_data import run_load_data
+
     run_load_data(
         project_id=project_id, full_table_ref=full_table_ref,
         label_col=label_col, split_col=split_col, id_col=id_col,

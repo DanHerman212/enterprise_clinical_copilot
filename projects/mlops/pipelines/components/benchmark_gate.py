@@ -32,6 +32,8 @@ def benchmark_gate(
     hospital_aucpr: float,
 ) -> NamedTuple("GateOutputs", [("passed", bool)]):
     """KFP component: gate on benchmark > HOSPITAL."""
+    from pipelines.components.benchmark_gate import run_benchmark_gate
+
     passed = run_benchmark_gate(
         benchmark_aucpr=benchmark_aucpr, hospital_aucpr=hospital_aucpr,
     )

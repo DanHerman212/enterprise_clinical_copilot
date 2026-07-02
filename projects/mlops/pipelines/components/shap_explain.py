@@ -136,6 +136,8 @@ def shap_explain(
     ],
 ):
     """KFP component: Tree SHAP global importance + per-patient values."""
+    from pipelines.components.shap_explain import run_shap_explain
+
     import os
     
     # We will use temporary paths for the PNGs, then render them into the Markdown artifact.

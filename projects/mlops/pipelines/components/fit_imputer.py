@@ -51,6 +51,8 @@ def fit_imputer_op(
     imputer: dsl.Output[dsl.Artifact],
 ):
     """KFP component: fit the missingness imputer on train, output the artifact."""
+    from pipelines.components.fit_imputer import run_fit_imputer
+
     run_fit_imputer(
         project_id=project_id,
         full_table_ref=full_table_ref,

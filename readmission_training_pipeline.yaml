@@ -1,0 +1,1235 @@
+# PIPELINE DEFINITION
+# Name: readmission-training
+# Description: 30-day readmission risk: impute → validate → benchmark → HPO → train → evaluate/explain/audit → register.
+# Inputs:
+#    cat_features: list [Default: ['gender', 'race', 'admission_type', 'discharge_location', 'has_procedure', 'oncology_flag']]
+#    full_table_ref: str
+#    hospital_aucpr: float [Default: 0.33246509478494324]
+#    label_col: str [Default: 'readmission_30d']
+#    max_drifted_share: float [Default: 0.2]
+#    n_trials: int [Default: 50.0]
+#    project_id: str
+#    selected_features: list [Default: ['age', 'gender', 'race', 'admission_type', 'discharge_location', 'prior_admission_count', 'prior_inpatient_days', 'recent_ed_visits', 'index_los_days', 'procedure_count', 'has_procedure', 'medication_count', 'medication_order_count', 'rbc_last', 'rbc_min', 'rdw_max', 'monocytes_min', 'hemoglobin_min', 'sodium_last', 'sodium_max', 'sodium_min', 'oncology_flag']]
+#    serving_container_image_uri: str [Default: '']
+#    split_col: str [Default: 'split_name']
+#    test_split: str [Default: 'test']
+#    train_split: str [Default: 'train']
+#    val_split: str [Default: 'validation']
+#    xgb_params: dict [Default: {'subsample': 0.8, 'n_estimators': 300.0, 'max_depth': 6.0, 'random_state': 42.0, 'learning_rate': 0.05, 'colsample_bytree': 0.8}]
+components:
+  comp-benchmark-gate:
+    executorLabel: exec-benchmark-gate
+    inputDefinitions:
+      parameters:
+        benchmark_aucpr:
+          parameterType: NUMBER_DOUBLE
+        hospital_aucpr:
+          parameterType: NUMBER_DOUBLE
+    outputDefinitions:
+      parameters:
+        passed:
+          parameterType: BOOLEAN
+  comp-benchmark-xgboost:
+    executorLabel: exec-benchmark-xgboost
+    inputDefinitions:
+      artifacts:
+        x_train:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        x_val:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        y_train:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        y_val:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+      parameters:
+        cat_features:
+          parameterType: LIST
+        xgb_params:
+          parameterType: STRUCT
+    outputDefinitions:
+      artifacts:
+        model_artifact:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+      parameters:
+        Output:
+          parameterType: NUMBER_DOUBLE
+  comp-evaluate-test:
+    executorLabel: exec-evaluate-test
+    inputDefinitions:
+      artifacts:
+        model_artifact:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+        x_test:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        y_test:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+      parameters:
+        benchmark_aucpr:
+          parameterType: NUMBER_DOUBLE
+        hospital_aucpr:
+          parameterType: NUMBER_DOUBLE
+        hpo_val_aucpr:
+          parameterType: NUMBER_DOUBLE
+    outputDefinitions:
+      artifacts:
+        metrics:
+          artifactType:
+            schemaTitle: system.Metrics
+            schemaVersion: 0.0.1
+        roc_curve_plot:
+          artifactType:
+            schemaTitle: system.ClassificationMetrics
+            schemaVersion: 0.0.1
+      parameters:
+        beat_hospital:
+          parameterType: BOOLEAN
+        stable:
+          parameterType: BOOLEAN
+        test_aucpr:
+          parameterType: NUMBER_DOUBLE
+  comp-fairness-audit:
+    executorLabel: exec-fairness-audit
+    inputDefinitions:
+      artifacts:
+        model_artifact:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+        x_test:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        y_test:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        fairness_html:
+          artifactType:
+            schemaTitle: system.HTML
+            schemaVersion: 0.0.1
+      parameters:
+        npv_pass:
+          parameterType: BOOLEAN
+        ppv_pass:
+          parameterType: BOOLEAN
+  comp-fit-imputer-op:
+    executorLabel: exec-fit-imputer-op
+    inputDefinitions:
+      parameters:
+        full_table_ref:
+          parameterType: STRING
+        project_id:
+          parameterType: STRING
+        split_col:
+          parameterType: STRING
+        train_split:
+          parameterType: STRING
+    outputDefinitions:
+      artifacts:
+        imputer:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+  comp-load-data:
+    executorLabel: exec-load-data
+    inputDefinitions:
+      artifacts:
+        imputer:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+      parameters:
+        cat_features:
+          parameterType: LIST
+        full_table_ref:
+          parameterType: STRING
+        id_col:
+          defaultValue: subject_id
+          isOptional: true
+          parameterType: STRING
+        label_col:
+          parameterType: STRING
+        project_id:
+          parameterType: STRING
+        selected_features:
+          parameterType: LIST
+        split_col:
+          parameterType: STRING
+        test_split:
+          parameterType: STRING
+        train_split:
+          parameterType: STRING
+        val_split:
+          parameterType: STRING
+    outputDefinitions:
+      artifacts:
+        groups_train:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        schema:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+        x_test:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        x_train:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        x_val:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        y_test:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        y_train:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        y_val:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-optuna-hpo:
+    executorLabel: exec-optuna-hpo
+    inputDefinitions:
+      artifacts:
+        groups:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        x_train:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        y_train:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+      parameters:
+        cat_features:
+          parameterType: LIST
+        n_trials:
+          parameterType: NUMBER_INTEGER
+    outputDefinitions:
+      artifacts:
+        best_params:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+      parameters:
+        Output:
+          parameterType: NUMBER_DOUBLE
+  comp-register-model:
+    executorLabel: exec-register-model
+    inputDefinitions:
+      artifacts:
+        imputer:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+        model_artifact:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+        schema:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+      parameters:
+        benchmark_aucpr:
+          parameterType: NUMBER_DOUBLE
+        hpo_val_aucpr:
+          parameterType: NUMBER_DOUBLE
+        location:
+          defaultValue: us-east1
+          isOptional: true
+          parameterType: STRING
+        project_id:
+          parameterType: STRING
+        serving_container_image_uri:
+          parameterType: STRING
+        test_aucpr:
+          parameterType: NUMBER_DOUBLE
+    outputDefinitions:
+      artifacts:
+        serving_model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+      parameters:
+        model_id:
+          parameterType: STRING
+  comp-shap-explain:
+    executorLabel: exec-shap-explain
+    inputDefinitions:
+      artifacts:
+        model_artifact_path:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+        x_test_path:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        shap_markdown:
+          artifactType:
+            schemaTitle: system.Markdown
+            schemaVersion: 0.0.1
+      parameters:
+        shap_beeswarm_png:
+          parameterType: STRING
+        shap_local_plots_dir:
+          parameterType: STRING
+        shap_summary_png:
+          parameterType: STRING
+        shap_values_parquet:
+          parameterType: STRING
+        shap_waterfall_png:
+          parameterType: STRING
+  comp-train-final:
+    executorLabel: exec-train-final
+    inputDefinitions:
+      artifacts:
+        best_params:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+        x_train:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        x_val:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        y_train:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        y_val:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+      parameters:
+        cat_features:
+          parameterType: LIST
+    outputDefinitions:
+      artifacts:
+        model_artifact:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+      parameters:
+        Output:
+          parameterType: NUMBER_DOUBLE
+  comp-validate-data:
+    executorLabel: exec-validate-data
+    inputDefinitions:
+      artifacts:
+        x_train:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        x_val:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+      parameters:
+        fail_on_drift:
+          defaultValue: true
+          isOptional: true
+          parameterType: BOOLEAN
+        max_drifted_share:
+          parameterType: NUMBER_DOUBLE
+    outputDefinitions:
+      artifacts:
+        drift_html:
+          artifactType:
+            schemaTitle: system.HTML
+            schemaVersion: 0.0.1
+        quality_html:
+          artifactType:
+            schemaTitle: system.HTML
+            schemaVersion: 0.0.1
+      parameters:
+        Output:
+          parameterType: BOOLEAN
+deploymentSpec:
+  executors:
+    exec-benchmark-gate:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - benchmark_gate
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.1'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef benchmark_gate(\n    benchmark_aucpr: float,\n    hospital_aucpr:\
+          \ float,\n) -> NamedTuple(\"GateOutputs\", [(\"passed\", bool)]):\n    \"\
+          \"\"KFP component: gate on benchmark > HOSPITAL.\"\"\"\n    passed = run_benchmark_gate(\n\
+          \        benchmark_aucpr=benchmark_aucpr, hospital_aucpr=hospital_aucpr,\n\
+          \    )\n    return (passed,)\n\n"
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
+    exec-benchmark-xgboost:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - benchmark_xgboost
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'xgboost' 'scikit-learn'\
+          \ 'pandas' 'pyarrow' 'joblib'  &&  python3 -m pip install --quiet --no-warn-script-location\
+          \ 'kfp==2.16.1' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
+          3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef benchmark_xgboost(\n    x_train: dsl.Input[dsl.Dataset],\n  \
+          \  y_train: dsl.Input[dsl.Dataset],\n    x_val: dsl.Input[dsl.Dataset],\n\
+          \    y_val: dsl.Input[dsl.Dataset],\n    xgb_params: dict,\n    cat_features:\
+          \ list,\n    model_artifact: dsl.Output[dsl.Model],\n) -> float:\n    \"\
+          \"\"KFP component: train benchmark XGBoost.\"\"\"\n    return run_benchmark_xgboost(\n\
+          \        x_train_path=x_train.path, y_train_path=y_train.path,\n       \
+          \ x_val_path=x_val.path, y_val_path=y_val.path,\n        xgb_params=xgb_params,\
+          \ cat_features=cat_features,\n        model_artifact_path=model_artifact.path,\n\
+          \    )\n\n"
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
+    exec-evaluate-test:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - evaluate_test
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.1'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef evaluate_test(\n    x_test: dsl.Input[dsl.Dataset],\n    y_test:\
+          \ dsl.Input[dsl.Dataset],\n    model_artifact: dsl.Input[dsl.Model],\n \
+          \   hpo_val_aucpr: float,\n    benchmark_aucpr: float,\n    hospital_aucpr:\
+          \ float,\n    metrics: dsl.Output[dsl.Metrics],\n    roc_curve_plot: dsl.Output[dsl.ClassificationMetrics],\n\
+          ) -> NamedTuple(\n    \"TestOutputs\",\n    [(\"test_aucpr\", float), (\"\
+          beat_hospital\", bool), (\"stable\", bool)],\n):\n    \"\"\"KFP component:\
+          \ evaluate model on held-out test set.\"\"\"\n    result = run_evaluate_test(\n\
+          \        x_test_path=x_test.path, y_test_path=y_test.path,\n        model_artifact_path=model_artifact.path,\n\
+          \        hpo_val_aucpr=hpo_val_aucpr,\n        benchmark_aucpr=benchmark_aucpr,\n\
+          \        hospital_aucpr=hospital_aucpr,\n    )\n\n    # Scalar metrics ->\
+          \ Vertex UI metrics tab + auto-logged to the experiment.\n    metrics.log_metric(\"\
+          test_aucpr\", result[\"test_aucpr\"])\n    metrics.log_metric(\"test_auroc\"\
+          , result[\"test_auroc\"])\n    metrics.log_metric(\"brier_score\", result[\"\
+          brier_score\"])\n    metrics.log_metric(\"hpo_val_aucpr\", hpo_val_aucpr)\n\
+          \    metrics.log_metric(\"benchmark_aucpr\", benchmark_aucpr)\n    metrics.log_metric(\"\
+          hospital_aucpr\", hospital_aucpr)\n\n    # Interactive ROC curve rendered\
+          \ on the node.\n    roc = result[\"roc\"]\n    roc_curve_plot.log_roc_curve(roc[\"\
+          fpr\"], roc[\"tpr\"], roc[\"thresholds\"])\n\n    return (result[\"test_aucpr\"\
+          ], result[\"beat_hospital\"], result[\"stable\"])\n\n"
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
+    exec-fairness-audit:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - fairness_audit
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.1'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef fairness_audit(\n    x_test: dsl.Input[dsl.Dataset],\n    y_test:\
+          \ dsl.Input[dsl.Dataset],\n    model_artifact: dsl.Input[dsl.Model],\n \
+          \   fairness_html: dsl.Output[dsl.HTML],\n) -> NamedTuple(\n    \"FairnessOutputs\"\
+          ,\n    [(\"ppv_pass\", bool), (\"npv_pass\", bool)],\n):\n    \"\"\"KFP\
+          \ component: subgroup fairness audit (NPV/PPV).\"\"\"\n    # KFP v2 doesn't\
+          \ native output raw JSON as an artifact type perfectly, \n    # but the\
+          \ HTML artifact guarantees UI rendering.\n    import os\n    fairness_report_json\
+          \ = os.path.join(os.path.dirname(fairness_html.path), \"report.json\")\n\
+          \n    ppv_pass, npv_pass = run_fairness_audit(\n        x_test_path=x_test.path,\
+          \ y_test_path=y_test.path,\n        model_artifact_path=model_artifact.path,\n\
+          \        fairness_report_json=fairness_report_json,\n        fairness_html_path=fairness_html.path,\n\
+          \    )\n    return (ppv_pass, npv_pass)\n\n"
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
+    exec-fit-imputer-op:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - fit_imputer_op
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'google-cloud-bigquery'\
+          \ 'pandas' 'pyarrow' 'joblib'  &&  python3 -m pip install --quiet --no-warn-script-location\
+          \ 'kfp==2.16.1' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
+          3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef fit_imputer_op(\n    project_id: str,\n    full_table_ref: str,\n\
+          \    split_col: str,\n    train_split: str,\n    imputer: dsl.Output[dsl.Artifact],\n\
+          ):\n    \"\"\"KFP component: fit the missingness imputer on train, output\
+          \ the artifact.\"\"\"\n    run_fit_imputer(\n        project_id=project_id,\n\
+          \        full_table_ref=full_table_ref,\n        split_col=split_col,\n\
+          \        train_split=train_split,\n        imputer_output_path=imputer.path,\n\
+          \    )\n\n"
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
+    exec-load-data:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - load_data
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'google-cloud-bigquery'\
+          \ 'pandas' 'pyarrow' 'joblib'  &&  python3 -m pip install --quiet --no-warn-script-location\
+          \ 'kfp==2.16.1' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
+          3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef load_data(\n    project_id: str,\n    full_table_ref: str,\n\
+          \    label_col: str,\n    split_col: str,\n    train_split: str,\n    val_split:\
+          \ str,\n    test_split: str,\n    selected_features: list,\n    cat_features:\
+          \ list,\n    imputer: dsl.Input[dsl.Artifact],\n    x_train: dsl.Output[dsl.Dataset],\n\
+          \    y_train: dsl.Output[dsl.Dataset],\n    x_val: dsl.Output[dsl.Dataset],\n\
+          \    y_val: dsl.Output[dsl.Dataset],\n    x_test: dsl.Output[dsl.Dataset],\n\
+          \    y_test: dsl.Output[dsl.Dataset],\n    groups_train: dsl.Output[dsl.Dataset],\n\
+          \    schema: dsl.Output[dsl.Artifact],\n    id_col: str = \"subject_id\"\
+          ,\n):\n    \"\"\"KFP component: load, impute, encode, and write parquet\
+          \ splits.\"\"\"\n    run_load_data(\n        project_id=project_id, full_table_ref=full_table_ref,\n\
+          \        label_col=label_col, split_col=split_col, id_col=id_col,\n    \
+          \    train_split=train_split, val_split=val_split, test_split=test_split,\n\
+          \        selected_features=selected_features, cat_features=cat_features,\n\
+          \        imputer_path=imputer.path,\n        x_train_path=x_train.path,\
+          \ y_train_path=y_train.path,\n        x_val_path=x_val.path, y_val_path=y_val.path,\n\
+          \        x_test_path=x_test.path, y_test_path=y_test.path,\n        groups_train_path=groups_train.path,\n\
+          \        schema_path=schema.path,\n    )\n\n"
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
+    exec-optuna-hpo:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - optuna_hpo
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'optuna' 'xgboost'\
+          \ 'scikit-learn' 'pandas' 'pyarrow'  &&  python3 -m pip install --quiet\
+          \ --no-warn-script-location 'kfp==2.16.1' '--no-deps' 'typing-extensions>=3.7.4,<5;\
+          \ python_version<\"3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef optuna_hpo(\n    x_train: dsl.Input[dsl.Dataset],\n    y_train:\
+          \ dsl.Input[dsl.Dataset],\n    groups: dsl.Input[dsl.Dataset],\n    cat_features:\
+          \ list,\n    n_trials: int,\n    best_params: dsl.Output[dsl.Artifact],\n\
+          ) -> float:\n    \"\"\"KFP component: patient-grouped-CV Optuna hyperparameter\
+          \ optimization.\"\"\"\n    return run_optuna_hpo(\n        x_train_path=x_train.path,\
+          \ y_train_path=y_train.path,\n        groups_path=groups.path,\n       \
+          \ cat_features=cat_features, n_trials=n_trials,\n        best_params_path=best_params.path,\n\
+          \    )\n\n"
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
+    exec-register-model:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - register_model
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'google-cloud-aiplatform'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.1'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef register_model(\n    project_id: str,\n    model_artifact: dsl.Input[dsl.Model],\n\
+          \    imputer: dsl.Input[dsl.Artifact],\n    schema: dsl.Input[dsl.Artifact],\n\
+          \    serving_container_image_uri: str,\n    test_aucpr: float,\n    hpo_val_aucpr:\
+          \ float,\n    benchmark_aucpr: float,\n    serving_model: dsl.Output[dsl.Model],\n\
+          \    location: str = \"us-east1\",\n) -> NamedTuple(\"RegistryOutputs\"\
+          , [(\"model_id\", str)]):\n    \"\"\"KFP component: assemble serving bundle\
+          \ and register in Vertex AI.\"\"\"\n    model_id = run_register_model(\n\
+          \        project_id=project_id,\n        location=location,\n        model_path=model_artifact.path,\n\
+          \        imputer_path=imputer.path,\n        schema_path=schema.path,\n\
+          \        bundle_dir=serving_model.path,\n        bundle_uri=serving_model.uri,\n\
+          \        serving_container_image_uri=serving_container_image_uri,\n    \
+          \    test_aucpr=test_aucpr,\n        hpo_val_aucpr=hpo_val_aucpr,\n    \
+          \    benchmark_aucpr=benchmark_aucpr,\n    )\n    return (model_id,)\n\n"
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
+    exec-shap-explain:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - shap_explain
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.1'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef shap_explain(\n    x_test_path: dsl.Input[dsl.Dataset],\n   \
+          \ model_artifact_path: dsl.Input[dsl.Artifact],\n    shap_markdown: dsl.Output[dsl.Markdown],\n\
+          ) -> NamedTuple(\n    \"SHAPOutputs\",\n    [\n        (\"shap_summary_png\"\
+          , str), \n        (\"shap_beeswarm_png\", str),\n        (\"shap_waterfall_png\"\
+          , str),\n        (\"shap_local_plots_dir\", str),\n        (\"shap_values_parquet\"\
+          , str)\n    ],\n):\n    \"\"\"KFP component: Tree SHAP global importance\
+          \ + per-patient values.\"\"\"\n    import os\n\n    # We will use temporary\
+          \ paths for the PNGs, then render them into the Markdown artifact.\n   \
+          \ # Vertex UI does not render raw .png string paths intuitively.\n    temp_dir\
+          \ = os.path.dirname(shap_markdown.path)\n    shap_summary_png = os.path.join(temp_dir,\
+          \ \"shap_summary.png\")\n    shap_beeswarm_png = os.path.join(temp_dir,\
+          \ \"shap_beeswarm.png\")\n    shap_waterfall_png = os.path.join(temp_dir,\
+          \ \"shap_waterfall.png\")\n    shap_local_plots_dir = os.path.join(temp_dir,\
+          \ \"shap_local_plots\")\n    shap_values_parquet = os.path.join(temp_dir,\
+          \ \"shap_values.parquet\")\n\n    run_shap_explain(\n        x_test_path=x_test_path,\n\
+          \        model_artifact_path=model_artifact_path,\n        shap_summary_png=shap_summary_png,\n\
+          \        shap_beeswarm_png=shap_beeswarm_png,\n        shap_waterfall_png=shap_waterfall_png,\n\
+          \        shap_local_plots_dir=shap_local_plots_dir,\n        shap_values_parquet=shap_values_parquet,\n\
+          \    )\n\n    # Encode images to base64 so they render directly inside the\
+          \ Vertex Markdown UI widget\n    import base64\n    def _to_b64(path):\n\
+          \        with open(path, \"rb\") as img_file:\n            return base64.b64encode(img_file.read()).decode('utf-8')\n\
+          \n    md_content = f\"\"\"\n# Model Interpretability (SHAP)\n\n## Global\
+          \ Importance (Beeswarm)\n<img src=\"data:image/png;base64,{_to_b64(shap_beeswarm_png)}\"\
+          \ width=\"800\"/>\n\n## Global Importance (Bar)\n<img src=\"data:image/png;base64,{_to_b64(shap_summary_png)}\"\
+          \ width=\"800\"/>\n\n## Local Importance (Waterfall - Highest Risk)\n<img\
+          \ src=\"data:image/png;base64,{_to_b64(shap_waterfall_png)}\" width=\"800\"\
+          />\n    \"\"\"\n\n    with open(shap_markdown.path, \"w\") as f:\n     \
+          \   f.write(md_content)\n\n    return (\n        shap_summary_png, \n  \
+          \      shap_beeswarm_png,\n        shap_waterfall_png,\n        shap_local_plots_dir,\n\
+          \        shap_values_parquet\n    )\n\n"
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
+    exec-train-final:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - train_final
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'xgboost' 'scikit-learn'\
+          \ 'pandas' 'pyarrow' 'joblib'  &&  python3 -m pip install --quiet --no-warn-script-location\
+          \ 'kfp==2.16.1' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
+          3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef train_final(\n    x_train: dsl.Input[dsl.Dataset],\n    y_train:\
+          \ dsl.Input[dsl.Dataset],\n    x_val: dsl.Input[dsl.Dataset],\n    y_val:\
+          \ dsl.Input[dsl.Dataset],\n    best_params: dsl.Input[dsl.Artifact],\n \
+          \   cat_features: list,\n    model_artifact: dsl.Output[dsl.Model],\n) ->\
+          \ float:\n    \"\"\"KFP component: train final XGBoost with best HPO params.\"\
+          \"\"\n    return run_train_final(\n        x_train_path=x_train.path, y_train_path=y_train.path,\n\
+          \        x_val_path=x_val.path, y_val_path=y_val.path,\n        best_params_path=best_params.path,\
+          \ cat_features=cat_features,\n        model_artifact_path=model_artifact.path,\n\
+          \    )\n\n"
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
+    exec-validate-data:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - validate_data
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'evidently==0.4.34'\
+          \ 'numpy<2' 'pandas' 'pyarrow'  &&  python3 -m pip install --quiet --no-warn-script-location\
+          \ 'kfp==2.16.1' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
+          3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef validate_data(\n    x_train: dsl.Input[dsl.Dataset],\n    x_val:\
+          \ dsl.Input[dsl.Dataset],\n    max_drifted_share: float,\n    drift_html:\
+          \ dsl.Output[dsl.HTML],\n    quality_html: dsl.Output[dsl.HTML],\n    fail_on_drift:\
+          \ bool = True,\n) -> bool:\n    \"\"\"KFP component: Evidently AI data validation\
+          \ gate (hard-fail on drift).\"\"\"\n    return run_validate_data(\n    \
+          \    x_train_path=x_train.path, x_val_path=x_val.path,\n        drift_report_html=drift_html.path,\n\
+          \        quality_report_html=quality_html.path,\n        max_drifted_share=max_drifted_share,\n\
+          \        fail_on_drift=fail_on_drift,\n    )\n\n"
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
+pipelineInfo:
+  description: "30-day readmission risk: impute \u2192 validate \u2192 benchmark \u2192\
+    \ HPO \u2192 train \u2192 evaluate/explain/audit \u2192 register."
+  name: readmission-training
+root:
+  dag:
+    tasks:
+      benchmark-gate:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-benchmark-gate
+        dependentTasks:
+        - benchmark-xgboost
+        inputs:
+          parameters:
+            benchmark_aucpr:
+              taskOutputParameter:
+                outputParameterKey: Output
+                producerTask: benchmark-xgboost
+            hospital_aucpr:
+              componentInputParameter: hospital_aucpr
+        taskInfo:
+          name: benchmark-gate
+      benchmark-xgboost:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-benchmark-xgboost
+        dependentTasks:
+        - load-data
+        - validate-data
+        inputs:
+          artifacts:
+            x_train:
+              taskOutputArtifact:
+                outputArtifactKey: x_train
+                producerTask: load-data
+            x_val:
+              taskOutputArtifact:
+                outputArtifactKey: x_val
+                producerTask: load-data
+            y_train:
+              taskOutputArtifact:
+                outputArtifactKey: y_train
+                producerTask: load-data
+            y_val:
+              taskOutputArtifact:
+                outputArtifactKey: y_val
+                producerTask: load-data
+          parameters:
+            cat_features:
+              componentInputParameter: cat_features
+            xgb_params:
+              componentInputParameter: xgb_params
+        taskInfo:
+          name: benchmark-xgboost
+      evaluate-test:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-evaluate-test
+        dependentTasks:
+        - benchmark-xgboost
+        - load-data
+        - optuna-hpo
+        - train-final
+        inputs:
+          artifacts:
+            model_artifact:
+              taskOutputArtifact:
+                outputArtifactKey: model_artifact
+                producerTask: train-final
+            x_test:
+              taskOutputArtifact:
+                outputArtifactKey: x_test
+                producerTask: load-data
+            y_test:
+              taskOutputArtifact:
+                outputArtifactKey: y_test
+                producerTask: load-data
+          parameters:
+            benchmark_aucpr:
+              taskOutputParameter:
+                outputParameterKey: Output
+                producerTask: benchmark-xgboost
+            hospital_aucpr:
+              componentInputParameter: hospital_aucpr
+            hpo_val_aucpr:
+              taskOutputParameter:
+                outputParameterKey: Output
+                producerTask: optuna-hpo
+        taskInfo:
+          name: evaluate-test
+      fairness-audit:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-fairness-audit
+        dependentTasks:
+        - load-data
+        - train-final
+        inputs:
+          artifacts:
+            model_artifact:
+              taskOutputArtifact:
+                outputArtifactKey: model_artifact
+                producerTask: train-final
+            x_test:
+              taskOutputArtifact:
+                outputArtifactKey: x_test
+                producerTask: load-data
+            y_test:
+              taskOutputArtifact:
+                outputArtifactKey: y_test
+                producerTask: load-data
+        taskInfo:
+          name: fairness-audit
+      fit-imputer-op:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-fit-imputer-op
+        inputs:
+          parameters:
+            full_table_ref:
+              componentInputParameter: full_table_ref
+            project_id:
+              componentInputParameter: project_id
+            split_col:
+              componentInputParameter: split_col
+            train_split:
+              componentInputParameter: train_split
+        taskInfo:
+          name: fit-imputer-op
+      load-data:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-load-data
+        dependentTasks:
+        - fit-imputer-op
+        inputs:
+          artifacts:
+            imputer:
+              taskOutputArtifact:
+                outputArtifactKey: imputer
+                producerTask: fit-imputer-op
+          parameters:
+            cat_features:
+              componentInputParameter: cat_features
+            full_table_ref:
+              componentInputParameter: full_table_ref
+            label_col:
+              componentInputParameter: label_col
+            project_id:
+              componentInputParameter: project_id
+            selected_features:
+              componentInputParameter: selected_features
+            split_col:
+              componentInputParameter: split_col
+            test_split:
+              componentInputParameter: test_split
+            train_split:
+              componentInputParameter: train_split
+            val_split:
+              componentInputParameter: val_split
+        taskInfo:
+          name: load-data
+      optuna-hpo:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-optuna-hpo
+        dependentTasks:
+        - benchmark-gate
+        - load-data
+        inputs:
+          artifacts:
+            groups:
+              taskOutputArtifact:
+                outputArtifactKey: groups_train
+                producerTask: load-data
+            x_train:
+              taskOutputArtifact:
+                outputArtifactKey: x_train
+                producerTask: load-data
+            y_train:
+              taskOutputArtifact:
+                outputArtifactKey: y_train
+                producerTask: load-data
+          parameters:
+            cat_features:
+              componentInputParameter: cat_features
+            n_trials:
+              componentInputParameter: n_trials
+        taskInfo:
+          name: optuna-hpo
+      register-model:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-register-model
+        dependentTasks:
+        - benchmark-xgboost
+        - evaluate-test
+        - fit-imputer-op
+        - load-data
+        - optuna-hpo
+        - train-final
+        inputs:
+          artifacts:
+            imputer:
+              taskOutputArtifact:
+                outputArtifactKey: imputer
+                producerTask: fit-imputer-op
+            model_artifact:
+              taskOutputArtifact:
+                outputArtifactKey: model_artifact
+                producerTask: train-final
+            schema:
+              taskOutputArtifact:
+                outputArtifactKey: schema
+                producerTask: load-data
+          parameters:
+            benchmark_aucpr:
+              taskOutputParameter:
+                outputParameterKey: Output
+                producerTask: benchmark-xgboost
+            hpo_val_aucpr:
+              taskOutputParameter:
+                outputParameterKey: Output
+                producerTask: optuna-hpo
+            project_id:
+              componentInputParameter: project_id
+            serving_container_image_uri:
+              componentInputParameter: serving_container_image_uri
+            test_aucpr:
+              taskOutputParameter:
+                outputParameterKey: test_aucpr
+                producerTask: evaluate-test
+        taskInfo:
+          name: register-model
+      shap-explain:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-shap-explain
+        dependentTasks:
+        - load-data
+        - train-final
+        inputs:
+          artifacts:
+            model_artifact_path:
+              taskOutputArtifact:
+                outputArtifactKey: model_artifact
+                producerTask: train-final
+            x_test_path:
+              taskOutputArtifact:
+                outputArtifactKey: x_test
+                producerTask: load-data
+        taskInfo:
+          name: shap-explain
+      train-final:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-train-final
+        dependentTasks:
+        - load-data
+        - optuna-hpo
+        inputs:
+          artifacts:
+            best_params:
+              taskOutputArtifact:
+                outputArtifactKey: best_params
+                producerTask: optuna-hpo
+            x_train:
+              taskOutputArtifact:
+                outputArtifactKey: x_train
+                producerTask: load-data
+            x_val:
+              taskOutputArtifact:
+                outputArtifactKey: x_val
+                producerTask: load-data
+            y_train:
+              taskOutputArtifact:
+                outputArtifactKey: y_train
+                producerTask: load-data
+            y_val:
+              taskOutputArtifact:
+                outputArtifactKey: y_val
+                producerTask: load-data
+          parameters:
+            cat_features:
+              componentInputParameter: cat_features
+        taskInfo:
+          name: train-final
+      validate-data:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-validate-data
+        dependentTasks:
+        - load-data
+        inputs:
+          artifacts:
+            x_train:
+              taskOutputArtifact:
+                outputArtifactKey: x_train
+                producerTask: load-data
+            x_val:
+              taskOutputArtifact:
+                outputArtifactKey: x_val
+                producerTask: load-data
+          parameters:
+            max_drifted_share:
+              componentInputParameter: max_drifted_share
+        taskInfo:
+          name: validate-data
+  inputDefinitions:
+    parameters:
+      cat_features:
+        defaultValue:
+        - gender
+        - race
+        - admission_type
+        - discharge_location
+        - has_procedure
+        - oncology_flag
+        isOptional: true
+        parameterType: LIST
+      full_table_ref:
+        parameterType: STRING
+      hospital_aucpr:
+        defaultValue: 0.33246509478494324
+        isOptional: true
+        parameterType: NUMBER_DOUBLE
+      label_col:
+        defaultValue: readmission_30d
+        isOptional: true
+        parameterType: STRING
+      max_drifted_share:
+        defaultValue: 0.2
+        isOptional: true
+        parameterType: NUMBER_DOUBLE
+      n_trials:
+        defaultValue: 50.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      project_id:
+        parameterType: STRING
+      selected_features:
+        defaultValue:
+        - age
+        - gender
+        - race
+        - admission_type
+        - discharge_location
+        - prior_admission_count
+        - prior_inpatient_days
+        - recent_ed_visits
+        - index_los_days
+        - procedure_count
+        - has_procedure
+        - medication_count
+        - medication_order_count
+        - rbc_last
+        - rbc_min
+        - rdw_max
+        - monocytes_min
+        - hemoglobin_min
+        - sodium_last
+        - sodium_max
+        - sodium_min
+        - oncology_flag
+        isOptional: true
+        parameterType: LIST
+      serving_container_image_uri:
+        defaultValue: ''
+        isOptional: true
+        parameterType: STRING
+      split_col:
+        defaultValue: split_name
+        isOptional: true
+        parameterType: STRING
+      test_split:
+        defaultValue: test
+        isOptional: true
+        parameterType: STRING
+      train_split:
+        defaultValue: train
+        isOptional: true
+        parameterType: STRING
+      val_split:
+        defaultValue: validation
+        isOptional: true
+        parameterType: STRING
+      xgb_params:
+        defaultValue:
+          colsample_bytree: 0.8
+          learning_rate: 0.05
+          max_depth: 6.0
+          n_estimators: 300.0
+          random_state: 42.0
+          subsample: 0.8
+        isOptional: true
+        parameterType: STRUCT
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.16.1

@@ -1,0 +1,26 @@
+# Build context minimizer for `gcloud builds submit` (context = projects/mlops).
+#
+# The container builds only need:
+#   src/, pipelines/components/, pipelines/serving/, pipelines/Dockerfile
+# Everything below is excluded to keep the uploaded context small and to avoid
+# walking heavy / non-source directories (artifacts/ also contains a
+# self-referential symlink that crashes the uploader).
+
+# Heavy, non-source directories
+artifacts/
+notebooks/
+docs/
+scripts/
+
+# Tests are not needed inside the images
+pipelines/tests/
+
+# Python / tooling cruft
+**/__pycache__/
+*.pyc
+*.pyo
+*.ipynb
+.venv/
+.pytest_cache/
+.mypy_cache/
+.DS_Store

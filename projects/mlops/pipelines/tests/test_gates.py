@@ -81,10 +81,14 @@ def test_evaluate_beats_baseline_and_stable(tmp_path):
         benchmark_aucpr=0.40,
         hospital_aucpr=0.10,               # low -> beaten
     )
-    returned_test_aucpr, beat_hospital, stable = result
-    assert beat_hospital is True
-    assert stable is True
-    assert abs(returned_test_aucpr - test_aucpr) < 1e-9
+    assert result["beat_hospital"] is True
+    assert result["stable"] is True
+    assert abs(result["test_aucpr"] - test_aucpr) < 1e-9
+    # Threshold-free extras for experiment tracking.
+    assert 0.0 <= result["test_auroc"] <= 1.0
+    assert 0.0 <= result["brier_score"] <= 1.0
+    assert len(result["roc"]["fpr"]) == len(result["roc"]["tpr"]) == len(result["roc"]["thresholds"])
+    assert all(np.isfinite(t) for t in result["roc"]["thresholds"])
 
 
 def test_evaluate_hard_fails_below_baseline(tmp_path):
@@ -101,12 +105,12 @@ def test_evaluate_hard_fails_below_baseline(tmp_path):
 
 def test_evaluate_flags_instability(tmp_path):
     model_path, x_path, y_path, test_aucpr = _trained_model(tmp_path)
-    _, beat_hospital, stable = run_evaluate_test(
+    result = run_evaluate_test(
         x_test_path=x_path, y_test_path=y_path,
         model_artifact_path=model_path,
         hpo_val_aucpr=test_aucpr + 0.30,   # big val->test drop
         benchmark_aucpr=0.40,
         hospital_aucpr=0.10,
     )
-    assert beat_hospital is True
-    assert stable is False
+    assert result["beat_hospital"] is True
+    assert result["stable"] is False

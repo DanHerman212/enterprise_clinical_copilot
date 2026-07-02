@@ -1,21 +1,49 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+#
+# submit_pipeline.sh — compile & submit the readmission training pipeline to
+# Vertex AI Pipelines, associated with the `readmission-mlops` experiment.
+#
+# Usage:
+#   bash projects/mlops/pipelines/submit_pipeline.sh
+#
+# Override any value by exporting it first, e.g. a full run with serving image:
+#   N_TRIALS=50 \
+#   SERVING_IMAGE_URI=us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/serving:latest \
+#     bash projects/mlops/pipelines/submit_pipeline.sh
+set -euo pipefail
 
-echo "Setting up Python 3.11 environment for KFP submission..."
-if [ -d "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv-311" ]; then
-    source /Users/danherman/Desktop/enterprise_clinical_copilot/.venv-311/bin/activate
-else
-    # Assume python3.11 is available
-    python3.11 -m venv /Users/danherman/Desktop/enterprise_clinical_copilot/.venv-311
-    source /Users/danherman/Desktop/enterprise_clinical_copilot/.venv-311/bin/activate
-    # Compiling the pipeline imports every component module, so the submission
-    # environment needs all of their top-level imports available.
-    pip install kfp==2.16.1 google-cloud-aiplatform google-cloud-bigquery \
-        pandas scikit-learn xgboost shap evidently optuna matplotlib joblib pyarrow
+# --- Resolve paths relative to this script -----------------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MLOPS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"            # projects/mlops
+REPO_ROOT="$(cd "$MLOPS_DIR/../.." && pwd)"          # repo root
+VENV_PY="$REPO_ROOT/.venv/bin/python"
+
+# --- Configuration (all overridable via env) ---------------------------------
+export PROJECT_ID="${PROJECT_ID:-trim-icon-498815-a0}"
+REGION="${REGION:-us-east1}"                         # pipeline is pinned to us-east1
+export PIPELINE_ROOT="${PIPELINE_ROOT:-gs://trim-icon-498815-a0-mlops/pipeline-root}"
+export N_TRIALS="${N_TRIALS:-5}"                     # dry-run default; use 50 for a full run
+export SERVING_IMAGE_URI="${SERVING_IMAGE_URI:-}"    # empty -> register_model step will fail
+export PIPELINE_SA="${PIPELINE_SA:-mlops-pipeline@trim-icon-498815-a0.iam.gserviceaccount.com}"
+# export TRAINING_IMAGE_URI=...                      # optional pinned training image
+
+if [[ ! -x "$VENV_PY" ]]; then
+  echo "ERROR: project venv not found at $VENV_PY" >&2
+  echo "Create it and install kfp==2.16.1 + google-cloud-aiplatform first." >&2
+  exit 1
 fi
 
-export PYTHONPATH="/Users/danherman/Desktop/enterprise_clinical_copilot/projects/mlops:$PYTHONPATH"
+# So `import pipelines...` and `import src...` resolve.
+export PYTHONPATH="$MLOPS_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
-echo "Submitting pipeline to Vertex AI..."
-python /Users/danherman/Desktop/enterprise_clinical_copilot/projects/mlops/pipelines/training_pipeline.py submit
-echo "Submission script complete."
+echo "=== Submitting readmission training pipeline ==="
+echo "  PROJECT_ID        : $PROJECT_ID"
+echo "  REGION            : $REGION"
+echo "  PIPELINE_ROOT     : $PIPELINE_ROOT"
+echo "  N_TRIALS          : $N_TRIALS   (dry run = 5, full run = 50)"
+echo "  PIPELINE_SA       : $PIPELINE_SA"
+echo "  SERVING_IMAGE_URI : ${SERVING_IMAGE_URI:-<unset — register_model step will fail>}"
+echo "  TRAINING_IMAGE_URI: ${TRAINING_IMAGE_URI:-<unset — steps use prebuilt base + pip>}"
+echo
+
+"$VENV_PY" "$MLOPS_DIR/pipelines/training_pipeline.py" submit

@@ -45,6 +45,10 @@ from pipelines.components.validate_data import validate_data
 
 PIPELINE_NAME = "readmission-training"
 
+# Vertex AI Experiment shared with the HOSPITAL baseline and feature-selection
+# runs, so training runs land alongside them for side-by-side comparison.
+EXPERIMENT_NAME = "readmission-mlops"
+
 # --- PINNED feature contract (source: run_summary.json 20260702t163137) -------
 # Leakage-controlled selection: grouped CV (StratifiedGroupKFold on subject_id),
 # native categoricals, scale_pos_weight, 1-standard-error parsimony rule.
@@ -210,25 +214,39 @@ def compile_pipeline(package_path: str = "readmission_training_pipeline.yaml") -
 def submit() -> None:
     """Compile and submit the pipeline to Vertex AI Pipelines."""
     import os
+    from datetime import datetime, timezone
 
     from google.cloud import aiplatform
 
     from src.config import FULL_TABLE_REF, PROJECT_ID
 
     package_path = compile_pipeline()
-    aiplatform.init(project=PROJECT_ID, location="us-east1")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    aiplatform.init(project=PROJECT_ID, location="us-east1", experiment=EXPERIMENT_NAME)
     job = aiplatform.PipelineJob(
-        display_name=PIPELINE_NAME,
+        display_name=f"{PIPELINE_NAME}-{ts}",
         template_path=package_path,
+        # GCS staging root for pipeline artifacts (required by Vertex).
+        pipeline_root=os.environ.get("PIPELINE_ROOT"),
         parameter_values={
             "project_id": PROJECT_ID,
             "full_table_ref": FULL_TABLE_REF,
+            # HPO trials — set N_TRIALS low (e.g. 5) for a quick wiring check.
+            "n_trials": int(os.environ.get("N_TRIALS", "50")),
             # Custom real-time predictor image (see pipelines/serving/).
             "serving_container_image_uri": os.environ.get("SERVING_IMAGE_URI", ""),
         },
-        enable_caching=True,
+        # Every run logs fresh (no cached step reuse) so the experiment record
+        # reflects the actual execution.
+        enable_caching=False,
     )
-    job.submit()
+    # Associate the run with the shared Vertex Experiment: pipeline parameters
+    # and system.Metrics artifacts are auto-logged for comparison against the
+    # baseline and feature-selection runs. Runs as PIPELINE_SA if set.
+    job.submit(
+        experiment=EXPERIMENT_NAME,
+        service_account=os.environ.get("PIPELINE_SA") or None,
+    )
 
 
 if __name__ == "__main__":

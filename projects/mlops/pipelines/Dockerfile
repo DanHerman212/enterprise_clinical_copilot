@@ -27,4 +27,7 @@ RUN pip install --no-cache-dir \
 WORKDIR /app
 COPY src /app/src
 COPY pipelines /app/pipelines
+# The missingness imputer reads this static policy at fit time; src/config.py
+# resolves it to /app/artifacts/missingness_policy.csv inside the container.
+COPY artifacts/missingness_policy.csv /app/artifacts/missingness_policy.csv
 ENV PYTHONPATH=/app

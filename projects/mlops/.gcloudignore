@@ -7,7 +7,8 @@
 # self-referential symlink that crashes the uploader).
 
 # Heavy, non-source directories
-artifacts/
+artifacts/*
+!artifacts/missingness_policy.csv
 notebooks/
 docs/
 scripts/

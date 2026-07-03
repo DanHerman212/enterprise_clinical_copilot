@@ -150,8 +150,8 @@ def shap_explain(
     shap_values_parquet = os.path.join(temp_dir, "shap_values.parquet")
 
     run_shap_explain(
-        x_test_path=x_test_path,
-        model_artifact_path=model_artifact_path,
+        x_test_path=x_test_path.path,
+        model_artifact_path=model_artifact_path.path,
         shap_summary_png=shap_summary_png,
         shap_beeswarm_png=shap_beeswarm_png,
         shap_waterfall_png=shap_waterfall_png,

@@ -15,7 +15,7 @@
 #    test_split: str [Default: 'test']
 #    train_split: str [Default: 'train']
 #    val_split: str [Default: 'validation']
-#    xgb_params: dict [Default: {'n_estimators': 300.0, 'learning_rate': 0.05, 'random_state': 42.0, 'colsample_bytree': 0.8, 'subsample': 0.8, 'max_depth': 6.0}]
+#    xgb_params: dict [Default: {'subsample': 0.8, 'max_depth': 6.0, 'colsample_bytree': 0.8, 'n_estimators': 300.0, 'random_state': 42.0, 'learning_rate': 0.05}]
 components:
   comp-benchmark-gate:
     executorLabel: exec-benchmark-gate
@@ -739,8 +739,8 @@ deploymentSpec:
           \ \"shap_beeswarm.png\")\n    shap_waterfall_png = os.path.join(temp_dir,\
           \ \"shap_waterfall.png\")\n    shap_local_plots_dir = os.path.join(temp_dir,\
           \ \"shap_local_plots\")\n    shap_values_parquet = os.path.join(temp_dir,\
-          \ \"shap_values.parquet\")\n\n    run_shap_explain(\n        x_test_path=x_test_path,\n\
-          \        model_artifact_path=model_artifact_path,\n        shap_summary_png=shap_summary_png,\n\
+          \ \"shap_values.parquet\")\n\n    run_shap_explain(\n        x_test_path=x_test_path.path,\n\
+          \        model_artifact_path=model_artifact_path.path,\n        shap_summary_png=shap_summary_png,\n\
           \        shap_beeswarm_png=shap_beeswarm_png,\n        shap_waterfall_png=shap_waterfall_png,\n\
           \        shap_local_plots_dir=shap_local_plots_dir,\n        shap_values_parquet=shap_values_parquet,\n\
           \    )\n\n    # Encode images to base64 so they render directly inside the\

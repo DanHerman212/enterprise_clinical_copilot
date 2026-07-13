@@ -16,7 +16,7 @@
 #    test_split: str [Default: 'test']
 #    train_split: str [Default: 'train']
 #    val_split: str [Default: 'validation']
-#    xgb_params: dict [Default: {'max_depth': 6.0, 'colsample_bytree': 0.8, 'random_state': 42.0, 'subsample': 0.8, 'n_estimators': 300.0, 'learning_rate': 0.05}]
+#    xgb_params: dict [Default: {'colsample_bytree': 0.8, 'subsample': 0.8, 'random_state': 42.0, 'n_estimators': 300.0, 'max_depth': 6.0, 'learning_rate': 0.05}]
 components:
   comp-benchmark-gate:
     executorLabel: exec-benchmark-gate
@@ -89,6 +89,22 @@ components:
           parameterType: NUMBER_DOUBLE
         cat_features:
           parameterType: LIST
+        experiment_name:
+          defaultValue: ''
+          isOptional: true
+          parameterType: STRING
+        location:
+          defaultValue: us-east1
+          isOptional: true
+          parameterType: STRING
+        pipeline_job_name:
+          defaultValue: ''
+          isOptional: true
+          parameterType: STRING
+        project_id:
+          defaultValue: ''
+          isOptional: true
+          parameterType: STRING
     outputDefinitions:
       artifacts:
         metrics:
@@ -125,10 +141,26 @@ components:
           defaultValue: 2.0
           isOptional: true
           parameterType: NUMBER_DOUBLE
+        experiment_name:
+          defaultValue: ''
+          isOptional: true
+          parameterType: STRING
         hospital_aucpr:
           parameterType: NUMBER_DOUBLE
         hpo_val_aucpr:
           parameterType: NUMBER_DOUBLE
+        location:
+          defaultValue: us-east1
+          isOptional: true
+          parameterType: STRING
+        pipeline_job_name:
+          defaultValue: ''
+          isOptional: true
+          parameterType: STRING
+        project_id:
+          defaultValue: ''
+          isOptional: true
+          parameterType: STRING
         tuned_threshold:
           parameterType: NUMBER_DOUBLE
     outputDefinitions:
@@ -539,9 +571,9 @@ deploymentSpec:
         - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
           \ python3 -m pip install --quiet --no-warn-script-location 'xgboost' 'scikit-learn'\
-          \ 'pandas' 'pyarrow'  &&  python3 -m pip install --quiet --no-warn-script-location\
-          \ 'kfp==2.16.1' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
-          3.9\"' && \"$0\" \"$@\"\n"
+          \ 'pandas' 'pyarrow' 'google-cloud-aiplatform'  &&  python3 -m pip install\
+          \ --quiet --no-warn-script-location 'kfp==2.16.1' '--no-deps' 'typing-extensions>=3.7.4,<5;\
+          \ python_version<\"3.9\"' && \"$0\" \"$@\"\n"
         - sh
         - -ec
         - 'program_path=$(mktemp -d)
@@ -557,27 +589,32 @@ deploymentSpec:
           \    y_train: dsl.Input[dsl.Dataset],\n    groups: dsl.Input[dsl.Dataset],\n\
           \    best_params: dsl.Input[dsl.Artifact],\n    cat_features: list,\n  \
           \  beta: float,\n    threshold_curve: dsl.Output[dsl.Artifact],\n    metrics:\
-          \ dsl.Output[dsl.Metrics],\n) -> float:\n    \"\"\"KFP component: select\
-          \ the operating threshold via OOF F-beta.\"\"\"\n    import json\n\n   \
-          \ from pipelines.components.calibrate_threshold import run_calibrate_threshold\n\
-          \n    threshold = run_calibrate_threshold(\n        x_train_path=x_train.path,\n\
+          \ dsl.Output[dsl.Metrics],\n    project_id: str = \"\",\n    location: str\
+          \ = \"us-east1\",\n    experiment_name: str = \"\",\n    pipeline_job_name:\
+          \ str = \"\",\n) -> float:\n    \"\"\"KFP component: select the operating\
+          \ threshold via OOF F-beta.\"\"\"\n    import json\n\n    from pipelines.components.calibrate_threshold\
+          \ import run_calibrate_threshold\n    from pipelines.components._experiment\
+          \ import (\n        companion_run, safe_log_metrics, safe_log_params,\n\
+          \    )\n\n    threshold = run_calibrate_threshold(\n        x_train_path=x_train.path,\n\
           \        y_train_path=y_train.path,\n        groups_path=groups.path,\n\
           \        best_params_path=best_params.path,\n        cat_features=cat_features,\n\
           \        beta=beta,\n        threshold_output_path=threshold_curve.path,\n\
-          \    )\n\n    # Log data stats + the tuned threshold + the tuned hyperparameters\
-          \ to the\n    # experiment run (dsl.Metrics is auto-associated with the\
-          \ pipeline's run).\n    with open(threshold_curve.path) as f:\n        record\
-          \ = json.load(f)\n    metrics.log_metric(\"tuned_threshold\", record[\"\
-          threshold\"])\n    metrics.log_metric(\"fbeta_at_threshold\", record[\"\
-          fbeta\"])\n    metrics.log_metric(\"beta\", record[\"beta\"])\n    metrics.log_metric(\"\
-          train_rows\", record[\"n_train\"])\n    metrics.log_metric(\"train_prevalence\"\
-          , record[\"prevalence\"])\n\n    with open(best_params.path) as f:\n   \
-          \     params = json.load(f)\n    for key in (\n        \"n_estimators\"\
-          , \"max_depth\", \"learning_rate\", \"min_child_weight\",\n        \"gamma\"\
-          , \"subsample\", \"colsample_bytree\", \"reg_alpha\", \"reg_lambda\",\n\
-          \        \"scale_pos_weight\",\n    ):\n        if key in params:\n    \
-          \        metrics.log_metric(f\"hp_{key}\", float(params[key]))\n\n    return\
-          \ threshold\n\n"
+          \    )\n\n    with open(threshold_curve.path) as f:\n        record = json.load(f)\n\
+          \n    # dsl.Metrics on the PipelineRun: genuine measured quantities only\
+          \ (config\n    # and hyperparameters go to the companion run's Parameters\
+          \ UI instead, so\n    # this tab stays a clean list of *metrics*).\n   \
+          \ metrics.log_metric(\"tuned_threshold\", record[\"threshold\"])\n    metrics.log_metric(\"\
+          fbeta_at_threshold\", record[\"fbeta\"])\n    metrics.log_metric(\"train_prevalence\"\
+          , record[\"prevalence\"])\n\n    # Companion Experiment run: clean params-vs-metrics\
+          \ separation + Charts.\n    with companion_run(\n        project_id=project_id,\
+          \ location=location,\n        experiment=experiment_name, pipeline_job_name=pipeline_job_name,\n\
+          \    ) as ap:\n        safe_log_params(ap, {\n            \"fbeta_beta\"\
+          : record[\"beta\"],\n            \"threshold_selection\": record[\"selection\"\
+          ],\n            \"train_rows\": record[\"n_train\"],\n            \"train_prevalence\"\
+          : record[\"prevalence\"],\n        })\n        safe_log_metrics(ap, {\n\
+          \            \"tuned_threshold\": record[\"threshold\"],\n            \"\
+          fbeta_at_threshold\": record[\"fbeta\"],\n        })\n\n    return threshold\n\
+          \n"
         image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-evaluate-test:
       container:
@@ -591,7 +628,8 @@ deploymentSpec:
         - -c
         - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
-          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.1'\
+          \ python3 -m pip install --quiet --no-warn-script-location 'google-cloud-aiplatform'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.1'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
           $0\" \"$@\"\n"
         - sh
@@ -610,12 +648,16 @@ deploymentSpec:
           \   tuned_threshold: float,\n    hpo_val_aucpr: float,\n    benchmark_aucpr:\
           \ float,\n    hospital_aucpr: float,\n    metrics: dsl.Output[dsl.Metrics],\n\
           \    classification_metrics: dsl.Output[dsl.ClassificationMetrics],\n  \
-          \  eval_report: dsl.Output[dsl.HTML],\n    beta: float = 2.0,\n) -> NamedTuple(\n\
-          \    \"TestOutputs\",\n    [(\"test_aucpr\", float), (\"beat_hospital\"\
-          , bool), (\"stable\", bool)],\n):\n    \"\"\"KFP component: evaluate model\
-          \ on held-out test set at the tuned threshold.\"\"\"\n    from pipelines.components.evaluate_test\
-          \ import _build_eval_html, run_evaluate_test\n\n    result = run_evaluate_test(\n\
-          \        x_test_path=x_test.path, y_test_path=y_test.path,\n        model_artifact_path=model_artifact.path,\n\
+          \  eval_report: dsl.Output[dsl.HTML],\n    beta: float = 2.0,\n    project_id:\
+          \ str = \"\",\n    location: str = \"us-east1\",\n    experiment_name: str\
+          \ = \"\",\n    pipeline_job_name: str = \"\",\n) -> NamedTuple(\n    \"\
+          TestOutputs\",\n    [(\"test_aucpr\", float), (\"beat_hospital\", bool),\
+          \ (\"stable\", bool)],\n):\n    \"\"\"KFP component: evaluate model on held-out\
+          \ test set at the tuned threshold.\"\"\"\n    from pipelines.components.evaluate_test\
+          \ import _build_eval_html, run_evaluate_test\n    from pipelines.components._experiment\
+          \ import (\n        companion_run, safe_log_metrics, safe_log_params,\n\
+          \    )\n\n    result = run_evaluate_test(\n        x_test_path=x_test.path,\
+          \ y_test_path=y_test.path,\n        model_artifact_path=model_artifact.path,\n\
           \        tuned_threshold=tuned_threshold,\n        hpo_val_aucpr=hpo_val_aucpr,\n\
           \        benchmark_aucpr=benchmark_aucpr,\n        hospital_aucpr=hospital_aucpr,\n\
           \        beta=beta,\n    )\n\n    pm = result[\"point_metrics\"]\n\n   \
@@ -624,15 +666,29 @@ deploymentSpec:
           test_auroc\", result[\"test_auroc\"])\n    metrics.log_metric(\"brier_score\"\
           , result[\"brier_score\"])\n    metrics.log_metric(\"hpo_val_aucpr\", hpo_val_aucpr)\n\
           \    metrics.log_metric(\"benchmark_aucpr\", benchmark_aucpr)\n    metrics.log_metric(\"\
-          hospital_aucpr\", hospital_aucpr)\n    metrics.log_metric(\"tuned_threshold\"\
-          , result[\"tuned_threshold\"])\n    metrics.log_metric(\"precision\", pm[\"\
-          precision\"])\n    metrics.log_metric(\"recall\", pm[\"recall\"])\n    metrics.log_metric(\"\
-          specificity\", pm[\"specificity\"])\n    metrics.log_metric(\"npv\", pm[\"\
-          npv\"])\n    metrics.log_metric(\"fbeta\", pm[\"fbeta\"])\n    metrics.log_metric(\"\
-          net_benefit_at_threshold\", result[\"net_benefit_at_threshold\"])\n\n  \
-          \  # ROC curve + confusion matrix (at the tuned threshold) on the node.\n\
-          \    roc = result[\"roc\"]\n    classification_metrics.log_roc_curve(roc[\"\
-          fpr\"], roc[\"tpr\"], roc[\"thresholds\"])\n    classification_metrics.log_confusion_matrix(\n\
+          hospital_aucpr\", hospital_aucpr)\n    metrics.log_metric(\"precision\"\
+          , pm[\"precision\"])\n    metrics.log_metric(\"recall\", pm[\"recall\"])\n\
+          \    metrics.log_metric(\"specificity\", pm[\"specificity\"])\n    metrics.log_metric(\"\
+          npv\", pm[\"npv\"])\n    metrics.log_metric(\"fbeta\", pm[\"fbeta\"])\n\
+          \    metrics.log_metric(\"net_benefit_at_threshold\", result[\"net_benefit_at_threshold\"\
+          ])\n\n    # Companion Experiment run: mirror the performance metrics into\
+          \ the Metrics\n    # UI and file the F-beta config under Parameters (tuned_threshold\
+          \ itself is\n    # owned by calibrate-threshold, so it is not re-logged\
+          \ here).\n    with companion_run(\n        project_id=project_id, location=location,\n\
+          \        experiment=experiment_name, pipeline_job_name=pipeline_job_name,\n\
+          \    ) as ap:\n        safe_log_params(ap, {\"fbeta_beta\": float(beta)})\n\
+          \        safe_log_metrics(ap, {\n            \"test_aucpr\": result[\"test_aucpr\"\
+          ],\n            \"test_auroc\": result[\"test_auroc\"],\n            \"\
+          brier_score\": result[\"brier_score\"],\n            \"precision\": pm[\"\
+          precision\"],\n            \"recall\": pm[\"recall\"],\n            \"specificity\"\
+          : pm[\"specificity\"],\n            \"npv\": pm[\"npv\"],\n            \"\
+          fbeta\": pm[\"fbeta\"],\n            \"net_benefit_at_threshold\": result[\"\
+          net_benefit_at_threshold\"],\n            \"hpo_val_aucpr\": float(hpo_val_aucpr),\n\
+          \            \"benchmark_aucpr\": float(benchmark_aucpr),\n            \"\
+          hospital_aucpr\": float(hospital_aucpr),\n        })\n\n    # ROC curve\
+          \ + confusion matrix (at the tuned threshold) on the node.\n    roc = result[\"\
+          roc\"]\n    classification_metrics.log_roc_curve(roc[\"fpr\"], roc[\"tpr\"\
+          ], roc[\"thresholds\"])\n    classification_metrics.log_confusion_matrix(\n\
           \        [\"No readmit\", \"Readmit\"],\n        [[pm[\"tn\"], pm[\"fp\"\
           ]], [pm[\"fn\"], pm[\"tp\"]]],\n    )\n\n    # PR / calibration / DCA plots\
           \ + metrics table as a rendered HTML report.\n    with open(eval_report.path,\
@@ -1069,6 +1125,14 @@ root:
               componentInputParameter: fbeta_beta
             cat_features:
               componentInputParameter: cat_features
+            experiment_name:
+              runtimeValue:
+                constant: readmission-mlops
+            pipeline_job_name:
+              runtimeValue:
+                constant: '{{$.pipeline_job_name}}'
+            project_id:
+              componentInputParameter: project_id
         taskInfo:
           name: calibrate-threshold
       evaluate-test:
@@ -1103,12 +1167,20 @@ root:
                 producerTask: benchmark-xgboost
             beta:
               componentInputParameter: fbeta_beta
+            experiment_name:
+              runtimeValue:
+                constant: readmission-mlops
             hospital_aucpr:
               componentInputParameter: hospital_aucpr
             hpo_val_aucpr:
               taskOutputParameter:
                 outputParameterKey: Output
                 producerTask: optuna-hpo
+            pipeline_job_name:
+              runtimeValue:
+                constant: '{{$.pipeline_job_name}}'
+            project_id:
+              componentInputParameter: project_id
             tuned_threshold:
               taskOutputParameter:
                 outputParameterKey: Output

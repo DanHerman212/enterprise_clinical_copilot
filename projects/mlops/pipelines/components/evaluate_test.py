@@ -219,7 +219,7 @@ def _build_eval_html(result: dict) -> str:
 
 @component(
     base_image=TRAINING_IMAGE,
-    packages_to_install=[],
+    packages_to_install=["google-cloud-aiplatform"],
 )
 def evaluate_test(
     x_test: dsl.Input[dsl.Dataset],
@@ -233,12 +233,19 @@ def evaluate_test(
     classification_metrics: dsl.Output[dsl.ClassificationMetrics],
     eval_report: dsl.Output[dsl.HTML],
     beta: float = 2.0,
+    project_id: str = "",
+    location: str = "us-east1",
+    experiment_name: str = "",
+    pipeline_job_name: str = "",
 ) -> NamedTuple(
     "TestOutputs",
     [("test_aucpr", float), ("beat_hospital", bool), ("stable", bool)],
 ):
     """KFP component: evaluate model on held-out test set at the tuned threshold."""
     from pipelines.components.evaluate_test import _build_eval_html, run_evaluate_test
+    from pipelines.components._experiment import (
+        companion_run, safe_log_metrics, safe_log_params,
+    )
 
     result = run_evaluate_test(
         x_test_path=x_test.path, y_test_path=y_test.path,
@@ -259,13 +266,35 @@ def evaluate_test(
     metrics.log_metric("hpo_val_aucpr", hpo_val_aucpr)
     metrics.log_metric("benchmark_aucpr", benchmark_aucpr)
     metrics.log_metric("hospital_aucpr", hospital_aucpr)
-    metrics.log_metric("tuned_threshold", result["tuned_threshold"])
     metrics.log_metric("precision", pm["precision"])
     metrics.log_metric("recall", pm["recall"])
     metrics.log_metric("specificity", pm["specificity"])
     metrics.log_metric("npv", pm["npv"])
     metrics.log_metric("fbeta", pm["fbeta"])
     metrics.log_metric("net_benefit_at_threshold", result["net_benefit_at_threshold"])
+
+    # Companion Experiment run: mirror the performance metrics into the Metrics
+    # UI and file the F-beta config under Parameters (tuned_threshold itself is
+    # owned by calibrate-threshold, so it is not re-logged here).
+    with companion_run(
+        project_id=project_id, location=location,
+        experiment=experiment_name, pipeline_job_name=pipeline_job_name,
+    ) as ap:
+        safe_log_params(ap, {"fbeta_beta": float(beta)})
+        safe_log_metrics(ap, {
+            "test_aucpr": result["test_aucpr"],
+            "test_auroc": result["test_auroc"],
+            "brier_score": result["brier_score"],
+            "precision": pm["precision"],
+            "recall": pm["recall"],
+            "specificity": pm["specificity"],
+            "npv": pm["npv"],
+            "fbeta": pm["fbeta"],
+            "net_benefit_at_threshold": result["net_benefit_at_threshold"],
+            "hpo_val_aucpr": float(hpo_val_aucpr),
+            "benchmark_aucpr": float(benchmark_aucpr),
+            "hospital_aucpr": float(hospital_aucpr),
+        })
 
     # ROC curve + confusion matrix (at the tuned threshold) on the node.
     roc = result["roc"]

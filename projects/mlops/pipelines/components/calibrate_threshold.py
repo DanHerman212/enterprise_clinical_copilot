@@ -71,7 +71,10 @@ def run_calibrate_threshold(
 
 @component(
     base_image=TRAINING_IMAGE,
-    packages_to_install=["xgboost", "scikit-learn", "pandas", "pyarrow"],
+    packages_to_install=[
+        "xgboost", "scikit-learn", "pandas", "pyarrow",
+        "google-cloud-aiplatform",
+    ],
 )
 def calibrate_threshold(
     x_train: dsl.Input[dsl.Dataset],
@@ -82,11 +85,18 @@ def calibrate_threshold(
     beta: float,
     threshold_curve: dsl.Output[dsl.Artifact],
     metrics: dsl.Output[dsl.Metrics],
+    project_id: str = "",
+    location: str = "us-east1",
+    experiment_name: str = "",
+    pipeline_job_name: str = "",
 ) -> float:
     """KFP component: select the operating threshold via OOF F-beta."""
     import json
 
     from pipelines.components.calibrate_threshold import run_calibrate_threshold
+    from pipelines.components._experiment import (
+        companion_run, safe_log_metrics, safe_log_params,
+    )
 
     threshold = run_calibrate_threshold(
         x_train_path=x_train.path,
@@ -98,24 +108,30 @@ def calibrate_threshold(
         threshold_output_path=threshold_curve.path,
     )
 
-    # Log data stats + the tuned threshold + the tuned hyperparameters to the
-    # experiment run (dsl.Metrics is auto-associated with the pipeline's run).
     with open(threshold_curve.path) as f:
         record = json.load(f)
+
+    # dsl.Metrics on the PipelineRun: genuine measured quantities only (config
+    # and hyperparameters go to the companion run's Parameters UI instead, so
+    # this tab stays a clean list of *metrics*).
     metrics.log_metric("tuned_threshold", record["threshold"])
     metrics.log_metric("fbeta_at_threshold", record["fbeta"])
-    metrics.log_metric("beta", record["beta"])
-    metrics.log_metric("train_rows", record["n_train"])
     metrics.log_metric("train_prevalence", record["prevalence"])
 
-    with open(best_params.path) as f:
-        params = json.load(f)
-    for key in (
-        "n_estimators", "max_depth", "learning_rate", "min_child_weight",
-        "gamma", "subsample", "colsample_bytree", "reg_alpha", "reg_lambda",
-        "scale_pos_weight",
-    ):
-        if key in params:
-            metrics.log_metric(f"hp_{key}", float(params[key]))
+    # Companion Experiment run: clean params-vs-metrics separation + Charts.
+    with companion_run(
+        project_id=project_id, location=location,
+        experiment=experiment_name, pipeline_job_name=pipeline_job_name,
+    ) as ap:
+        safe_log_params(ap, {
+            "fbeta_beta": record["beta"],
+            "threshold_selection": record["selection"],
+            "train_rows": record["n_train"],
+            "train_prevalence": record["prevalence"],
+        })
+        safe_log_metrics(ap, {
+            "tuned_threshold": record["threshold"],
+            "fbeta_at_threshold": record["fbeta"],
+        })
 
     return threshold

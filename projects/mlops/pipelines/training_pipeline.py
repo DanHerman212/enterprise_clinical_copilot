@@ -184,6 +184,9 @@ def training_pipeline(
         best_params=hpo.outputs["best_params"],
         cat_features=cat_features,
         beta=fbeta_beta,
+        project_id=project_id,
+        experiment_name=EXPERIMENT_NAME,
+        pipeline_job_name=dsl.PIPELINE_JOB_NAME_PLACEHOLDER,
     )
 
     # The honest pre-test generalization estimate is the HPO validation AUCPR,
@@ -197,6 +200,9 @@ def training_pipeline(
         benchmark_aucpr=bench.outputs["Output"],
         hospital_aucpr=hospital_aucpr,
         beta=fbeta_beta,
+        project_id=project_id,
+        experiment_name=EXPERIMENT_NAME,
+        pipeline_job_name=dsl.PIPELINE_JOB_NAME_PLACEHOLDER,
     )
 
     shap_explain(

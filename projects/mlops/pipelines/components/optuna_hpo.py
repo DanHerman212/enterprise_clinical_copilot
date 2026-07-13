@@ -34,32 +34,56 @@ def _grouped_folds(X: pd.DataFrame, y: pd.Series, groups: pd.Series, n_splits: i
     return list(sgkf.split(X, y, groups))
 
 
-def _log_trial_timeseries(study, *, project_id, location, experiment, run_name):
-    """Best-effort: stream per-trial CV AUCPR to the pipeline's experiment run.
+# Search-space hyperparameters (the tuned knobs); logged as *params*, never metrics.
+_HP_KEYS = (
+    "n_estimators", "max_depth", "learning_rate", "min_child_weight", "gamma",
+    "subsample", "colsample_bytree", "reg_alpha", "reg_lambda", "scale_pos_weight",
+)
 
-    Populates the Vertex Experiments **time-series** charts (dsl.Metrics only
-    writes single-value summary metrics, which is why those charts were empty).
-    Wrapped so telemetry can never abort a training run.
+
+def _log_experiment(
+    study, best_params, n_splits, *, project_id, location, experiment, run_name
+):
+    """Best-effort: log the HPO result to a companion Vertex Experiment run.
+
+    Three destinations, each in its proper UI:
+      * **Parameters** — the tuned hyperparameters + HPO config;
+      * **Metrics**     — the best grouped-CV AUCPR;
+      * **Charts**      — the per-trial CV AUCPR curve (time-series).
+
+    Uses a dedicated ``ExperimentRun`` (see :mod:`._experiment`) because a
+    pipeline's auto-created ``system.PipelineRun`` cannot receive ``log_params``
+    or time-series. Wrapped so telemetry can never abort a training run.
     """
-    if not (project_id and experiment and run_name):
-        return
-    try:
-        from google.cloud import aiplatform
+    from ._experiment import companion_run, safe_log_metrics, safe_log_params
 
-        aiplatform.init(project=project_id, location=location, experiment=experiment)
-        aiplatform.start_run(run_name=run_name, resume=True)
+    with companion_run(
+        project_id=project_id, location=location,
+        experiment=experiment, pipeline_job_name=run_name,
+    ) as ap:
+        if ap is None:
+            return
+        safe_log_params(
+            ap,
+            {f"hp_{k}": best_params[k] for k in _HP_KEYS if k in best_params}
+            | {"hpo_n_trials": len(study.trials), "hpo_cv_folds": n_splits},
+        )
+        safe_log_metrics(ap, {"hpo_cv_aucpr": float(study.best_value)})
         best = float("-inf")
+        n = 0
         for t in study.trials:
             if t.value is None:
                 continue
             best = max(best, float(t.value))
-            aiplatform.log_time_series_metrics(
-                {"cv_aucpr": float(t.value), "cv_aucpr_best": best},
-                step=int(t.number),
-            )
-        print(f"  Streamed {len(study.trials)} trial metrics to experiment '{experiment}'.")
-    except Exception as exc:  # noqa: BLE001 - telemetry must never break training
-        print(f"  [warn] experiment time-series logging skipped: {exc}")
+            try:
+                ap.log_time_series_metrics(
+                    {"cv_aucpr": float(t.value), "cv_aucpr_best": best},
+                    step=int(t.number),
+                )
+                n += 1
+            except Exception as exc:  # noqa: BLE001
+                print(f"  [warn] time-series step {t.number} skipped: {exc}")
+        print(f"  Streamed {n} trial metrics to experiment '{experiment}'.")
 
 
 def run_optuna_hpo(
@@ -140,8 +164,8 @@ def run_optuna_hpo(
     with open(best_params_path, "w") as f:
         json.dump(best_params, f, indent=2)
 
-    _log_trial_timeseries(
-        study, project_id=project_id, location=location,
+    _log_experiment(
+        study, best_params, n_splits, project_id=project_id, location=location,
         experiment=experiment, run_name=run_name,
     )
 

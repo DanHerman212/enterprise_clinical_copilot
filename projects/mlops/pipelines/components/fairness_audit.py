@@ -29,9 +29,9 @@ def _bucket_age(age_series: pd.Series) -> pd.Series:
     return pd.cut(age_series, bins=bins, labels=labels, right=False)
 
 
-def _compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
-    """Compute NPV, PPV from binary predictions at default 0.5 threshold."""
-    y_pred_bin = (y_pred >= 0.5).astype(int)
+def _compute_metrics(y_true: np.ndarray, y_pred: np.ndarray, threshold: float = 0.5) -> dict:
+    """Compute NPV, PPV from binary predictions at the given operating threshold."""
+    y_pred_bin = (y_pred >= threshold).astype(int)
 
     tp = ((y_pred_bin == 1) & (y_true == 1)).sum()
     fp = ((y_pred_bin == 1) & (y_true == 0)).sum()
@@ -56,10 +56,11 @@ def run_fairness_audit(
     model_artifact_path: str,
     fairness_report_json: str,
     fairness_html_path: str,
+    tuned_threshold: float = 0.5,
     max_ppv_gap: float = 0.15,
     max_npv_gap: float = 0.15,
 ) -> tuple[bool, bool]:
-    """Audit fairness.  Returns (ppv_pass, npv_pass)."""
+    """Audit fairness at the tuned operating threshold.  Returns (ppv_pass, npv_pass)."""
     X_test = pd.read_parquet(x_test_path)
     y_test = pd.read_parquet(y_test_path).iloc[:, 0]
     model = joblib.load(model_artifact_path)
@@ -67,7 +68,10 @@ def run_fairness_audit(
     y_pred = model.predict_proba(X_test)[:, 1]
 
     # Reconstruct readable subgroup values from category dtype.
-    report = {"overall": _compute_metrics(y_test.values, y_pred)}
+    report = {
+        "threshold": float(tuned_threshold),
+        "overall": _compute_metrics(y_test.values, y_pred, tuned_threshold),
+    }
     ppv_ok = True
     npv_ok = True
 
@@ -90,7 +94,7 @@ def run_fairness_audit(
             if mask.sum() < 50:  # skip tiny subgroups
                 continue
             report[subgroup_name][str(label)] = _compute_metrics(
-                y_test.values[mask], y_pred[mask],
+                y_test.values[mask], y_pred[mask], tuned_threshold,
             )
 
         # Check gaps.
@@ -105,14 +109,17 @@ def run_fairness_audit(
         json.dump(report, f, indent=2)
 
     # Dump a simple HTML version so the UI can render it.
-    html_content = "<h2>Fairness Audit Report</h2><pre>" + json.dumps(report, indent=2) + "</pre>"
+    html_content = (
+        f"<h2>Fairness Audit Report (threshold={tuned_threshold:.4f})</h2>"
+        "<pre>" + json.dumps(report, indent=2) + "</pre>"
+    )
     with open(fairness_html_path, "w") as f:
         f.write(html_content)
 
     print(f"  PPV across subgroups: {'PASS' if ppv_ok else 'GAP > {:.0%}'.format(max_ppv_gap)}")
     print(f"  NPV across subgroups: {'PASS' if npv_ok else 'GAP > {:.0%}'.format(max_npv_gap)}")
     for subgroup_name, metrics in report.items():
-        if subgroup_name == "overall":
+        if subgroup_name in ("overall", "threshold"):
             continue
         print(f"\n  {subgroup_name}:")
         for label, m in metrics.items():
@@ -129,12 +136,13 @@ def fairness_audit(
     x_test: dsl.Input[dsl.Dataset],
     y_test: dsl.Input[dsl.Dataset],
     model_artifact: dsl.Input[dsl.Model],
+    tuned_threshold: float,
     fairness_html: dsl.Output[dsl.HTML],
 ) -> NamedTuple(
     "FairnessOutputs",
     [("ppv_pass", bool), ("npv_pass", bool)],
 ):
-    """KFP component: subgroup fairness audit (NPV/PPV)."""
+    """KFP component: subgroup fairness audit (NPV/PPV) at the tuned threshold."""
     from pipelines.components.fairness_audit import run_fairness_audit
 
     # KFP v2 doesn't native output raw JSON as an artifact type perfectly, 
@@ -147,5 +155,6 @@ def fairness_audit(
         model_artifact_path=model_artifact.path,
         fairness_report_json=fairness_report_json,
         fairness_html_path=fairness_html.path,
+        tuned_threshold=tuned_threshold,
     )
     return (ppv_pass, npv_pass)

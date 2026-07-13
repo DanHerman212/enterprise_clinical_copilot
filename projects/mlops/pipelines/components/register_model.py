@@ -28,12 +28,30 @@ def assemble_serving_bundle(
     imputer_path: str,
     schema_path: str,
     bundle_dir: str,
+    tuned_threshold: float | None = None,
+    beta: float | None = None,
 ) -> None:
-    """Copy the model, imputer, and schema into a serving-bundle directory."""
+    """Copy the model, imputer, schema (+ optional threshold) into a bundle dir."""
+    import json
+
     os.makedirs(bundle_dir, exist_ok=True)
     shutil.copy(model_path, os.path.join(bundle_dir, "model.joblib"))
     shutil.copy(imputer_path, os.path.join(bundle_dir, "imputer.joblib"))
     shutil.copy(schema_path, os.path.join(bundle_dir, "schema.json"))
+    if tuned_threshold is not None:
+        with open(os.path.join(bundle_dir, "threshold.json"), "w") as f:
+            json.dump(
+                {
+                    "threshold": float(tuned_threshold),
+                    "beta": None if beta is None else float(beta),
+                    "note": (
+                        "Operating threshold for the decision layer only; the "
+                        "endpoint returns calibrated probabilities."
+                    ),
+                },
+                f,
+                indent=2,
+            )
 
 
 def run_register_model(
@@ -49,6 +67,8 @@ def run_register_model(
     test_aucpr: float,
     hpo_val_aucpr: float,
     benchmark_aucpr: float,
+    tuned_threshold: float,
+    beta: float = 2.0,
 ) -> str:
     """Assemble the serving bundle, register the model, return resource name."""
     assemble_serving_bundle(
@@ -56,6 +76,8 @@ def run_register_model(
         imputer_path=imputer_path,
         schema_path=schema_path,
         bundle_dir=bundle_dir,
+        tuned_threshold=tuned_threshold,
+        beta=beta,
     )
 
     from google.cloud import aiplatform
@@ -82,6 +104,7 @@ def run_register_model(
     print(f"  Test AUCPR:    {test_aucpr:.4f}")
     print(f"  HPO val AUCPR: {hpo_val_aucpr:.4f}")
     print(f"  Benchmark:     {benchmark_aucpr:.4f}")
+    print(f"  Threshold:     {tuned_threshold:.4f}  (F{beta:g}, in threshold.json)")
     return model.resource_name
 
 
@@ -98,8 +121,10 @@ def register_model(
     test_aucpr: float,
     hpo_val_aucpr: float,
     benchmark_aucpr: float,
+    tuned_threshold: float,
     serving_model: dsl.Output[dsl.Model],
     location: str = "us-east1",
+    beta: float = 2.0,
 ) -> NamedTuple("RegistryOutputs", [("model_id", str)]):
     """KFP component: assemble serving bundle and register in Vertex AI."""
     from pipelines.components.register_model import run_register_model
@@ -116,5 +141,7 @@ def register_model(
         test_aucpr=test_aucpr,
         hpo_val_aucpr=hpo_val_aucpr,
         benchmark_aucpr=benchmark_aucpr,
+        tuned_threshold=tuned_threshold,
+        beta=beta,
     )
     return (model_id,)

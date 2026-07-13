@@ -33,6 +33,7 @@ from kfp import compiler, dsl
 
 from pipelines.components.benchmark_gate import benchmark_gate
 from pipelines.components.benchmark_xgboost import benchmark_xgboost
+from pipelines.components.calibrate_threshold import calibrate_threshold
 from pipelines.components.evaluate_test import evaluate_test
 from pipelines.components.fairness_audit import fairness_audit
 from pipelines.components.fit_imputer import fit_imputer_op
@@ -107,6 +108,7 @@ def training_pipeline(
     cat_features: list = CAT_FEATURES,
     xgb_params: dict = DEFAULT_XGB_PARAMS,
     n_trials: int = 50,
+    fbeta_beta: float = 2.0,
     max_drifted_share: float = 0.2,
     hospital_aucpr: float = HOSPITAL_AUCPR,
     serving_container_image_uri: str = "",
@@ -158,6 +160,9 @@ def training_pipeline(
         groups=data.outputs["groups_train"],
         cat_features=cat_features,
         n_trials=n_trials,
+        project_id=project_id,
+        experiment_name=EXPERIMENT_NAME,
+        pipeline_job_name=dsl.PIPELINE_JOB_NAME_PLACEHOLDER,
     ).after(gate)
 
     final = train_final(
@@ -169,15 +174,29 @@ def training_pipeline(
         cat_features=cat_features,
     )
 
+    # Operating threshold: F-beta-optimal on out-of-fold (patient-grouped) TRAIN
+    # predictions with the tuned HPO params. Probability-first model; this
+    # threshold is metadata for the decision layer only.
+    calib = calibrate_threshold(
+        x_train=data.outputs["x_train"],
+        y_train=data.outputs["y_train"],
+        groups=data.outputs["groups_train"],
+        best_params=hpo.outputs["best_params"],
+        cat_features=cat_features,
+        beta=fbeta_beta,
+    )
+
     # The honest pre-test generalization estimate is the HPO validation AUCPR,
     # NOT train_final's combined-fit metric (the final model trained on val).
     evalt = evaluate_test(
         x_test=data.outputs["x_test"],
         y_test=data.outputs["y_test"],
         model_artifact=final.outputs["model_artifact"],
+        tuned_threshold=calib.outputs["Output"],
         hpo_val_aucpr=hpo.outputs["Output"],
         benchmark_aucpr=bench.outputs["Output"],
         hospital_aucpr=hospital_aucpr,
+        beta=fbeta_beta,
     )
 
     shap_explain(
@@ -189,6 +208,7 @@ def training_pipeline(
         x_test=data.outputs["x_test"],
         y_test=data.outputs["y_test"],
         model_artifact=final.outputs["model_artifact"],
+        tuned_threshold=calib.outputs["Output"],
     )
 
     register_model(
@@ -200,6 +220,8 @@ def training_pipeline(
         test_aucpr=evalt.outputs["test_aucpr"],
         hpo_val_aucpr=hpo.outputs["Output"],
         benchmark_aucpr=bench.outputs["Output"],
+        tuned_threshold=calib.outputs["Output"],
+        beta=fbeta_beta,
     ).after(evalt)
 
 

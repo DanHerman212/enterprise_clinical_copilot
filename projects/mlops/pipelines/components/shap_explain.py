@@ -124,7 +124,7 @@ def run_shap_explain(
 def shap_explain(
     x_test_path: dsl.Input[dsl.Dataset],
     model_artifact_path: dsl.Input[dsl.Artifact],
-    shap_markdown: dsl.Output[dsl.Markdown],
+    shap_html: dsl.Output[dsl.HTML],
 ) -> NamedTuple(
     "SHAPOutputs",
     [
@@ -140,9 +140,9 @@ def shap_explain(
 
     import os
     
-    # We will use temporary paths for the PNGs, then render them into the Markdown artifact.
-    # Vertex UI does not render raw .png string paths intuitively.
-    temp_dir = os.path.dirname(shap_markdown.path)
+    # We render the PNGs into an HTML artifact (Vertex's Markdown viewer strips
+    # raw <img> tags; HTML artifacts render them).
+    temp_dir = os.path.dirname(shap_html.path)
     shap_summary_png = os.path.join(temp_dir, "shap_summary.png")
     shap_beeswarm_png = os.path.join(temp_dir, "shap_beeswarm.png")
     shap_waterfall_png = os.path.join(temp_dir, "shap_waterfall.png")
@@ -159,27 +159,27 @@ def shap_explain(
         shap_values_parquet=shap_values_parquet,
     )
 
-    # Encode images to base64 so they render directly inside the Vertex Markdown UI widget
+    # Encode images to base64 so they render directly inside the Vertex HTML UI widget
     import base64
     def _to_b64(path):
         with open(path, "rb") as img_file:
             return base64.b64encode(img_file.read()).decode('utf-8')
 
-    md_content = f"""
-# Model Interpretability (SHAP)
+    html_content = f"""
+<h1>Model Interpretability (SHAP)</h1>
 
-## Global Importance (Beeswarm)
+<h2>Global Importance (Beeswarm)</h2>
 <img src="data:image/png;base64,{_to_b64(shap_beeswarm_png)}" width="800"/>
 
-## Global Importance (Bar)
+<h2>Global Importance (Bar)</h2>
 <img src="data:image/png;base64,{_to_b64(shap_summary_png)}" width="800"/>
 
-## Local Importance (Waterfall - Highest Risk)
+<h2>Local Importance (Waterfall - Highest Risk)</h2>
 <img src="data:image/png;base64,{_to_b64(shap_waterfall_png)}" width="800"/>
-    """
-    
-    with open(shap_markdown.path, "w") as f:
-        f.write(md_content)
+"""
+
+    with open(shap_html.path, "w") as f:
+        f.write(html_content)
 
     return (
         shap_summary_png, 

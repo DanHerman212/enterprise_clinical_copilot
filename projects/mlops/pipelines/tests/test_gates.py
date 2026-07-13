@@ -77,9 +77,11 @@ def test_evaluate_beats_baseline_and_stable(tmp_path):
     result = run_evaluate_test(
         x_test_path=x_path, y_test_path=y_path,
         model_artifact_path=model_path,
+        tuned_threshold=0.5,
         hpo_val_aucpr=test_aucpr,          # equal -> stable
         benchmark_aucpr=0.40,
         hospital_aucpr=0.10,               # low -> beaten
+        beta=2.0,
     )
     assert result["beat_hospital"] is True
     assert result["stable"] is True
@@ -89,6 +91,15 @@ def test_evaluate_beats_baseline_and_stable(tmp_path):
     assert 0.0 <= result["brier_score"] <= 1.0
     assert len(result["roc"]["fpr"]) == len(result["roc"]["tpr"]) == len(result["roc"]["thresholds"])
     assert all(np.isfinite(t) for t in result["roc"]["thresholds"])
+    # Threshold-dependent diagnostics.
+    pm = result["point_metrics"]
+    assert pm["tp"] + pm["fp"] + pm["tn"] + pm["fn"] == 300
+    assert 0.0 <= pm["precision"] <= 1.0 and 0.0 <= pm["recall"] <= 1.0
+    assert result["tuned_threshold"] == 0.5
+    assert len(result["pr"]["precision"]) == len(result["pr"]["recall"])
+    assert len(result["calibration"]["prob_true"]) == len(result["calibration"]["prob_pred"])
+    assert result["dca"][0]["treat_none"] == 0.0
+    assert all("model" in r and "treat_all" in r for r in result["dca"])
 
 
 def test_evaluate_hard_fails_below_baseline(tmp_path):
@@ -97,6 +108,7 @@ def test_evaluate_hard_fails_below_baseline(tmp_path):
         run_evaluate_test(
             x_test_path=x_path, y_test_path=y_path,
             model_artifact_path=model_path,
+            tuned_threshold=0.5,
             hpo_val_aucpr=test_aucpr,
             benchmark_aucpr=0.40,
             hospital_aucpr=0.999,          # impossibly high -> must fail
@@ -108,6 +120,7 @@ def test_evaluate_flags_instability(tmp_path):
     result = run_evaluate_test(
         x_test_path=x_path, y_test_path=y_path,
         model_artifact_path=model_path,
+        tuned_threshold=0.5,
         hpo_val_aucpr=test_aucpr + 0.30,   # big val->test drop
         benchmark_aucpr=0.40,
         hospital_aucpr=0.10,

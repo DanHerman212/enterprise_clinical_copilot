@@ -34,6 +34,34 @@ def _grouped_folds(X: pd.DataFrame, y: pd.Series, groups: pd.Series, n_splits: i
     return list(sgkf.split(X, y, groups))
 
 
+def _log_trial_timeseries(study, *, project_id, location, experiment, run_name):
+    """Best-effort: stream per-trial CV AUCPR to the pipeline's experiment run.
+
+    Populates the Vertex Experiments **time-series** charts (dsl.Metrics only
+    writes single-value summary metrics, which is why those charts were empty).
+    Wrapped so telemetry can never abort a training run.
+    """
+    if not (project_id and experiment and run_name):
+        return
+    try:
+        from google.cloud import aiplatform
+
+        aiplatform.init(project=project_id, location=location, experiment=experiment)
+        aiplatform.start_run(run_name=run_name, resume=True)
+        best = float("-inf")
+        for t in study.trials:
+            if t.value is None:
+                continue
+            best = max(best, float(t.value))
+            aiplatform.log_time_series_metrics(
+                {"cv_aucpr": float(t.value), "cv_aucpr_best": best},
+                step=int(t.number),
+            )
+        print(f"  Streamed {len(study.trials)} trial metrics to experiment '{experiment}'.")
+    except Exception as exc:  # noqa: BLE001 - telemetry must never break training
+        print(f"  [warn] experiment time-series logging skipped: {exc}")
+
+
 def run_optuna_hpo(
     *,
     x_train_path: str,
@@ -43,6 +71,10 @@ def run_optuna_hpo(
     n_trials: int,
     best_params_path: str,
     n_splits: int = 5,
+    project_id: str = "",
+    location: str = "us-east1",
+    experiment: str = "",
+    run_name: str = "",
 ) -> float:
     """Run grouped-CV Optuna study, save best params, return best CV AUCPR."""
     X_train = pd.read_parquet(x_train_path)
@@ -108,12 +140,20 @@ def run_optuna_hpo(
     with open(best_params_path, "w") as f:
         json.dump(best_params, f, indent=2)
 
+    _log_trial_timeseries(
+        study, project_id=project_id, location=location,
+        experiment=experiment, run_name=run_name,
+    )
+
     return float(study.best_value)
 
 
 @component(
     base_image=TRAINING_IMAGE,
-    packages_to_install=["optuna", "xgboost", "scikit-learn", "pandas", "pyarrow"],
+    packages_to_install=[
+        "optuna", "xgboost", "scikit-learn", "pandas", "pyarrow",
+        "google-cloud-aiplatform",
+    ],
 )
 def optuna_hpo(
     x_train: dsl.Input[dsl.Dataset],
@@ -122,6 +162,10 @@ def optuna_hpo(
     cat_features: list,
     n_trials: int,
     best_params: dsl.Output[dsl.Artifact],
+    project_id: str = "",
+    location: str = "us-east1",
+    experiment_name: str = "",
+    pipeline_job_name: str = "",
 ) -> float:
     """KFP component: patient-grouped-CV Optuna hyperparameter optimization."""
     from pipelines.components.optuna_hpo import run_optuna_hpo
@@ -131,4 +175,6 @@ def optuna_hpo(
         groups_path=groups.path,
         cat_features=cat_features, n_trials=n_trials,
         best_params_path=best_params.path,
+        project_id=project_id, location=location,
+        experiment=experiment_name, run_name=pipeline_job_name,
     )

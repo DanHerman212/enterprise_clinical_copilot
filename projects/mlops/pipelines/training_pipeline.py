@@ -54,9 +54,11 @@ EXPERIMENT_NAME = "readmission-mlops"
 # Leakage-controlled selection: grouped CV (StratifiedGroupKFold on subject_id),
 # native categoricals, scale_pos_weight, 1-standard-error parsimony rule.
 # 22 features (down from 50), grouped-CV AUCPR 0.4078 — statistically tied with
-# the full set (0.4084) but 56% smaller.
+# the full set (0.4084) but 56% smaller. ``insurance`` is added on top of the
+# selection run as a model feature (it also serves as the fairness-audit SES
+# slice, read straight off the encoded test frame).
 SELECTED_FEATURES = [
-    "age", "gender", "race", "admission_type", "discharge_location",
+    "age", "gender", "race", "admission_type", "discharge_location", "insurance",
     "prior_admission_count", "prior_inpatient_days", "recent_ed_visits",
     "index_los_days", "procedure_count", "has_procedure",
     "medication_count", "medication_order_count",
@@ -66,7 +68,7 @@ SELECTED_FEATURES = [
 
 # Categorical subset of SELECTED_FEATURES (config.CATEGORICAL_FEATURES ∩ pinned).
 CAT_FEATURES = [
-    "gender", "race", "admission_type", "discharge_location",
+    "gender", "race", "admission_type", "discharge_location", "insurance",
     "has_procedure", "oncology_flag",
 ]
 
@@ -215,6 +217,9 @@ def training_pipeline(
         y_test=data.outputs["y_test"],
         model_artifact=final.outputs["model_artifact"],
         tuned_threshold=calib.outputs["Output"],
+        project_id=project_id,
+        experiment_name=EXPERIMENT_NAME,
+        pipeline_job_name=dsl.PIPELINE_JOB_NAME_PLACEHOLDER,
     )
 
     register_model(

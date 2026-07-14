@@ -2,7 +2,7 @@
 # Name: readmission-training
 # Description: 30-day readmission risk: impute → validate → benchmark → HPO → train → evaluate/explain/audit → register.
 # Inputs:
-#    cat_features: list [Default: ['gender', 'race', 'admission_type', 'discharge_location', 'has_procedure', 'oncology_flag']]
+#    cat_features: list [Default: ['gender', 'race', 'admission_type', 'discharge_location', 'insurance', 'has_procedure', 'oncology_flag']]
 #    fbeta_beta: float [Default: 2.0]
 #    full_table_ref: str
 #    hospital_aucpr: float [Default: 0.33246509478494324]
@@ -10,13 +10,13 @@
 #    max_drifted_share: float [Default: 0.2]
 #    n_trials: int [Default: 50.0]
 #    project_id: str
-#    selected_features: list [Default: ['age', 'gender', 'race', 'admission_type', 'discharge_location', 'prior_admission_count', 'prior_inpatient_days', 'recent_ed_visits', 'index_los_days', 'procedure_count', 'has_procedure', 'medication_count', 'medication_order_count', 'rbc_last', 'rbc_min', 'rdw_max', 'monocytes_min', 'hemoglobin_min', 'sodium_last', 'sodium_max', 'sodium_min', 'oncology_flag']]
+#    selected_features: list [Default: ['age', 'gender', 'race', 'admission_type', 'discharge_location', 'insurance', 'prior_admission_count', 'prior_inpatient_days', 'recent_ed_visits', 'index_los_days', 'procedure_count', 'has_procedure', 'medication_count', 'medication_order_count', 'rbc_last', 'rbc_min', 'rdw_max', 'monocytes_min', 'hemoglobin_min', 'sodium_last', 'sodium_max', 'sodium_min', 'oncology_flag']]
 #    serving_container_image_uri: str [Default: '']
 #    split_col: str [Default: 'split_name']
 #    test_split: str [Default: 'test']
 #    train_split: str [Default: 'train']
 #    val_split: str [Default: 'validation']
-#    xgb_params: dict [Default: {'colsample_bytree': 0.8, 'n_estimators': 300.0, 'learning_rate': 0.05, 'random_state': 42.0, 'max_depth': 6.0, 'subsample': 0.8}]
+#    xgb_params: dict [Default: {'subsample': 0.8, 'max_depth': 6.0, 'learning_rate': 0.05, 'colsample_bytree': 0.8, 'n_estimators': 300.0, 'random_state': 42.0}]
 components:
   comp-benchmark-gate:
     executorLabel: exec-benchmark-gate
@@ -115,6 +115,10 @@ components:
           artifactType:
             schemaTitle: system.Artifact
             schemaVersion: 0.0.1
+        threshold_plot:
+          artifactType:
+            schemaTitle: system.HTML
+            schemaVersion: 0.0.1
       parameters:
         Output:
           parameterType: NUMBER_DOUBLE
@@ -201,6 +205,30 @@ components:
             schemaTitle: system.Dataset
             schemaVersion: 0.0.1
       parameters:
+        experiment_name:
+          defaultValue: ''
+          isOptional: true
+          parameterType: STRING
+        location:
+          defaultValue: us-east1
+          isOptional: true
+          parameterType: STRING
+        max_fpr_gap:
+          defaultValue: 0.15
+          isOptional: true
+          parameterType: NUMBER_DOUBLE
+        max_tpr_gap:
+          defaultValue: 0.15
+          isOptional: true
+          parameterType: NUMBER_DOUBLE
+        pipeline_job_name:
+          defaultValue: ''
+          isOptional: true
+          parameterType: STRING
+        project_id:
+          defaultValue: ''
+          isOptional: true
+          parameterType: STRING
         tuned_threshold:
           parameterType: NUMBER_DOUBLE
     outputDefinitions:
@@ -210,9 +238,9 @@ components:
             schemaTitle: system.HTML
             schemaVersion: 0.0.1
       parameters:
-        npv_pass:
+        equal_opportunity_pass:
           parameterType: BOOLEAN
-        ppv_pass:
+        predictive_equality_pass:
           parameterType: BOOLEAN
   comp-fit-imputer-op:
     executorLabel: exec-fit-imputer-op
@@ -520,7 +548,7 @@ deploymentSpec:
           \ import run_benchmark_gate\n\n    passed = run_benchmark_gate(\n      \
           \  benchmark_aucpr=benchmark_aucpr, hospital_aucpr=hospital_aucpr,\n   \
           \ )\n    return (passed,)\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-benchmark-xgboost:
       container:
         args:
@@ -557,7 +585,7 @@ deploymentSpec:
           \      x_train_path=x_train.path, y_train_path=y_train.path,\n        x_val_path=x_val.path,\
           \ y_val_path=y_val.path,\n        xgb_params=xgb_params, cat_features=cat_features,\n\
           \        model_artifact_path=model_artifact.path,\n    )\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-calibrate-threshold:
       container:
         args:
@@ -588,24 +616,29 @@ deploymentSpec:
           \ *\n\ndef calibrate_threshold(\n    x_train: dsl.Input[dsl.Dataset],\n\
           \    y_train: dsl.Input[dsl.Dataset],\n    groups: dsl.Input[dsl.Dataset],\n\
           \    best_params: dsl.Input[dsl.Artifact],\n    cat_features: list,\n  \
-          \  beta: float,\n    threshold_curve: dsl.Output[dsl.Artifact],\n    metrics:\
-          \ dsl.Output[dsl.Metrics],\n    project_id: str = \"\",\n    location: str\
-          \ = \"us-east1\",\n    experiment_name: str = \"\",\n    pipeline_job_name:\
-          \ str = \"\",\n) -> float:\n    \"\"\"KFP component: select the operating\
-          \ threshold via OOF F-beta.\"\"\"\n    import json\n\n    from pipelines.components.calibrate_threshold\
-          \ import run_calibrate_threshold\n    from pipelines.components._experiment\
-          \ import (\n        companion_run, safe_log_metrics, safe_log_params,\n\
-          \    )\n\n    threshold = run_calibrate_threshold(\n        x_train_path=x_train.path,\n\
-          \        y_train_path=y_train.path,\n        groups_path=groups.path,\n\
-          \        best_params_path=best_params.path,\n        cat_features=cat_features,\n\
-          \        beta=beta,\n        threshold_output_path=threshold_curve.path,\n\
+          \  beta: float,\n    threshold_curve: dsl.Output[dsl.Artifact],\n    threshold_plot:\
+          \ dsl.Output[dsl.HTML],\n    metrics: dsl.Output[dsl.Metrics],\n    project_id:\
+          \ str = \"\",\n    location: str = \"us-east1\",\n    experiment_name: str\
+          \ = \"\",\n    pipeline_job_name: str = \"\",\n) -> float:\n    \"\"\"KFP\
+          \ component: select the operating threshold via OOF F-beta.\"\"\"\n    import\
+          \ json\n\n    from pipelines.components.calibrate_threshold import (\n \
+          \       _build_threshold_html, run_calibrate_threshold,\n    )\n    from\
+          \ pipelines.components._experiment import (\n        companion_run, safe_log_metrics,\
+          \ safe_log_params,\n    )\n\n    threshold = run_calibrate_threshold(\n\
+          \        x_train_path=x_train.path,\n        y_train_path=y_train.path,\n\
+          \        groups_path=groups.path,\n        best_params_path=best_params.path,\n\
+          \        cat_features=cat_features,\n        beta=beta,\n        threshold_output_path=threshold_curve.path,\n\
           \    )\n\n    with open(threshold_curve.path) as f:\n        record = json.load(f)\n\
-          \n    # dsl.Metrics on the PipelineRun: genuine measured quantities only\
-          \ (config\n    # and hyperparameters go to the companion run's Parameters\
-          \ UI instead, so\n    # this tab stays a clean list of *metrics*).\n   \
-          \ metrics.log_metric(\"tuned_threshold\", record[\"threshold\"])\n    metrics.log_metric(\"\
-          fbeta_at_threshold\", record[\"fbeta\"])\n    metrics.log_metric(\"train_prevalence\"\
-          , record[\"prevalence\"])\n\n    # Companion Experiment run: clean params-vs-metrics\
+          \n    # Threshold-selection sweep plot (precision/recall/F-beta vs threshold\
+          \ with\n    # the selected point + sweet-spot plateau band) as a rendered\
+          \ HTML report.\n    with open(threshold_plot.path, \"w\") as f:\n      \
+          \  f.write(_build_threshold_html(record))\n\n    # dsl.Metrics on the PipelineRun:\
+          \ genuine measured quantities only (config\n    # and hyperparameters go\
+          \ to the companion run's Parameters UI instead, so\n    # this tab stays\
+          \ a clean list of *metrics*).\n    metrics.log_metric(\"tuned_threshold\"\
+          , record[\"threshold\"])\n    metrics.log_metric(\"fbeta_at_threshold\"\
+          , record[\"fbeta\"])\n    metrics.log_metric(\"train_prevalence\", record[\"\
+          prevalence\"])\n\n    # Companion Experiment run: clean params-vs-metrics\
           \ separation + Charts.\n    with companion_run(\n        project_id=project_id,\
           \ location=location,\n        experiment=experiment_name, pipeline_job_name=pipeline_job_name,\n\
           \    ) as ap:\n        safe_log_params(ap, {\n            \"fbeta_beta\"\
@@ -615,7 +648,7 @@ deploymentSpec:
           \            \"tuned_threshold\": record[\"threshold\"],\n            \"\
           fbeta_at_threshold\": record[\"fbeta\"],\n        })\n\n    return threshold\n\
           \n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-evaluate-test:
       container:
         args:
@@ -695,7 +728,7 @@ deploymentSpec:
           \ \"w\") as f:\n        f.write(_build_eval_html(result))\n\n    return\
           \ (result[\"test_aucpr\"], result[\"beat_hospital\"], result[\"stable\"\
           ])\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-fairness-audit:
       container:
         args:
@@ -708,7 +741,8 @@ deploymentSpec:
         - -c
         - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
-          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.1'\
+          \ python3 -m pip install --quiet --no-warn-script-location 'google-cloud-aiplatform'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.1'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
           $0\" \"$@\"\n"
         - sh
@@ -725,18 +759,33 @@ deploymentSpec:
           \ *\n\ndef fairness_audit(\n    x_test: dsl.Input[dsl.Dataset],\n    y_test:\
           \ dsl.Input[dsl.Dataset],\n    model_artifact: dsl.Input[dsl.Model],\n \
           \   tuned_threshold: float,\n    fairness_html: dsl.Output[dsl.HTML],\n\
-          ) -> NamedTuple(\n    \"FairnessOutputs\",\n    [(\"ppv_pass\", bool), (\"\
-          npv_pass\", bool)],\n):\n    \"\"\"KFP component: subgroup fairness audit\
-          \ (NPV/PPV) at the tuned threshold.\"\"\"\n    from pipelines.components.fairness_audit\
-          \ import run_fairness_audit\n\n    # KFP v2 doesn't native output raw JSON\
-          \ as an artifact type perfectly, \n    # but the HTML artifact guarantees\
-          \ UI rendering.\n    import os\n    fairness_report_json = os.path.join(os.path.dirname(fairness_html.path),\
-          \ \"report.json\")\n\n    ppv_pass, npv_pass = run_fairness_audit(\n   \
-          \     x_test_path=x_test.path, y_test_path=y_test.path,\n        model_artifact_path=model_artifact.path,\n\
-          \        fairness_report_json=fairness_report_json,\n        fairness_html_path=fairness_html.path,\n\
-          \        tuned_threshold=tuned_threshold,\n    )\n    return (ppv_pass,\
-          \ npv_pass)\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+          \    max_tpr_gap: float = 0.15,\n    max_fpr_gap: float = 0.15,\n    project_id:\
+          \ str = \"\",\n    location: str = \"us-east1\",\n    experiment_name: str\
+          \ = \"\",\n    pipeline_job_name: str = \"\",\n) -> NamedTuple(\n    \"\
+          FairnessOutputs\",\n    [(\"equal_opportunity_pass\", bool), (\"predictive_equality_pass\"\
+          , bool)],\n):\n    \"\"\"KFP component: subgroup error-rate parity audit\
+          \ at the tuned threshold.\"\"\"\n    import os\n\n    from pipelines.components.fairness_audit\
+          \ import run_fairness_audit\n    from pipelines.components._experiment import\
+          \ companion_run, safe_log_metrics\n\n    report_json = os.path.join(os.path.dirname(fairness_html.path),\
+          \ \"report.json\")\n    report = run_fairness_audit(\n        x_test_path=x_test.path,\n\
+          \        y_test_path=y_test.path,\n        model_artifact_path=model_artifact.path,\n\
+          \        fairness_report_json=report_json,\n        fairness_html_path=fairness_html.path,\n\
+          \        tuned_threshold=tuned_threshold,\n        max_tpr_gap=max_tpr_gap,\n\
+          \        max_fpr_gap=max_fpr_gap,\n    )\n\n    # Surface the parity gaps\
+          \ to the experiment UI (diagnostic; never gates).\n    flat: dict[str, float]\
+          \ = {}\n    for name, g in report.get(\"gaps\", {}).items():\n        if\
+          \ g.get(\"tpr_gap\") is not None:\n            flat[f\"fairness_tpr_gap_{name}\"\
+          ] = g[\"tpr_gap\"]\n        if g.get(\"fpr_gap\") is not None:\n       \
+          \     flat[f\"fairness_fpr_gap_{name}\"] = g[\"fpr_gap\"]\n    tpr_gaps\
+          \ = [v for k, v in flat.items() if k.startswith(\"fairness_tpr_gap_\")]\n\
+          \    fpr_gaps = [v for k, v in flat.items() if k.startswith(\"fairness_fpr_gap_\"\
+          )]\n    if tpr_gaps:\n        flat[\"fairness_max_tpr_gap\"] = max(tpr_gaps)\n\
+          \    if fpr_gaps:\n        flat[\"fairness_max_fpr_gap\"] = max(fpr_gaps)\n\
+          \n    with companion_run(\n        project_id=project_id, location=location,\n\
+          \        experiment=experiment_name, pipeline_job_name=pipeline_job_name,\n\
+          \    ) as ap:\n        safe_log_metrics(ap, flat)\n\n    return (report[\"\
+          equal_opportunity_pass\"], report[\"predictive_equality_pass\"])\n\n"
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-fit-imputer-op:
       container:
         args:
@@ -772,7 +821,7 @@ deploymentSpec:
           \        full_table_ref=full_table_ref,\n        split_col=split_col,\n\
           \        train_split=train_split,\n        imputer_output_path=imputer.path,\n\
           \    )\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-load-data:
       container:
         args:
@@ -818,7 +867,7 @@ deploymentSpec:
           \ y_train_path=y_train.path,\n        x_val_path=x_val.path, y_val_path=y_val.path,\n\
           \        x_test_path=x_test.path, y_test_path=y_test.path,\n        groups_train_path=groups_train.path,\n\
           \        schema_path=schema.path,\n    )\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-optuna-hpo:
       container:
         args:
@@ -859,7 +908,7 @@ deploymentSpec:
           \        best_params_path=best_params.path,\n        project_id=project_id,\
           \ location=location,\n        experiment=experiment_name, run_name=pipeline_job_name,\n\
           \    )\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-register-model:
       container:
         args:
@@ -903,7 +952,7 @@ deploymentSpec:
           \    test_aucpr=test_aucpr,\n        hpo_val_aucpr=hpo_val_aucpr,\n    \
           \    benchmark_aucpr=benchmark_aucpr,\n        tuned_threshold=tuned_threshold,\n\
           \        beta=beta,\n    )\n    return (model_id,)\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-shap-explain:
       container:
         args:
@@ -961,7 +1010,7 @@ deploymentSpec:
           \n    return (\n        shap_summary_png, \n        shap_beeswarm_png,\n\
           \        shap_waterfall_png,\n        shap_local_plots_dir,\n        shap_values_parquet\n\
           \    )\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-train-final:
       container:
         args:
@@ -999,7 +1048,7 @@ deploymentSpec:
           \        x_val_path=x_val.path, y_val_path=y_val.path,\n        best_params_path=best_params.path,\
           \ cat_features=cat_features,\n        model_artifact_path=model_artifact.path,\n\
           \    )\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-validate-data:
       container:
         args:
@@ -1036,7 +1085,7 @@ deploymentSpec:
           \ x_val_path=x_val.path,\n        drift_report_html=drift_html.path,\n \
           \       quality_report_html=quality_html.path,\n        max_drifted_share=max_drifted_share,\n\
           \        fail_on_drift=fail_on_drift,\n    )\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
 pipelineInfo:
   description: "30-day readmission risk: impute \u2192 validate \u2192 benchmark \u2192\
     \ HPO \u2192 train \u2192 evaluate/explain/audit \u2192 register."
@@ -1211,6 +1260,14 @@ root:
                 outputArtifactKey: y_test
                 producerTask: load-data
           parameters:
+            experiment_name:
+              runtimeValue:
+                constant: readmission-mlops
+            pipeline_job_name:
+              runtimeValue:
+                constant: '{{$.pipeline_job_name}}'
+            project_id:
+              componentInputParameter: project_id
             tuned_threshold:
               taskOutputParameter:
                 outputParameterKey: Output
@@ -1442,6 +1499,7 @@ root:
         - race
         - admission_type
         - discharge_location
+        - insurance
         - has_procedure
         - oncology_flag
         isOptional: true
@@ -1477,6 +1535,7 @@ root:
         - race
         - admission_type
         - discharge_location
+        - insurance
         - prior_admission_count
         - prior_inpatient_days
         - recent_ed_visits

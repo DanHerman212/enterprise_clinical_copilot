@@ -67,9 +67,14 @@ def test_pipeline_dependency_edges(tmp_path):
 
 def test_pinned_features_match_run_summary():
     summary = json.loads(_RUN_SUMMARY.read_text())
-    assert SELECTED_FEATURES == summary["selected_features"], (
-        "Pinned SELECTED_FEATURES drifted from the documented run summary. "
-        "Update it deliberately from the chosen feature-selection run."
+    # ``insurance`` is added on top of the feature-selection run as a model
+    # feature (and the fairness-audit SES slice); everything else must still
+    # match the documented run summary exactly.
+    intentional_additions = {"insurance"}
+    assert set(SELECTED_FEATURES) == set(summary["selected_features"]) | intentional_additions, (
+        "Pinned SELECTED_FEATURES drifted from the documented run summary "
+        "(beyond the intentional additions). Update it deliberately from the "
+        "chosen feature-selection run."
     )
 
 

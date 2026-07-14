@@ -18,7 +18,11 @@ from xgboost import XGBClassifier
 warnings.filterwarnings("ignore")
 
 from pipelines.components.data import fit_imputer, prepare_splits
-from pipelines.components.fairness_audit import run_fairness_audit
+from pipelines.components.fairness_audit import (
+    _omb_race,
+    _wilson_ci,
+    run_fairness_audit,
+)
 from pipelines.components.shap_explain import run_shap_explain
 
 LABEL = "readmission_30d"
@@ -97,24 +101,46 @@ def test_shap_explain_outputs_and_importance(tmp_path, model_and_test):
 # fairness_audit
 # ---------------------------------------------------------------------------
 
-def test_fairness_audit_report(tmp_path, model_and_test):
+def test_omb_race_rolls_up_to_standard_buckets():
+    assert _omb_race("WHITE - RUSSIAN") == "White"
+    assert _omb_race("BLACK/CAPE VERDEAN") == "Black or African American"
+    assert _omb_race("ASIAN - CHINESE") == "Asian"
+    assert _omb_race("HISPANIC/LATINO - CUBAN") == "Hispanic or Latino"
+    assert _omb_race("AMERICAN INDIAN/ALASKA NATIVE") == "American Indian or Alaska Native"
+    assert _omb_race(None) == "Other/Unknown"
+    assert _omb_race("UNABLE TO OBTAIN") == "Other/Unknown"
+
+
+def test_wilson_ci_bounds_and_edges():
+    lo, hi = _wilson_ci(5, 10)
+    assert 0.0 <= lo < 0.5 < hi <= 1.0
+    import math as _m
+    a, b = _wilson_ci(0, 0)
+    assert _m.isnan(a) and _m.isnan(b)
+
+
+def test_fairness_audit_error_rate_parity_report(tmp_path, model_and_test):
     model_path, x_test, y_test = model_and_test
     report_json = tmp_path / "fairness.json"
     report_html = tmp_path / "fairness.html"
 
-    ppv_ok, npv_ok = run_fairness_audit(
+    report = run_fairness_audit(
         x_test_path=x_test,
         y_test_path=y_test,
         model_artifact_path=model_path,
         fairness_report_json=str(report_json),
         fairness_html_path=str(report_html),
+        tuned_threshold=0.3,
     )
-    assert isinstance(ppv_ok, bool) and isinstance(npv_ok, bool)
     assert report_json.exists() and report_html.exists()
+    assert isinstance(report["equal_opportunity_pass"], bool)
+    assert isinstance(report["predictive_equality_pass"], bool)
+    assert report["primary_signal"] == "equal_opportunity_tpr_parity"
 
-    report = json.loads(report_json.read_text())
-    assert "overall" in report
-    # gender/insurance subgroups should be analyzed (n>50 per group).
-    assert "gender" in report and "insurance" in report
-    for group in report["gender"].values():
-        assert "ppv" in group and "npv" in group
+    # gender + insurance audited (n>50 per level); each level carries TPR/FPR + CIs.
+    assert "gender" in report["subgroups"] and "insurance" in report["subgroups"]
+    for level in report["subgroups"]["gender"].values():
+        assert "tpr" in level and "fpr" in level
+        assert len(level["tpr_ci"]) == 2 and len(level["fpr_ci"]) == 2
+    # gaps are computed for each audited subgroup.
+    assert "gender" in report["gaps"] and "insurance" in report["gaps"]

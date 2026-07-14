@@ -5,9 +5,11 @@ import json
 import numpy as np
 import pandas as pd
 
-from pipelines.components.calibrate_threshold import run_calibrate_threshold
+from pipelines.components.calibrate_threshold import (
+    _build_threshold_html,
+    run_calibrate_threshold,
+)
 from pipelines.components.evaluate_test import _build_eval_html
-
 
 def _write_train(tmp_path):
     """Synthetic patient-grouped train split written as parquet (like load_data)."""
@@ -86,3 +88,29 @@ def test_build_eval_html_renders_images():
     assert html.count("data:image/png;base64,") == 3  # PR, calibration, DCA
     assert "Decision Curve Analysis" in html
     assert "Operating threshold" in html
+
+
+def test_build_threshold_html_renders_plot_and_sweet_spot():
+    # Synthetic unimodal F-beta sweep peaking at threshold 0.14.
+    curve = []
+    for t in [round(0.01 * i, 2) for i in range(1, 100)]:
+        fb = max(0.0, 0.60 - abs(t - 0.14) * 1.5)
+        curve.append({
+            "threshold": t,
+            "precision": min(0.9, 0.1 + t),
+            "recall": max(0.0, 1.0 - t),
+            "fbeta": fb,
+        })
+    record = {
+        "threshold": 0.14,
+        "beta": 2.0,
+        "fbeta": 0.60,
+        "n_train": 120,
+        "prevalence": 0.21,
+        "curve": curve,
+    }
+    html = _build_threshold_html(record)
+    assert html.count("data:image/png;base64,") == 1
+    assert "Threshold Calibration" in html
+    assert "Sweet-spot band" in html
+    assert "0.1400" in html  # selected threshold echoed in the summary

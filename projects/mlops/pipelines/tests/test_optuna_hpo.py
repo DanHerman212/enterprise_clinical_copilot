@@ -19,7 +19,6 @@ warnings.filterwarnings("ignore")
 
 from pipelines.components.optuna_hpo import (
     _grouped_folds,
-    _scale_pos_weight,
     run_optuna_hpo,
 )
 
@@ -60,16 +59,6 @@ def test_grouped_folds_are_patient_disjoint():
         assert train_patients.isdisjoint(val_patients)
 
 
-def test_scale_pos_weight_is_neg_over_pos():
-    y = pd.Series([1, 1, 0, 0, 0, 0, 0, 0])  # 2 pos, 6 neg -> 3.0
-    assert _scale_pos_weight(y) == 3.0
-
-
-def test_scale_pos_weight_handles_no_positives():
-    y = pd.Series([0, 0, 0])
-    assert _scale_pos_weight(y) == 1.0
-
-
 def test_run_optuna_writes_best_params_and_returns_score(tmp_path):
     X, y, g = _grouped_frame()
     xp = tmp_path / "x.parquet"
@@ -99,6 +88,10 @@ def test_run_optuna_writes_best_params_and_returns_score(tmp_path):
         "scale_pos_weight",
     ):
         assert key in params, f"missing tuned param: {key}"
+    # scale_pos_weight is fixed at 1.0 (protects probability calibration).
+    assert params["scale_pos_weight"] == 1.0
+    # n_estimators is derived from early stopping (>= 1), not a suggested knob.
+    assert params["n_estimators"] >= 1
     # Fixed model settings needed for reproducible refit with categoricals.
     assert params["enable_categorical"] is True
     assert params["random_state"] == 42
@@ -119,7 +112,7 @@ def test_search_space_bounds_are_respected(tmp_path):
         cat_features=CAT, n_trials=3, best_params_path=str(bp), n_splits=3,
     )
     p = json.loads(bp.read_text())
-    assert 200 <= p["n_estimators"] <= 800
+    assert 1 <= p["n_estimators"] <= 2000  # derived from early stopping (capped)
     assert 3 <= p["max_depth"] <= 8
     assert 0.01 <= p["learning_rate"] <= 0.2
     assert 0.0 <= p["gamma"] <= 5.0

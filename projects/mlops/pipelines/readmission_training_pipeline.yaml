@@ -16,7 +16,7 @@
 #    test_split: str [Default: 'test']
 #    train_split: str [Default: 'train']
 #    val_split: str [Default: 'validation']
-#    xgb_params: dict [Default: {'subsample': 0.8, 'max_depth': 6.0, 'learning_rate': 0.05, 'colsample_bytree': 0.8, 'n_estimators': 300.0, 'random_state': 42.0}]
+#    xgb_params: dict [Default: {'colsample_bytree': 0.8, 'n_estimators': 300.0, 'learning_rate': 0.05, 'random_state': 42.0, 'max_depth': 6.0, 'subsample': 0.8}]
 components:
   comp-benchmark-gate:
     executorLabel: exec-benchmark-gate

@@ -1,11 +1,25 @@
 """
 optuna_hpo — Hyperparameter optimization with Optuna + XGBoost.
 
-Cross-validation is patient-grouped (StratifiedGroupKFold on subject_id): no
-patient appears in both the train and validation side of a fold, matching the
-leakage-controlled outer split. Optimizes mean cross-validated AUCPR with the
-TPE sampler (no pruner — a coarse 5-fold objective gives too few, too-noisy
-intermediate steps for median pruning to help without risking good trials).
+Design (tuned to the readmission goals: rank the minority well, stay
+probability-first / well-calibrated, leakage-safe, reproducible):
+
+  * **Objective** — mean AUCPR over patient-grouped, class-stratified CV
+    (StratifiedGroupKFold on subject_id); no patient straddles a fold.
+  * **scale_pos_weight is FIXED at 1.0**, not tuned. AUCPR is invariant to
+    monotonic probability scaling, so tuning ``scale_pos_weight`` barely moves
+    the objective while badly inflating predicted probabilities — which would
+    wreck the Brier score / calibration the pipeline depends on. Class imbalance
+    is handled downstream by the F-beta operating threshold, not by distorting
+    probabilities.
+  * **Early stopping instead of tuning n_estimators.** Each fold fits up to a
+    high ceiling and stops on a patient-grouped inner holdout, so the tree count
+    is *learned*. The persisted ``n_estimators`` is the median best iteration of
+    the best trial — a principled count for the no-early-stopping refit in
+    train_final / calibrate.
+  * **Multivariate TPE** (models parameter interactions) with 20 startup trials.
+  * **MedianPruner** on per-fold intermediate AUCPR kills clearly-losing trials
+    after a couple of folds, so the trial budget goes to promising regions.
 """
 
 import json
@@ -15,23 +29,34 @@ import numpy as np
 import optuna
 import pandas as pd
 from sklearn.metrics import average_precision_score
-from sklearn.model_selection import StratifiedGroupKFold
+from sklearn.model_selection import GroupShuffleSplit, StratifiedGroupKFold
 from xgboost import XGBClassifier
 from kfp import dsl
 from ._image import TRAINING_IMAGE, component
 
-
-def _scale_pos_weight(y: pd.Series) -> float:
-    """Empirical class-imbalance ratio (neg/pos); 1.0 if no positives."""
-    pos = int((y == 1).sum())
-    neg = int((y == 0).sum())
-    return float(neg / pos) if pos > 0 else 1.0
+# Early stopping replaces tuning n_estimators: fit up to the ceiling and stop
+# when the inner-holdout AUCPR hasn't improved for this many rounds.
+_N_ESTIMATORS_CEILING = 2000
+_EARLY_STOPPING_ROUNDS = 50
+# Fixed to protect probability calibration (see module docstring).
+_FIXED_SCALE_POS_WEIGHT = 1.0
 
 
 def _grouped_folds(X: pd.DataFrame, y: pd.Series, groups: pd.Series, n_splits: int):
     """Patient-grouped, class-stratified CV folds (list of (train_idx, val_idx))."""
     sgkf = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=42)
     return list(sgkf.split(X, y, groups))
+
+
+def _inner_holdout(groups_sub: np.ndarray, *, seed: int = 42, test_size: float = 0.2):
+    """Patient-grouped inner holdout for early stopping -> (fit_pos, val_pos).
+
+    Returns positional indices *into the subset* so that no patient straddles the
+    fit / early-stopping-holdout boundary.
+    """
+    gss = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=seed)
+    fit_pos, val_pos = next(gss.split(np.zeros(len(groups_sub)), groups=groups_sub))
+    return fit_pos, val_pos
 
 
 # Search-space hyperparameters (the tuned knobs); logged as *params*, never metrics.
@@ -112,13 +137,11 @@ def run_optuna_hpo(
             )
             X_train[col] = X_train[col].astype(str).astype(dtype)
 
-    spw = _scale_pos_weight(y_train)
-    spw_high = max(spw, 1.0001)  # guard degenerate [1, 1] band
     folds = _grouped_folds(X_train, y_train, groups, n_splits)
 
     def objective(trial: optuna.Trial) -> float:
         params = {
-            "n_estimators": trial.suggest_int("n_estimators", 200, 800),
+            "n_estimators": _N_ESTIMATORS_CEILING,  # capped; early stopping picks the count
             "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.2, log=True),
             "max_depth": trial.suggest_int("max_depth", 3, 8),
             "min_child_weight": trial.suggest_int("min_child_weight", 1, 20),
@@ -127,38 +150,73 @@ def run_optuna_hpo(
             "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
             "reg_alpha": trial.suggest_float("reg_alpha", 1e-8, 10.0, log=True),
             "reg_lambda": trial.suggest_float("reg_lambda", 1e-8, 10.0, log=True),
-            "scale_pos_weight": trial.suggest_float("scale_pos_weight", 1.0, spw_high),
+            "scale_pos_weight": _FIXED_SCALE_POS_WEIGHT,  # fixed: protect calibration
             "random_state": 42,
             "n_jobs": -1,
             "eval_metric": "aucpr",
             "enable_categorical": True,
             "tree_method": "hist",
+            "early_stopping_rounds": _EARLY_STOPPING_ROUNDS,
         }
-        scores = []
-        for train_idx, val_idx in folds:
+        scores: list[float] = []
+        best_iters: list[int] = []
+        for step, (train_idx, val_idx) in enumerate(folds):
+            # Patient-grouped inner holdout (within this fold's train) for early
+            # stopping — the outer val fold stays untouched for honest scoring.
+            g_sub = groups.iloc[train_idx].to_numpy()
+            fit_pos, ival_pos = _inner_holdout(g_sub, seed=42)
+            fit_idx, ival_idx = train_idx[fit_pos], train_idx[ival_pos]
+
             model = XGBClassifier(**params)
-            model.fit(X_train.iloc[train_idx], y_train.iloc[train_idx], verbose=False)
+            model.fit(
+                X_train.iloc[fit_idx], y_train.iloc[fit_idx],
+                eval_set=[(X_train.iloc[ival_idx], y_train.iloc[ival_idx])],
+                verbose=False,
+            )
             proba = model.predict_proba(X_train.iloc[val_idx])[:, 1]
-            scores.append(average_precision_score(y_train.iloc[val_idx], proba))
+            scores.append(float(average_precision_score(y_train.iloc[val_idx], proba)))
+            bi = getattr(model, "best_iteration", None)
+            best_iters.append(int(bi) + 1 if bi is not None else _N_ESTIMATORS_CEILING)
+
+            # Report the running mean so MedianPruner can drop losing trials early.
+            trial.report(float(np.mean(scores)), step=step)
+            if trial.should_prune():
+                raise optuna.TrialPruned()
+
+        trial.set_user_attr("best_iterations", best_iters)
         return float(np.mean(scores))
 
     study = optuna.create_study(
         direction="maximize",
-        sampler=optuna.samplers.TPESampler(seed=42),
-        pruner=optuna.pruners.NopPruner(),
+        sampler=optuna.samplers.TPESampler(
+            multivariate=True, n_startup_trials=20, seed=42,
+        ),
+        pruner=optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=1),
     )
     study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
 
+    # Tuned knobs come from the study; n_estimators is the median early-stopping
+    # iteration of the best trial (the tree count for the no-early-stopping refit
+    # in train_final / calibrate); the rest are fixed reproducible settings.
+    best_iters = study.best_trial.user_attrs.get(
+        "best_iterations", [_N_ESTIMATORS_CEILING]
+    )
     best_params = dict(study.best_params)
+    best_params["n_estimators"] = int(np.median(best_iters))
+    best_params["scale_pos_weight"] = _FIXED_SCALE_POS_WEIGHT
     best_params["random_state"] = 42
     best_params["n_jobs"] = -1
     best_params["eval_metric"] = "aucpr"
     best_params["enable_categorical"] = True
     best_params["tree_method"] = "hist"
 
+    n_pruned = len(
+        [t for t in study.trials if t.state == optuna.trial.TrialState.PRUNED]
+    )
     print(f"  Best trial: {study.best_trial.number}")
     print(f"  Best grouped-CV AUCPR: {study.best_value:.4f}  ({n_splits}-fold)")
-    print(f"  scale_pos_weight band: [1.0, {spw_high:.3f}]")
+    print(f"  n_estimators (median early-stop iters): {best_params['n_estimators']}")
+    print(f"  Pruned trials: {n_pruned}/{len(study.trials)}")
     print(f"  Best params: {json.dumps(best_params, indent=2)}")
 
     with open(best_params_path, "w") as f:

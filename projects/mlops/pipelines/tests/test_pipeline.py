@@ -42,6 +42,28 @@ def test_pipeline_compiles_with_all_tasks(tmp_path):
     assert EXPECTED_TASKS.issubset(tasks), f"missing tasks: {EXPECTED_TASKS - tasks}"
 
 
+def test_no_module_constant_defaults_in_component_signatures(tmp_path):
+    """Guard the KFP re-exec gotcha.
+
+    KFP serializes each @component wrapper's *source* and re-execs it inside the
+    training container, where module-level names from the authoring module are
+    NOT defined. So a parameter default like ``x: int = _SOME_CONSTANT`` raises
+    ``NameError`` at function definition -> the task exits 1 immediately (with no
+    useful stdout). Component defaults must be literals; keep module constants in
+    the ``run_*`` helpers (which are imported from the image, not serialized).
+    """
+    import re
+
+    out = tmp_path / "pipeline.yaml"
+    compile_pipeline(str(out))
+    offenders = re.findall(
+        r": (?:int|float|str|list|dict|bool) = _[A-Za-z]\w*", out.read_text()
+    )
+    assert not offenders, (
+        f"component parameter default references a module constant: {offenders}"
+    )
+
+
 def test_pipeline_dependency_edges(tmp_path):
     out = tmp_path / "pipeline.yaml"
     compile_pipeline(str(out))

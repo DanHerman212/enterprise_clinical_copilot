@@ -27,6 +27,7 @@ export PROJECT_ID="${PROJECT_ID:-trim-icon-498815-a0}"
 REGION="${REGION:-us-east1}"                         # pipeline is pinned to us-east1
 export PIPELINE_ROOT="${PIPELINE_ROOT:-gs://trim-icon-498815-a0-mlops/pipeline-root}"
 export N_TRIALS="${N_TRIALS:-5}"                     # dry-run default; use 50 for a full run
+export HPO_TIMEOUT="${HPO_TIMEOUT:-2700}"            # HPO wall-clock backstop (sec); 45 min default
 export SERVING_IMAGE_URI="${SERVING_IMAGE_URI:-}"    # empty -> register_model step will fail
 export PIPELINE_SA="${PIPELINE_SA:-mlops-pipeline@trim-icon-498815-a0.iam.gserviceaccount.com}"
 # REQUIRED: components import their helpers from source baked into this image.
@@ -46,6 +47,7 @@ echo "  PROJECT_ID        : $PROJECT_ID"
 echo "  REGION            : $REGION"
 echo "  PIPELINE_ROOT     : $PIPELINE_ROOT"
 echo "  N_TRIALS          : $N_TRIALS   (dry run = 5, full run = 50)"
+echo "  HPO_TIMEOUT       : ${HPO_TIMEOUT}s   (HPO wall-clock backstop)"
 echo "  PIPELINE_SA       : $PIPELINE_SA"
 echo "  SERVING_IMAGE_URI : ${SERVING_IMAGE_URI:-<unset — register_model step will fail>}"
 echo "  TRAINING_IMAGE_URI: $TRAINING_IMAGE_URI"

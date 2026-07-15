@@ -110,6 +110,7 @@ def training_pipeline(
     cat_features: list = CAT_FEATURES,
     xgb_params: dict = DEFAULT_XGB_PARAMS,
     n_trials: int = 50,
+    hpo_timeout_seconds: int = 2700,
     fbeta_beta: float = 2.0,
     max_drifted_share: float = 0.2,
     hospital_aucpr: float = HOSPITAL_AUCPR,
@@ -162,6 +163,7 @@ def training_pipeline(
         groups=data.outputs["groups_train"],
         cat_features=cat_features,
         n_trials=n_trials,
+        timeout_seconds=hpo_timeout_seconds,
         project_id=project_id,
         experiment_name=EXPERIMENT_NAME,
         pipeline_job_name=dsl.PIPELINE_JOB_NAME_PLACEHOLDER,
@@ -266,6 +268,9 @@ def submit() -> None:
             "full_table_ref": FULL_TABLE_REF,
             # HPO trials — set N_TRIALS low (e.g. 5) for a quick wiring check.
             "n_trials": int(os.environ.get("N_TRIALS", "50")),
+            # Wall-clock backstop for HPO (seconds); stops launching trials past
+            # this budget and returns best-so-far. Default 45 min.
+            "hpo_timeout_seconds": int(os.environ.get("HPO_TIMEOUT", "2700")),
             # Custom real-time predictor image (see pipelines/serving/).
             "serving_container_image_uri": os.environ.get("SERVING_IMAGE_URI", ""),
         },

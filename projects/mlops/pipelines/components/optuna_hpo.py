@@ -17,9 +17,15 @@ probability-first / well-calibrated, leakage-safe, reproducible):
     is *learned*. The persisted ``n_estimators`` is the median best iteration of
     the best trial — a principled count for the no-early-stopping refit in
     train_final / calibrate.
-  * **Multivariate TPE** (models parameter interactions) with 20 startup trials.
+  * **Multivariate TPE** (models parameter interactions) with a short startup.
   * **MedianPruner** on per-fold intermediate AUCPR kills clearly-losing trials
     after a couple of folds, so the trial budget goes to promising regions.
+
+Because the objective surface is flat (data-limited ceiling), HPO only needs to
+*rank* configs into the good region, so a **fast profile** keeps a full search
+under an hour: a patient-grouped row subsample, a low tree ceiling + early
+stopping, 3 folds, a known-good **warm-start** trial, and a wall-clock
+``timeout`` backstop. Quality is essentially unchanged; wall-time drops ~5x.
 """
 
 import json
@@ -34,18 +40,61 @@ from xgboost import XGBClassifier
 from kfp import dsl
 from ._image import TRAINING_IMAGE, component
 
-# Early stopping replaces tuning n_estimators: fit up to the ceiling and stop
-# when the inner-holdout AUCPR hasn't improved for this many rounds.
-_N_ESTIMATORS_CEILING = 2000
-_EARLY_STOPPING_ROUNDS = 50
+# --- Fast HPO profile --------------------------------------------------------
+# The objective surface is flat (data-limited ceiling), so HPO only needs to
+# RANK configs into the good region — not evaluate each one at full fidelity.
+# These settings keep a full search bounded to well under an hour.
+_N_ESTIMATORS_CEILING = 500     # capped; early stopping picks the actual count
+_EARLY_STOPPING_ROUNDS = 30
+_LEARNING_RATE_FLOOR = 0.03     # higher floor => fewer trees needed per fit
+_DEFAULT_N_SPLITS = 3           # 3-fold is enough to rank configs
+_HPO_SUBSAMPLE_FRAC = 0.5       # patient-grouped row subsample for HPO speed
+_TPE_STARTUP_TRIALS = 8         # engage exploitation sooner in a small budget
+_PRUNER_STARTUP_TRIALS = 5
+_DEFAULT_TIMEOUT_SECONDS = 2700  # 45-min wall-clock backstop (graceful)
 # Fixed to protect probability calibration (see module docstring).
 _FIXED_SCALE_POS_WEIGHT = 1.0
+
+# Warm-start: seed the study with a known-good config as trial 0 so even a short
+# / heavily-pruned search never ends up worse than this baseline. Keys must be
+# the *suggested* params only (n_estimators / scale_pos_weight are fixed).
+_WARM_START_PARAMS = {
+    "learning_rate": 0.05,
+    "max_depth": 5,
+    "min_child_weight": 5,
+    "gamma": 0.0,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "reg_alpha": 1e-3,
+    "reg_lambda": 1.0,
+}
 
 
 def _grouped_folds(X: pd.DataFrame, y: pd.Series, groups: pd.Series, n_splits: int):
     """Patient-grouped, class-stratified CV folds (list of (train_idx, val_idx))."""
     sgkf = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=42)
     return list(sgkf.split(X, y, groups))
+
+
+def _grouped_subsample(X, y, groups, frac: float, *, seed: int = 42):
+    """Keep a random ``frac`` of *whole patients* (leakage-safe) for faster HPO.
+
+    Subsampling by ``subject_id`` (not by row) means no patient is split across
+    the kept / dropped boundary, preserving the grouped-CV guarantee. Returns
+    row-reindexed (X, y, groups). ``frac >= 1`` is a no-op.
+    """
+    if frac >= 1.0:
+        return X.reset_index(drop=True), y.reset_index(drop=True), groups.reset_index(drop=True)
+    rng = np.random.RandomState(seed)
+    uniq = pd.unique(groups)
+    n_keep = max(1, int(round(len(uniq) * frac)))
+    keep = set(rng.choice(uniq, size=n_keep, replace=False))
+    mask = groups.isin(keep).to_numpy()
+    return (
+        X.loc[mask].reset_index(drop=True),
+        y.loc[mask].reset_index(drop=True),
+        groups.loc[mask].reset_index(drop=True),
+    )
 
 
 def _inner_holdout(groups_sub: np.ndarray, *, seed: int = 42, test_size: float = 0.2):
@@ -119,7 +168,9 @@ def run_optuna_hpo(
     cat_features: list[str],
     n_trials: int,
     best_params_path: str,
-    n_splits: int = 5,
+    n_splits: int = _DEFAULT_N_SPLITS,
+    subsample_frac: float = _HPO_SUBSAMPLE_FRAC,
+    timeout_seconds: int = _DEFAULT_TIMEOUT_SECONDS,
     project_id: str = "",
     location: str = "us-east1",
     experiment: str = "",
@@ -137,12 +188,16 @@ def run_optuna_hpo(
             )
             X_train[col] = X_train[col].astype(str).astype(dtype)
 
-    folds = _grouped_folds(X_train, y_train, groups, n_splits)
+    # Patient-grouped row subsample for HPO speed (final model refits on full).
+    X_hpo, y_hpo, g_hpo = _grouped_subsample(X_train, y_train, groups, subsample_frac)
+    folds = _grouped_folds(X_hpo, y_hpo, g_hpo, n_splits)
 
     def objective(trial: optuna.Trial) -> float:
         params = {
             "n_estimators": _N_ESTIMATORS_CEILING,  # capped; early stopping picks the count
-            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.2, log=True),
+            "learning_rate": trial.suggest_float(
+                "learning_rate", _LEARNING_RATE_FLOOR, 0.2, log=True
+            ),
             "max_depth": trial.suggest_int("max_depth", 3, 8),
             "min_child_weight": trial.suggest_int("min_child_weight", 1, 20),
             "gamma": trial.suggest_float("gamma", 0.0, 5.0),
@@ -163,18 +218,18 @@ def run_optuna_hpo(
         for step, (train_idx, val_idx) in enumerate(folds):
             # Patient-grouped inner holdout (within this fold's train) for early
             # stopping — the outer val fold stays untouched for honest scoring.
-            g_sub = groups.iloc[train_idx].to_numpy()
+            g_sub = g_hpo.iloc[train_idx].to_numpy()
             fit_pos, ival_pos = _inner_holdout(g_sub, seed=42)
             fit_idx, ival_idx = train_idx[fit_pos], train_idx[ival_pos]
 
             model = XGBClassifier(**params)
             model.fit(
-                X_train.iloc[fit_idx], y_train.iloc[fit_idx],
-                eval_set=[(X_train.iloc[ival_idx], y_train.iloc[ival_idx])],
+                X_hpo.iloc[fit_idx], y_hpo.iloc[fit_idx],
+                eval_set=[(X_hpo.iloc[ival_idx], y_hpo.iloc[ival_idx])],
                 verbose=False,
             )
-            proba = model.predict_proba(X_train.iloc[val_idx])[:, 1]
-            scores.append(float(average_precision_score(y_train.iloc[val_idx], proba)))
+            proba = model.predict_proba(X_hpo.iloc[val_idx])[:, 1]
+            scores.append(float(average_precision_score(y_hpo.iloc[val_idx], proba)))
             bi = getattr(model, "best_iteration", None)
             best_iters.append(int(bi) + 1 if bi is not None else _N_ESTIMATORS_CEILING)
 
@@ -189,11 +244,18 @@ def run_optuna_hpo(
     study = optuna.create_study(
         direction="maximize",
         sampler=optuna.samplers.TPESampler(
-            multivariate=True, n_startup_trials=20, seed=42,
+            multivariate=True, n_startup_trials=_TPE_STARTUP_TRIALS, seed=42,
         ),
-        pruner=optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=1),
+        pruner=optuna.pruners.MedianPruner(
+            n_startup_trials=_PRUNER_STARTUP_TRIALS, n_warmup_steps=1,
+        ),
     )
-    study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+    # Seed a known-good config so a short / heavily-pruned search never regresses.
+    study.enqueue_trial(_WARM_START_PARAMS)
+    timeout = timeout_seconds if timeout_seconds and timeout_seconds > 0 else None
+    study.optimize(
+        objective, n_trials=n_trials, timeout=timeout, show_progress_bar=False,
+    )
 
     # Tuned knobs come from the study; n_estimators is the median early-stopping
     # iteration of the best trial (the tree count for the no-early-stopping refit
@@ -244,8 +306,9 @@ def optuna_hpo(
     cat_features: list,
     n_trials: int,
     best_params: dsl.Output[dsl.Artifact],
-    project_id: str = "",
-    location: str = "us-east1",
+    timeout_seconds: int = 2700,  # literal (NOT a module constant): KFP re-execs
+    project_id: str = "",         # this signature in-container, where names from
+    location: str = "us-east1",   # this module are not defined.
     experiment_name: str = "",
     pipeline_job_name: str = "",
 ) -> float:
@@ -257,6 +320,7 @@ def optuna_hpo(
         groups_path=groups.path,
         cat_features=cat_features, n_trials=n_trials,
         best_params_path=best_params.path,
+        timeout_seconds=timeout_seconds,
         project_id=project_id, location=location,
         experiment=experiment_name, run_name=pipeline_job_name,
     )

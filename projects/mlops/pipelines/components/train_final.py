@@ -115,6 +115,58 @@ def run_train_final(
     return train_aucpr
 
 
+def _build_training_curve_html(curve: dict) -> str:
+    """Render the per-round train-vs-monitor AUCPR curves as one HTML report.
+
+    The gap between the two curves per boosting round is the most sensitive
+    overfit signal — divergence means the model is memorising training noise
+    without improving its out-of-sample score.
+    """
+    import base64
+    import io
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    train_keys = [k for k in curve if k.startswith("train_")]
+    monitor_keys = [k for k in curve if k.startswith("monitor_")]
+    if not train_keys or not monitor_keys:
+        return "<p>No per-round training curve data available.</p>"
+
+    train_label = train_keys[0].replace("train_", "")
+    train_vals = curve[train_keys[0]]
+    monitor_vals = curve[monitor_keys[0]]
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    rounds = range(1, len(train_vals) + 1)
+    ax.plot(rounds, train_vals, color="#1f77b4", lw=1.8, label="Training set (combined fit)")
+    ax.plot(rounds[:len(monitor_vals)], monitor_vals, color="#d62728", lw=1.8,
+            label="Monitor set (held-out 20% val)")
+    ax.set_xlabel("Boosting round")
+    ax.set_ylabel(train_label.upper())
+    ax.set_title("Per-Round Training Curve (overfit check)")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=120, bbox_inches="tight")
+    plt.close(fig)
+    png_b64 = base64.b64encode(buf.getvalue()).decode()
+
+    gap = round(train_vals[-1] - monitor_vals[-1], 4) if monitor_vals else None
+    return f"""
+<h2>Training Curve — Per-Round {train_label.upper()}</h2>
+<p><b>Train–monitor gap at final round:</b> {gap}</p>
+<p>The red curve is scored on a small held-out patient-grouped portion of the
+validation split that the model never trained on. If the blue training curve
+keeps climbing while red plateaus or drops, the model is overfitting — the
+final rounds are memorising noise without improving generalization.</p>
+<img src="data:image/png;base64,{png_b64}" width="700"/>
+"""
+
+
 @component(
     base_image=TRAINING_IMAGE,
     packages_to_install=[
@@ -132,6 +184,7 @@ def train_final(
     groups_val: dsl.Input[dsl.Dataset],
     model_artifact: dsl.Output[dsl.Model],
     training_curve: dsl.Output[dsl.Artifact],
+    training_curve_plot: dsl.Output[dsl.HTML],
     project_id: str = "",
     location: str = "us-east1",
     experiment_name: str = "",
@@ -140,7 +193,7 @@ def train_final(
     """KFP component: train final XGBoost with best HPO params."""
     import json
 
-    from pipelines.components.train_final import run_train_final
+    from pipelines.components.train_final import _build_training_curve_html, run_train_final
     from pipelines.components._experiment import companion_run
 
     score = run_train_final(
@@ -169,5 +222,9 @@ def train_final(
                     )
                 except Exception:  # noqa: BLE001
                     pass
+
+    # Render the training curve as an HTML plot on the pipeline DAG node.
+    with open(training_curve_plot.path, "w") as f:
+        f.write(_build_training_curve_html(curve))
 
     return score

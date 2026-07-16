@@ -17,7 +17,7 @@
 #    test_split: str [Default: 'test']
 #    train_split: str [Default: 'train']
 #    val_split: str [Default: 'validation']
-#    xgb_params: dict [Default: {'max_depth': 6.0, 'random_state': 42.0, 'n_estimators': 300.0, 'learning_rate': 0.05, 'colsample_bytree': 0.8, 'subsample': 0.8}]
+#    xgb_params: dict [Default: {'subsample': 0.8, 'learning_rate': 0.05, 'n_estimators': 300.0, 'max_depth': 6.0, 'random_state': 42.0, 'colsample_bytree': 0.8}]
 components:
   comp-benchmark-gate:
     executorLabel: exec-benchmark-gate
@@ -511,6 +511,10 @@ components:
         training_curve:
           artifactType:
             schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+        training_curve_plot:
+          artifactType:
+            schemaTitle: system.HTML
             schemaVersion: 0.0.1
       parameters:
         Output:
@@ -1081,12 +1085,13 @@ deploymentSpec:
           \ dsl.Input[dsl.Dataset],\n    best_params: dsl.Input[dsl.Artifact],\n \
           \   cat_features: list,\n    groups_val: dsl.Input[dsl.Dataset],\n    model_artifact:\
           \ dsl.Output[dsl.Model],\n    training_curve: dsl.Output[dsl.Artifact],\n\
-          \    project_id: str = \"\",\n    location: str = \"us-east1\",\n    experiment_name:\
-          \ str = \"\",\n    pipeline_job_name: str = \"\",\n) -> float:\n    \"\"\
-          \"KFP component: train final XGBoost with best HPO params.\"\"\"\n    import\
-          \ json\n\n    from pipelines.components.train_final import run_train_final\n\
-          \    from pipelines.components._experiment import companion_run\n\n    score\
-          \ = run_train_final(\n        x_train_path=x_train.path, y_train_path=y_train.path,\n\
+          \    training_curve_plot: dsl.Output[dsl.HTML],\n    project_id: str = \"\
+          \",\n    location: str = \"us-east1\",\n    experiment_name: str = \"\"\
+          ,\n    pipeline_job_name: str = \"\",\n) -> float:\n    \"\"\"KFP component:\
+          \ train final XGBoost with best HPO params.\"\"\"\n    import json\n\n \
+          \   from pipelines.components.train_final import _build_training_curve_html,\
+          \ run_train_final\n    from pipelines.components._experiment import companion_run\n\
+          \n    score = run_train_final(\n        x_train_path=x_train.path, y_train_path=y_train.path,\n\
           \        x_val_path=x_val.path, y_val_path=y_val.path,\n        best_params_path=best_params.path,\
           \ cat_features=cat_features,\n        model_artifact_path=model_artifact.path,\n\
           \        training_curve_path=training_curve.path,\n        groups_val_path=groups_val.path,\n\
@@ -1100,7 +1105,10 @@ deploymentSpec:
           \ ap.log_time_series_metrics(\n                        {k: v[step] for k,\
           \ v in curve.items() if step < len(v)},\n                        step=step,\n\
           \                    )\n                except Exception:  # noqa: BLE001\n\
-          \                    pass\n\n    return score\n\n"
+          \                    pass\n\n    # Render the training curve as an HTML\
+          \ plot on the pipeline DAG node.\n    with open(training_curve_plot.path,\
+          \ \"w\") as f:\n        f.write(_build_training_curve_html(curve))\n\n \
+          \   return score\n\n"
         image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-validate-data:
       container:

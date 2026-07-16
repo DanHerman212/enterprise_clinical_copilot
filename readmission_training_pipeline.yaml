@@ -17,7 +17,7 @@
 #    test_split: str [Default: 'test']
 #    train_split: str [Default: 'train']
 #    val_split: str [Default: 'validation']
-#    xgb_params: dict [Default: {'learning_rate': 0.05, 'random_state': 42.0, 'colsample_bytree': 0.8, 'n_estimators': 300.0, 'subsample': 0.8, 'max_depth': 6.0}]
+#    xgb_params: dict [Default: {'subsample': 0.8, 'learning_rate': 0.05, 'n_estimators': 300.0, 'max_depth': 6.0, 'random_state': 42.0, 'colsample_bytree': 0.8}]
 components:
   comp-benchmark-gate:
     executorLabel: exec-benchmark-gate
@@ -512,6 +512,10 @@ components:
           artifactType:
             schemaTitle: system.Artifact
             schemaVersion: 0.0.1
+        training_curve_plot:
+          artifactType:
+            schemaTitle: system.HTML
+            schemaVersion: 0.0.1
       parameters:
         Output:
           parameterType: NUMBER_DOUBLE
@@ -581,7 +585,7 @@ deploymentSpec:
           \ import run_benchmark_gate\n\n    passed = run_benchmark_gate(\n      \
           \  benchmark_aucpr=benchmark_aucpr, hospital_aucpr=hospital_aucpr,\n   \
           \ )\n    return (passed,)\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-benchmark-xgboost:
       container:
         args:
@@ -618,7 +622,7 @@ deploymentSpec:
           \      x_train_path=x_train.path, y_train_path=y_train.path,\n        x_val_path=x_val.path,\
           \ y_val_path=y_val.path,\n        xgb_params=xgb_params, cat_features=cat_features,\n\
           \        model_artifact_path=model_artifact.path,\n    )\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-calibrate-threshold:
       container:
         args:
@@ -681,7 +685,7 @@ deploymentSpec:
           \            \"tuned_threshold\": record[\"threshold\"],\n            \"\
           fbeta_at_threshold\": record[\"fbeta\"],\n        })\n\n    return threshold\n\
           \n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-evaluate-test:
       container:
         args:
@@ -761,7 +765,7 @@ deploymentSpec:
           \ \"w\") as f:\n        f.write(_build_eval_html(result))\n\n    return\
           \ (result[\"test_aucpr\"], result[\"beat_hospital\"], result[\"stable\"\
           ])\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-fairness-audit:
       container:
         args:
@@ -818,7 +822,7 @@ deploymentSpec:
           \        experiment=experiment_name, pipeline_job_name=pipeline_job_name,\n\
           \    ) as ap:\n        safe_log_metrics(ap, flat)\n\n    return (report[\"\
           equal_opportunity_pass\"], report[\"predictive_equality_pass\"])\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-fit-imputer-op:
       container:
         args:
@@ -854,7 +858,7 @@ deploymentSpec:
           \        full_table_ref=full_table_ref,\n        split_col=split_col,\n\
           \        train_split=train_split,\n        imputer_output_path=imputer.path,\n\
           \    )\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-load-data:
       container:
         args:
@@ -901,7 +905,7 @@ deploymentSpec:
           \        x_test_path=x_test.path, y_test_path=y_test.path,\n        groups_train_path=groups_train.path,\n\
           \        groups_val_path=groups_val.path,\n        schema_path=schema.path,\n\
           \    )\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-optuna-hpo:
       container:
         args:
@@ -945,7 +949,7 @@ deploymentSpec:
           \        timeout_seconds=timeout_seconds,\n        project_id=project_id,\
           \ location=location,\n        experiment=experiment_name, run_name=pipeline_job_name,\n\
           \    )\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-register-model:
       container:
         args:
@@ -989,7 +993,7 @@ deploymentSpec:
           \    test_aucpr=test_aucpr,\n        hpo_val_aucpr=hpo_val_aucpr,\n    \
           \    benchmark_aucpr=benchmark_aucpr,\n        tuned_threshold=tuned_threshold,\n\
           \        beta=beta,\n    )\n    return (model_id,)\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-shap-explain:
       container:
         args:
@@ -1047,7 +1051,7 @@ deploymentSpec:
           \n    return (\n        shap_summary_png, \n        shap_beeswarm_png,\n\
           \        shap_waterfall_png,\n        shap_local_plots_dir,\n        shap_values_parquet\n\
           \    )\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-train-final:
       container:
         args:
@@ -1081,12 +1085,13 @@ deploymentSpec:
           \ dsl.Input[dsl.Dataset],\n    best_params: dsl.Input[dsl.Artifact],\n \
           \   cat_features: list,\n    groups_val: dsl.Input[dsl.Dataset],\n    model_artifact:\
           \ dsl.Output[dsl.Model],\n    training_curve: dsl.Output[dsl.Artifact],\n\
-          \    project_id: str = \"\",\n    location: str = \"us-east1\",\n    experiment_name:\
-          \ str = \"\",\n    pipeline_job_name: str = \"\",\n) -> float:\n    \"\"\
-          \"KFP component: train final XGBoost with best HPO params.\"\"\"\n    import\
-          \ json\n\n    from pipelines.components.train_final import run_train_final\n\
-          \    from pipelines.components._experiment import companion_run\n\n    score\
-          \ = run_train_final(\n        x_train_path=x_train.path, y_train_path=y_train.path,\n\
+          \    training_curve_plot: dsl.Output[dsl.HTML],\n    project_id: str = \"\
+          \",\n    location: str = \"us-east1\",\n    experiment_name: str = \"\"\
+          ,\n    pipeline_job_name: str = \"\",\n) -> float:\n    \"\"\"KFP component:\
+          \ train final XGBoost with best HPO params.\"\"\"\n    import json\n\n \
+          \   from pipelines.components.train_final import _build_training_curve_html,\
+          \ run_train_final\n    from pipelines.components._experiment import companion_run\n\
+          \n    score = run_train_final(\n        x_train_path=x_train.path, y_train_path=y_train.path,\n\
           \        x_val_path=x_val.path, y_val_path=y_val.path,\n        best_params_path=best_params.path,\
           \ cat_features=cat_features,\n        model_artifact_path=model_artifact.path,\n\
           \        training_curve_path=training_curve.path,\n        groups_val_path=groups_val.path,\n\
@@ -1100,8 +1105,11 @@ deploymentSpec:
           \ ap.log_time_series_metrics(\n                        {k: v[step] for k,\
           \ v in curve.items() if step < len(v)},\n                        step=step,\n\
           \                    )\n                except Exception:  # noqa: BLE001\n\
-          \                    pass\n\n    return score\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+          \                    pass\n\n    # Render the training curve as an HTML\
+          \ plot on the pipeline DAG node.\n    with open(training_curve_plot.path,\
+          \ \"w\") as f:\n        f.write(_build_training_curve_html(curve))\n\n \
+          \   return score\n\n"
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-validate-data:
       container:
         args:
@@ -1138,7 +1146,7 @@ deploymentSpec:
           \ x_val_path=x_val.path,\n        drift_report_html=drift_html.path,\n \
           \       quality_report_html=quality_html.path,\n        max_drifted_share=max_drifted_share,\n\
           \        fail_on_drift=fail_on_drift,\n    )\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
 pipelineInfo:
   description: "30-day readmission risk: impute \u2192 validate \u2192 benchmark \u2192\
     \ HPO \u2192 train \u2192 evaluate/explain/audit \u2192 register."

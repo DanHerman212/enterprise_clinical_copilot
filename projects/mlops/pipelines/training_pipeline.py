@@ -176,6 +176,10 @@ def training_pipeline(
         y_val=data.outputs["y_val"],
         best_params=hpo.outputs["best_params"],
         cat_features=cat_features,
+        groups_val=data.outputs["groups_val"],
+        project_id=project_id,
+        experiment_name=EXPERIMENT_NAME,
+        pipeline_job_name=dsl.PIPELINE_JOB_NAME_PLACEHOLDER,
     )
 
     # Operating threshold: F-beta-optimal on out-of-fold (patient-grouped) TRAIN

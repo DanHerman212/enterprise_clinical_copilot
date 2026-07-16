@@ -38,6 +38,7 @@ def run_load_data(
     x_test_path: str,
     y_test_path: str,
     groups_train_path: str,
+    groups_val_path: str,
     schema_path: str,
 ) -> None:
     """Load splits, impute + encode via ``prepare_splits``, write parquet.
@@ -67,6 +68,7 @@ def run_load_data(
 
     # Capture the train group key before features are selected out.
     groups_train = train_df[[id_col]].copy()
+    groups_val = val_df[[id_col]].copy()
 
     imputer = joblib.load(imputer_path)
 
@@ -85,6 +87,7 @@ def run_load_data(
     out["X_test"].to_parquet(x_test_path, index=False)
     pd.DataFrame(out["y_test"]).to_parquet(y_test_path, index=False)
     groups_train.to_parquet(groups_train_path, index=False)
+    groups_val.to_parquet(groups_val_path, index=False)
 
     # Persist the serving schema so training and online inference share the
     # exact same feature order and category encoding.
@@ -125,6 +128,7 @@ def load_data(
     x_test: dsl.Output[dsl.Dataset],
     y_test: dsl.Output[dsl.Dataset],
     groups_train: dsl.Output[dsl.Dataset],
+    groups_val: dsl.Output[dsl.Dataset],
     schema: dsl.Output[dsl.Artifact],
     id_col: str = "subject_id",
 ):
@@ -141,5 +145,6 @@ def load_data(
         x_val_path=x_val.path, y_val_path=y_val.path,
         x_test_path=x_test.path, y_test_path=y_test.path,
         groups_train_path=groups_train.path,
+        groups_val_path=groups_val.path,
         schema_path=schema.path,
     )

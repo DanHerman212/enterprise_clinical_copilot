@@ -17,7 +17,7 @@
 #    test_split: str [Default: 'test']
 #    train_split: str [Default: 'train']
 #    val_split: str [Default: 'validation']
-#    xgb_params: dict [Default: {'max_depth': 6.0, 'random_state': 42.0, 'colsample_bytree': 0.8, 'subsample': 0.8, 'n_estimators': 300.0, 'learning_rate': 0.05}]
+#    xgb_params: dict [Default: {'learning_rate': 0.05, 'random_state': 42.0, 'colsample_bytree': 0.8, 'n_estimators': 300.0, 'subsample': 0.8, 'max_depth': 6.0}]
 components:
   comp-benchmark-gate:
     executorLabel: exec-benchmark-gate
@@ -298,6 +298,10 @@ components:
           artifactType:
             schemaTitle: system.Dataset
             schemaVersion: 0.0.1
+        groups_val:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
         schema:
           artifactType:
             schemaTitle: system.Artifact
@@ -459,6 +463,10 @@ components:
           artifactType:
             schemaTitle: system.Artifact
             schemaVersion: 0.0.1
+        groups_val:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
         x_train:
           artifactType:
             schemaTitle: system.Dataset
@@ -478,11 +486,31 @@ components:
       parameters:
         cat_features:
           parameterType: LIST
+        experiment_name:
+          defaultValue: ''
+          isOptional: true
+          parameterType: STRING
+        location:
+          defaultValue: us-east1
+          isOptional: true
+          parameterType: STRING
+        pipeline_job_name:
+          defaultValue: ''
+          isOptional: true
+          parameterType: STRING
+        project_id:
+          defaultValue: ''
+          isOptional: true
+          parameterType: STRING
     outputDefinitions:
       artifacts:
         model_artifact:
           artifactType:
             schemaTitle: system.Model
+            schemaVersion: 0.0.1
+        training_curve:
+          artifactType:
+            schemaTitle: system.Artifact
             schemaVersion: 0.0.1
       parameters:
         Output:
@@ -861,17 +889,18 @@ deploymentSpec:
           \    y_train: dsl.Output[dsl.Dataset],\n    x_val: dsl.Output[dsl.Dataset],\n\
           \    y_val: dsl.Output[dsl.Dataset],\n    x_test: dsl.Output[dsl.Dataset],\n\
           \    y_test: dsl.Output[dsl.Dataset],\n    groups_train: dsl.Output[dsl.Dataset],\n\
-          \    schema: dsl.Output[dsl.Artifact],\n    id_col: str = \"subject_id\"\
-          ,\n):\n    \"\"\"KFP component: load, impute, encode, and write parquet\
-          \ splits.\"\"\"\n    from pipelines.components.load_data import run_load_data\n\
-          \n    run_load_data(\n        project_id=project_id, full_table_ref=full_table_ref,\n\
-          \        label_col=label_col, split_col=split_col, id_col=id_col,\n    \
-          \    train_split=train_split, val_split=val_split, test_split=test_split,\n\
-          \        selected_features=selected_features, cat_features=cat_features,\n\
+          \    groups_val: dsl.Output[dsl.Dataset],\n    schema: dsl.Output[dsl.Artifact],\n\
+          \    id_col: str = \"subject_id\",\n):\n    \"\"\"KFP component: load, impute,\
+          \ encode, and write parquet splits.\"\"\"\n    from pipelines.components.load_data\
+          \ import run_load_data\n\n    run_load_data(\n        project_id=project_id,\
+          \ full_table_ref=full_table_ref,\n        label_col=label_col, split_col=split_col,\
+          \ id_col=id_col,\n        train_split=train_split, val_split=val_split,\
+          \ test_split=test_split,\n        selected_features=selected_features, cat_features=cat_features,\n\
           \        imputer_path=imputer.path,\n        x_train_path=x_train.path,\
           \ y_train_path=y_train.path,\n        x_val_path=x_val.path, y_val_path=y_val.path,\n\
           \        x_test_path=x_test.path, y_test_path=y_test.path,\n        groups_train_path=groups_train.path,\n\
-          \        schema_path=schema.path,\n    )\n\n"
+          \        groups_val_path=groups_val.path,\n        schema_path=schema.path,\n\
+          \    )\n\n"
         image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
     exec-optuna-hpo:
       container:
@@ -1032,9 +1061,10 @@ deploymentSpec:
         - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
           \ python3 -m pip install --quiet --no-warn-script-location 'xgboost' 'scikit-learn'\
-          \ 'pandas' 'pyarrow' 'joblib'  &&  python3 -m pip install --quiet --no-warn-script-location\
-          \ 'kfp==2.16.1' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
-          3.9\"' && \"$0\" \"$@\"\n"
+          \ 'pandas' 'pyarrow' 'joblib' 'google-cloud-aiplatform'  &&  python3 -m\
+          \ pip install --quiet --no-warn-script-location 'kfp==2.16.1' '--no-deps'\
+          \ 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\
+          \n"
         - sh
         - -ec
         - 'program_path=$(mktemp -d)
@@ -1049,13 +1079,28 @@ deploymentSpec:
           \ *\n\ndef train_final(\n    x_train: dsl.Input[dsl.Dataset],\n    y_train:\
           \ dsl.Input[dsl.Dataset],\n    x_val: dsl.Input[dsl.Dataset],\n    y_val:\
           \ dsl.Input[dsl.Dataset],\n    best_params: dsl.Input[dsl.Artifact],\n \
-          \   cat_features: list,\n    model_artifact: dsl.Output[dsl.Model],\n) ->\
-          \ float:\n    \"\"\"KFP component: train final XGBoost with best HPO params.\"\
-          \"\"\n    from pipelines.components.train_final import run_train_final\n\
-          \n    return run_train_final(\n        x_train_path=x_train.path, y_train_path=y_train.path,\n\
+          \   cat_features: list,\n    groups_val: dsl.Input[dsl.Dataset],\n    model_artifact:\
+          \ dsl.Output[dsl.Model],\n    training_curve: dsl.Output[dsl.Artifact],\n\
+          \    project_id: str = \"\",\n    location: str = \"us-east1\",\n    experiment_name:\
+          \ str = \"\",\n    pipeline_job_name: str = \"\",\n) -> float:\n    \"\"\
+          \"KFP component: train final XGBoost with best HPO params.\"\"\"\n    import\
+          \ json\n\n    from pipelines.components.train_final import run_train_final\n\
+          \    from pipelines.components._experiment import companion_run\n\n    score\
+          \ = run_train_final(\n        x_train_path=x_train.path, y_train_path=y_train.path,\n\
           \        x_val_path=x_val.path, y_val_path=y_val.path,\n        best_params_path=best_params.path,\
           \ cat_features=cat_features,\n        model_artifact_path=model_artifact.path,\n\
-          \    )\n\n"
+          \        training_curve_path=training_curve.path,\n        groups_val_path=groups_val.path,\n\
+          \    )\n\n    # Stream the per-round AUCPR curves to the companion experiment\
+          \ run so the\n    # train-vs-monitor gap is visible directly in the Charts\
+          \ tab.\n    with open(training_curve.path) as f:\n        curve = json.load(f)\n\
+          \    with companion_run(\n        project_id=project_id, location=location,\n\
+          \        experiment=experiment_name, pipeline_job_name=pipeline_job_name,\n\
+          \    ) as ap:\n        if ap is not None:\n            for step in range(max(len(v)\
+          \ for v in curve.values())):\n                try:\n                   \
+          \ ap.log_time_series_metrics(\n                        {k: v[step] for k,\
+          \ v in curve.items() if step < len(v)},\n                        step=step,\n\
+          \                    )\n                except Exception:  # noqa: BLE001\n\
+          \                    pass\n\n    return score\n\n"
         image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
     exec-validate-data:
       container:
@@ -1458,6 +1503,10 @@ root:
               taskOutputArtifact:
                 outputArtifactKey: best_params
                 producerTask: optuna-hpo
+            groups_val:
+              taskOutputArtifact:
+                outputArtifactKey: groups_val
+                producerTask: load-data
             x_train:
               taskOutputArtifact:
                 outputArtifactKey: x_train
@@ -1477,6 +1526,14 @@ root:
           parameters:
             cat_features:
               componentInputParameter: cat_features
+            experiment_name:
+              runtimeValue:
+                constant: readmission-mlops
+            pipeline_job_name:
+              runtimeValue:
+                constant: '{{$.pipeline_job_name}}'
+            project_id:
+              componentInputParameter: project_id
         taskInfo:
           name: train-final
       validate-data:

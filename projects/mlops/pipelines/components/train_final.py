@@ -2,22 +2,36 @@
 train_final — Train the final XGBoost on the COMBINED train+val set.
 
 Uses the hyperparameters selected during HPO to refit on train+val (so the
-production model sees all pre-test data). The returned metric is the
-combined-set FIT metric — useful only for logging / overfit sanity, NOT an
-unbiased estimate. The honest generalization estimate comes from HPO
-(validation), and the final unbiased metric is computed on the untouched
-hold-out test set by evaluate_test.
+production model sees all pre-test data). A small patient-grouped *monitor*
+split (20% of validation) is held out during training to produce per-round
+AUCPR curves — these are persisted as an artifact and streamed to the
+companion experiment run's Charts tab for overfit inspection. The honest
+generalization estimate comes from the untouched hold-out test set by
+evaluate_test.
 """
 
 import json
 from typing import NamedTuple
 
 import joblib
+import numpy as np
 import pandas as pd
 from sklearn.metrics import average_precision_score
+from sklearn.model_selection import GroupShuffleSplit
 from xgboost import XGBClassifier
 from kfp import dsl
 from ._image import TRAINING_IMAGE, component
+
+_MONITOR_VAL_FRAC = 0.8  # use 80% of val for training, 20% for per-round monitor
+
+
+def _patient_split_mask(groups: np.ndarray, test_size: float, seed: int = 42):
+    """Boolean mask: True for training rows, False for monitor/holdout rows."""
+    gss = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=seed)
+    train_pos, _ = next(gss.split(np.zeros(len(groups)), groups=groups))
+    mask = np.zeros(len(groups), dtype=bool)
+    mask[train_pos] = True
+    return mask
 
 
 def run_train_final(
@@ -29,35 +43,73 @@ def run_train_final(
     best_params_path: str,
     cat_features: list[str],
     model_artifact_path: str,
+    training_curve_path: str,
+    groups_val_path: str,
 ) -> float:
-    """Refit on train+val with best params, save model, return train-fit AUCPR."""
+    """Refit on train+val with best params, save model, return combined-fit AUCPR.
+
+    A small patient-grouped *monitor* split (20% of val rows) is held out during
+    training solely for the per-round AUCPR curves; the final model still trains
+    on 80% of val plus all of train — the honest generalization estimate is test.
+    """
     X_train = pd.read_parquet(x_train_path)
     y_train = pd.read_parquet(y_train_path).iloc[:, 0]
     X_val = pd.read_parquet(x_val_path)
     y_val = pd.read_parquet(y_val_path).iloc[:, 0]
+    g_val = pd.read_parquet(groups_val_path).iloc[:, 0].to_numpy()
 
-    X_all = pd.concat([X_train, X_val], ignore_index=True)
-    y_all = pd.concat([y_train, y_val], ignore_index=True)
-
-    # Categorical encoding is already applied upstream by load_data and preserved
-    # through parquet (category dtype), so we do NOT re-encode here — re-deriving
-    # categories could drift from the training/serving schema. cat_features is
-    # accepted for interface stability but intentionally not used for encoding.
+    # Categorical encoding is already applied upstream (category dtype).
     _ = cat_features
 
     with open(best_params_path) as f:
         best_params = json.load(f)
 
-    model = XGBClassifier(**best_params)
-    model.fit(X_all, y_all, verbose=False)
+    # Patient-grouped monitor split — no patient straddles train/monitor.
+    train_mask = _patient_split_mask(g_val, test_size=1 - _MONITOR_VAL_FRAC)
+    X_val_train, y_val_train = X_val.iloc[train_mask], y_val.iloc[train_mask]
+    X_monitor, y_monitor = X_val.iloc[~train_mask], y_val.iloc[~train_mask]
 
-    # Fit metric on the combined training set. This is NOT an unbiased estimate
-    # (the model trained on these rows); it is logged only as an overfit sanity
-    # signal. Unbiased performance is measured on the hold-out test set.
+    X_all = pd.concat([X_train, X_val_train], ignore_index=True)
+    y_all = pd.concat([y_train, y_val_train], ignore_index=True)
+
+    n_estimators = best_params.get("n_estimators", 300)
+    # For the final fit we drop early-stopping (it was a HPO selection tool) so
+    # the full tree budget is used; but we still need eval_set for the curves.
+    fit_params = {**best_params}
+    fit_params.pop("early_stopping_rounds", None)
+
+    model = XGBClassifier(**fit_params)
+    model.fit(
+        X_all, y_all,
+        eval_set=[(X_all, y_all), (X_monitor, y_monitor)],
+        verbose=False,
+    )
+
+    # Per-round AUCPR curves (train on the combined fit, monitor on the held-out
+    # val subsample). Streamed to the companion run's Charts tab for overfit
+    # inspection — the gap between "train" and "monitor" evals_result entries per
+    # round is the most sensitive early-warning signal.
+    evals = model.evals_result()
+    curve = {}
+    for dataset_idx, label in enumerate(["train", "monitor"]):
+        key = f"validation_{dataset_idx}"
+        if key in evals:
+            metrics = evals[key]
+            # Read the first available metric (usually "aucpr" from best_params,
+            # or "logloss" if eval_metric was not explicitly set).
+            for metric_name, values in metrics.items():
+                curve[f"{label}_{metric_name}"] = [float(v) for v in values]
+
+    with open(training_curve_path, "w") as f:
+        json.dump(curve, f, indent=2)
+
+    # Combined-set fit AUCPR. NOT unbiased — logged only as an overfit sanity
+    # signal. Unbiased performance is on the hold-out test set.
     train_aucpr = float(average_precision_score(y_all, model.predict_proba(X_all)[:, 1]))
-    print(f"  Final model trained on {len(X_all):,} combined train+val rows.")
+    print(f"  Final model trained on {len(X_all):,} rows (train + {_MONITOR_VAL_FRAC:.0%} val).")
+    print(f"  Monitor rows held out for per-round curve: {len(X_monitor):,}")
     print(f"  Combined-set fit AUCPR (not unbiased): {train_aucpr:.4f}")
-    print(f"  Params: {json.dumps(best_params)}")
+    print(f"  n_estimators: {n_estimators}  Params: {json.dumps(best_params)}")
 
     joblib.dump(model, model_artifact_path)
     return train_aucpr
@@ -65,7 +117,10 @@ def run_train_final(
 
 @component(
     base_image=TRAINING_IMAGE,
-    packages_to_install=["xgboost", "scikit-learn", "pandas", "pyarrow", "joblib"],
+    packages_to_install=[
+        "xgboost", "scikit-learn", "pandas", "pyarrow", "joblib",
+        "google-cloud-aiplatform",
+    ],
 )
 def train_final(
     x_train: dsl.Input[dsl.Dataset],
@@ -74,14 +129,45 @@ def train_final(
     y_val: dsl.Input[dsl.Dataset],
     best_params: dsl.Input[dsl.Artifact],
     cat_features: list,
+    groups_val: dsl.Input[dsl.Dataset],
     model_artifact: dsl.Output[dsl.Model],
+    training_curve: dsl.Output[dsl.Artifact],
+    project_id: str = "",
+    location: str = "us-east1",
+    experiment_name: str = "",
+    pipeline_job_name: str = "",
 ) -> float:
     """KFP component: train final XGBoost with best HPO params."""
-    from pipelines.components.train_final import run_train_final
+    import json
 
-    return run_train_final(
+    from pipelines.components.train_final import run_train_final
+    from pipelines.components._experiment import companion_run
+
+    score = run_train_final(
         x_train_path=x_train.path, y_train_path=y_train.path,
         x_val_path=x_val.path, y_val_path=y_val.path,
         best_params_path=best_params.path, cat_features=cat_features,
         model_artifact_path=model_artifact.path,
+        training_curve_path=training_curve.path,
+        groups_val_path=groups_val.path,
     )
+
+    # Stream the per-round AUCPR curves to the companion experiment run so the
+    # train-vs-monitor gap is visible directly in the Charts tab.
+    with open(training_curve.path) as f:
+        curve = json.load(f)
+    with companion_run(
+        project_id=project_id, location=location,
+        experiment=experiment_name, pipeline_job_name=pipeline_job_name,
+    ) as ap:
+        if ap is not None:
+            for step in range(max(len(v) for v in curve.values())):
+                try:
+                    ap.log_time_series_metrics(
+                        {k: v[step] for k, v in curve.items() if step < len(v)},
+                        step=step,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+
+    return score

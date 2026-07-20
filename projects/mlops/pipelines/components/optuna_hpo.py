@@ -181,12 +181,9 @@ def run_optuna_hpo(
     y_train = pd.read_parquet(y_train_path).iloc[:, 0]
     groups = pd.read_parquet(groups_path).iloc[:, 0]
 
-    for col in cat_features:
-        if col in X_train.columns:
-            dtype = pd.CategoricalDtype(
-                categories=X_train[col].astype(str).unique(),
-            )
-            X_train[col] = X_train[col].astype(str).astype(dtype)
+    # Features arrive fully numeric (one-hot encoded in BigQuery); cat_features
+    # is retained for signature stability but is unused.
+    _ = cat_features
 
     # Patient-grouped row subsample for HPO speed (final model refits on full).
     X_hpo, y_hpo, g_hpo = _grouped_subsample(X_train, y_train, groups, subsample_frac)
@@ -209,7 +206,6 @@ def run_optuna_hpo(
             "random_state": 42,
             "n_jobs": -1,
             "eval_metric": "aucpr",
-            "enable_categorical": True,
             "tree_method": "hist",
             "early_stopping_rounds": _EARLY_STOPPING_ROUNDS,
         }
@@ -269,7 +265,6 @@ def run_optuna_hpo(
     best_params["random_state"] = 42
     best_params["n_jobs"] = -1
     best_params["eval_metric"] = "aucpr"
-    best_params["enable_categorical"] = True
     best_params["tree_method"] = "hist"
 
     n_pruned = len(

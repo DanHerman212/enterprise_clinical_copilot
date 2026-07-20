@@ -28,18 +28,12 @@ def run_benchmark_xgboost(
     X_val = pd.read_parquet(x_val_path)
     y_val = pd.read_parquet(y_val_path).iloc[:, 0]
 
-    for col in cat_features:
-        if col in X_train.columns:
-            all_cats = pd.concat([
-                X_train[col].astype(str), X_val[col].astype(str),
-            ])
-            dtype = pd.CategoricalDtype(categories=all_cats.unique())
-            X_train[col] = X_train[col].astype(str).astype(dtype)
-            X_val[col] = X_val[col].astype(str).astype(dtype)
+    # Features arrive fully numeric (one-hot encoded in BigQuery); cat_features
+    # is retained for signature stability but is unused.
+    _ = cat_features
 
     params = dict(xgb_params)
     params.setdefault("n_jobs", -1)
-    params.setdefault("enable_categorical", True)
 
     model = XGBClassifier(**params)
     model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)

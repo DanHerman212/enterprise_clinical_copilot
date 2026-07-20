@@ -52,9 +52,18 @@ def get_project_id() -> str:
 BQ_DATASET = "readmission"
 BQ_TABLE = "analytics_dataset"
 
+# One-hot ENCODED view consumed by the training pipeline for the decoupled
+# pre-built XGBoost serving pattern (see src/encoding.py). All-numeric so the
+# model is a fixed-order vector and Vertex Explainable AI can attribute it.
+BQ_TABLE_ENCODED = "analytics_dataset_encoded"
+
 
 def _full_table_ref() -> str:
     return f"{get_project_id()}.{BQ_DATASET}.{BQ_TABLE}"
+
+
+def _full_table_ref_encoded() -> str:
+    return f"{get_project_id()}.{BQ_DATASET}.{BQ_TABLE_ENCODED}"
 
 
 def __getattr__(name: str):
@@ -68,6 +77,8 @@ def __getattr__(name: str):
         return _resolve_project_id()
     if name == "FULL_TABLE_REF":
         return _full_table_ref()
+    if name == "FULL_TABLE_REF_ENCODED":
+        return _full_table_ref_encoded()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # ---------------------------------------------------------------------------

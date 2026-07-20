@@ -22,7 +22,8 @@ from pipelines.components.optuna_hpo import (
     run_optuna_hpo,
 )
 
-CAT = ["gender"]
+# Features arrive fully numeric (one-hot encoded in BigQuery); no categoricals.
+CAT: list[str] = []
 
 
 def _grouped_frame(n_patients=40, rows_per=2, seed=0):
@@ -38,7 +39,7 @@ def _grouped_frame(n_patients=40, rows_per=2, seed=0):
                 {
                     "age": rng.normal(60 + 5 * y, 8),
                     "glucose_last": rng.normal(100 + 15 * y, 12),
-                    "gender": rng.choice(["M", "F"]),
+                    "gender": int(rng.random() < 0.5),
                 }
             )
             groups.append(pid)
@@ -92,8 +93,9 @@ def test_run_optuna_writes_best_params_and_returns_score(tmp_path):
     assert params["scale_pos_weight"] == 1.0
     # n_estimators is derived from early stopping (>= 1), not a suggested knob.
     assert params["n_estimators"] >= 1
-    # Fixed model settings needed for reproducible refit with categoricals.
-    assert params["enable_categorical"] is True
+    # Features are fully numeric (one-hot in BigQuery); no categorical flag is
+    # carried into the refit params.
+    assert "enable_categorical" not in params
     assert params["random_state"] == 42
 
 

@@ -40,11 +40,9 @@ def run_calibrate_threshold(
     with open(best_params_path) as f:
         params = json.load(f)
 
-    # Restore native categorical dtype (parquet + train-only categories).
-    for col in cat_features:
-        if col in X_train.columns:
-            dtype = pd.CategoricalDtype(categories=X_train[col].astype(str).unique())
-            X_train[col] = X_train[col].astype(str).astype(dtype)
+    # Features arrive fully numeric (one-hot encoded in BigQuery); cat_features
+    # is retained for signature stability but is unused.
+    _ = cat_features
 
     oof = oof_probabilities(X_train, y_train, groups, params=params, n_splits=n_splits)
     threshold, fbeta, curve = select_threshold_fbeta(y_train, oof, beta=beta)

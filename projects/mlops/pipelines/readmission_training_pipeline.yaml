@@ -1,8 +1,8 @@
 # PIPELINE DEFINITION
 # Name: readmission-training
-# Description: 30-day readmission risk: impute → validate → benchmark → HPO → train → evaluate/explain/audit → register.
+# Description: 30-day readmission risk: load → validate → benchmark → HPO → train → evaluate/explain/audit → register.
 # Inputs:
-#    cat_features: list [Default: ['gender', 'race', 'admission_type', 'discharge_location', 'insurance', 'has_procedure', 'oncology_flag']]
+#    cat_features: list [Default: []]
 #    fbeta_beta: float [Default: 2.0]
 #    full_table_ref: str
 #    hospital_aucpr: float [Default: 0.33246509478494324]
@@ -11,13 +11,13 @@
 #    max_drifted_share: float [Default: 0.2]
 #    n_trials: int [Default: 50.0]
 #    project_id: str
-#    selected_features: list [Default: ['age', 'gender', 'race', 'admission_type', 'discharge_location', 'insurance', 'prior_admission_count', 'prior_inpatient_days', 'recent_ed_visits', 'index_los_days', 'procedure_count', 'has_procedure', 'medication_count', 'medication_order_count', 'rbc_last', 'rbc_min', 'rdw_max', 'monocytes_min', 'hemoglobin_min', 'sodium_last', 'sodium_max', 'sodium_min', 'oncology_flag']]
+#    selected_features: list [Default: ['age', 'prior_admission_count', 'prior_inpatient_days', 'recent_ed_visits', 'index_los_days', 'procedure_count', 'medication_count', 'medication_order_count', 'rbc_last', 'rbc_min', 'rdw_max', 'monocytes_min', 'hemoglobin_min', 'sodium_last', 'sodium_max', 'sodium_min', 'gender', 'has_procedure', 'oncology_flag', 'race_white', 'race_black', 'race_hispanic', 'race_asian', 'race_amind', 'race_nhpi', 'race_unknown', 'admission_type_ew_emer', 'admission_type_eu_obs', 'admission_type_obs_admit', 'admission_type_urgent', 'admission_type_direct_emer', 'admission_type_ambulatory_obs', 'admission_type_direct_obs', 'admission_type_unknown', 'discharge_location_home', 'discharge_location_home_health', 'discharge_location_snf', 'discharge_location_rehab', 'discharge_location_ltac', 'discharge_location_hospice', 'discharge_location_ama', 'discharge_location_psych', 'discharge_location_assisted_living', 'discharge_location_unknown', 'insurance_medicare', 'insurance_medicaid', 'insurance_private', 'insurance_other', 'insurance_unknown']]
 #    serving_container_image_uri: str [Default: '']
 #    split_col: str [Default: 'split_name']
 #    test_split: str [Default: 'test']
 #    train_split: str [Default: 'train']
 #    val_split: str [Default: 'validation']
-#    xgb_params: dict [Default: {'subsample': 0.8, 'learning_rate': 0.05, 'n_estimators': 300.0, 'max_depth': 6.0, 'random_state': 42.0, 'colsample_bytree': 0.8}]
+#    xgb_params: dict [Default: {'max_depth': 6.0, 'random_state': 42.0, 'n_estimators': 300.0, 'learning_rate': 0.05, 'subsample': 0.8, 'colsample_bytree': 0.8}]
 components:
   comp-benchmark-gate:
     executorLabel: exec-benchmark-gate
@@ -243,35 +243,10 @@ components:
           parameterType: BOOLEAN
         predictive_equality_pass:
           parameterType: BOOLEAN
-  comp-fit-imputer-op:
-    executorLabel: exec-fit-imputer-op
-    inputDefinitions:
-      parameters:
-        full_table_ref:
-          parameterType: STRING
-        project_id:
-          parameterType: STRING
-        split_col:
-          parameterType: STRING
-        train_split:
-          parameterType: STRING
-    outputDefinitions:
-      artifacts:
-        imputer:
-          artifactType:
-            schemaTitle: system.Artifact
-            schemaVersion: 0.0.1
   comp-load-data:
     executorLabel: exec-load-data
     inputDefinitions:
-      artifacts:
-        imputer:
-          artifactType:
-            schemaTitle: system.Artifact
-            schemaVersion: 0.0.1
       parameters:
-        cat_features:
-          parameterType: LIST
         full_table_ref:
           parameterType: STRING
         id_col:
@@ -282,8 +257,6 @@ components:
           parameterType: STRING
         project_id:
           parameterType: STRING
-        selected_features:
-          parameterType: LIST
         split_col:
           parameterType: STRING
         test_split:
@@ -302,7 +275,7 @@ components:
           artifactType:
             schemaTitle: system.Dataset
             schemaVersion: 0.0.1
-        schema:
+        manifest:
           artifactType:
             schemaTitle: system.Artifact
             schemaVersion: 0.0.1
@@ -384,15 +357,11 @@ components:
     executorLabel: exec-register-model
     inputDefinitions:
       artifacts:
-        imputer:
-          artifactType:
-            schemaTitle: system.Artifact
-            schemaVersion: 0.0.1
-        model_artifact:
+        booster_model:
           artifactType:
             schemaTitle: system.Model
             schemaVersion: 0.0.1
-        schema:
+        manifest:
           artifactType:
             schemaTitle: system.Artifact
             schemaVersion: 0.0.1
@@ -409,6 +378,10 @@ components:
           defaultValue: us-east1
           isOptional: true
           parameterType: STRING
+        path_count:
+          defaultValue: 25.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
         project_id:
           parameterType: STRING
         serving_container_image_uri:
@@ -504,6 +477,10 @@ components:
           parameterType: STRING
     outputDefinitions:
       artifacts:
+        booster_model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
         model_artifact:
           artifactType:
             schemaTitle: system.Model
@@ -823,42 +800,6 @@ deploymentSpec:
           \    ) as ap:\n        safe_log_metrics(ap, flat)\n\n    return (report[\"\
           equal_opportunity_pass\"], report[\"predictive_equality_pass\"])\n\n"
         image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
-    exec-fit-imputer-op:
-      container:
-        args:
-        - --executor_input
-        - '{{$}}'
-        - --function_to_execute
-        - fit_imputer_op
-        command:
-        - sh
-        - -c
-        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
-          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
-          \ python3 -m pip install --quiet --no-warn-script-location 'google-cloud-bigquery'\
-          \ 'pandas' 'pyarrow' 'joblib'  &&  python3 -m pip install --quiet --no-warn-script-location\
-          \ 'kfp==2.16.1' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
-          3.9\"' && \"$0\" \"$@\"\n"
-        - sh
-        - -ec
-        - 'program_path=$(mktemp -d)
-
-
-          printf "%s" "$0" > "$program_path/ephemeral_component.py"
-
-          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
-
-          '
-        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
-          \ *\n\ndef fit_imputer_op(\n    project_id: str,\n    full_table_ref: str,\n\
-          \    split_col: str,\n    train_split: str,\n    imputer: dsl.Output[dsl.Artifact],\n\
-          ):\n    \"\"\"KFP component: fit the missingness imputer on train, output\
-          \ the artifact.\"\"\"\n    from pipelines.components.fit_imputer import\
-          \ run_fit_imputer\n\n    run_fit_imputer(\n        project_id=project_id,\n\
-          \        full_table_ref=full_table_ref,\n        split_col=split_col,\n\
-          \        train_split=train_split,\n        imputer_output_path=imputer.path,\n\
-          \    )\n\n"
-        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-load-data:
       container:
         args:
@@ -872,7 +813,7 @@ deploymentSpec:
         - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
           \ python3 -m pip install --quiet --no-warn-script-location 'google-cloud-bigquery'\
-          \ 'pandas' 'pyarrow' 'joblib'  &&  python3 -m pip install --quiet --no-warn-script-location\
+          \ 'pandas' 'pyarrow'  &&  python3 -m pip install --quiet --no-warn-script-location\
           \ 'kfp==2.16.1' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
           3.9\"' && \"$0\" \"$@\"\n"
         - sh
@@ -888,22 +829,20 @@ deploymentSpec:
         - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
           \ *\n\ndef load_data(\n    project_id: str,\n    full_table_ref: str,\n\
           \    label_col: str,\n    split_col: str,\n    train_split: str,\n    val_split:\
-          \ str,\n    test_split: str,\n    selected_features: list,\n    cat_features:\
-          \ list,\n    imputer: dsl.Input[dsl.Artifact],\n    x_train: dsl.Output[dsl.Dataset],\n\
-          \    y_train: dsl.Output[dsl.Dataset],\n    x_val: dsl.Output[dsl.Dataset],\n\
+          \ str,\n    test_split: str,\n    x_train: dsl.Output[dsl.Dataset],\n  \
+          \  y_train: dsl.Output[dsl.Dataset],\n    x_val: dsl.Output[dsl.Dataset],\n\
           \    y_val: dsl.Output[dsl.Dataset],\n    x_test: dsl.Output[dsl.Dataset],\n\
           \    y_test: dsl.Output[dsl.Dataset],\n    groups_train: dsl.Output[dsl.Dataset],\n\
-          \    groups_val: dsl.Output[dsl.Dataset],\n    schema: dsl.Output[dsl.Artifact],\n\
-          \    id_col: str = \"subject_id\",\n):\n    \"\"\"KFP component: load, impute,\
-          \ encode, and write parquet splits.\"\"\"\n    from pipelines.components.load_data\
+          \    groups_val: dsl.Output[dsl.Dataset],\n    manifest: dsl.Output[dsl.Artifact],\n\
+          \    id_col: str = \"subject_id\",\n):\n    \"\"\"KFP component: load the\
+          \ encoded splits and emit the serving manifest.\"\"\"\n    from pipelines.components.load_data\
           \ import run_load_data\n\n    run_load_data(\n        project_id=project_id,\
           \ full_table_ref=full_table_ref,\n        label_col=label_col, split_col=split_col,\
           \ id_col=id_col,\n        train_split=train_split, val_split=val_split,\
-          \ test_split=test_split,\n        selected_features=selected_features, cat_features=cat_features,\n\
-          \        imputer_path=imputer.path,\n        x_train_path=x_train.path,\
-          \ y_train_path=y_train.path,\n        x_val_path=x_val.path, y_val_path=y_val.path,\n\
-          \        x_test_path=x_test.path, y_test_path=y_test.path,\n        groups_train_path=groups_train.path,\n\
-          \        groups_val_path=groups_val.path,\n        schema_path=schema.path,\n\
+          \ test_split=test_split,\n        x_train_path=x_train.path, y_train_path=y_train.path,\n\
+          \        x_val_path=x_val.path, y_val_path=y_val.path,\n        x_test_path=x_test.path,\
+          \ y_test_path=y_test.path,\n        groups_train_path=groups_train.path,\n\
+          \        groups_val_path=groups_val.path,\n        manifest_path=manifest.path,\n\
           \    )\n\n"
         image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-optuna-hpo:
@@ -977,22 +916,22 @@ deploymentSpec:
 
           '
         - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
-          \ *\n\ndef register_model(\n    project_id: str,\n    model_artifact: dsl.Input[dsl.Model],\n\
-          \    imputer: dsl.Input[dsl.Artifact],\n    schema: dsl.Input[dsl.Artifact],\n\
-          \    serving_container_image_uri: str,\n    test_aucpr: float,\n    hpo_val_aucpr:\
-          \ float,\n    benchmark_aucpr: float,\n    tuned_threshold: float,\n   \
-          \ serving_model: dsl.Output[dsl.Model],\n    location: str = \"us-east1\"\
-          ,\n    beta: float = 2.0,\n) -> NamedTuple(\"RegistryOutputs\", [(\"model_id\"\
-          , str)]):\n    \"\"\"KFP component: assemble serving bundle and register\
-          \ in Vertex AI.\"\"\"\n    from pipelines.components.register_model import\
+          \ *\n\ndef register_model(\n    project_id: str,\n    booster_model: dsl.Input[dsl.Model],\n\
+          \    manifest: dsl.Input[dsl.Artifact],\n    serving_container_image_uri:\
+          \ str,\n    test_aucpr: float,\n    hpo_val_aucpr: float,\n    benchmark_aucpr:\
+          \ float,\n    tuned_threshold: float,\n    serving_model: dsl.Output[dsl.Model],\n\
+          \    location: str = \"us-east1\",\n    beta: float = 2.0,\n    path_count:\
+          \ int = DEFAULT_PATH_COUNT,\n) -> NamedTuple(\"RegistryOutputs\", [(\"model_id\"\
+          , str)]):\n    \"\"\"KFP component: register the booster with the pre-built\
+          \ container + XAI.\"\"\"\n    from pipelines.components.register_model import\
           \ run_register_model\n\n    model_id = run_register_model(\n        project_id=project_id,\n\
-          \        location=location,\n        model_path=model_artifact.path,\n \
-          \       imputer_path=imputer.path,\n        schema_path=schema.path,\n \
-          \       bundle_dir=serving_model.path,\n        bundle_uri=serving_model.uri,\n\
-          \        serving_container_image_uri=serving_container_image_uri,\n    \
-          \    test_aucpr=test_aucpr,\n        hpo_val_aucpr=hpo_val_aucpr,\n    \
-          \    benchmark_aucpr=benchmark_aucpr,\n        tuned_threshold=tuned_threshold,\n\
-          \        beta=beta,\n    )\n    return (model_id,)\n\n"
+          \        location=location,\n        booster_path=booster_model.path,\n\
+          \        manifest_path=manifest.path,\n        bundle_dir=serving_model.path,\n\
+          \        bundle_uri=serving_model.uri,\n        serving_container_image_uri=serving_container_image_uri,\n\
+          \        test_aucpr=test_aucpr,\n        hpo_val_aucpr=hpo_val_aucpr,\n\
+          \        benchmark_aucpr=benchmark_aucpr,\n        tuned_threshold=tuned_threshold,\n\
+          \        beta=beta,\n        path_count=path_count,\n    )\n    return (model_id,)\n\
+          \n"
         image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-shap-explain:
       container:
@@ -1084,31 +1023,31 @@ deploymentSpec:
           \ dsl.Input[dsl.Dataset],\n    x_val: dsl.Input[dsl.Dataset],\n    y_val:\
           \ dsl.Input[dsl.Dataset],\n    best_params: dsl.Input[dsl.Artifact],\n \
           \   cat_features: list,\n    groups_val: dsl.Input[dsl.Dataset],\n    model_artifact:\
-          \ dsl.Output[dsl.Model],\n    training_curve: dsl.Output[dsl.Artifact],\n\
-          \    training_curve_plot: dsl.Output[dsl.HTML],\n    project_id: str = \"\
-          \",\n    location: str = \"us-east1\",\n    experiment_name: str = \"\"\
-          ,\n    pipeline_job_name: str = \"\",\n) -> float:\n    \"\"\"KFP component:\
-          \ train final XGBoost with best HPO params.\"\"\"\n    import json\n\n \
-          \   from pipelines.components.train_final import _build_training_curve_html,\
+          \ dsl.Output[dsl.Model],\n    booster_model: dsl.Output[dsl.Model],\n  \
+          \  training_curve: dsl.Output[dsl.Artifact],\n    training_curve_plot: dsl.Output[dsl.HTML],\n\
+          \    project_id: str = \"\",\n    location: str = \"us-east1\",\n    experiment_name:\
+          \ str = \"\",\n    pipeline_job_name: str = \"\",\n) -> float:\n    \"\"\
+          \"KFP component: train final XGBoost with best HPO params.\"\"\"\n    import\
+          \ json\n\n    from pipelines.components.train_final import _build_training_curve_html,\
           \ run_train_final\n    from pipelines.components._experiment import companion_run\n\
           \n    score = run_train_final(\n        x_train_path=x_train.path, y_train_path=y_train.path,\n\
           \        x_val_path=x_val.path, y_val_path=y_val.path,\n        best_params_path=best_params.path,\
           \ cat_features=cat_features,\n        model_artifact_path=model_artifact.path,\n\
-          \        training_curve_path=training_curve.path,\n        groups_val_path=groups_val.path,\n\
-          \    )\n\n    # Stream the per-round AUCPR curves to the companion experiment\
-          \ run so the\n    # train-vs-monitor gap is visible directly in the Charts\
-          \ tab.\n    with open(training_curve.path) as f:\n        curve = json.load(f)\n\
-          \    with companion_run(\n        project_id=project_id, location=location,\n\
-          \        experiment=experiment_name, pipeline_job_name=pipeline_job_name,\n\
-          \    ) as ap:\n        if ap is not None:\n            for step in range(max(len(v)\
-          \ for v in curve.values())):\n                try:\n                   \
-          \ ap.log_time_series_metrics(\n                        {k: v[step] for k,\
-          \ v in curve.items() if step < len(v)},\n                        step=step,\n\
-          \                    )\n                except Exception:  # noqa: BLE001\n\
-          \                    pass\n\n    # Render the training curve as an HTML\
-          \ plot on the pipeline DAG node.\n    with open(training_curve_plot.path,\
-          \ \"w\") as f:\n        f.write(_build_training_curve_html(curve))\n\n \
-          \   return score\n\n"
+          \        booster_model_path=booster_model.path,\n        training_curve_path=training_curve.path,\n\
+          \        groups_val_path=groups_val.path,\n    )\n\n    # Stream the per-round\
+          \ AUCPR curves to the companion experiment run so the\n    # train-vs-monitor\
+          \ gap is visible directly in the Charts tab.\n    with open(training_curve.path)\
+          \ as f:\n        curve = json.load(f)\n    with companion_run(\n       \
+          \ project_id=project_id, location=location,\n        experiment=experiment_name,\
+          \ pipeline_job_name=pipeline_job_name,\n    ) as ap:\n        if ap is not\
+          \ None:\n            for step in range(max(len(v) for v in curve.values())):\n\
+          \                try:\n                    ap.log_time_series_metrics(\n\
+          \                        {k: v[step] for k, v in curve.items() if step <\
+          \ len(v)},\n                        step=step,\n                    )\n\
+          \                except Exception:  # noqa: BLE001\n                   \
+          \ pass\n\n    # Render the training curve as an HTML plot on the pipeline\
+          \ DAG node.\n    with open(training_curve_plot.path, \"w\") as f:\n    \
+          \    f.write(_build_training_curve_html(curve))\n\n    return score\n\n"
         image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-validate-data:
       container:
@@ -1148,7 +1087,7 @@ deploymentSpec:
           \        fail_on_drift=fail_on_drift,\n    )\n\n"
         image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
 pipelineInfo:
-  description: "30-day readmission risk: impute \u2192 validate \u2192 benchmark \u2192\
+  description: "30-day readmission risk: load \u2192 validate \u2192 benchmark \u2192\
     \ HPO \u2192 train \u2192 evaluate/explain/audit \u2192 register."
   name: readmission-training
 root:
@@ -1335,47 +1274,19 @@ root:
                 producerTask: calibrate-threshold
         taskInfo:
           name: fairness-audit
-      fit-imputer-op:
-        cachingOptions:
-          enableCache: true
-        componentRef:
-          name: comp-fit-imputer-op
-        inputs:
-          parameters:
-            full_table_ref:
-              componentInputParameter: full_table_ref
-            project_id:
-              componentInputParameter: project_id
-            split_col:
-              componentInputParameter: split_col
-            train_split:
-              componentInputParameter: train_split
-        taskInfo:
-          name: fit-imputer-op
       load-data:
         cachingOptions:
           enableCache: true
         componentRef:
           name: comp-load-data
-        dependentTasks:
-        - fit-imputer-op
         inputs:
-          artifacts:
-            imputer:
-              taskOutputArtifact:
-                outputArtifactKey: imputer
-                producerTask: fit-imputer-op
           parameters:
-            cat_features:
-              componentInputParameter: cat_features
             full_table_ref:
               componentInputParameter: full_table_ref
             label_col:
               componentInputParameter: label_col
             project_id:
               componentInputParameter: project_id
-            selected_features:
-              componentInputParameter: selected_features
             split_col:
               componentInputParameter: split_col
             test_split:
@@ -1434,23 +1345,18 @@ root:
         - benchmark-xgboost
         - calibrate-threshold
         - evaluate-test
-        - fit-imputer-op
         - load-data
         - optuna-hpo
         - train-final
         inputs:
           artifacts:
-            imputer:
+            booster_model:
               taskOutputArtifact:
-                outputArtifactKey: imputer
-                producerTask: fit-imputer-op
-            model_artifact:
-              taskOutputArtifact:
-                outputArtifactKey: model_artifact
+                outputArtifactKey: booster_model
                 producerTask: train-final
-            schema:
+            manifest:
               taskOutputArtifact:
-                outputArtifactKey: schema
+                outputArtifactKey: manifest
                 producerTask: load-data
           parameters:
             benchmark_aucpr:
@@ -1569,14 +1475,7 @@ root:
   inputDefinitions:
     parameters:
       cat_features:
-        defaultValue:
-        - gender
-        - race
-        - admission_type
-        - discharge_location
-        - insurance
-        - has_procedure
-        - oncology_flag
+        defaultValue: []
         isOptional: true
         parameterType: LIST
       fbeta_beta:
@@ -1610,17 +1509,11 @@ root:
       selected_features:
         defaultValue:
         - age
-        - gender
-        - race
-        - admission_type
-        - discharge_location
-        - insurance
         - prior_admission_count
         - prior_inpatient_days
         - recent_ed_visits
         - index_los_days
         - procedure_count
-        - has_procedure
         - medication_count
         - medication_order_count
         - rbc_last
@@ -1631,7 +1524,39 @@ root:
         - sodium_last
         - sodium_max
         - sodium_min
+        - gender
+        - has_procedure
         - oncology_flag
+        - race_white
+        - race_black
+        - race_hispanic
+        - race_asian
+        - race_amind
+        - race_nhpi
+        - race_unknown
+        - admission_type_ew_emer
+        - admission_type_eu_obs
+        - admission_type_obs_admit
+        - admission_type_urgent
+        - admission_type_direct_emer
+        - admission_type_ambulatory_obs
+        - admission_type_direct_obs
+        - admission_type_unknown
+        - discharge_location_home
+        - discharge_location_home_health
+        - discharge_location_snf
+        - discharge_location_rehab
+        - discharge_location_ltac
+        - discharge_location_hospice
+        - discharge_location_ama
+        - discharge_location_psych
+        - discharge_location_assisted_living
+        - discharge_location_unknown
+        - insurance_medicare
+        - insurance_medicaid
+        - insurance_private
+        - insurance_other
+        - insurance_unknown
         isOptional: true
         parameterType: LIST
       serving_container_image_uri:

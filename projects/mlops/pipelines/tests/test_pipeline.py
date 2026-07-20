@@ -12,6 +12,7 @@ from pathlib import Path
 
 import yaml
 
+from src.encoding import feature_order
 from pipelines.training_pipeline import (
     CAT_FEATURES,
     SELECTED_FEATURES,
@@ -20,13 +21,9 @@ from pipelines.training_pipeline import (
 )
 
 _MLOPS_ROOT = Path(__file__).resolve().parents[2]
-_RUN_SUMMARY = (
-    _MLOPS_ROOT
-    / "artifacts" / "feature_selection" / "20260702t163137" / "run_summary.json"
-)
 
 EXPECTED_TASKS = {
-    "fit-imputer-op", "load-data", "validate-data", "benchmark-xgboost",
+    "load-data", "validate-data", "benchmark-xgboost",
     "benchmark-gate", "optuna-hpo", "train-final", "evaluate-test",
     "shap-explain", "fairness-audit", "register-model",
 }
@@ -79,29 +76,25 @@ def test_pipeline_dependency_edges(tmp_path):
         blob = json.dumps(t.get("inputs", {}))
         return upstream in blob
 
-    # load_data must consume the fitted imputer; training must follow the gate.
-    assert depends_on("load-data", "fit-imputer-op")
+    # Encoding is static in BigQuery now (no imputer node); training must
+    # follow the benchmark gate.
     assert depends_on("benchmark-gate", "benchmark-xgboost")
     assert depends_on("optuna-hpo", "benchmark-gate")
     assert depends_on("train-final", "optuna-hpo")
     assert depends_on("register-model", "evaluate-test")
 
 
-def test_pinned_features_match_run_summary():
-    summary = json.loads(_RUN_SUMMARY.read_text())
-    # ``insurance`` is added on top of the feature-selection run as a model
-    # feature (and the fairness-audit SES slice); everything else must still
-    # match the documented run summary exactly.
-    intentional_additions = {"insurance"}
-    assert set(SELECTED_FEATURES) == set(summary["selected_features"]) | intentional_additions, (
-        "Pinned SELECTED_FEATURES drifted from the documented run summary "
-        "(beyond the intentional additions). Update it deliberately from the "
-        "chosen feature-selection run."
-    )
+def test_selected_features_match_encoding_order():
+    # Feature encoding is the single source of truth (``src.encoding``); the
+    # pipeline's SELECTED_FEATURES must equal the encoded view's column order
+    # exactly, in order, so the serving feature vector lines up with training.
+    assert SELECTED_FEATURES == feature_order()
 
 
-def test_cat_features_are_subset_of_selected():
-    assert set(CAT_FEATURES).issubset(set(SELECTED_FEATURES))
+def test_cat_features_is_empty_after_onehot():
+    # One-hot encoding is now static in BigQuery, so the pipeline carries no
+    # in-model categorical columns.
+    assert CAT_FEATURES == []
 
 
 def test_pipeline_callable_is_a_kfp_pipeline():

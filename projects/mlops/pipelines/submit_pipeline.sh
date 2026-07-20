@@ -10,10 +10,12 @@
 # source that the components import at runtime):
 #   bash projects/mlops/scripts/build_images.sh all
 #
-# Override any value by exporting it first, e.g. a full run with serving image:
-#   N_TRIALS=50 \
-#   SERVING_IMAGE_URI=us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/serving:latest \
-#     bash projects/mlops/pipelines/submit_pipeline.sh
+# Override any value by exporting it first, e.g. a full run:
+#   N_TRIALS=50 bash projects/mlops/pipelines/submit_pipeline.sh
+#
+# SERVING_IMAGE_URI is optional: when empty, register_model serves the model
+# with the Vertex pre-built XGBoost container. Only set it to override that
+# image with a custom serving container.
 set -euo pipefail
 
 # --- Resolve paths relative to this script -----------------------------------
@@ -28,7 +30,7 @@ REGION="${REGION:-us-east1}"                         # pipeline is pinned to us-
 export PIPELINE_ROOT="${PIPELINE_ROOT:-gs://trim-icon-498815-a0-mlops/pipeline-root}"
 export N_TRIALS="${N_TRIALS:-5}"                     # dry-run default; use 50 for a full run
 export HPO_TIMEOUT="${HPO_TIMEOUT:-2700}"            # HPO wall-clock backstop (sec); 45 min default
-export SERVING_IMAGE_URI="${SERVING_IMAGE_URI:-}"    # empty -> register_model step will fail
+export SERVING_IMAGE_URI="${SERVING_IMAGE_URI:-}"    # empty -> pre-built XGBoost serving container
 export PIPELINE_SA="${PIPELINE_SA:-mlops-pipeline@trim-icon-498815-a0.iam.gserviceaccount.com}"
 # REQUIRED: components import their helpers from source baked into this image.
 export TRAINING_IMAGE_URI="${TRAINING_IMAGE_URI:-us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest}"

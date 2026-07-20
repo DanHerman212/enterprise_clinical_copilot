@@ -45,6 +45,7 @@ def run_train_final(
     model_artifact_path: str,
     training_curve_path: str,
     groups_val_path: str,
+    booster_model_path: str | None = None,
 ) -> float:
     """Refit on train+val with best params, save model, return combined-fit AUCPR.
 
@@ -58,7 +59,9 @@ def run_train_final(
     y_val = pd.read_parquet(y_val_path).iloc[:, 0]
     g_val = pd.read_parquet(groups_val_path).iloc[:, 0].to_numpy()
 
-    # Categorical encoding is already applied upstream (category dtype).
+    # Features arrive fully numeric (one-hot encoded in BigQuery); no in-code
+    # categorical handling remains. cat_features is retained for signature
+    # stability but is unused.
     _ = cat_features
 
     with open(best_params_path) as f:
@@ -77,6 +80,10 @@ def run_train_final(
     # the full tree budget is used; but we still need eval_set for the curves.
     fit_params = {**best_params}
     fit_params.pop("early_stopping_rounds", None)
+    # Probability output: the served raw booster must emit calibrated
+    # probabilities (Vertex Sampled Shapley then attributes probability units).
+    fit_params.setdefault("objective", "binary:logistic")
+    fit_params.setdefault("eval_metric", "aucpr")
 
     model = XGBClassifier(**fit_params)
     model.fit(
@@ -111,7 +118,14 @@ def run_train_final(
     print(f"  Combined-set fit AUCPR (not unbiased): {train_aucpr:.4f}")
     print(f"  n_estimators: {n_estimators}  Params: {json.dumps(best_params)}")
 
+    # Two artifacts, one model:
+    #   * model.joblib  — sklearn XGBClassifier, consumed by the in-pipeline
+    #     eval/explain/audit components (train time).
+    #   * model.bst     — native booster, uploaded with the pre-built XGBoost
+    #     serving container (serving time, Sampled Shapley on the endpoint).
     joblib.dump(model, model_artifact_path)
+    if booster_model_path is not None:
+        model.get_booster().save_model(booster_model_path)
     return train_aucpr
 
 
@@ -183,6 +197,7 @@ def train_final(
     cat_features: list,
     groups_val: dsl.Input[dsl.Dataset],
     model_artifact: dsl.Output[dsl.Model],
+    booster_model: dsl.Output[dsl.Model],
     training_curve: dsl.Output[dsl.Artifact],
     training_curve_plot: dsl.Output[dsl.HTML],
     project_id: str = "",
@@ -201,6 +216,7 @@ def train_final(
         x_val_path=x_val.path, y_val_path=y_val.path,
         best_params_path=best_params.path, cat_features=cat_features,
         model_artifact_path=model_artifact.path,
+        booster_model_path=booster_model.path,
         training_curve_path=training_curve.path,
         groups_val_path=groups_val.path,
     )

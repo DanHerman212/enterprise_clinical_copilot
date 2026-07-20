@@ -1,0 +1,96 @@
+config {
+  type: "table",
+  schema: "readmission",
+  description: "Model-ready ONE-HOT encoded dataset for the decoupled pre-built XGBoost serving pattern. Every feature is numeric so the model consumes a fixed-order vector and Vertex Explainable AI (Sampled Shapley) can attribute it. GENERATED from projects/mlops/src/encoding.py — do not hand-edit; run `python -m src.encoding --emit-sql` and paste. Leakage-free: numerics pass NULL through (native XGBoost missing handling), categoricals are static one-hot (no train-derived statistics).",
+  assertions: {
+    nonNull: ["subject_id", "hadm_id", "split_name", "readmission_30d"],
+    rowConditions: [
+      "split_name IN ('train', 'validation', 'test', 'prod_test', 'demo')",
+      "readmission_30d IN (0, 1)"
+    ]
+  }
+}
+
+-- Phase 2 (serving pivot) — static, leakage-free one-hot encoding pushed into
+-- BigQuery so the pre-built XGBoost container receives a purely numeric vector.
+--
+--   * Numerics pass through unchanged; NULLs preserved (XGBoost learns a default
+--     split direction — no imputation, so no fitted statistic ever leaves the DB).
+--   * Binary flags (gender, has_procedure, oncology_flag) stay single 0/1 columns.
+--   * race is bucketed into OMB groups (mirrors fairness_audit._omb_race), then
+--     one-hot; admission_type / discharge_location / insurance are one-hot per
+--     known level plus a `<parent>_unknown` catch-all for NULL / unseen levels.
+--
+-- The column order here is the model's feature vector layout and MUST match
+-- src.encoding.feature_order(); the one-hot -> parent map for aggregating
+-- Sampled Shapley attributions is src.encoding.groups().
+
+WITH bucketed AS (
+  SELECT
+    *,
+    CASE
+      WHEN UPPER(race) LIKE '%HISPANIC%' OR UPPER(race) LIKE '%LATINO%' OR UPPER(race) LIKE '%SOUTH AMERICAN%' THEN 'hispanic'
+      WHEN UPPER(race) LIKE '%BLACK%' OR UPPER(race) LIKE '%AFRICAN%' THEN 'black'
+      WHEN UPPER(race) LIKE '%ASIAN%' THEN 'asian'
+      WHEN UPPER(race) LIKE '%AMERICAN INDIAN%' OR UPPER(race) LIKE '%ALASKA NATIVE%' THEN 'amind'
+      WHEN UPPER(race) LIKE '%NATIVE HAWAIIAN%' OR UPPER(race) LIKE '%PACIFIC ISLANDER%' THEN 'nhpi'
+      WHEN UPPER(race) LIKE '%WHITE%' THEN 'white'
+      ELSE 'unknown'
+    END AS race_bucket
+  FROM ${ref("analytics_dataset")}
+)
+SELECT
+  subject_id,
+  hadm_id,
+  split_name,
+  age AS age,
+  prior_admission_count AS prior_admission_count,
+  prior_inpatient_days AS prior_inpatient_days,
+  recent_ed_visits AS recent_ed_visits,
+  index_los_days AS index_los_days,
+  procedure_count AS procedure_count,
+  medication_count AS medication_count,
+  medication_order_count AS medication_order_count,
+  rbc_last AS rbc_last,
+  rbc_min AS rbc_min,
+  rdw_max AS rdw_max,
+  monocytes_min AS monocytes_min,
+  hemoglobin_min AS hemoglobin_min,
+  sodium_last AS sodium_last,
+  sodium_max AS sodium_max,
+  sodium_min AS sodium_min,
+  CAST(gender = 'M' AS INT64) AS gender,
+  CAST(has_procedure AS INT64) AS has_procedure,
+  CAST(oncology_flag AS INT64) AS oncology_flag,
+  CAST(race_bucket = 'white' AS INT64) AS race_white,
+  CAST(race_bucket = 'black' AS INT64) AS race_black,
+  CAST(race_bucket = 'hispanic' AS INT64) AS race_hispanic,
+  CAST(race_bucket = 'asian' AS INT64) AS race_asian,
+  CAST(race_bucket = 'amind' AS INT64) AS race_amind,
+  CAST(race_bucket = 'nhpi' AS INT64) AS race_nhpi,
+  CAST(race_bucket = 'unknown' AS INT64) AS race_unknown,
+  CAST(admission_type = 'EW EMER.' AS INT64) AS admission_type_ew_emer,
+  CAST(admission_type = 'EU OBSERVATION' AS INT64) AS admission_type_eu_obs,
+  CAST(admission_type = 'OBSERVATION ADMIT' AS INT64) AS admission_type_obs_admit,
+  CAST(admission_type = 'URGENT' AS INT64) AS admission_type_urgent,
+  CAST(admission_type = 'DIRECT EMER.' AS INT64) AS admission_type_direct_emer,
+  CAST(admission_type = 'AMBULATORY OBSERVATION' AS INT64) AS admission_type_ambulatory_obs,
+  CAST(admission_type = 'DIRECT OBSERVATION' AS INT64) AS admission_type_direct_obs,
+  CAST((admission_type IS NULL OR admission_type NOT IN ('EW EMER.', 'EU OBSERVATION', 'OBSERVATION ADMIT', 'URGENT', 'DIRECT EMER.', 'AMBULATORY OBSERVATION', 'DIRECT OBSERVATION')) AS INT64) AS admission_type_unknown,
+  CAST(discharge_location = 'HOME' AS INT64) AS discharge_location_home,
+  CAST(discharge_location = 'HOME HEALTH CARE' AS INT64) AS discharge_location_home_health,
+  CAST(discharge_location = 'SKILLED NURSING FACILITY' AS INT64) AS discharge_location_snf,
+  CAST(discharge_location = 'REHAB' AS INT64) AS discharge_location_rehab,
+  CAST(discharge_location = 'CHRONIC/LONG TERM ACUTE CARE' AS INT64) AS discharge_location_ltac,
+  CAST(discharge_location = 'HOSPICE' AS INT64) AS discharge_location_hospice,
+  CAST(discharge_location = 'AGAINST ADVICE' AS INT64) AS discharge_location_ama,
+  CAST(discharge_location = 'PSYCH FACILITY' AS INT64) AS discharge_location_psych,
+  CAST(discharge_location = 'ASSISTED LIVING' AS INT64) AS discharge_location_assisted_living,
+  CAST((discharge_location IS NULL OR discharge_location NOT IN ('HOME', 'HOME HEALTH CARE', 'SKILLED NURSING FACILITY', 'REHAB', 'CHRONIC/LONG TERM ACUTE CARE', 'HOSPICE', 'AGAINST ADVICE', 'PSYCH FACILITY', 'ASSISTED LIVING')) AS INT64) AS discharge_location_unknown,
+  CAST(insurance = 'Medicare' AS INT64) AS insurance_medicare,
+  CAST(insurance = 'Medicaid' AS INT64) AS insurance_medicaid,
+  CAST(insurance = 'Private' AS INT64) AS insurance_private,
+  CAST(insurance = 'Other' AS INT64) AS insurance_other,
+  CAST((insurance IS NULL OR insurance NOT IN ('Medicare', 'Medicaid', 'Private', 'Other')) AS INT64) AS insurance_unknown,
+  readmission_30d
+FROM bucketed

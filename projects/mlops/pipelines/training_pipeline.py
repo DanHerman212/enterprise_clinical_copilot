@@ -3,26 +3,26 @@ training_pipeline — Vertex AI (KFP v2) readmission training pipeline DAG.
 
 Wiring::
 
-    fit_imputer ─▶ load_data ─▶ validate_data ─▶ benchmark_xgboost ─▶ benchmark_gate
-                                                                           │
-                                                                           ▼
-                                                                       optuna_hpo
-                                                                           │
-                                                                           ▼
-                                                                      train_final
-                                                                           │
-                       ┌───────────────────┬───────────────────┬──────────┘
-                       ▼                   ▼                   ▼
-                 evaluate_test        shap_explain       fairness_audit
-                       │
-                       ▼
-                 register_model
+    load_data ─▶ validate_data ─▶ benchmark_xgboost ─▶ benchmark_gate
+                                                            │
+                                                            ▼
+                                                        optuna_hpo
+                                                            │
+                                                            ▼
+                                                       train_final
+                                                            │
+                        ┌───────────────────┬───────────────────┬──────────┘
+                        ▼                   ▼                   ▼
+                  evaluate_test        shap_explain       fairness_audit
+                        │
+                        ▼
+                  register_model
 
-The feature contract is **pinned explicitly** below (sourced from
-``artifacts/feature_selection/20260701t225649/run_summary.json``) and passed as
-a default pipeline parameter, so a rerun is fully reproducible and does not
-silently change when a new feature-selection run lands. To adopt a new feature
-set, update ``SELECTED_FEATURES`` deliberately from the chosen run summary.
+All feature encoding (one-hot categoricals, missingness policy) is now static in
+BigQuery (``analytics_dataset_encoded``, generated from :mod:`src.encoding`), so
+``load_data`` is a plain projection and there is no in-pipeline imputer. The
+model is a pure numeric XGBoost booster served by the Vertex pre-built XGBoost
+container with a Sampled Shapley explanation spec.
 """
 
 import json
@@ -36,7 +36,6 @@ from pipelines.components.benchmark_xgboost import benchmark_xgboost
 from pipelines.components.calibrate_threshold import calibrate_threshold
 from pipelines.components.evaluate_test import evaluate_test
 from pipelines.components.fairness_audit import fairness_audit
-from pipelines.components.fit_imputer import fit_imputer_op
 from pipelines.components.load_data import load_data
 from pipelines.components.optuna_hpo import optuna_hpo
 from pipelines.components.register_model import register_model
@@ -50,27 +49,19 @@ PIPELINE_NAME = "readmission-training"
 # runs, so training runs land alongside them for side-by-side comparison.
 EXPERIMENT_NAME = "readmission-mlops"
 
-# --- PINNED feature contract (source: run_summary.json 20260702t163137) -------
-# Leakage-controlled selection: grouped CV (StratifiedGroupKFold on subject_id),
-# native categoricals, scale_pos_weight, 1-standard-error parsimony rule.
-# 22 features (down from 50), grouped-CV AUCPR 0.4078 — statistically tied with
-# the full set (0.4084) but 56% smaller. ``insurance`` is added on top of the
-# selection run as a model feature (it also serves as the fairness-audit SES
-# slice, read straight off the encoded test frame).
-SELECTED_FEATURES = [
-    "age", "gender", "race", "admission_type", "discharge_location", "insurance",
-    "prior_admission_count", "prior_inpatient_days", "recent_ed_visits",
-    "index_los_days", "procedure_count", "has_procedure",
-    "medication_count", "medication_order_count",
-    "rbc_last", "rbc_min", "rdw_max", "monocytes_min", "hemoglobin_min",
-    "sodium_last", "sodium_max", "sodium_min", "oncology_flag",
-]
+# --- Feature contract -------------------------------------------------------
+# All feature encoding is now static in BigQuery (analytics_dataset_encoded),
+# generated from src.encoding. The model consumes the fixed-order NUMERIC
+# one-hot vector below; there are no native categoricals at train time, so
+# CAT_FEATURES is empty. To change the feature set, edit src.encoding and
+# regenerate the encoded Dataform view.
+from src.encoding import feature_order as _feature_order
 
-# Categorical subset of SELECTED_FEATURES (config.CATEGORICAL_FEATURES ∩ pinned).
-CAT_FEATURES = [
-    "gender", "race", "admission_type", "discharge_location", "insurance",
-    "has_procedure", "oncology_flag",
-]
+SELECTED_FEATURES = _feature_order()
+
+# No native categoricals: categorical encoding is one-hot in BigQuery. Retained
+# as an (empty) pipeline parameter for component signature stability.
+CAT_FEATURES: list = []
 
 # Benchmark XGBoost defaults (mirror the feature-selection reference model).
 DEFAULT_XGB_PARAMS = {
@@ -95,7 +86,7 @@ HOSPITAL_AUCPR = _load_hospital_baseline()
 
 @dsl.pipeline(
     name=PIPELINE_NAME,
-    description="30-day readmission risk: impute → validate → benchmark → HPO → "
+    description="30-day readmission risk: load → validate → benchmark → HPO → "
     "train → evaluate/explain/audit → register.",
 )
 def training_pipeline(
@@ -117,13 +108,6 @@ def training_pipeline(
     serving_container_image_uri: str = "",
 ):
     """Assemble the readmission training DAG."""
-    fit = fit_imputer_op(
-        project_id=project_id,
-        full_table_ref=full_table_ref,
-        split_col=split_col,
-        train_split=train_split,
-    )
-
     data = load_data(
         project_id=project_id,
         full_table_ref=full_table_ref,
@@ -132,9 +116,6 @@ def training_pipeline(
         train_split=train_split,
         val_split=val_split,
         test_split=test_split,
-        selected_features=selected_features,
-        cat_features=cat_features,
-        imputer=fit.outputs["imputer"],
     )
 
     validate = validate_data(
@@ -230,9 +211,8 @@ def training_pipeline(
 
     register_model(
         project_id=project_id,
-        model_artifact=final.outputs["model_artifact"],
-        imputer=fit.outputs["imputer"],
-        schema=data.outputs["schema"],
+        booster_model=final.outputs["booster_model"],
+        manifest=data.outputs["manifest"],
         serving_container_image_uri=serving_container_image_uri,
         test_aucpr=evalt.outputs["test_aucpr"],
         hpo_val_aucpr=hpo.outputs["Output"],
@@ -257,7 +237,7 @@ def submit() -> None:
 
     from google.cloud import aiplatform
 
-    from src.config import FULL_TABLE_REF, PROJECT_ID
+    from src.config import FULL_TABLE_REF_ENCODED, PROJECT_ID
 
     package_path = compile_pipeline()
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -269,13 +249,14 @@ def submit() -> None:
         pipeline_root=os.environ.get("PIPELINE_ROOT"),
         parameter_values={
             "project_id": PROJECT_ID,
-            "full_table_ref": FULL_TABLE_REF,
+            "full_table_ref": FULL_TABLE_REF_ENCODED,
             # HPO trials — set N_TRIALS low (e.g. 5) for a quick wiring check.
             "n_trials": int(os.environ.get("N_TRIALS", "50")),
             # Wall-clock backstop for HPO (seconds); stops launching trials past
             # this budget and returns best-so-far. Default 45 min.
             "hpo_timeout_seconds": int(os.environ.get("HPO_TIMEOUT", "2700")),
-            # Custom real-time predictor image (see pipelines/serving/).
+            # Optional override for the pre-built XGBoost serving image; empty ->
+            # register_model uses its region-matched pre-built default.
             "serving_container_image_uri": os.environ.get("SERVING_IMAGE_URI", ""),
         },
         # Every run logs fresh (no cached step reuse) so the experiment record

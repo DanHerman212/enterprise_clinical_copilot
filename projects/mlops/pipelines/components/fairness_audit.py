@@ -119,20 +119,56 @@ def _group_rates(y_true: np.ndarray, y_pred_bin: np.ndarray) -> dict:
     }
 
 
-def _derive_subgroups(sens: pd.DataFrame) -> dict[str, pd.Series]:
-    """Build audit slices from the (model-ready) feature frame.
+def _onehot_to_label(frame: pd.DataFrame, col_to_label: dict[str, str]) -> pd.Series | None:
+    """Reconstruct a categorical label Series from its one-hot columns.
 
-    Reads the sensitive attributes straight off ``X_test`` — ``gender``, ``race``,
-    ``insurance`` are model features stored as category dtype (raw string levels
-    preserved), and ``age`` is numeric — so no separate passthrough is needed.
+    The one-hot block is mutually exclusive (exactly one column is 1 per row,
+    incl. the ``_unknown`` catch-all), so the winning column identifies the
+    level. Returns ``None`` if none of the expected columns are present.
     """
+    cols = [c for c in col_to_label if c in frame.columns]
+    if not cols:
+        return None
+    winner = frame[cols].idxmax(axis=1)
+    return winner.map(col_to_label).astype("string")
+
+
+def _derive_subgroups(sens: pd.DataFrame) -> dict[str, pd.Series]:
+    """Build audit slices from the (one-hot ENCODED) feature frame.
+
+    The sensitive attributes are reconstructed from the model's numeric feature
+    columns: ``gender`` (0/1), ``race_*`` / ``insurance_*`` one-hot blocks, and
+    the numeric ``age`` passthrough — so no separate raw passthrough is needed
+    and the slices exactly match what the model consumed.
+    """
+    from src import encoding
+
     groups: dict[str, pd.Series] = {}
+
     if "gender" in sens:
-        groups["gender"] = sens["gender"].astype("string").fillna("Unknown")
-    if "race" in sens:
-        groups["race"] = sens["race"].astype("string").map(_omb_race).astype("string")
-    if "insurance" in sens:
-        groups["insurance"] = sens["insurance"].astype("string").fillna("Unknown")
+        # gender is encoded 1 == male (see src.encoding.BINARY_FEATURES).
+        groups["gender"] = (
+            pd.to_numeric(sens["gender"], errors="coerce")
+            .map({1: "M", 0: "F"})
+            .astype("string")
+            .fillna("Unknown")
+        )
+
+    race_map = {f"race_{slug}": label for slug, label in encoding.RACE_BUCKETS}
+    race_map["race_unknown"] = "Other/Unknown"
+    race = _onehot_to_label(sens, race_map)
+    if race is not None:
+        groups["race"] = race
+
+    ins_map = {
+        f"insurance_{slug}": raw
+        for raw, slug in encoding.ONEHOT_DIRECT["insurance"]
+    }
+    ins_map["insurance_unknown"] = "Unknown"
+    insurance = _onehot_to_label(sens, ins_map)
+    if insurance is not None:
+        groups["insurance"] = insurance
+
     if "age" in sens:
         groups["age_bucket"] = _bucket_age(sens["age"]).astype("string")
     return groups

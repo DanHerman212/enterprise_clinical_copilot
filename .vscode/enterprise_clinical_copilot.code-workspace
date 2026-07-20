@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		},
+		{
+			"path": "../../danielmherman"
+		}
+	],
+	"settings": {
+		"git.ignoreLimitWarning": true
+	}
+}

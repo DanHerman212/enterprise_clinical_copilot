@@ -1,16 +1,14 @@
 #!/usr/bin/env bash
 #
-# build_images.sh — build & push the training and serving container images to
-# Artifact Registry via Cloud Build. Creates the `readmission` Docker repo if
-# it doesn't exist.
+# build_images.sh — build & push the training container image to Artifact
+# Registry via Cloud Build. Creates the `readmission` Docker repo if it doesn't
+# exist. Serving no longer needs a custom image: the model is served by the
+# Vertex pre-built XGBoost container (set at registration in register_model).
 #
 # Usage:
-#   bash projects/mlops/scripts/build_images.sh [training|serving|all]
+#   bash projects/mlops/scripts/build_images.sh [training]
 #
-# Default target is `all`. Override PROJECT_ID / REGION by exporting them.
-#
-# After a serving build, export the printed URI before submitting the pipeline:
-#   export SERVING_IMAGE_URI=us-east1-docker.pkg.dev/<PROJECT>/readmission/serving:latest
+# Default target is `training`. Override PROJECT_ID / REGION by exporting them.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,7 +17,7 @@ MLOPS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"            # projects/mlops
 PROJECT_ID="${PROJECT_ID:-trim-icon-498815-a0}"
 REGION="${REGION:-us-east1}"
 REPO="${REPO:-readmission}"
-TARGET="${1:-all}"
+TARGET="${1:-training}"
 
 AR_HOST="${REGION}-docker.pkg.dev"
 
@@ -53,23 +51,11 @@ build_training() {
   echo "    -> ${AR_HOST}/${PROJECT_ID}/${REPO}/training:latest"
 }
 
-build_serving() {
-  echo ">>> Building SERVING image (pipelines/serving/Dockerfile) …"
-  gcloud builds submit "$MLOPS_DIR" \
-    --project "$PROJECT_ID" \
-    --config "$MLOPS_DIR/pipelines/serving/cloudbuild.yaml"
-  echo "    -> ${AR_HOST}/${PROJECT_ID}/${REPO}/serving:latest"
-}
-
 case "$TARGET" in
   training) build_training ;;
-  serving)  build_serving ;;
-  all)      build_training; build_serving ;;
-  *) echo "Unknown target '$TARGET' (use: training | serving | all)" >&2; exit 1 ;;
+  *) echo "Unknown target '$TARGET' (use: training)" >&2; exit 1 ;;
 esac
 
 echo
-echo "Done. To use the serving image in the pipeline:"
-echo "  export SERVING_IMAGE_URI=${AR_HOST}/${PROJECT_ID}/${REPO}/serving:latest"
-echo "To use the pinned training image for pipeline steps (optional):"
+echo "Done. To use the pinned training image for pipeline steps (optional):"
 echo "  export TRAINING_IMAGE_URI=${AR_HOST}/${PROJECT_ID}/${REPO}/training:latest"

@@ -44,7 +44,7 @@ def run_shap_explain(
         X_sample = X_test
 
     import xgboost as xgb
-    X_matrix = xgb.DMatrix(X_sample, enable_categorical=True)
+    X_matrix = xgb.DMatrix(X_sample)
     explainer = shap.TreeExplainer(booster)
     shap_values = explainer.shap_values(X_matrix)
     explanation = explainer(X_matrix)

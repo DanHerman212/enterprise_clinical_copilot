@@ -17,7 +17,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from google.cloud import bigquery
+from google.cloud import aiplatform, bigquery
 from google.cloud.aiplatform.prediction import LocalModel
 
 CPR_SRC = str(Path(__file__).resolve().parents[1] / "pipelines" / "serving" / "cpr")
@@ -28,16 +28,24 @@ PROJECT = "trim-icon-498815-a0"
 LOCATION = "us-east1"
 TABLE = "readmission.analytics_dataset_encoded"
 IMAGE_URI = f"{LOCATION}-docker.pkg.dev/{PROJECT}/readmission/readmission-cpr:latest"
-BUNDLE_URI = (
-    "gs://trim-icon-498815-a0-mlops/pipeline-root/778397675435/"
-    "readmission-training-20260720164335/register-model_3063486647661232128/serving_model"
-)
+BUNDLE_URI_OVERRIDE = os.environ.get("BUNDLE_URI")
 CREDS = os.path.expanduser("~/.config/gcloud/application_default_credentials.json")
 
 
-def _manifest() -> dict:
+def _discover_bundle_uri() -> str:
+    """artifact_uri of the newest readmission-final-* provenance record."""
+    models = [
+        m for m in aiplatform.Model.list(order_by="create_time desc")
+        if m.display_name.startswith("readmission-final-")
+    ]
+    if not models:
+        sys.exit("No 'readmission-final-*' model found; run the pipeline or set BUNDLE_URI.")
+    return models[0].gca_resource.artifact_uri.rstrip("/")
+
+
+def _manifest(bundle_uri: str) -> dict:
     raw = subprocess.check_output(
-        ["gsutil", "cat", f"{BUNDLE_URI}/manifest.json"], text=True
+        ["gsutil", "cat", f"{bundle_uri}/manifest.json"], text=True
     )
     return json.loads(raw)
 
@@ -63,7 +71,10 @@ def _patient(hadm_id: int, feature_order: list[str]):
 
 def main() -> None:
     hadm_id = int(sys.argv[1]) if len(sys.argv) > 1 else 20924467
-    feature_order = _manifest()["feature_order"]
+    aiplatform.init(project=PROJECT, location=LOCATION)
+    bundle_uri = BUNDLE_URI_OVERRIDE.rstrip("/") if BUNDLE_URI_OVERRIDE else _discover_bundle_uri()
+    print(f"Bundle: {bundle_uri}")
+    feature_order = _manifest(bundle_uri)["feature_order"]
     positional, named = _patient(hadm_id, feature_order)
     n_missing = sum(1 for v in positional if v is None)
     print(f"Patient {hadm_id}: {len(positional)} features, {n_missing} missing (null)")

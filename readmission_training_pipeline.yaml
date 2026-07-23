@@ -17,7 +17,7 @@
 #    test_split: str [Default: 'test']
 #    train_split: str [Default: 'train']
 #    val_split: str [Default: 'validation']
-#    xgb_params: dict [Default: {'subsample': 0.8, 'n_estimators': 300.0, 'random_state': 42.0, 'colsample_bytree': 0.8, 'learning_rate': 0.05, 'max_depth': 6.0}]
+#    xgb_params: dict [Default: {'colsample_bytree': 0.8, 'subsample': 0.8, 'learning_rate': 0.05, 'random_state': 42.0, 'max_depth': 6.0, 'n_estimators': 300.0}]
 components:
   comp-benchmark-gate:
     executorLabel: exec-benchmark-gate
@@ -378,10 +378,6 @@ components:
           defaultValue: us-east1
           isOptional: true
           parameterType: STRING
-        path_count:
-          defaultValue: 25.0
-          isOptional: true
-          parameterType: NUMBER_INTEGER
         project_id:
           parameterType: STRING
         serving_container_image_uri:
@@ -920,18 +916,16 @@ deploymentSpec:
           \    manifest: dsl.Input[dsl.Artifact],\n    serving_container_image_uri:\
           \ str,\n    test_aucpr: float,\n    hpo_val_aucpr: float,\n    benchmark_aucpr:\
           \ float,\n    tuned_threshold: float,\n    serving_model: dsl.Output[dsl.Model],\n\
-          \    location: str = \"us-east1\",\n    beta: float = 2.0,\n    path_count:\
-          \ int = DEFAULT_PATH_COUNT,\n) -> NamedTuple(\"RegistryOutputs\", [(\"model_id\"\
-          , str)]):\n    \"\"\"KFP component: register the booster with the pre-built\
-          \ container + XAI.\"\"\"\n    from pipelines.components.register_model import\
-          \ run_register_model\n\n    model_id = run_register_model(\n        project_id=project_id,\n\
-          \        location=location,\n        booster_path=booster_model.path,\n\
+          \    location: str = \"us-east1\",\n    beta: float = 2.0,\n) -> NamedTuple(\"\
+          RegistryOutputs\", [(\"model_id\", str)]):\n    \"\"\"KFP component: publish\
+          \ the serving bundle + a CPR provenance record.\"\"\"\n    from pipelines.components.register_model\
+          \ import run_register_model\n\n    model_id = run_register_model(\n    \
+          \    project_id=project_id,\n        location=location,\n        booster_path=booster_model.path,\n\
           \        manifest_path=manifest.path,\n        bundle_dir=serving_model.path,\n\
           \        bundle_uri=serving_model.uri,\n        serving_container_image_uri=serving_container_image_uri,\n\
           \        test_aucpr=test_aucpr,\n        hpo_val_aucpr=hpo_val_aucpr,\n\
           \        benchmark_aucpr=benchmark_aucpr,\n        tuned_threshold=tuned_threshold,\n\
-          \        beta=beta,\n        path_count=path_count,\n    )\n    return (model_id,)\n\
-          \n"
+          \        beta=beta,\n    )\n    return (model_id,)\n\n"
         image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
     exec-shap-explain:
       container:

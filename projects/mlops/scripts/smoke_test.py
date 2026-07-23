@@ -23,18 +23,26 @@ LOCATION = "us-east1"
 ENDPOINT_NAME = "readmission-endpoint"
 TABLE = "readmission.analytics_dataset_encoded"
 
-# GCS serving bundle (model.bst + manifest.json) from the latest pipeline run.
-BUNDLE_URI = os.environ.get(
-    "BUNDLE_URI",
-    "gs://trim-icon-498815-a0-mlops/pipeline-root/778397675435/"
-    "readmission-training-20260720164335/"
-    "register-model_3063486647661232128/serving_model",
-)
-MANIFEST_URI = f"{BUNDLE_URI.rstrip('/')}/manifest.json"
+# Serving bundle is discovered from the newest readmission-final-* provenance
+# record; set BUNDLE_URI to override (e.g. to pin a specific run).
+BUNDLE_URI_OVERRIDE = os.environ.get("BUNDLE_URI")
 
 
-def _load_manifest() -> dict:
-    raw = subprocess.check_output(["gsutil", "cat", MANIFEST_URI], text=True)
+def _discover_bundle_uri() -> str:
+    """artifact_uri of the newest readmission-final-* provenance record."""
+    models = [
+        m for m in aiplatform.Model.list(order_by="create_time desc")
+        if m.display_name.startswith("readmission-final-")
+    ]
+    if not models:
+        sys.exit("No 'readmission-final-*' model found; run the pipeline or set BUNDLE_URI.")
+    return models[0].gca_resource.artifact_uri.rstrip("/")
+
+
+def _load_manifest(bundle_uri: str) -> dict:
+    raw = subprocess.check_output(
+        ["gsutil", "cat", f"{bundle_uri}/manifest.json"], text=True
+    )
     return json.loads(raw)
 
 
@@ -69,7 +77,10 @@ def _get_endpoint() -> aiplatform.Endpoint:
 
 
 def main() -> None:
-    manifest = _load_manifest()
+    aiplatform.init(project=PROJECT, location=LOCATION)
+    bundle_uri = BUNDLE_URI_OVERRIDE.rstrip("/") if BUNDLE_URI_OVERRIDE else _discover_bundle_uri()
+    print(f"Bundle: {bundle_uri}")
+    manifest = _load_manifest(bundle_uri)
     feature_order: list[str] = manifest["feature_order"]
     groups: dict[str, list[str]] = manifest.get("groups", {})
     print(f"Manifest: {len(feature_order)} features, {len(groups)} parent groups")

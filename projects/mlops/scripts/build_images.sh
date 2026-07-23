@@ -2,8 +2,8 @@
 #
 # build_images.sh — build & push the training container image to Artifact
 # Registry via Cloud Build. Creates the `readmission` Docker repo if it doesn't
-# exist. Serving no longer needs a custom image: the model is served by the
-# Vertex pre-built XGBoost container (set at registration in register_model).
+# exist. Serving uses a Custom Prediction Routine image built separately by
+# scripts/deploy_cpr.py (register_model only records it for provenance).
 #
 # Usage:
 #   bash projects/mlops/scripts/build_images.sh [training]

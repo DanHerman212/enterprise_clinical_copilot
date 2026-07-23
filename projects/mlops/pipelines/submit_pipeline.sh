@@ -13,9 +13,10 @@
 # Override any value by exporting it first, e.g. a full run:
 #   N_TRIALS=50 bash projects/mlops/pipelines/submit_pipeline.sh
 #
-# SERVING_IMAGE_URI is optional: when empty, register_model serves the model
-# with the Vertex pre-built XGBoost container. Only set it to override that
-# image with a custom serving container.
+# SERVING_IMAGE_URI is optional: when empty, register_model records its default
+# CPR serving image on the provenance entry. The servable model is built and
+# deployed separately by scripts/deploy_cpr.py. Only set it to override that
+# recorded image.
 set -euo pipefail
 
 # --- Resolve paths relative to this script -----------------------------------
@@ -30,7 +31,7 @@ REGION="${REGION:-us-east1}"                         # pipeline is pinned to us-
 export PIPELINE_ROOT="${PIPELINE_ROOT:-gs://trim-icon-498815-a0-mlops/pipeline-root}"
 export N_TRIALS="${N_TRIALS:-5}"                     # dry-run default; use 50 for a full run
 export HPO_TIMEOUT="${HPO_TIMEOUT:-2700}"            # HPO wall-clock backstop (sec); 45 min default
-export SERVING_IMAGE_URI="${SERVING_IMAGE_URI:-}"    # empty -> pre-built XGBoost serving container
+export SERVING_IMAGE_URI="${SERVING_IMAGE_URI:-}"    # empty -> CPR provenance image (deploy_cpr.py serves)
 export PIPELINE_SA="${PIPELINE_SA:-mlops-pipeline@trim-icon-498815-a0.iam.gserviceaccount.com}"
 # REQUIRED: components import their helpers from source baked into this image.
 export TRAINING_IMAGE_URI="${TRAINING_IMAGE_URI:-us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest}"
@@ -51,7 +52,7 @@ echo "  PIPELINE_ROOT     : $PIPELINE_ROOT"
 echo "  N_TRIALS          : $N_TRIALS   (dry run = 5, full run = 50)"
 echo "  HPO_TIMEOUT       : ${HPO_TIMEOUT}s   (HPO wall-clock backstop)"
 echo "  PIPELINE_SA       : $PIPELINE_SA"
-  echo "  SERVING_IMAGE_URI : ${SERVING_IMAGE_URI:-<unset — pre-built XGBoost serving container>}"
+  echo "  SERVING_IMAGE_URI : ${SERVING_IMAGE_URI:-<unset — CPR provenance image; deploy_cpr.py serves>}"
 echo "  TRAINING_IMAGE_URI: $TRAINING_IMAGE_URI"
 echo
 "$VENV_PY" "$MLOPS_DIR/pipelines/training_pipeline.py" submit

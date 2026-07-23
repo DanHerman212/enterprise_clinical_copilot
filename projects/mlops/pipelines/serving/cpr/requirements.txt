@@ -1,0 +1,5 @@
+# CPR serving image dependencies.
+# xgboost pinned to the training container's major/minor (xgboost-cpu.2-1) for
+# exact prediction parity and to read model.bst without a format-guess warning.
+xgboost>=2.1,<2.2
+numpy>=1.26,<2.0

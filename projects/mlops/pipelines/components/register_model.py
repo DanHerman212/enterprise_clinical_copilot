@@ -1,25 +1,24 @@
 """
-register_model — register the native XGBoost booster in Vertex AI Model Registry
-behind the **pre-built XGBoost serving container** (no custom container).
+register_model — publish the trained booster as a versioned SERVING BUNDLE in
+GCS and record a provenance entry in the Vertex AI Model Registry.
 
-Decoupled serving pattern (zero custom container maintenance):
+Bundle-only handoff (the pipeline does NOT build or deploy a serving container):
 
     <artifact_uri>/
         model.bst        # native booster (booster.save_model)
         manifest.json    # feature_order + one-hot -> parent groups
         threshold.json   # operating threshold (decision layer only)
 
-All feature encoding is static in BigQuery (analytics_dataset_encoded), so the
-model consumes a fixed-order numeric vector. The endpoint returns a calibrated
-probability (objective=binary:logistic).
+The registry entry (display name ``readmission-final-<ts>``) points at this
+bundle via ``artifact_uri`` and tags the CPR serving image for provenance. The
+servable model is built and deployed separately by ``scripts/deploy_cpr.py``,
+which discovers the latest bundle from this record's ``artifact_uri``, wraps it
+in the Custom Prediction Routine container (probability + native TreeSHAP
+attributions in one response), and deploys it to the Vertex endpoint.
 
-Feature attributions are computed **client-side with native TreeSHAP**
-(``booster.predict(..., pred_contribs=True)``) in the agent-side serving glue,
-which aggregates one-hot column contributions back to parent features using
-``manifest.json`` groups (valid by Shapley additivity). This replaces the
-managed Vertex Explainable AI Sampled Shapley spec, which Google deprecated on
-2026-03-16; native TreeSHAP is exact (not sampled), lower-latency, and carries
-no platform dependency.
+All feature encoding is static in BigQuery (analytics_dataset_encoded), so the
+model consumes a fixed-order numeric vector and returns a calibrated probability
+(objective=binary:logistic).
 """
 
 import json
@@ -31,10 +30,12 @@ from typing import NamedTuple
 from kfp import dsl
 from ._image import TRAINING_IMAGE, component
 
-# Vertex AI pre-built XGBoost prediction container (CPU). Region-matched at
-# submit time via the pipeline parameter; this is the default.
-DEFAULT_PREBUILT_XGB_IMAGE = (
-    "us-docker.pkg.dev/vertex-ai/prediction/xgboost-cpu.2-1:latest"
+# The Custom Prediction Routine (CPR) serving image. Recorded on the provenance
+# entry so lineage points at the correct serving image; the actual servable
+# model (with the CPR container spec) is built + deployed by
+# scripts/deploy_cpr.py, not by this pipeline component.
+DEFAULT_CPR_SERVING_IMAGE = (
+    "us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/readmission-cpr:latest"
 )
 
 
@@ -84,10 +85,10 @@ def run_register_model(
     tuned_threshold: float,
     beta: float = 2.0,
 ) -> str:
-    """Assemble the bundle, register with the pre-built container, return name."""
+    """Assemble the bundle, record a provenance model entry, return its name."""
     from google.cloud import aiplatform
 
-    prebuilt_image = serving_container_image_uri or DEFAULT_PREBUILT_XGB_IMAGE
+    serving_image = serving_container_image_uri or DEFAULT_CPR_SERVING_IMAGE
 
     assemble_serving_bundle(
         booster_path=booster_path,
@@ -104,7 +105,7 @@ def run_register_model(
     model = aiplatform.Model.upload(
         display_name=display_name,
         artifact_uri=bundle_uri,
-        serving_container_image_uri=prebuilt_image,
+        serving_container_image_uri=serving_image,
         labels={"pipeline": "readmission-training", "stage": "final"},
     )
     model_name = model.resource_name
@@ -112,7 +113,7 @@ def run_register_model(
     print(f"  Registered: {model_name}")
     print(f"  Display:    {display_name}")
     print(f"  Bundle:     {bundle_uri}")
-    print(f"  Serving:    {prebuilt_image}  (pre-built XGBoost; native TreeSHAP client-side)")
+    print(f"  Serving:    {serving_image}  (CPR provenance; deployed by deploy_cpr.py)")
     print(f"  Test AUCPR:    {test_aucpr:.4f}")
     print(f"  HPO val AUCPR: {hpo_val_aucpr:.4f}")
     print(f"  Benchmark:     {benchmark_aucpr:.4f}")
@@ -137,7 +138,7 @@ def register_model(
     location: str = "us-east1",
     beta: float = 2.0,
 ) -> NamedTuple("RegistryOutputs", [("model_id", str)]):
-    """KFP component: register the booster with the pre-built container."""
+    """KFP component: publish the serving bundle + a CPR provenance record."""
     from pipelines.components.register_model import run_register_model
 
     model_id = run_register_model(

@@ -21,8 +21,10 @@ Wiring::
 All feature encoding (one-hot categoricals, missingness policy) is now static in
 BigQuery (``analytics_dataset_encoded``, generated from :mod:`src.encoding`), so
 ``load_data`` is a plain projection and there is no in-pipeline imputer. The
-model is a pure numeric XGBoost booster served by the Vertex pre-built XGBoost
-container; feature attributions are computed client-side with native TreeSHAP.
+model is a pure numeric XGBoost booster. ``register_model`` publishes a versioned
+serving bundle (model.bst + manifest.json + threshold.json) to GCS and records a
+provenance entry; the servable Custom Prediction Routine (probability + native
+TreeSHAP attributions) is built and deployed separately by ``scripts/deploy_cpr.py``.
 """
 
 import json
@@ -255,8 +257,8 @@ def submit() -> None:
             # Wall-clock backstop for HPO (seconds); stops launching trials past
             # this budget and returns best-so-far. Default 45 min.
             "hpo_timeout_seconds": int(os.environ.get("HPO_TIMEOUT", "2700")),
-            # Optional override for the pre-built XGBoost serving image; empty ->
-            # register_model uses its region-matched pre-built default.
+            # Optional override for the serving image recorded on the provenance
+            # entry; empty -> register_model uses its CPR image default.
             "serving_container_image_uri": os.environ.get("SERVING_IMAGE_URI", ""),
         },
         # Every run logs fresh (no cached step reuse) so the experiment record

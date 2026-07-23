@@ -1,0 +1,25 @@
+# Cloud Build config for the readmission CPR serving image.
+#
+# Invoked by scripts/deploy_cpr.py only when the CPR source hash changes.
+# Cloud Build workers are linux/amd64, so this avoids the Apple-Silicon arm64
+# cross-build trap entirely. The image is tagged with a content hash (_TAG) and
+# also with `latest` for the provenance record in register_model.
+substitutions:
+  _IMAGE: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/readmission-cpr
+  _TAG: latest
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_IMAGE}:${_TAG}
+      - -t
+      - ${_IMAGE}:latest
+      - -f
+      - Dockerfile
+      - .
+
+images:
+  - ${_IMAGE}:${_TAG}
+  - ${_IMAGE}:latest

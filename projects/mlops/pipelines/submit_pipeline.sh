@@ -51,7 +51,7 @@ echo "  PIPELINE_ROOT     : $PIPELINE_ROOT"
 echo "  N_TRIALS          : $N_TRIALS   (dry run = 5, full run = 50)"
 echo "  HPO_TIMEOUT       : ${HPO_TIMEOUT}s   (HPO wall-clock backstop)"
 echo "  PIPELINE_SA       : $PIPELINE_SA"
-echo "  SERVING_IMAGE_URI : ${SERVING_IMAGE_URI:-<unset — register_model step will fail>}"
+  echo "  SERVING_IMAGE_URI : ${SERVING_IMAGE_URI:-<unset — pre-built XGBoost serving container>}"
 echo "  TRAINING_IMAGE_URI: $TRAINING_IMAGE_URI"
 echo
 "$VENV_PY" "$MLOPS_DIR/pipelines/training_pipeline.py" submit

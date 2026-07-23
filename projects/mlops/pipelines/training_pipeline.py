@@ -22,7 +22,7 @@ All feature encoding (one-hot categoricals, missingness policy) is now static in
 BigQuery (``analytics_dataset_encoded``, generated from :mod:`src.encoding`), so
 ``load_data`` is a plain projection and there is no in-pipeline imputer. The
 model is a pure numeric XGBoost booster served by the Vertex pre-built XGBoost
-container with a Sampled Shapley explanation spec.
+container; feature attributions are computed client-side with native TreeSHAP.
 """
 
 import json

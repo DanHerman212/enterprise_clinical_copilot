@@ -136,6 +136,11 @@ def main() -> None:
         serving_container_predict_route=PREDICT_ROUTE,
         serving_container_health_route=HEALTH_ROUTE,
         serving_container_ports=[CONTAINER_PORT],
+        # The CPR predictor downloads the bundle via storage.Client(), which
+        # needs a project. Pin it explicitly so worker boot never depends on
+        # ambient metadata-server project resolution (the "Model server never
+        # became ready" failure was storage.Client() unable to resolve one).
+        serving_container_environment_variables={"GOOGLE_CLOUD_PROJECT": PROJECT},
         artifact_uri=bundle_uri,
         labels={"pipeline": "readmission-training", "stage": "cpr"},
     )

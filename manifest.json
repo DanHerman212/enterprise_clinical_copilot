@@ -1,0 +1,150 @@
+{
+  "feature_order": [
+    "age",
+    "prior_admission_count",
+    "prior_inpatient_days",
+    "recent_ed_visits",
+    "index_los_days",
+    "procedure_count",
+    "medication_count",
+    "medication_order_count",
+    "rbc_last",
+    "rbc_min",
+    "rdw_max",
+    "monocytes_min",
+    "hemoglobin_min",
+    "sodium_last",
+    "sodium_max",
+    "sodium_min",
+    "gender",
+    "has_procedure",
+    "oncology_flag",
+    "race_white",
+    "race_black",
+    "race_hispanic",
+    "race_asian",
+    "race_amind",
+    "race_nhpi",
+    "race_unknown",
+    "admission_type_ew_emer",
+    "admission_type_eu_obs",
+    "admission_type_obs_admit",
+    "admission_type_urgent",
+    "admission_type_direct_emer",
+    "admission_type_ambulatory_obs",
+    "admission_type_direct_obs",
+    "admission_type_unknown",
+    "discharge_location_home",
+    "discharge_location_home_health",
+    "discharge_location_snf",
+    "discharge_location_rehab",
+    "discharge_location_ltac",
+    "discharge_location_hospice",
+    "discharge_location_ama",
+    "discharge_location_psych",
+    "discharge_location_assisted_living",
+    "discharge_location_unknown",
+    "insurance_medicare",
+    "insurance_medicaid",
+    "insurance_private",
+    "insurance_other",
+    "insurance_unknown"
+  ],
+  "groups": {
+    "age": [
+      "age"
+    ],
+    "prior_admission_count": [
+      "prior_admission_count"
+    ],
+    "prior_inpatient_days": [
+      "prior_inpatient_days"
+    ],
+    "recent_ed_visits": [
+      "recent_ed_visits"
+    ],
+    "index_los_days": [
+      "index_los_days"
+    ],
+    "procedure_count": [
+      "procedure_count"
+    ],
+    "medication_count": [
+      "medication_count"
+    ],
+    "medication_order_count": [
+      "medication_order_count"
+    ],
+    "rbc_last": [
+      "rbc_last"
+    ],
+    "rbc_min": [
+      "rbc_min"
+    ],
+    "rdw_max": [
+      "rdw_max"
+    ],
+    "monocytes_min": [
+      "monocytes_min"
+    ],
+    "hemoglobin_min": [
+      "hemoglobin_min"
+    ],
+    "sodium_last": [
+      "sodium_last"
+    ],
+    "sodium_max": [
+      "sodium_max"
+    ],
+    "sodium_min": [
+      "sodium_min"
+    ],
+    "gender": [
+      "gender"
+    ],
+    "has_procedure": [
+      "has_procedure"
+    ],
+    "oncology_flag": [
+      "oncology_flag"
+    ],
+    "race": [
+      "race_white",
+      "race_black",
+      "race_hispanic",
+      "race_asian",
+      "race_amind",
+      "race_nhpi",
+      "race_unknown"
+    ],
+    "admission_type": [
+      "admission_type_ew_emer",
+      "admission_type_eu_obs",
+      "admission_type_obs_admit",
+      "admission_type_urgent",
+      "admission_type_direct_emer",
+      "admission_type_ambulatory_obs",
+      "admission_type_direct_obs",
+      "admission_type_unknown"
+    ],
+    "discharge_location": [
+      "discharge_location_home",
+      "discharge_location_home_health",
+      "discharge_location_snf",
+      "discharge_location_rehab",
+      "discharge_location_ltac",
+      "discharge_location_hospice",
+      "discharge_location_ama",
+      "discharge_location_psych",
+      "discharge_location_assisted_living",
+      "discharge_location_unknown"
+    ],
+    "insurance": [
+      "insurance_medicare",
+      "insurance_medicaid",
+      "insurance_private",
+      "insurance_other",
+      "insurance_unknown"
+    ]
+  }
+}

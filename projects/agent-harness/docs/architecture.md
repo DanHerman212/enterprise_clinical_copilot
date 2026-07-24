@@ -6,18 +6,6 @@ and services. See the master architecture for shared foundation.
 _Status: Phase 2 design (2026-07-24). Captures the agreed stack and component plan.
 Phase 3 (RAG) and the Django/A2UI UI are shown as planned extensions._
 
-## Chosen stack (Stack 2 — portable / self-run)
-
-| Concern | Decision | Why |
-|---|---|---|
-| Agent framework | **LangGraph** | Portable, model-agnostic, most visible engineering; not Google-coupled |
-| Runtime host | **Cloud Run** | Serverless, scales to zero, we own the runtime |
-| LLM provider | **Gemini Flash** (via Vertex) | Near-free per token, fully managed, stays in-GCP (no PHI egress) |
-| Tool exposure | **MCP server** | Reusable across clients (this agent, Claude Desktop, future agents) |
-| MCP transport | **stdio (dev) + streamable HTTP (prod)** | One transport-agnostic server; dev locally, deploy remote |
-| Feature source | **Pluggable: online Feature Store OR BigQuery** | Low-latency showcase for demo; cheap BigQuery path for dev/CI |
-| Agent shape | **Stateless tools; single-turn now, conversational-ready** | Phase 2 integration test is single-turn; multi-turn deferred to demo |
-
 ## Diagram
 
 ```mermaid
@@ -59,6 +47,18 @@ flowchart TB
     FSRC --> EP
     T2 -.Phase 3.-> VS
 ```
+
+## Chosen stack (Stack 2 — portable / self-run)
+
+| Concern | Decision | Why |
+|---|---|---|
+| Agent framework | **LangGraph** | Portable, model-agnostic, most visible engineering; not Google-coupled |
+| Runtime host | **Cloud Run** | Serverless, scales to zero, we own the runtime |
+| LLM provider | **Gemini Flash** (via Vertex) | Near-free per token, fully managed, stays in-GCP (no PHI egress) |
+| Tool exposure | **MCP server** | Reusable across clients (this agent, Claude Desktop, future agents) |
+| MCP transport | **stdio (dev) + streamable HTTP (prod)** | One transport-agnostic server; dev locally, deploy remote |
+| Feature source | **Pluggable: online Feature Store OR BigQuery** | Low-latency showcase for demo; cheap BigQuery path for dev/CI |
+| Agent shape | **Stateless tools; single-turn now, conversational-ready** | Phase 2 integration test is single-turn; multi-turn deferred to demo |
 
 ## Components
 

@@ -134,8 +134,12 @@ anything the tools did not support.
 ## Open items
 
 - Conversational session model (deferred until the demo needs multi-turn).
-- Auth model for the HTTP MCP server on Cloud Run.
+- UI ↔ agent auth: **thin BFF in Django** (service-to-service ID token to a private
+  agent Cloud Run) is the chosen pattern; MCP HTTP server auth on Cloud Run TBD.
+- Enable Gemini on Vertex + confirm region (Gemini may need `us-central1`/global vs the
+  mlops `us-east1`).
 - Exact online Feature Store view/entity wiring (entity = `hadm_id`).
+- PhysioNet DUA / LLM-use compliance (staying in-GCP via Vertex is the defensible path).
 - Phase 3: `rag_search` tool contract (see [docs/rag_requirements.md](../../../docs/rag_requirements.md)).
 
 ---

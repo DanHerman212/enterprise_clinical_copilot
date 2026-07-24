@@ -79,7 +79,8 @@ as `predict_readmission` — not as a standalone system.
 
 ## Open questions to resolve before design
 
-- What unstructured corpus is actually available (MIMIC-IV discharge summaries / notes)?
+- ~~What unstructured corpus is actually available?~~ **RESOLVED:**
+  `physionet-data.mimiciv_note.discharge` (+ `radiology`) in BigQuery, keyed by `hadm_id`.
 - Chunking granularity (whole note vs sections vs sliding window).
 - Embedding model choice and where it runs.
 - Vector store / index (e.g. Vertex AI Vector Search) and its metadata-filter support.

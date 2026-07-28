@@ -1,6 +1,6 @@
 # MLOps — Architecture
 
-The **HOW (design)** for the readmission-risk MLOps project: the exact components and services behind each workflow phase. See the master architecture for shared foundation; see [workflow.md](workflow.md) for the WHAT.
+The **HOW (design)** for the readmission-risk MLOps project: the exact components and services behind each workflow phase. See the [project README](../README.md) for the summary; see [workflow.md](workflow.md) for the WHAT.
 
 ## Diagram
 

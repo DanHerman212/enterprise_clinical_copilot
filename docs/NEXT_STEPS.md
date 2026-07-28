@@ -19,6 +19,12 @@ wears. So the agent is what we stand up first, with the smallest number of tools
 
 ## Recommended order
 
+> **⚠️ SUPERSEDED (2026-07-28).** The A/B/C ordering below was the original reasoning and
+> is kept for context. The website moved to **Step 0 (first)** because Phase 1 is already
+> complete and publishable, and the site is fully independent. See
+> **[Roadmap (updated 2026-07-28)](#roadmap-updated-2026-07-28--website-first)** for the
+> current plan.
+
 ### Phase A — Prediction tool + minimal agent (next)
 
 1. Wrap the live endpoint as an MCP server exposing one tool:
@@ -64,28 +70,68 @@ gives good answers with both tools, put Django + A2UI in front for dynamic UIs.
    `danielmherman.com/projects/clinical_copilot/demo`.
 5. **MCP hosting** — build one transport-agnostic server: **stdio for dev**,
    **streamable HTTP** on Cloud Run for prod.
+6. **Rendering layer** — **A2UI is committed** (design decision made). The demo page
+   renders agent output via A2UI; the agent's output contract is designed to be
+   A2UI-renderable from the start rather than retrofitted.
+7. **Region** — **`us-east1`** everywhere (website + mlops aligned; avoids cross-region
+   latency/egress).
+8. **Redis / Memorystore** — **SKIP.** The demo is auth-gated with few users, so Cloud SQL
+   (Postgres) covers quota, sessions, and LangGraph checkpointing — all shared across
+   Cloud Run instances and durable. Saves ~$43/mo. Revisit only for a live multi-client
+   WebSocket dashboard (the one thing Postgres genuinely can't do).
+9. **Demo access** — public website, but the LLM-backed demo sits behind **Django auth**
+   with per-user quota in Postgres (issued to selected employers / partners). Gives a
+   natural audit trail and caps LLM cost/abuse.
 
 Full Phase 2 design captured in
 [projects/agent-harness/docs/architecture.md](../projects/agent-harness/docs/architecture.md).
 
 ---
 
-## Finalized 5-Step Roadmap (2026-07-24)
+## Roadmap (updated 2026-07-28 — website-first)
 
-1. **Agent Runtime + MCP** — MCP server with `predict_readmission`, LangGraph agent on
-   Cloud Run + Gemini Flash, pluggable feature source, single-turn.
-   **Exit = Tier 1 integration test passes.**
-2. **Website + UI** — deploy clean-sheet Django to Cloud Run (per the GCP guide), wire a
-   UI to the agent runtime.
-3. **RAG tool** — build the Vector Search index + `rag_search`, add as the agent's
-   second tool.
-4. **Demo + evaluation** — define user journeys and the Tier 2 eval
-   (faithfulness/groundedness rubric + golden set of `hadm_id`s).
-5. **Publish results.**
+**Step 0 — Website launch (do first).** Deploy the clean-sheet Django site to Cloud Run
+per the [GCP deployment guide](../../danielmherman/docs/GCP_DEPLOYMENT_GUIDE.md).
+Rationale: it is fully independent (zero dependencies), de-risks unfamiliar infra in
+isolation, and — critically — Phase 1 (MLOps) is **already complete and publishable**,
+so the site turns finished work into visible output and lets each phase be published as
+it lands. The Django BFF that will front the agent also lives here.
+
+> **Guardrails:** ship the skeleton + portfolio only — **do not build the demo page yet**
+> (its requirements don't exist until the agent does). Timebox it, then return to Step 1.
+
+Then:
+
+1. **Full training pass, then deploy the endpoint** \u2014 the model must go through a
+   **complete pipeline run** before deployment; the existing
+   `readmission-final-20260723172647` is not the deployment candidate. Run the full
+   pipeline, then `deploy_cpr.py` (image is cached; deploy path already validated).
+2. **MCP server + `predict_readmission`** \u2014 local, stdio, BigQuery feature path.
+   **Exit = Tier 1 acceptance.**
+3. **LangGraph agent** \u2014 calls the tool via MCP, still fully local.
+4. **Deploy both to Cloud Run** \u2014 agent **private**, MCP over HTTP. Check A2UI maturity
+   and its integration story here, before it lands on the critical path.
+5. **Django BFF + A2UI demo page** \u2014 auth-gated with per-user quota. The agent emits a
+   **single fixed component** (the risk card: probability, threshold, top factors).
+   \u27f5 *Walking skeleton complete: BigQuery \u2192 model \u2192 MCP \u2192 agent \u2192 live website.*
+   **First tool call + UI done \u2014 this is the milestone gate.**
+6. **RAG as the second tool** \u2014 add the citation/passage component; the agent now
+   genuinely chooses between output shapes.
+7. **Finalize orchestration + demo UI** \u2014 user journeys, the demo script, and the Tier 2
+   eval (faithfulness/groundedness rubric + golden set).
+8. **Publish**, then the deployment-optimization cleanup pass.
+
+### Risk mitigation at Step 5 (agreed)
+
+Learning A2UI *and* debugging the agent at the same time is the main risk. Mitigation:
+lock the agent's output to **one fixed A2UI component** first and prove the render path
+end-to-end with a known-good payload. Only Step 6 introduces real dynamism — onto a pipe
+already trusted. This is why A2UI's multi-shape capability is deliberately deferred to
+Step 6 even though A2UI itself is committed from Step 5.
 
 ### Status of gaps (updated 2026-07-24)
 
-**Step 1 — CLEARED to start:**
+**Step 1 (MCP/agent) — CLEARED to start:**
 - **Repo layout** — ✓ `projects/agent-harness/mcp/` (server + tools),
   `projects/agent-harness/agent/` (LangGraph runtime).
 - **Dev-first sequence** — ✓ build + test locally (MCP over stdio, tool against local
@@ -100,18 +146,22 @@ Full Phase 2 design captured in
   path is the showcase, turned on only when actively demoing (bills continuously; the
   `create-feature-store` pipeline component already does most of the wiring).
 
-**Step 2 — website/UI:**
+**Website / UI:**
 - **Domain** — ✓ page on the existing site: `danielmherman.com/projects/clinical_copilot/demo`.
-- **UI ↔ agent auth** — RECOMMEND **thin BFF in Django**: browser → Django view →
+- **UI ↔ agent auth** — ✓ **thin BFF in Django**: browser → Django view →
   (service-to-service ID token) → **private** agent Cloud Run. Agent off the public
   internet, no CORS, auth + rate-limiting centralized in Django.
-- **A2UI** — experiment on the demo page; plain Django templates as the first-cut fallback.
+- **A2UI** — ✓ committed as the rendering layer. Single fixed component at Step 5;
+  multiple shapes from Step 6.
+- **Deployment guide** — reviewed and corrected (region `us-east1`, `min-instances 0`,
+  migrate-before-deploy in CI, clean-sheet §17 with no data migration, collectstatic
+  failures no longer suppressed, superuser password via Secret Manager).
 
-**Step 3 — RAG:**
+**RAG:**
 - **Corpus** — ✓ RESOLVED: `physionet-data.mimiciv_note.discharge` (+ `radiology`),
-  keyed by `hadm_id`. Step 3 unblocked.
+  keyed by `hadm_id`. Unblocked.
 
-**Step 4–5:**
+**Demo / publish:**
 - **Golden set** — ✓ exists: ~1,000 unique holdout patient IDs reserved for the demo;
   Tier 2 eval draws from this.
 - **Publish plan** — `danielmherman.com/projects/`, social syndication, per-section Vimeo

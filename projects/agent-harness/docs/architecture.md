@@ -1,7 +1,7 @@
 # Agent Engine + Harness — Architecture
 
 The **HOW (design)** for the orchestration agent and Django + A2UI harness: components
-and services. See the master architecture for shared foundation.
+and services. See the [project README](../README.md) for the summary.
 
 _Status: Phase 2 design (2026-07-24). Captures the agreed stack and component plan.
 Phase 3 (RAG) and the Django/A2UI UI are shown as planned extensions._
@@ -59,6 +59,9 @@ flowchart TB
 | MCP transport | **stdio (dev) + streamable HTTP (prod)** | One transport-agnostic server; dev locally, deploy remote |
 | Feature source | **Pluggable: online Feature Store OR BigQuery** | Low-latency showcase for demo; cheap BigQuery path for dev/CI |
 | Agent shape | **Stateless tools; single-turn now, conversational-ready** | Phase 2 integration test is single-turn; multi-turn deferred to demo |
+| Rendering layer | **A2UI** (committed) | Agent output contract designed A2UI-renderable from the start |
+| UI ↔ agent auth | **Thin BFF in Django** (service-to-service ID token) | Agent stays private; no CORS; auth + quota centralized |
+| Shared state | **Cloud SQL (Postgres)** — no Redis | Auth-gated demo → Postgres covers quota, sessions, LangGraph checkpoints durably across instances (saves ~$43/mo) |
 
 ## Components
 
@@ -102,6 +105,26 @@ Tools are stateless functions. The Phase 2 **integration test is single-turn**
 (`hadm_id` → assessment). The framework/session model is chosen to support multi-turn,
 because follow-up Q&A (e.g. "why is `prior_inpatient_days` protective?") is what makes
 the Phase 4 demo compelling — but conversational session wiring is deferred.
+
+Cloud Run is stateless and scales to zero, so any cross-request state (per-user quota,
+sessions, LangGraph checkpoints) lives in **Cloud SQL (Postgres)** — shared across
+instances and durable. **Redis/Memorystore is deliberately not used**; it would only be
+warranted for WebSocket broadcast (e.g. a live multi-client ward dashboard), which is
+out of scope.
+
+## UI rendering (A2UI)
+
+A2UI is the committed rendering layer for the demo page. To avoid learning A2UI and
+debugging the agent simultaneously, adoption is staged:
+
+- **Step 5** — the agent emits a **single fixed component** (risk card: probability,
+  threshold, top factors). This proves the A2UI render path end-to-end against a
+  known-good payload.
+- **Step 6** — once `rag_search` lands, the agent chooses among multiple output shapes
+  (risk card, cited note passages, comparisons), which is what A2UI actually exists for.
+
+A2UI maturity and its integration story should be validated at Step 4, before it lands
+on the critical path.
 
 ## Evaluation (two tiers)
 

@@ -4,7 +4,7 @@ _Date: 2026-07-24 · Status: discussion notes, not yet a design_
 
 Requirements for the RAG system, captured from the architecture discussion. This is
 the **WHAT/WHY** — the design (embedding model, chunking, index type, tool contract)
-comes later. See [NEXT_STEPS.md](../NEXT_STEPS.md) for overall sequencing.
+comes later. See [NEXT_STEPS.md](NEXT_STEPS.md) for overall sequencing.
 
 ## Purpose
 

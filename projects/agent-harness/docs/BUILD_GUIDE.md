@@ -295,37 +295,63 @@ SOURCE = os.environ.get("FEATURE_SOURCE", "bigquery")  # "bigquery" | "feature_s
 
 ## 6. MCP server and the predict tool
 
-Use **FastMCP** (bundled with the `mcp` Python SDK).
+Use the `mcp` Python SDK (`pip install "mcp[cli]"`).
 
-`mcp_server/server.py` must be **transport-agnostic**:
+> **SDK 2.0 removed `mcp.server.fastmcp`.** The ergonomic server class is now
+> `MCPServer`, imported from `mcp.server`. Same decorator/`add_tool` model, new
+> name. Verified against `mcp==2.0.0` on 2026-07-30. Also note the wire types
+> moved to snake_case: `tool.input_schema`, not `tool.inputSchema`.
+
+**Files:**
+
+| File | Role |
+|---|---|
+| `mcp_server/endpoint.py` | Cached `Endpoint` lookup + `predict_one()` |
+| `mcp_server/tools/predict.py` | The tool: fetch → order → predict → shape |
+| `mcp_server/server.py` | Transport-agnostic entrypoint |
+
+`mcp_server/server.py` must be **transport-agnostic** — the transport is a flag,
+not a fork in the code, so the local path and the deployed path cannot drift:
 
 ```python
-import argparse
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
+from .tools import predict_readmission
 
-app = FastMCP("readmission")
+server = MCPServer(name="readmission", version="0.1.0", instructions="…")
+server.add_tool(predict_readmission)
 
-# tools registered here (see tools/predict.py)
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--transport", choices=["stdio", "http"], default="stdio")
-    parser.add_argument("--port", type=int, default=8080)
-    args = parser.parse_args()
-    app.run(transport=args.transport, port=args.port)
+# --transport stdio  ->  server.run("stdio")
+# --transport http   ->  server.run("streamable-http", host="0.0.0.0", port=port)
 ```
+
+Registering with `add_tool` rather than a `@server.tool()` decorator keeps
+`tools/predict.py` free of a server import — no circular dependency, and the
+tool function stays directly callable from tests.
+
+> **Under stdio the transport *is* stdout.** Anything printed to stdout corrupts
+> the JSON-RPC stream. Diagnostics go to stderr.
 
 `tools/predict.py` — the tool contract:
 
 ```python
-@app.tool()
-def predict_readmission(hadm_id: int) -> dict:
+async def predict_readmission(hadm_id: int) -> dict:
     """30-day readmission risk for one hospital admission.
 
     Returns probability, the decision at the operating threshold, and the
     top contributing factors (parent-aggregated TreeSHAP).
     """
+    return await asyncio.to_thread(_predict, hadm_id)
 ```
+
+**The tool is async, the work is not.** BigQuery and Vertex calls are
+synchronous; under the HTTP transport a blocking tool stalls the event loop for
+every concurrent caller. `asyncio.to_thread` costs one line now and is a
+retrofit later.
+
+**Cache the clients.** The endpoint lookup, the manifest, and the feature source
+are all `lru_cache`d for the process lifetime. `smoke_test.py` refetches each
+run, which is right for a CLI and wrong for a long-lived server — that would be
+three API round-trips on every tool call.
 
 **Return shape** (stable contract — the agent, the tests, and A2UI all depend on it):
 
@@ -356,15 +382,38 @@ def predict_readmission(hadm_id: int) -> dict:
 **Error handling:** an unknown `hadm_id` must return a structured error, not raise. This
 is a Tier 1 acceptance criterion (§13).
 
+```json
+{"hadm_id": 1, "error": "unknown_patient",
+ "message": "No admission 1 in the feature source (bigquery).",
+ "feature_source": "bigquery"}
+```
+
+Codes: `unknown_patient`, `feature_fetch_failed`, `incomplete_features`,
+`prediction_failed`.
+
+**Missing values are fine; a missing column is not.** A null feature is
+legitimate — the model reads it as NaN by design, and patient 20924467 has 8 of
+them. But `to_vector` fills absent keys with `None`, so a *short* row would
+silently shift every feature after the gap and still return a plausible
+probability. The tool therefore checks the fetched row against `feature_order()`
+and returns `incomplete_features` rather than predicting on it.
+
+> This is the same failure mode as the Feature Store sync that reported success
+> while writing nothing (§5). Both times the symptom was silence, not an error.
+> Prefer a loud failure over a plausible number.
+
 ---
 
 ## 7. Verify MCP over stdio
 
-Run the server and inspect it with the official tool:
+Run the server and inspect it with the official tool. Run it **from
+`projects/agent-harness/`** — the directory name contains a hyphen, so it is not
+an importable package path; `mcp_server` must be resolvable from the cwd:
 
 ```bash
+cd projects/agent-harness
 npx @modelcontextprotocol/inspector \
-  .venv/bin/python -m projects.agent_harness.mcp_server.server --transport stdio
+  ../../.venv/bin/python -m mcp_server.server --transport stdio
 ```
 
 **Verify:**

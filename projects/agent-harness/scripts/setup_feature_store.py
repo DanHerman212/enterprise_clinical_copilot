@@ -21,7 +21,7 @@ import sys
 import time
 from pathlib import Path
 
-from google.api_core.exceptions import AlreadyExists, NotFound
+from google.api_core.exceptions import AlreadyExists, FailedPrecondition, NotFound
 from google.cloud import aiplatform_v1
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -107,18 +107,52 @@ def ensure_feature_view(admin) -> None:
         print("  Already exists (race) — reusing")
 
 
+def _running_sync(admin) -> str | None:
+    """Name of an in-flight sync for this view, if one exists."""
+    for sync in admin.list_feature_view_syncs(parent=VIEW_PATH):
+        if not sync._pb.run_time.HasField("end_time"):
+            return sync.name
+    return None
+
+
 def run_sync(admin) -> None:
-    print("  Starting sync…")
-    response = admin.sync_feature_view(feature_view=VIEW_PATH)
-    sync_name = response.feature_view_sync
+    try:
+        print("  Starting sync…")
+        sync_name = admin.sync_feature_view(feature_view=VIEW_PATH).feature_view_sync
+    except FailedPrecondition as e:
+        # Only one on-demand sync runs at a time. Attaching to it is far more
+        # useful than making the caller wait and guess.
+        if "still running" not in str(e):
+            raise
+        sync_name = _running_sync(admin)
+        if not sync_name:
+            raise
+        print("  A sync is already running — waiting on it instead")
+
     print(f"  Sync: {sync_name.rsplit('/', 1)[-1]}")
 
     deadline = time.time() + SYNC_TIMEOUT_SECONDS
     while time.time() < deadline:
         sync = admin.get_feature_view_sync(name=sync_name)
-        # end_time is populated only once the sync finishes.
-        if sync.run_time.end_time:
+        # Must use HasField: an unset protobuf Timestamp is not None, it is the
+        # epoch — which is truthy. `if sync.run_time.end_time` reports every
+        # running sync as finished.
+        finished = sync._pb.run_time.HasField("end_time")
+        if finished:
+            # Finishing is not succeeding. A sync can end in seconds with a
+            # permission error and still look "done", which is exactly the kind
+            # of false success this project cannot afford.
+            if sync.final_status.code != 0:
+                sys.exit(
+                    f"\n  SYNC FAILED (code {sync.final_status.code})\n"
+                    f"  {sync.final_status.message}\n"
+                )
             rows = sync.sync_summary.row_synced
+            if not rows:
+                sys.exit(
+                    "\n  SYNC REPORTED 0 ROWS — the online store would serve nothing.\n"
+                    "  Check the feature view's BigQuery source and entity id column.\n"
+                )
             print(f"  Sync complete — {rows} rows synced")
             return
         print("    still syncing…")

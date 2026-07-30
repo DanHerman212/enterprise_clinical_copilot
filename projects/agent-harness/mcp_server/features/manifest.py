@@ -6,7 +6,7 @@ call.
 """
 
 import json
-import sys
+import os
 from functools import lru_cache
 
 from google.cloud import aiplatform, storage
@@ -15,10 +15,16 @@ from ..config import BUNDLE_URI_OVERRIDE, FINAL_MODEL_PREFIX, LOCATION, PROJECT
 
 
 @lru_cache(maxsize=1)
-def bundle_uri() -> str:
-    """GCS dir of the serving bundle, from the newest provenance record."""
+def _discover() -> tuple[str, str]:
+    """(bundle_uri, model_version) from the newest provenance record.
+
+    Raises rather than calling sys.exit: this is imported by a long-lived
+    server, where killing the process on a lookup failure would take every
+    other in-flight request with it.
+    """
     if BUNDLE_URI_OVERRIDE:
-        return BUNDLE_URI_OVERRIDE.rstrip("/")
+        uri = BUNDLE_URI_OVERRIDE.rstrip("/")
+        return uri, os.path.basename(uri) or uri
 
     aiplatform.init(project=PROJECT, location=LOCATION)
     models = [
@@ -26,8 +32,25 @@ def bundle_uri() -> str:
         if m.display_name.startswith(FINAL_MODEL_PREFIX)
     ]
     if not models:
-        sys.exit(f"No '{FINAL_MODEL_PREFIX}*' model found; set BUNDLE_URI to override.")
-    return models[0].gca_resource.artifact_uri.rstrip("/")
+        raise RuntimeError(
+            f"No '{FINAL_MODEL_PREFIX}*' model found in {PROJECT}/{LOCATION}; "
+            "run the training pipeline or set BUNDLE_URI to override."
+        )
+    return models[0].gca_resource.artifact_uri.rstrip("/"), models[0].display_name
+
+
+def bundle_uri() -> str:
+    """GCS dir of the serving bundle."""
+    return _discover()[0]
+
+
+def model_version() -> str:
+    """Registry display name of the model the bundle came from.
+
+    Returned on every prediction: when a demo shows a surprising number, this
+    plus `feature_source` answers "which model, reading from where?" at once.
+    """
+    return _discover()[1]
 
 
 @lru_cache(maxsize=1)

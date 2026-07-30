@@ -1,0 +1,14 @@
+# Runtime dependencies for the agent container.
+# Deliberately narrower than the harness requirements: the agent never touches
+# Vertex prediction, BigQuery, or GCS directly — it reaches all of that through
+# the MCP server — so google-cloud-aiplatform and friends stay out of this image.
+#
+# NOT langchain-mcp-adapters: it declares mcp>=1.24.0 with no upper bound but
+# imports mcp.server.fastmcp (removed in 2.0). Installs clean, fails at import.
+# NOT langchain-google-vertexai: pins pyarrow<24.0.0 for one model call.
+
+mcp==2.0.0
+langgraph==1.2.10
+google-genai==1.75.0
+google-auth==2.50.0
+uvicorn==0.47.0

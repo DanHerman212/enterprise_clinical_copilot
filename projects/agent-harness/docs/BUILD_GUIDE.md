@@ -735,15 +735,74 @@ instead, which is the whole reason it is a script rather than a paragraph.
 
 ## 10. LangGraph agent (local)
 
-Build against **stdio** first — no network, no auth.
+Build against **stdio** first — no network, no auth. If you build straight onto the
+deployed service, a failure is ambiguous: bad prompt, bad tool schema, or a 401? §11
+swaps the transport precisely so §10's bugs can only be agent-shaped.
 
-Minimum viable graph:
+```bash
+pip install langgraph
+```
+
+| File | Role |
+| --- | --- |
+| `agent/prompts.py` | `SYSTEM_PROMPT` — the Tier 2 guardrails |
+| `agent/mcp_client.py` | `MCPToolbox`: MCP tools → Gemini function declarations |
+| `agent/graph.py` | explicit `StateGraph`, `ask()`, `final_text()` |
+| `agent/run.py` | CLI: `python -m agent.run --trace "..."` |
+| `tests/test_agent_local.py` | 6 guardrail tests |
+
+### Do not use `langchain-mcp-adapters`
+
+It is half-migrated to MCP SDK 2.0 and **fails at import**, not at install (probed
+2026-07-30, v0.3.1):
+
+| Evidence | Result |
+| --- | --- |
+| declares `mcp>=1.24.0` | **no upper bound** — pip resolves it against `mcp==2.0.0` happily |
+| `sessions.py:20` | uses the new `streamable_http_client` ✓ |
+| `tools.py:27` | imports `mcp.server.fastmcp` → **ModuleNotFoundError** |
+| `tools.py:531` | reads `tool.inputSchema` → field is now `input_schema` |
+
+The only alternative is pinning `mcp<2.0`, which invalidates §6-§8 and the deployed
+image. `agent/mcp_client.py` is the ~130 lines that replace it. **Check the ceiling, not
+just the floor** — an unpinned upper bound is not a compatibility statement.
+
+Skip `langchain-google-vertexai` too: it pins `pyarrow<24.0.0`, downgrading the pyarrow
+`google-cloud-bigquery` uses in the verified feature path, and pulls
+`google-cloud-vectorsearch`, `bottleneck`, and `numexpr` in to make one model call.
+`google-genai` is already present via `google-cloud-aiplatform` and was verified in §9.
+Installing `langgraph` alone leaves `mcp` and `pyarrow` untouched.
+
+### The graph
 
 ```
-START → agent (Gemini + tools) → tool node → agent → END
+START → agent (Gemini + tools) → tools → agent → END
 ```
 
-**System prompt requirements** (these are the Tier 2 guardrails, worth writing now):
+Explicit `StateGraph`, not `create_react_agent`, so the control flow is visible: the
+agent turns once to emit a tool call, the tool node runs it, and the agent turns
+**again** to narrate the result. That second turn is what the guardrails constrain.
+
+State holds `google.genai` `Content` objects under an `operator.add` reducer, so each
+node appends to the transcript. LangGraph does not care what the state holds, and
+keeping Gemini's own types avoids a translation layer whose only job is converting them
+back. `tool_calls` is accumulated alongside so tests can assert on what was called.
+
+Two details that bite:
+
+- **Sanitise the tool schema.** MCP advertises pydantic's JSON Schema, which carries
+  `title` (and elsewhere `$schema`, `additionalProperties`). Gemini's `Schema` accepts a
+  subset, and an unknown key is a 400 at *generate* time, not at declaration time.
+  `_clean_schema` strips to an allowlist.
+- **Tool errors must arrive as data, not exceptions.** The model is instructed to report
+  failures rather than invent a number; an exception would collapse the graph before it
+  could. `MCPToolbox.call` converts transport failures into `{"error": ...}`.
+
+Carried over from §9: `max_output_tokens` budgets thinking *and* the answer, so
+`agent_node` raises explicitly on `finish_reason=MAX_TOKENS` with empty text. Inside a
+graph that would otherwise look like a silently skipped tool call.
+
+### System prompt requirements
 
 - Report the probability and threshold decision exactly as returned; never round or
   restate them differently
@@ -751,8 +810,27 @@ START → agent (Gemini + tools) → tool node → agent → END
 - State plainly that this is a decision-support signal, not a diagnosis
 - If the tool errors, say so — never fabricate a plausible number
 
-**Verify:** ask *"What is the readmission risk for admission 20924467?"* and confirm the
-agent calls the tool and reports `0.1314`.
+The failure these prevent is specific: **Gemini knows what readmission risk is**, so it
+can produce a confident, clinically plausible answer without calling the tool at all. A
+fabricated `0.14` reads exactly like a real `0.131398` unless something checks.
+
+### Verify
+
+```bash
+cd projects/agent-harness
+../../.venv/bin/python -m agent.run --trace "What is the readmission risk for admission 20924467?"
+../../.venv/bin/python -m pytest tests/test_agent_local.py -q     # 6 passed in 21.59s
+```
+
+The CLI exits non-zero if the agent answered with no tool call. The tests assert it
+called `predict_readmission` with the right `hadm_id`, that the tool result still matches
+the fixture, that the exact probability and threshold appear in the answer, that
+**no feature outside `top_factors` is cited** (checked against the model's own feature
+vocabulary from `manifest.groups()`, so a plausible hallucination fails), and that an
+unknown admission is reported as an error rather than given a number.
+
+Observed answer for `20924467`: `0.131398`, above the `0.12` threshold, the five real
+factors with their directions, and the decision-support disclaimer — unprompted per run.
 
 > **Checkpointer keying.** When you add persistence, key the thread on
 > **user + session**, never on `hadm_id`. Keying by patient means two concurrent
@@ -772,26 +850,69 @@ gcloud run services add-iam-policy-binding mcp-server \
   --role="roles/run.invoker"
 ```
 
-`agent/mcp_client.py` fetches an ID token **audienced to the MCP service URL**:
-
-```python
-import google.auth.transport.requests
-import google.oauth2.id_token
-
-def _id_token(audience: str) -> str:
-    req = google.auth.transport.requests.Request()
-    return google.oauth2.id_token.fetch_id_token(req, audience)
-```
+> The MCP service is deployed `--no-allow-unauthenticated`, so its IAM policy starts
+> **empty** — `get-iam-policy` returns nothing but an etag. Nothing can call it until
+> this binding exists, including the agent.
 
 Select transport by environment so local dev stays on stdio:
 
 ```python
 MCP_TRANSPORT = os.environ.get("MCP_TRANSPORT", "stdio")  # "stdio" | "http"
+MCP_URL = os.environ.get("MCP_URL", "")
 ```
+
+`agent/mcp_client.py` gains `http_toolbox()` and a `toolbox()` selector. Nothing in
+`graph.py` changes — the graph never learns which transport it got, which is the payoff
+for building §10 against stdio.
+
+### Minting the ID token
+
+```python
+credentials, _ = google.auth.default()
+if not isinstance(credentials, google.oauth2.credentials.Credentials):
+    return google.oauth2.id_token.fetch_id_token(request, audience)   # SA / metadata
+return subprocess.run(["gcloud", "auth", "print-identity-token"], ...).stdout.strip()
+```
+
+> **Check the credential type; do not use try/except.** The obvious shape is to try
+> `fetch_id_token` and fall back on failure. Locally that costs seconds on **every run**:
+> ADC is a user credential, `fetch_id_token` does not fail fast, it probes the GCE
+> metadata server first and only then raises
+> `DefaultCredentialsError: Neither metadata server or valid service account credentials
+> are found`. Branching on the credential type up front takes **0.82 s** total.
 
 > **The audience must be the service URL**, not the endpoint path. A mismatched audience
 > produces a `401` that looks identical to a missing IAM binding. Check the audience
 > first — it is the more common cause.
+
+The `gcloud` fallback **forks**. Keep the call early, before
+`google-cloud-aiplatform` opens gRPC channels, or it can deadlock in gRPC's atfork
+handler — the same failure as the gsutil hang in `projects/mlops`.
+
+### Verify
+
+```bash
+cd projects/agent-harness
+MCP_URL=$(gcloud run services describe mcp-server --region ${REGION} --format="value(status.url)")
+
+../../.venv/bin/python -m agent.run --transport http --url "${MCP_URL}" --trace \
+  "What is the readmission risk for admission 20924467?"
+
+MCP_TRANSPORT=http MCP_URL="${MCP_URL}" ../../.venv/bin/python -m pytest \
+  tests/test_agent_local.py tests/test_mcp_stdio.py -q
+```
+
+The same six guardrail assertions now run against the deployed service — the tests take
+the transport from the environment rather than hard-coding stdio, so there is one suite,
+not two.
+
+| Run | Result |
+| --- | --- |
+| stdio | 6 passed in 21.45 s |
+| http (agent + protocol suites) | 11 passed in 20.34 s |
+
+`0.131398` over authenticated HTTP, identical to stdio and to the §3 smoke test. Four
+transports and hosts now agree on one number.
 
 ---
 

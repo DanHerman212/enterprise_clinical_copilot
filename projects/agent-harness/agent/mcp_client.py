@@ -9,22 +9,30 @@ migrated, so the package is half-ported. The only alternative was pinning
 `mcp<2.0`, which would invalidate the server built in §6-§8 and the deployed
 image. The adapter surface we actually need is this file.
 
-Transport is stdio here (§10). §11 adds authenticated HTTP; the toolbox itself
-is transport-agnostic — only the context manager changes.
+Transport is selected by environment so local development stays on stdio:
+`MCP_TRANSPORT=stdio` (default) or `http` with `MCP_URL` pointing at the Cloud
+Run service. `toolbox()` picks; the graph never knows which it got.
 """
 
 import contextlib
 import json
+import os
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import httpx2
 from google.genai import types
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from mcp.client.streamable_http import streamable_http_client
 
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
+
+MCP_TRANSPORT = os.environ.get("MCP_TRANSPORT", "stdio")  # "stdio" | "http"
+MCP_URL = os.environ.get("MCP_URL", "")
 
 # Gemini's Schema is a subset of JSON Schema. Pydantic emits keys it rejects
 # ("title", "$schema", "additionalProperties", "default"), and an unknown key is
@@ -135,3 +143,73 @@ async def stdio_toolbox(python: str | None = None):
         async with ClientSession(read, write) as session:
             await session.initialize()
             yield await MCPToolbox(session).load()
+
+
+def id_token(audience: str) -> str:
+    """Mint an ID token for a private Cloud Run service.
+
+    The audience must be the **service URL**, not the /mcp path. A mismatched
+    audience produces a 401 identical to a missing IAM binding, and the
+    audience is the more common cause.
+
+    On Cloud Run the metadata server mints this in-process. Locally, ADC is a
+    *user* credential, which cannot mint an ID token for an arbitrary audience.
+    Check the credential type first rather than letting fetch_id_token fail:
+    its failure path probes the GCE metadata server and stalls for seconds
+    before raising DefaultCredentialsError, on every local run.
+    """
+    import google.auth
+    import google.auth.transport.requests
+    import google.oauth2.credentials
+    import google.oauth2.id_token
+
+    credentials, _ = google.auth.default()
+
+    if not isinstance(credentials, google.oauth2.credentials.Credentials):
+        # Service account or metadata server: in-process, no fork.
+        request = google.auth.transport.requests.Request()
+        return google.oauth2.id_token.fetch_id_token(request, audience)
+
+    # Local user credential. NOTE: this forks. Keep it early — once
+    # google-cloud-aiplatform has opened gRPC channels, fork+exec can deadlock
+    # in gRPC's atfork handler. See the gsutil hang in projects/mlops.
+    result = subprocess.run(
+        ["gcloud", "auth", "print-identity-token"],
+        capture_output=True, text=True, check=True, timeout=60,
+    )
+    return result.stdout.strip()
+
+
+@contextlib.asynccontextmanager
+async def http_toolbox(url: str | None = None):
+    """Connect to the deployed MCP server over authenticated streamable HTTP."""
+    base = (url or MCP_URL).rstrip("/")
+    if not base:
+        raise RuntimeError("MCP_URL is not set; required when MCP_TRANSPORT=http")
+
+    headers = {"Authorization": f"Bearer {id_token(base)}"}
+
+    # SDK 2.0 takes an http_client, not headers — and it must be httpx2, which
+    # the SDK vendors alongside the ordinary httpx other libraries pull in.
+    async with httpx2.AsyncClient(headers=headers, timeout=180) as http_client:
+        async with streamable_http_client(f"{base}/mcp", http_client=http_client) as (
+            read,
+            write,
+        ):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                yield await MCPToolbox(session).load()
+
+
+@contextlib.asynccontextmanager
+async def toolbox(transport: str | None = None, url: str | None = None):
+    """Transport-agnostic entry point. The graph never knows which it got."""
+    chosen = (transport or MCP_TRANSPORT).lower()
+    if chosen == "stdio":
+        async with stdio_toolbox() as box:
+            yield box
+    elif chosen == "http":
+        async with http_toolbox(url) as box:
+            yield box
+    else:
+        raise ValueError(f"Unknown MCP transport {chosen!r}; expected 'stdio' or 'http'")

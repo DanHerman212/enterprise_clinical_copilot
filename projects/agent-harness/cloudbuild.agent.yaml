@@ -1,0 +1,13 @@
+# `gcloud builds submit --tag` requires the Dockerfile at the context root, but
+# the agent's context must be the harness root (it needs both agent/ and
+# mcp_server/config.py) while mcp_server/Dockerfile already owns that root.
+# An explicit build config lets us keep both images with one context.
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "-f", "agent/Dockerfile", "-t", "${_IMAGE}", "."]
+
+images: ["${_IMAGE}"]
+
+options:
+  logging: CLOUD_LOGGING_ONLY

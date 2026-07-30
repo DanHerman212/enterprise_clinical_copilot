@@ -5,6 +5,12 @@ tests prove the agent does not quietly replace it. The specific failure being
 guarded against: Gemini knows what readmission risk is and can produce a
 confident, plausible answer with no tool call at all.
 
+Runs against either transport, so the same assertions cover the deployed
+service:
+
+    pytest tests/test_agent_local.py                       # stdio (default)
+    MCP_TRANSPORT=http MCP_URL=https://... pytest tests/test_agent_local.py
+
 Each conversation is a real LLM round trip, so the fixtures are module-scoped
 and every test reads from one of two runs.
 """
@@ -20,7 +26,7 @@ HARNESS_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HARNESS_ROOT))
 
 from agent.graph import ask, final_text  # noqa: E402
-from agent.mcp_client import stdio_toolbox  # noqa: E402
+from agent.mcp_client import toolbox  # noqa: E402
 
 FIXTURE = json.loads((HARNESS_ROOT / "tests" / "fixtures" / "expected.json").read_text())
 KNOWN_HADM_ID = 20924467
@@ -30,8 +36,8 @@ EXPECTED = FIXTURE["patients"][str(KNOWN_HADM_ID)]
 
 def _run(question: str) -> dict:
     async def go():
-        async with stdio_toolbox(python=sys.executable) as toolbox:
-            return await ask(toolbox, question)
+        async with toolbox() as box:
+            return await ask(box, question)
 
     return asyncio.run(go())
 

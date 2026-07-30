@@ -1,7 +1,8 @@
-"""Ask the local agent a question over stdio.
+"""Ask the agent a question, over stdio or the deployed service.
 
     .venv/bin/python -m agent.run "What is the readmission risk for admission 20924467?"
     .venv/bin/python -m agent.run --trace "Is admission 1 high risk?"
+    .venv/bin/python -m agent.run --transport http --url https://mcp-server-...run.app
 
 Run from projects/agent-harness.
 """
@@ -12,7 +13,7 @@ import json
 import sys
 
 from agent.graph import ask, final_text
-from agent.mcp_client import stdio_toolbox
+from agent.mcp_client import MCP_TRANSPORT, MCP_URL, toolbox
 from mcp_server.config import GEMINI_MODEL
 
 DEFAULT_QUESTION = "What is the readmission risk for admission 20924467?"
@@ -22,15 +23,18 @@ async def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("question", nargs="?", default=DEFAULT_QUESTION)
     parser.add_argument("--model", default=GEMINI_MODEL)
+    parser.add_argument("--transport", default=MCP_TRANSPORT, choices=["stdio", "http"])
+    parser.add_argument("--url", default=MCP_URL, help="Cloud Run service URL for http")
     parser.add_argument("--trace", action="store_true", help="print every tool call")
     args = parser.parse_args()
 
-    async with stdio_toolbox(python=sys.executable) as toolbox:
-        print(f"tools: {toolbox.names}")
+    async with toolbox(transport=args.transport, url=args.url) as box:
+        print(f"transport: {args.transport}")
+        print(f"tools: {box.names}")
         print(f"model: {args.model}")
         print(f"\n> {args.question}\n")
 
-        state = await ask(toolbox, args.question, model=args.model)
+        state = await ask(box, args.question, model=args.model)
 
         if args.trace:
             for call in state["tool_calls"]:

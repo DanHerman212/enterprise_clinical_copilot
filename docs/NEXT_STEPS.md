@@ -73,6 +73,12 @@ gives good answers with both tools, put Django + A2UI in front for dynamic UIs.
 6. **Rendering layer** — **A2UI is committed** (design decision made). The demo page
    renders agent output via A2UI; the agent's output contract is designed to be
    A2UI-renderable from the start rather than retrofitted.
+   Requirements and constraints researched 2026-07-29 — see
+   [a2ui_requirements.md](a2ui_requirements.md). Key outcomes: A2UI does **not** require
+   WebSockets (they are a *proposed*, unimplemented transport), so the Redis/Postgres
+   decision below is unaffected; the real constraint is that all maintained renderers
+   are client-side JS, so we use the **Lit (Web Components)** renderer inside Django and
+   explicitly avoid the documented CopilotKit/Next.js path.
 7. **Region** — **`us-east1`** everywhere (website + mlops aligned; avoids cross-region
    latency/egress).
 8. **Redis / Memorystore** — **SKIP.** The demo is auth-gated with few users, so Cloud SQL

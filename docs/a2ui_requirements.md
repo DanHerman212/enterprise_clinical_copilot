@@ -173,10 +173,12 @@ plainly.
 
 ## Open questions — verify at Step 4
 
-1. ~~Does Lit require a bundler?~~ **Answered: no** — see R2. The remaining narrower
-   question is whether the **A2UI Lit renderer package** (distinct from Lit core) loads
-   cleanly from an ESM CDN or import map, since it has its own dependency tree. Test
-   this at Step 4 with a static HTML page before wiring any Django templates.
+1. ~~Does Lit require a bundler?~~ ~~Does the A2UI Lit renderer load from an ESM CDN?~~
+   **Both answered: yes, it works with no build step.** Verified 2026-07-30 by
+   [a2ui_cdn_spike.html](../projects/agent-harness/spikes/a2ui_cdn_spike.html) — nine
+   checks pass, including Lit dedupe, custom-element registration, and data binding.
+   The exact working import map and the v0.8-vs-v0.9 payload trap are recorded in
+   [BUILD_GUIDE.md §16](../projects/agent-harness/docs/BUILD_GUIDE.md#16-a2ui-rendering-layer).
 2. Does `a2ui-agent-sdk` work cleanly with Gemini structured output via LangGraph, given
    that first-class LangGraph support is still on the roadmap?
 3. Will v1.0 ship before Step 5? If so, target it directly.
@@ -191,7 +193,7 @@ plainly.
 | Transport | Plain HTTP request/response; SSE only if streaming is wanted later. **Not WebSockets.** |
 | Renderer | **Lit (Web Components)** mounted in a Django template |
 | Frontend framework | **None** — no Next.js, no CopilotKit, no second service |
-| Build tooling | **None** — Lit loads natively via pinned CDN or import map; no Node in the image |
+| Build tooling | **None** — verified: pinned ESM CDN / import map, no Node in the image |
 | A2UI generation | In the **LangGraph agent** via `a2ui-agent-sdk`; MCP tools return plain JSON |
-| Spec version | **v0.9.1**, pinned, behind an adapter module |
+| Spec version | **spec v0.9** via npm `@a2ui/lit@0.10.2` `/v0_9` subpath (package version ≠ spec version), behind an adapter module |
 | Fallback | Always emit text alongside the payload |

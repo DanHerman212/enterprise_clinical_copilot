@@ -96,5 +96,6 @@ serving container; both are brought up only when a live demo needs them.
 
 - [architecture.md](docs/architecture.md) — full component design and rationale
 - [BUILD_GUIDE.md](docs/BUILD_GUIDE.md) — step-by-step build plan (MCP → agent → A2UI demo)
+- [a2ui_spike_findings.md](docs/a2ui_spike_findings.md) — verified A2UI rendering recipe and the four failure modes behind it
 - [rag_requirements.md](../../docs/rag_requirements.md) — contract for the planned retrieval tool
 - [NEXT_STEPS.md](../../docs/NEXT_STEPS.md) — build sequencing

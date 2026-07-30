@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>A2UI CDN spike — running…</title>
+<style>
+  body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 2rem; max-width: 60rem; }
+  h1 { font-size: 1.1rem; }
+  #log { background: #111; color: #eee; padding: 1rem; border-radius: 6px; white-space: pre-wrap; }
+  .pass { color: #4ade80; } .fail { color: #f87171; } .info { color: #93c5fd; }
+  #surface-host { margin-top: 1.5rem; padding: 1rem; border: 1px dashed #999; border-radius: 6px; }
+</style>
+</head>
+<body>
+
+<h1>A2UI CDN spike — can <code>@a2ui/lit</code> load without a build step?</h1>
+<p>Question: does the A2UI Lit renderer load from an ESM CDN with no Node, no bundler?</p>
+
+<div id="log">running…</div>
+
+<h2>Rendered surface</h2>
+<div id="surface-host"><em>nothing yet</em></div>
+
+<!--
+  Import map pins every version explicitly and forces a SINGLE copy of `lit`.
+
+  Without `?external=lit`, esm.sh would bundle its own lit into each A2UI
+  package. Two lit copies means two CustomElementRegistry attempts and two
+  ReactiveElement base classes -- components fail to upgrade, usually silently.
+  This is the most common failure mode for web components via CDN.
+
+  The trailing-slash entries ("lit/", "zod/") are required: the renderer imports
+  subpaths like "lit/decorators.js" and web_core imports "zod/v3". A bare-name
+  mapping alone does NOT cover subpaths.
+
+  zod must be >= 3.25 -- that is the release that introduced the "zod/v3"
+  subpath A2UI imports. 3.24.1 404s.
+-->
+<script type="importmap">
+{
+  "imports": {
+    "lit": "https://esm.sh/lit@3.2.1",
+    "lit/": "https://esm.sh/lit@3.2.1/",
+    "zod": "https://esm.sh/zod@3.25.76",
+    "zod/": "https://esm.sh/zod@3.25.76/",
+    "@lit/context": "https://esm.sh/@lit/context@1.1.6?external=lit",
+    "@a2ui/markdown-it": "https://esm.sh/@a2ui/markdown-it@0.1.0",
+    "@a2ui/web_core/v0_9": "https://esm.sh/@a2ui/web_core@0.10.5/v0_9?external=lit,zod",
+    "@a2ui/lit/v0_9": "https://esm.sh/@a2ui/lit@0.10.2/v0_9?external=lit,zod"
+  }
+}
+</script>
+
+<script type="module">
+const logEl = document.getElementById('log');
+const results = [];
+logEl.textContent = '';
+
+function log(status, label, detail = '') {
+  results.push({ status, label, detail });
+  const cls = status === 'PASS' ? 'pass' : status === 'FAIL' ? 'fail' : 'info';
+  const line = document.createElement('div');
+  line.className = cls;
+  line.textContent = `[${status}] ${label}${detail ? ' — ' + detail : ''}`;
+  logEl.appendChild(line);
+  console.log(`[${status}] ${label}`, detail);
+}
+
+function finish() {
+  const failed = results.filter(r => r.status === 'FAIL');
+  const verdict = failed.length === 0 ? 'SPIKE PASSED' : `SPIKE FAILED (${failed.length})`;
+  document.title = `A2UI CDN spike — ${verdict}`;
+  log('INFO', '─'.repeat(40));
+  log(failed.length === 0 ? 'PASS' : 'FAIL', verdict);
+  window.__SPIKE_RESULT__ = { verdict, results };
+}
+
+window.addEventListener('error', e => log('FAIL', 'Uncaught error', e.message));
+
+// ---------------------------------------------------------------- stage 1-2
+let webCore, litRenderer;
+try {
+  webCore = await import('@a2ui/web_core/v0_9');
+  log('PASS', 'Stage 1: @a2ui/web_core/v0_9 resolved from CDN',
+      `exports: ${Object.keys(webCore).slice(0, 8).join(', ')}…`);
+} catch (err) {
+  log('FAIL', 'Stage 1: @a2ui/web_core/v0_9 failed to load', err.message);
+  finish(); throw err;
+}
+
+try {
+  litRenderer = await import('@a2ui/lit/v0_9');
+  log('PASS', 'Stage 2: @a2ui/lit/v0_9 resolved from CDN',
+      `exports: ${Object.keys(litRenderer).slice(0, 8).join(', ')}…`);
+} catch (err) {
+  log('FAIL', 'Stage 2: @a2ui/lit/v0_9 failed to load', err.message);
+  finish(); throw err;
+}
+
+// ------------------------------------------------------------------ stage 3
+// Duplicate-lit detection. If two copies loaded, custom elements silently
+// fail to upgrade -- the hardest CDN bug to diagnose, so check it explicitly.
+try {
+  const litA = await import('lit');
+  const litB = await import('lit');
+  log(litA === litB ? 'PASS' : 'FAIL', 'Stage 3: single lit instance',
+      litA === litB ? 'import map dedupe held' : 'DUPLICATE lit detected');
+} catch (err) {
+  log('FAIL', 'Stage 3: lit import failed', err.message);
+}
+
+// ------------------------------------------------------------------ stage 4
+const tag = 'a2ui-surface';
+try {
+  await customElements.whenDefined(tag);
+  log('PASS', `Stage 4: <${tag}> registered`, 'renderer defined its custom element');
+} catch (err) {
+  log('FAIL', `Stage 4: <${tag}> never registered`, err.message);
+}
+
+// ------------------------------------------------------------------ stage 5
+const { MessageProcessor } = webCore;
+const { basicCatalog, Context } = litRenderer;
+
+if (!MessageProcessor) log('FAIL', 'Stage 5: MessageProcessor missing from web_core');
+if (!basicCatalog)     log('FAIL', 'Stage 5: basicCatalog missing from lit renderer');
+
+let processor, surface;
+try {
+  processor = new MessageProcessor([basicCatalog]);
+  log('PASS', 'Stage 5: MessageProcessor constructed', `catalogId: ${basicCatalog?.id ?? 'n/a'}`);
+} catch (err) {
+  log('FAIL', 'Stage 5: MessageProcessor constructor threw', err.message);
+  finish(); throw err;
+}
+
+// ------------------------------------------------------------------ stage 6
+// A hardcoded stand-in for the RiskCard the agent will emit. No agent, no MCP,
+// no endpoint -- this is only testing the rendering path.
+//
+// v0.9 component shape (NOT v0.8):
+//   { id, component: "Text", ...props inline }
+// `component` is a STRING naming the type; properties sit directly on the
+// object. v0.8's nested { component: { Text: {...} } } is silently rejected --
+// the renderer logs "Component implementation not found for type: [object
+// Object]" and renders nothing.
+//
+// The component with id "root" IS the tree root; createSurface takes no `root`.
+const SURFACE_ID = 'risk-demo';
+const components = [
+  { id: 'root',      component: 'Card',   child: 'card-body' },
+  { id: 'card-body', component: 'Column', children: ['title', 'prob', 'decision', 'factor-1'] },
+  { id: 'title',     component: 'Text',   text: 'Readmission risk — synthetic patient', variant: 'h2' },
+  { id: 'prob',      component: 'Text',   text: { path: '/probability' } },
+  { id: 'decision',  component: 'Text',   text: { path: '/decision' } },
+  { id: 'factor-1',  component: 'Text',   text: '· prior inpatient days (increases risk)' },
+];
+
+// v0.9 updateDataModel is a plain path/value upsert -- NOT the v0.8
+// `contents` adjacency list of typed key/value* entries.
+const messages = [
+  { version: 'v0.9', createSurface:    { surfaceId: SURFACE_ID, catalogId: basicCatalog.id } },
+  { version: 'v0.9', updateComponents: { surfaceId: SURFACE_ID, components } },
+  { version: 'v0.9', updateDataModel:  { surfaceId: SURFACE_ID, value: {
+      probability: 'Probability: 0.1314',
+      decision:    'Decision at threshold 0.12: FLAGGED',
+  } } },
+];
+
+const host = document.getElementById('surface-host');
+
+// Text properties are MARKDOWN. `variant: 'h2'` literally prepends "## ", so
+// without a markdown renderer the user sees raw "## Heading" on screen.
+// The renderer is injected through Lit context (Context.markdown), not a
+// global setter -- so a provider must sit above <a2ui-surface> in the DOM.
+try {
+  const { ContextProvider } = await import('@lit/context');
+  const { renderMarkdown } = await import('@a2ui/markdown-it');
+  new ContextProvider(host, { context: Context.markdown, initialValue: renderMarkdown });
+  log('PASS', 'Stage 5b: markdown renderer provided via Lit context');
+} catch (err) {
+  log('FAIL', 'Stage 5b: could not configure markdown renderer', err.message);
+}
+
+try {
+  processor.onSurfaceCreated(s => {
+    if (s.id === SURFACE_ID) {
+      surface = s;
+      log('PASS', 'Stage 6: onSurfaceCreated fired', `surface id: ${s.id}`);
+      const el = document.createElement(tag);
+      el.surface = s;              // property binding, not attribute
+      host.replaceChildren(el);
+    }
+  });
+
+  processor.processMessages(messages);
+  log('PASS', 'Stage 6: processMessages accepted the v0.9 payload');
+} catch (err) {
+  log('FAIL', 'Stage 6: processMessages threw', err.message);
+}
+
+// ------------------------------------------------------------------ stage 7
+// The real proof: did pixels actually appear? Custom elements upgrade
+// asynchronously, so give the renderer a turn before inspecting.
+await new Promise(r => setTimeout(r, 750));
+
+// Each A2UI component is its own custom element with its own shadow root, so
+// a plain .textContent on the surface returns "" even when the card is fully
+// rendered. Pierce every shadow boundary instead.
+function deepText(node) {
+  let out = '';
+  if (node.shadowRoot) out += deepText(node.shadowRoot);
+  for (const child of node.childNodes) {
+    out += child.nodeType === Node.TEXT_NODE ? child.textContent : deepText(child);
+  }
+  return out;
+}
+
+const el = host.querySelector(tag);
+const text = el ? deepText(el).replace(/\s+/g, ' ').trim() : '';
+
+if (!surface) {
+  log('FAIL', 'Stage 7: no surface was created', 'check message ordering / catalogId');
+} else if (text.includes('0.1314') && text.includes('FLAGGED')) {
+  log('PASS', 'Stage 7: rendered DOM contains bound data', `"${text.slice(0, 90)}…"`);
+} else if (text.length > 0) {
+  log('FAIL', 'Stage 7: rendered, but data binding did not resolve', `got: "${text.slice(0, 90)}"`);
+} else {
+  log('FAIL', 'Stage 7: element present but rendered nothing', 'likely failed to upgrade');
+}
+
+// ------------------------------------------------------------------ stage 8
+// Markdown must be rendered, not shown literally.
+if (text.includes('##')) {
+  log('FAIL', 'Stage 8: markdown leaked to the user as raw text', 'renderer not wired');
+} else if (text.includes('Readmission risk')) {
+  log('PASS', 'Stage 8: markdown rendered (no literal "##" on screen)');
+} else {
+  log('FAIL', 'Stage 8: heading text missing entirely');
+}
+
+finish();
+</script>
+
+</body>
+</html>

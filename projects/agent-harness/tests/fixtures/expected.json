@@ -1,0 +1,14 @@
+{
+  "generated_at": "2026-07-30",
+  "generated_by": "projects/mlops/scripts/smoke_test.py --write-fixture",
+  "model_version": "readmission-final-20260723172647",
+  "patients": {
+    "20924467": {
+      "base_value": -1.33862,
+      "decision": 1,
+      "probability": 0.131398,
+      "tolerance": 0.0001
+    }
+  },
+  "threshold": 0.12
+}

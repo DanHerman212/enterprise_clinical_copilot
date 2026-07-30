@@ -1,0 +1,10 @@
+# Container deps for the MCP server only — deliberately not the repo's full
+# requirements. The training stack (xgboost, pandas, sklearn) has no place in a
+# serving image: the model runs behind the Vertex endpoint, not in here.
+#
+# Pinned to what §6/§7 were verified against on 2026-07-30.
+mcp==2.0.0
+google-cloud-aiplatform==1.161.0
+google-cloud-bigquery==3.41.0
+google-cloud-storage==2.19.0
+uvicorn==0.47.0

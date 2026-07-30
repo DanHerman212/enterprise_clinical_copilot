@@ -1,0 +1,6 @@
+# Build context is this directory (projects/agent-harness/mcp_server).
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.md

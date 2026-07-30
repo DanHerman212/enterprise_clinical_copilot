@@ -1,0 +1,15 @@
+# Keep the build context small and the image free of anything the server does
+# not need at runtime.
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Not runtime code
+tests/
+docs/
+scripts/
+README.md
+
+.env
+*.log

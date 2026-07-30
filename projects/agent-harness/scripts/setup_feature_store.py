@@ -28,12 +28,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from mcp_server.config import (  # noqa: E402
     API_ENDPOINT,
+    COHORT_TABLE_FQN,
     ENTITY_ID_COLUMN,
     FEATURE_VIEW_ID,
     LOCATION,
     ONLINE_STORE_ID,
     PROJECT,
-    TABLE_FQN,
 )
 
 PARENT = f"projects/{PROJECT}/locations/{LOCATION}"
@@ -88,10 +88,10 @@ def ensure_feature_view(admin) -> None:
     except NotFound:
         pass
 
-    print(f"  Creating feature view {FEATURE_VIEW_ID} over bq://{TABLE_FQN}…")
+    print(f"  Creating feature view {FEATURE_VIEW_ID} over bq://{COHORT_TABLE_FQN}…")
     view = aiplatform_v1.FeatureView(
         big_query_source=aiplatform_v1.FeatureView.BigQuerySource(
-            uri=f"bq://{TABLE_FQN}",
+            uri=f"bq://{COHORT_TABLE_FQN}",
             entity_id_columns=[ENTITY_ID_COLUMN],
         ),
         # No cron: the dataset is static, so syncs are run on demand from here

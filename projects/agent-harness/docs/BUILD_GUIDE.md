@@ -119,8 +119,22 @@ gcloud services enable \
   artifactregistry.googleapis.com \
   bigquery.googleapis.com \
   cloudbuild.googleapis.com \
-  secretmanager.googleapis.com
+  secretmanager.googleapis.com \
+  bigtable.googleapis.com \
+  bigtableadmin.googleapis.com
 ```
+
+> **The two Bigtable APIs are not optional if you use Feature Store.** A Vertex
+> online store is Bigtable underneath, and the sync is a BigQuery export job
+> writing into it. Without them the sync fails with
+> `Missing IAM permission: bigtable.tables.mutateRows` — which reads like an IAM
+> problem and sends you to grant roles the service agent already has.
+>
+> **Then wait before syncing.** API enablement and service-agent propagation take
+> several minutes. A sync started ~1 minute after enabling them ran for 52
+> minutes reporting `code=0` and never finished or failed. Compare: the genuine
+> permission failure surfaced in 0.1 min. A sync that neither completes nor
+> errors is wedged, not slow.
 
 Create **two** service accounts with distinct privileges:
 
@@ -291,6 +305,51 @@ Select via env var, defaulting to the cheap path:
 SOURCE = os.environ.get("FEATURE_SOURCE", "bigquery")  # "bigquery" | "feature_store"
 ```
 
+### Feature Store serves the demo cohort, not the whole table
+
+`scripts/build_demo_cohort.py` builds `readmission.demo_cohort`, and the feature
+view is created over **that**, not over `analytics_dataset_encoded`.
+
+The reason is arithmetic. The full table is 352,699 rows / 140.8 MB, and the
+demo queries a few dozen patients — so a full sync provisions, bills, and
+re-exports the entire dataset to serve ~0.01% of it. Measured, on one Bigtable
+node:
+
+| Scope | Rows | Sync |
+|---|---|---|
+| Full table | 352,699 | 52 min, never finished |
+| Demo cohort | 41 | under one 20 s poll |
+
+Cohort selection rules, all defensible on their own:
+
+- **test split only** — a demo patient the model trained on proves nothing
+- **balanced on `readmission_30d`** — so both a high- and low-risk case are on hand
+- **deterministic** via `FARM_FINGERPRINT(hadm_id)`, which is stable across runs
+  without the low-id bias of `ORDER BY hadm_id`
+- **fixture patients pinned in**, and the script exits non-zero if one is absent
+
+Ids outside the cohort simply fall back to BigQuery, which is the default source
+anyway — so the advanced free-text `hadm_id` path still works.
+
+> §14 owns final cohort selection. This is a defensible default, not a decision.
+
+Provision and sync:
+
+```bash
+.venv/bin/python projects/agent-harness/scripts/build_demo_cohort.py
+.venv/bin/python projects/agent-harness/scripts/setup_feature_store.py
+```
+
+`setup_feature_store.py` is idempotent, attaches to an already-running sync
+rather than failing on `FailedPrecondition`, and **exits non-zero if the sync
+reports a non-zero status or zero rows**. That last check exists because an
+earlier version printed `Sync complete — 0 rows synced` for a sync that had died
+with a permission error.
+
+> **An unset protobuf `Timestamp` is the epoch, not `None`.** `if
+> sync.run_time.end_time:` is truthy for a *running* sync, so every in-flight
+> sync looks finished. Use `sync._pb.run_time.HasField("end_time")`.
+
 ---
 
 ## 6. MCP server and the predict tool
@@ -421,6 +480,30 @@ npx @modelcontextprotocol/inspector \
 - Calling it with `hadm_id=20924467` returns the expected probability
 - Calling it with `hadm_id=1` returns a graceful structured error
 
+> If the first call times out, raise the request timeout in the inspector's
+> Configuration panel before assuming a bug. A cold call does `Model.list` + GCS
+> manifest + BigQuery + Vertex predict; the caches make every later call fast.
+
+### Then automate it
+
+The inspector proves the protocol works once, on one machine, and leaves nothing
+behind. `tests/test_mcp_stdio.py` is the durable version — it spawns the server
+as a real subprocess and talks JSON-RPC to it:
+
+```bash
+.venv/bin/python -m pytest projects/agent-harness/tests/test_mcp_stdio.py -v
+# 5 passed in 7.82s
+```
+
+It covers what the in-process tests of §6 cannot: the initialize handshake,
+`tools/list` as a model sees it, content serialisation, and — the one worth
+having — **that stdout stays clean**. Under stdio the transport *is* stdout, so
+a stray `print()` in any dependency corrupts the stream. That regression is
+invisible until a client fails to parse.
+
+Uses `asyncio.run` rather than pytest-asyncio, so it adds no plugin dependency.
+The session is module-scoped: one spawn, one cold start, five assertions.
+
 **Optional but worth doing once:** register the same command in Claude Desktop's MCP
 config and ask it in natural language. This is the concrete proof of the reusability
 claim — and it takes ten minutes.
@@ -429,17 +512,76 @@ claim — and it takes ten minutes.
 
 ## 8. Deploy the MCP server to Cloud Run
 
-`mcp_server/Dockerfile` — apply the lessons already learned on the website:
+Three files, all in `mcp_server/`: `Dockerfile`, `.dockerignore`,
+`requirements.txt`. The build context is the **package directory**, not the repo
+root — `agent-harness` contains a hyphen and is not importable, so the package
+is copied to `/app/mcp_server` where `python -m mcp_server.server` resolves.
 
-- `python:3.12-slim`, no `gcc`/`libpq-dev` unless something actually needs compiling
-- `.dockerignore` including `.venv/`
-- **JSON-form `CMD`** so the process receives `SIGTERM` as PID 1
+`requirements.txt` is deliberately *not* the repo's full requirements. The
+training stack (xgboost, pandas, sklearn) has no place in a serving image — the
+model runs behind the Vertex endpoint, not in this container.
+
+**Dockerfile lessons carried over from the website:**
+
+- `python:3.12-slim`, no `gcc`/`libpq-dev` — nothing here compiles
+- `.dockerignore` including `.venv/` and `__pycache__/`
+- **JSON-form `CMD`** so the process is PID 1 and receives `SIGTERM` directly;
+  with the shell form, `sh` swallows the signal and Cloud Run waits out the full
+  grace period on every revision swap
 
 ```dockerfile
-CMD ["python", "-m", "mcp_server.server", "--transport", "http", "--port", "8080"]
+CMD ["python", "-m", "mcp_server.server", "--transport", "http"]
 ```
 
-Build and deploy **privately** — no `--allow-unauthenticated`:
+Note there is no `--port`. **Cloud Run injects `PORT`** and expects the
+container to honour it, so `--port` defaults to `int(os.environ["PORT"])`.
+Hard-coding 8080 works until the day it doesn't.
+
+### Stateless HTTP is not optional here
+
+Streamable-HTTP sessions live in the memory of one instance. Behind a Cloud Run
+load balancer with no session affinity, a follow-up request can land on a
+different instance and fail to find its session — an error that only appears
+under concurrency, which is to say in front of an audience.
+
+The server therefore runs `stateless_http=True` by default (`--stateful` opts
+out for single-instance debugging). This tool holds no per-session state, so
+there is nothing to lose. Verified locally: two independent sessions each
+completed a full call, and the log shows `Terminating session: None` after each.
+
+### Health check
+
+`/health` is registered with `@server.custom_route` and is **deliberately
+shallow** — it does not touch Vertex or BigQuery. A deep check would bill on
+every probe of a scale-to-zero service and would mark the container unhealthy
+whenever a dependency blipped, causing Cloud Run to recycle a process that is
+fine. Per-request dependency failures already surface as the tool's structured
+errors.
+
+### Service account
+
+The MCP server needs exactly three things. Grant no more:
+
+```bash
+gcloud iam service-accounts create mcp-server \
+  --display-name "Readmission MCP server"
+
+MCP_SA="mcp-server@${PROJECT_ID}.iam.gserviceaccount.com"
+
+for ROLE in roles/aiplatform.user roles/bigquery.jobUser roles/bigquery.dataViewer; do
+  gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+    --member "serviceAccount:${MCP_SA}" --role ${ROLE}
+done
+
+# Serving bundle (manifest.json) only — not the whole MLOps bucket.
+gsutil iam ch serviceAccount:${MCP_SA}:objectViewer gs://${PROJECT_ID}-mlops
+```
+
+`bigquery.jobUser` is separate from `dataViewer` and both are required: reading
+a table is a *query job*, and a viewer without job rights fails at run time with
+a permission error that reads like a data problem.
+
+### Build and deploy privately
 
 ```bash
 gcloud builds submit --tag ${REGION}-docker.pkg.dev/${PROJECT_ID}/readmission/mcp-server:latest \
@@ -458,12 +600,20 @@ gcloud run deploy mcp-server \
 > not accumulate — the last occurrence silently replaces the rest. This cost us a
 > debugging cycle on the website deploy.
 
+`--min-instances 0` means cold starts. A cold call also warms three caches
+(endpoint lookup, manifest, feature source), so the first request after idle is
+slow and every one after is not. That is the right trade for a portfolio demo;
+raise it to 1 only if a live audience is watching.
+
 **Verify** with your own credentials before wiring the agent:
 
 ```bash
 MCP_URL=$(gcloud run services describe mcp-server --region ${REGION} --format="value(status.url)")
 curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" "${MCP_URL}/health"
 ```
+
+Then repeat the §7 protocol check against the deployed URL rather than a
+subprocess — same assertions, different transport.
 
 ---
 

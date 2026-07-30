@@ -1,0 +1,8 @@
+# Runtime dependencies for the MCP server container.
+# Pinned to the versions verified locally on 2026-07-30 — an unpinned
+# google-cloud-aiplatform is how a working image starts failing on a rebuild.
+
+mcp==2.0.0
+google-cloud-aiplatform==1.161.0
+google-cloud-bigquery==3.41.0
+google-cloud-storage==2.19.0

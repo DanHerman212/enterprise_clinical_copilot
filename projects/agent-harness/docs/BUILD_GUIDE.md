@@ -560,13 +560,11 @@ errors.
 
 ### Service account
 
-The MCP server needs exactly three things. Grant no more:
+The MCP server needs exactly three things. Grant no more. The account was
+already created in §2; these are the bindings:
 
 ```bash
-gcloud iam service-accounts create mcp-server \
-  --display-name "Readmission MCP server"
-
-MCP_SA="mcp-server@${PROJECT_ID}.iam.gserviceaccount.com"
+MCP_SA="mcp-server-sa@${PROJECT_ID}.iam.gserviceaccount.com"
 
 for ROLE in roles/aiplatform.user roles/bigquery.jobUser roles/bigquery.dataViewer; do
   gcloud projects add-iam-policy-binding ${PROJECT_ID} \
@@ -574,12 +572,21 @@ for ROLE in roles/aiplatform.user roles/bigquery.jobUser roles/bigquery.dataView
 done
 
 # Serving bundle (manifest.json) only — not the whole MLOps bucket.
-gsutil iam ch serviceAccount:${MCP_SA}:objectViewer gs://${PROJECT_ID}-mlops
+gcloud storage buckets add-iam-policy-binding gs://${PROJECT_ID}-mlops \
+  --member "serviceAccount:${MCP_SA}" --role roles/storage.objectViewer
 ```
 
 `bigquery.jobUser` is separate from `dataViewer` and both are required: reading
 a table is a *query job*, and a viewer without job rights fails at run time with
 a permission error that reads like a data problem.
+
+> **Check the bucket binding before you deploy, not after.** The three project-level
+> roles were granted in §2, but the bucket binding is separate and was missing —
+> the server would have started, passed its health check, and failed only on the
+> first prediction, when it went to read `manifest.json`. Audit with
+> `gcloud storage buckets get-iam-policy gs://${PROJECT_ID}-mlops`.
+> Use `gcloud storage`, not `gsutil`: `gsutil` forks a helper that can hang
+> indefinitely here rather than erroring.
 
 ### Build and deploy privately
 
@@ -592,9 +599,15 @@ gcloud run deploy mcp-server \
   --region ${REGION} \
   --no-allow-unauthenticated \
   --service-account ${MCP_SA} \
-  --set-env-vars "^@^PROJECT_ID=${PROJECT_ID}@LOCATION=${REGION}@FEATURE_SOURCE=bigquery" \
+  --set-env-vars "^@^FEATURE_SOURCE=bigquery" \
   --min-instances 0 --max-instances 3 --memory 512Mi
 ```
+
+> **Env vars are optional here, not inert.** `config.py` reads `PROJECT_ID` and `LOCATION`
+> but defaults both to the real values, so the deploy above omits them and the container
+> still resolves the right project and region. Set them only when pointing the image at
+> a different project. The other knobs are `FEATURE_SOURCE`, `ENDPOINT_NAME`,
+> `BUNDLE_URI`, `ONLINE_STORE_ID`, and `FEATURE_VIEW_ID`.
 
 > **Use the `^@^` delimiter and a single `--set-env-vars` flag.** Repeating the flag does
 > not accumulate — the last occurrence silently replaces the rest. This cost us a
@@ -615,6 +628,34 @@ curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" "${MCP_URL}/
 Then repeat the §7 protocol check against the deployed URL rather than a
 subprocess — same assertions, different transport.
 
+> **The client takes an `http_client`, not `headers`.** In SDK 2.0 the signature is
+> `streamable_http_client(url, *, http_client=None, terminate_on_close=True)`, so auth
+> is attached by constructing the client yourself. It must be an **`httpx2.AsyncClient`** —
+> the SDK vendors `httpx2` (2.x) alongside the ordinary `httpx` (0.28) that other
+> libraries pull in, and passing the wrong one fails on a type check, not at import.
+>
+> ```python
+> async with httpx2.AsyncClient(headers={"Authorization": f"Bearer {token}"}) as hc:
+>     async with streamable_http_client(f"{MCP_URL}/mcp", http_client=hc) as (read, write):
+> ```
+
+### Result
+
+Deployed 2026-07-30 as revision `mcp-server-00001-zwc`:
+`https://mcp-server-778397675435.us-east1.run.app`. Image build 1m9s.
+
+| Check | Result |
+| --- | --- |
+| `GET /health`, no credentials | `403` — private, as intended |
+| `GET /health`, ID token | `200` in 0.12 s |
+| `tools/list` | `['predict_readmission']` |
+| `predict_readmission(20924467)` | `0.131398`, decision `1` — delta `0.00e+00` vs fixture |
+| `predict_readmission(1)` | structured `unknown_patient` |
+
+The probability is byte-identical to the local stdio run and to the §3 smoke
+test, which is the point of the exercise: the transport and the host changed,
+the number did not.
+
 ---
 
 ## 9. Enable Gemini on Vertex
@@ -623,13 +664,67 @@ subprocess — same assertions, different transport.
 gcloud services enable aiplatform.googleapis.com
 ```
 
-Confirm the model is reachable from `us-east1`. If it is not, use the **global
-endpoint** rather than relocating the agent — keeping the agent co-located with Cloud SQL
-and the prediction endpoint matters more than a few milliseconds of LLM latency.
-
-**Verify** with a trivial generate call before building the graph. A model-availability
+**Verify with a trivial generate call before building the graph.** A model-availability
 error surfacing inside a LangGraph trace is much harder to read than the same error on
-its own.
+its own:
+
+```bash
+.venv/bin/python projects/agent-harness/scripts/check_gemini.py
+.venv/bin/python projects/agent-harness/scripts/check_gemini.py --model gemini-2.5-pro
+```
+
+The script exits non-zero on failure, and treats an **empty answer as a failure** — see
+below for why that is not paranoia.
+
+### What is actually available (probed 2026-07-30)
+
+| Model | `us-east1` | `global` |
+| --- | --- | --- |
+| `gemini-2.5-pro` | works, 1.32 s | works, 1.41 s |
+| `gemini-2.5-flash` | works, 1.06 s | works, 1.02 s |
+| `gemini-2.5-flash-lite` | works, 0.94 s | works, 0.88 s |
+| `gemini-2.0-flash` | **404 NOT_FOUND** | **404 NOT_FOUND** |
+
+`us-east1` serves the 2.5 family, so **the global-endpoint fallback is not needed** and
+the agent stays co-located with the prediction endpoint. Latency between the two is
+within noise (~0.05 s), which is worth knowing: if a future model is region-locked,
+switching to `global` costs almost nothing, so co-location is a tidiness argument here
+rather than a performance one.
+
+`gemini-2.0-flash` is gone. Do not copy a 2.0 model name out of an older tutorial.
+
+Default is **`gemini-2.5-flash`** (`GEMINI_MODEL` in `config.py`): it is the cheapest
+model that still reasons over tool output, and it thinks with a fraction of the tokens
+`2.5-pro` spends — 29 vs 169 on an identical trivial prompt.
+
+### The trap: HTTP 200 with an empty answer
+
+The first probe reported `OK` for `2.5-pro` and `2.5-flash` and returned **empty
+strings**. Nothing raised. The cause:
+
+> **`max_output_tokens` budgets thinking *and* the answer.** The 2.5 models are thinking
+> models. With `max_output_tokens=16`, all 16 went to thoughts, the answer came back
+> empty, and `finish_reason` was `MAX_TOKENS` — reported as a successful call.
+
+| Config | finish_reason | thoughts | output | text |
+| --- | --- | --- | --- | --- |
+| `max_output_tokens=16` | `MAX_TOKENS` | 12–13 | – | `''` |
+| `max_output_tokens=2048` | `STOP` | 29–169 | 1 | `'ready'` |
+| `thinking_budget=0` (flash) | `STOP` | – | 1 | `'ready'` |
+| `thinking_budget=0` (pro) | **400 INVALID_ARGUMENT** | – | – | – |
+
+Two consequences worth carrying into §10:
+
+- **`gemini-2.5-pro` cannot disable thinking.** `thinking_budget=0` is rejected outright.
+  Only flash and flash-lite can. Any code path that assumes thinking is optional will
+  break the moment someone switches the model to pro.
+- **Never assert on `response.text` being truthy without checking `finish_reason`.** An
+  agent that silently receives `''` will either emit an empty turn or, worse, let the
+  LLM improvise around a missing tool result.
+
+This is the same failure mode as the wedged Feature Store sync and the gsutil fork hang:
+**the system reports success and returns nothing.** `check_gemini.py` fails loudly on it
+instead, which is the whole reason it is a script rather than a paragraph.
 
 > **Compliance note.** Only tabular features and model outputs reach Gemini at this
 > stage — no note text. That arrives with `rag_search` in Phase 3, at which point the

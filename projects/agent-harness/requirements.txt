@@ -1,4 +1,5 @@
-# Runtime dependencies for the MCP server container.
+# Local development dependencies for the whole harness (MCP server + agent).
+# The container installs the narrower mcp_server/requirements.txt instead.
 # Pinned to the versions verified locally on 2026-07-30 — an unpinned
 # google-cloud-aiplatform is how a working image starts failing on a rebuild.
 
@@ -6,3 +7,11 @@ mcp==2.0.0
 google-cloud-aiplatform==1.161.0
 google-cloud-bigquery==3.41.0
 google-cloud-storage==2.19.0
+
+# Agent (§10). Deliberately NOT langchain-mcp-adapters: it declares mcp>=1.24.0
+# with no upper bound but imports mcp.server.fastmcp, removed in 2.0, so it
+# installs cleanly and fails at import. agent/mcp_client.py replaces it.
+# Deliberately NOT langchain-google-vertexai either: it pins pyarrow<24.0.0,
+# which downgrades the pyarrow that google-cloud-bigquery uses in the feature
+# path. google-genai already ships with google-cloud-aiplatform.
+langgraph==1.2.10

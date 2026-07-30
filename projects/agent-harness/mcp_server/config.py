@@ -33,4 +33,14 @@ FEATURE_VIEW_ID = os.environ.get("FEATURE_VIEW_ID", "readmission_cohort")
 # "bigquery" (default: dev, CI, tests) | "feature_store" (live demos)
 FEATURE_SOURCE = os.environ.get("FEATURE_SOURCE", "bigquery")
 
+# Gemini. Verified reachable from us-east1 on 2026-07-30, so the agent stays
+# co-located with the prediction endpoint; "global" is the fallback, not the default.
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+
+# 2.5 models are thinking models and this budget covers thinking AND the answer.
+# Too small and the whole budget is spent on thoughts: the call returns 200 with
+# empty text and finish_reason=MAX_TOKENS, no exception. 16 tokens was enough to
+# reproduce that. Keep this generous.
+GEMINI_MAX_OUTPUT_TOKENS = int(os.environ.get("GEMINI_MAX_OUTPUT_TOKENS", "2048"))
+
 API_ENDPOINT = f"{LOCATION}-aiplatform.googleapis.com"

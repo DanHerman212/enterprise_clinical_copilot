@@ -18,7 +18,8 @@ from mcp.server import MCPServer
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from .config import FEATURE_SOURCE, LOCATION, PROJECT
+from .config import LOCATION, PROJECT
+from .features import FEATURE_SOURCE
 from .tools import predict_readmission
 
 server = MCPServer(

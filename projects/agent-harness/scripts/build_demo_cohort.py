@@ -1,4 +1,10 @@
-"""Build the demo cohort table that backs Feature Store online serving.
+"""SUPERSEDED by seed_demo_cohort.py — do not run both.
+
+Kept for the reasoning below, which still explains why a cohort table exists at
+all. Selection here balances on the *label*, which produced a cohort with no
+patient just below the 0.12 threshold; §14 replaced it with risk-band selection.
+
+Build the demo cohort table that backs Feature Store online serving.
 
 Why this exists: syncing all 352,699 admissions into Bigtable to serve a demo
 over a few dozen patients is a full-table export, an hour of wall clock, and

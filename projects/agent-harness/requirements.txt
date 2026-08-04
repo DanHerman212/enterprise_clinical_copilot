@@ -15,3 +15,9 @@ google-cloud-storage==2.19.0
 # which downgrades the pyarrow that google-cloud-bigquery uses in the feature
 # path. google-genai already ships with google-cloud-aiplatform.
 langgraph==1.2.10
+
+# Tests. jsonschema arrives transitively today (via mcp), but test_tier1.py
+# imports it directly, and a direct import on a transitive dependency breaks
+# the day the intermediary drops it.
+pytest==9.1.1
+jsonschema==4.26.0

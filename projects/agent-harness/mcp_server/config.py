@@ -18,20 +18,9 @@ TABLE = f"{DATASET}.analytics_dataset_encoded"
 TABLE_FQN = f"{PROJECT}.{TABLE}"
 ENTITY_ID_COLUMN = "hadm_id"
 
-# Feature Store serves the demo cohort only, not the full 352,699-row table.
-# Syncing everything into Bigtable to answer queries about a few dozen patients
-# is an hour of export and ongoing storage for ~0.01% of what it holds.
-# Built by scripts/build_demo_cohort.py; ids outside it fall back to BigQuery.
+# The hand-picked demo cohort. Built by scripts/build_demo_cohort.py.
 COHORT_TABLE = f"{DATASET}.demo_cohort"
 COHORT_TABLE_FQN = f"{PROJECT}.{COHORT_TABLE}"
-
-# Feature Store online serving. The teardown script matches online stores by the
-# "readmission" prefix, so these names must keep it.
-ONLINE_STORE_ID = os.environ.get("ONLINE_STORE_ID", "readmission_online")
-FEATURE_VIEW_ID = os.environ.get("FEATURE_VIEW_ID", "readmission_cohort")
-
-# "bigquery" (default: dev, CI, tests) | "feature_store" (live demos)
-FEATURE_SOURCE = os.environ.get("FEATURE_SOURCE", "bigquery")
 
 # Gemini. Verified reachable from us-east1 on 2026-07-30, so the agent stays
 # co-located with the prediction endpoint; "global" is the fallback, not the default.

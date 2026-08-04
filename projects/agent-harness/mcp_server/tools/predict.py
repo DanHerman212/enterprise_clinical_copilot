@@ -9,9 +9,8 @@ import asyncio
 from functools import lru_cache
 from typing import Any
 
-from ..config import FEATURE_SOURCE
 from ..endpoint import predict_one
-from ..features import FeatureSource, get_feature_source, to_vector
+from ..features import FEATURE_SOURCE, FeatureSource, get_feature_source, to_vector
 from ..features.manifest import feature_order, model_version
 
 # The risk card renders five; returning all 23 parent groups would just be
@@ -21,7 +20,7 @@ MAX_FACTORS = 5
 
 @lru_cache(maxsize=1)
 def _source() -> FeatureSource:
-    """Cached so the BigQuery / Feature Store client is built once."""
+    """Cached so the BigQuery client is built once."""
     return get_feature_source()
 
 

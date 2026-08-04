@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>A2UI render check — running…</title>
+<style>
+  body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 2rem; max-width: 60rem; }
+  #log { background: #111; color: #eee; padding: 1rem; border-radius: 6px; white-space: pre-wrap; }
+  .pass { color: #4ade80; } .fail { color: #f87171; } .info { color: #93c5fd; }
+  #surface-host { margin-top: 1.5rem; padding: 1rem; border: 1px dashed #999; border-radius: 6px; }
+</style>
+</head>
+<body>
+
+<!--
+  Unlike a2ui_cdn_spike.html, which hardcoded a payload to test the CDN, this
+  page renders the EXACT JSON that agent/a2ui.py produces (regenerate it with
+  spikes/gen_render_check.py). The Python tests can only pin the shape they
+  believe is correct; this page is the only place that proves the renderer
+  agrees. A2UI's failure mode is a console warning and an empty box, so
+  "the tests pass" and "the card draws" are genuinely different claims.
+
+  Serve over HTTP, not file:// —
+    python3 -m http.server 8777
+  then open http://localhost:8777/projects/agent-harness/spikes/a2ui_render_check.html
+-->
+
+<h1>A2UI render check — does <code>agent/a2ui.py</code> output actually draw?</h1>
+<div id="log">running…</div>
+
+<h2>Rendered surface</h2>
+<div id="surface-host"><em>nothing yet</em></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "lit": "https://esm.sh/lit@3.2.1",
+    "lit/": "https://esm.sh/lit@3.2.1/",
+    "zod": "https://esm.sh/zod@3.25.76",
+    "zod/": "https://esm.sh/zod@3.25.76/",
+    "@lit/context": "https://esm.sh/@lit/context@1.1.6?external=lit",
+    "@a2ui/markdown-it": "https://esm.sh/@a2ui/markdown-it@0.1.0",
+    "@a2ui/web_core/v0_9": "https://esm.sh/@a2ui/web_core@0.10.5/v0_9?external=lit,zod",
+    "@a2ui/lit/v0_9": "https://esm.sh/@a2ui/lit@0.10.2/v0_9?external=lit,zod"
+  }
+}
+</script>
+
+<script type="module">
+const logEl = document.getElementById('log');
+logEl.textContent = '';
+const results = [];
+
+function log(status, label, detail = '') {
+  results.push({ status, label, detail });
+  const line = document.createElement('div');
+  line.className = status === 'PASS' ? 'pass' : status === 'FAIL' ? 'fail' : 'info';
+  line.textContent = `[${status}] ${label}${detail ? ' — ' + detail : ''}`;
+  logEl.appendChild(line);
+}
+
+// The silent failure this whole page exists to catch. The renderer warns
+// instead of throwing, so promote the warning to a visible failure.
+const warnings = [];
+const nativeWarn = console.warn.bind(console);
+console.warn = (...args) => { warnings.push(args.join(' ')); nativeWarn(...args); };
+const nativeError = console.error.bind(console);
+console.error = (...args) => { warnings.push(args.join(' ')); nativeError(...args); };
+
+function finish() {
+  const failed = results.filter(r => r.status === 'FAIL');
+  const verdict = failed.length === 0 ? 'RENDER CHECK PASSED' : `RENDER CHECK FAILED (${failed.length})`;
+  document.title = `A2UI render check — ${verdict}`;
+  log('INFO', '─'.repeat(40));
+  log(failed.length === 0 ? 'PASS' : 'FAIL', verdict);
+  window.__RENDER_RESULT__ = { verdict, results, warnings };
+}
+
+window.addEventListener('error', e => log('FAIL', 'Uncaught error', e.message));
+
+let card;
+// ?card=render_check_error.json renders the error envelope instead. The error
+// path is the one that runs on a bad day, so it needs the same proof.
+const cardFile = new URLSearchParams(location.search).get('card') || 'render_check_card.json';
+try {
+  card = await (await fetch('./' + cardFile)).json();
+  log('PASS', `Loaded ${cardFile} emitted by agent/a2ui.py`,
+      `${card.messages.length} messages, audience=${JSON.stringify(card.audience)}`);
+} catch (err) {
+  log('FAIL', `Could not load ${cardFile}`, err.message);
+  finish(); throw err;
+}
+
+// R8: the fallback must exist even when everything else works, because the
+// caller needs it on the day the CDN does not.
+log(card.fallback_text ? 'PASS' : 'FAIL', 'R8 fallback text present',
+    (card.fallback_text || '').slice(0, 60) + '…');
+
+const webCore = await import('@a2ui/web_core/v0_9');
+const litRenderer = await import('@a2ui/lit/v0_9');
+const { MessageProcessor } = webCore;
+const { basicCatalog, Context } = litRenderer;
+
+// The Python constant is only correct if it equals what the bundle ships.
+const declared = card.messages[0].createSurface.catalogId;
+log(declared === basicCatalog.id ? 'PASS' : 'FAIL', 'catalogId matches basicCatalog.id',
+    declared === basicCatalog.id ? declared : `python=${declared} bundle=${basicCatalog.id}`);
+
+const host = document.getElementById('surface-host');
+const { ContextProvider } = await import('@lit/context');
+const { renderMarkdown } = await import('@a2ui/markdown-it');
+new ContextProvider(host, { context: Context.markdown, initialValue: renderMarkdown });
+
+const processor = new MessageProcessor([basicCatalog]);
+processor.onSurfaceCreated(s => {
+  const el = document.createElement('a2ui-surface');
+  el.surface = s;
+  host.replaceChildren(el);
+});
+
+try {
+  processor.processMessages(card.messages);
+  log('PASS', 'processMessages accepted the adapter output');
+} catch (err) {
+  log('FAIL', 'processMessages threw', err.message);
+  finish(); throw err;
+}
+
+await new Promise(r => setTimeout(r, 900));
+
+// Every A2UI component owns a shadow root, so textContent on the surface
+// returns "" even when the card is fully drawn. Pierce the boundaries.
+function deepText(node) {
+  let out = '';
+  if (node.shadowRoot) out += deepText(node.shadowRoot);
+  for (const child of node.childNodes) {
+    out += child.nodeType === Node.TEXT_NODE ? child.textContent : deepText(child);
+  }
+  return out;
+}
+
+const el = host.querySelector('a2ui-surface');
+const text = el ? deepText(el).replace(/\s+/g, ' ').trim() : '';
+log('INFO', 'Visible text', text.slice(0, 200));
+
+// Assert on meaning, not on the DOM existing: an empty box is also a DOM.
+const expectations = cardFile.includes('error')
+  ? [['error title rendered', 'unavailable'], ['error code rendered', 'unknown_patient']]
+  : [
+      ['admission id rendered', '20924467'],
+      ['probability rendered', '13.1%'],
+      ['decision rendered', 'Flagged'],
+      ['factor rendered', 'prior'],
+      ['provenance rendered', 'synthetic'],
+    ];
+for (const [label, needle] of expectations) {
+  log(text.toLowerCase().includes(needle.toLowerCase()) ? 'PASS' : 'FAIL', label, needle);
+}
+
+// Markdown must have been APPLIED, not printed. If the renderer were missing,
+// variant h2 would show a literal "## ".
+log(!text.includes('## ') ? 'PASS' : 'FAIL', 'Markdown applied, not shown raw');
+// And escaping must have been consumed by the parser rather than displayed.
+log(!text.includes('\\_') ? 'PASS' : 'FAIL', 'Escaped underscores render clean');
+
+const componentWarnings = warnings.filter(w => w.includes('Component implementation not found'));
+log(componentWarnings.length === 0 ? 'PASS' : 'FAIL',
+    'No unresolved components', componentWarnings[0] || 'none');
+
+finish();
+</script>
+</body>
+</html>

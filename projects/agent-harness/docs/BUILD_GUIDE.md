@@ -918,6 +918,69 @@ transports and hosts now agree on one number.
 
 ## 12. Deploy the agent to Cloud Run
 
+> **The deploy command below presupposes an image, and §10–§11 did not build one.**
+> The agent so far is a CLI (`agent/run.py`). A container needs something that
+> serves HTTP. Build the surface first.
+
+### 12a. The HTTP surface
+
+| File | Purpose |
+|---|---|
+| `agent/server.py` | Starlette app: `GET /health`, `POST /ask` |
+| `agent/Dockerfile` | Runtime image, built from the **harness root** |
+| `agent/requirements.txt` | Container-only deps, narrower than the harness set |
+| `cloudbuild.agent.yaml` | Lets one context hold two Dockerfiles |
+
+**Starlette, not FastAPI.** The MCP SDK already pulls Starlette in and the API is two
+routes. FastAPI would be a dependency bought for nothing.
+
+**`/health` is shallow** — no Vertex, no BigQuery, no MCP. Same reasoning as §8: a deep
+check bills on every probe of a scale-to-zero service and reports the container
+unhealthy whenever a dependency blips.
+
+**One MCP session per request, not one per instance.** The MCP server runs
+`stateless_http=True` precisely because streamable-HTTP sessions live in the memory of a
+single instance (§8). A long-lived client session therefore buys nothing and breaks when
+Cloud Run recycles the instance.
+
+**Validate the input even though the service is IAM-private.** `/ask` rejects non-JSON
+and empty questions with `400` and over-long ones with `413`. Private is not the same as
+trusted, and the bound is the caller's contract rather than an assumption about it.
+
+**Failures return `502`, never a plausible answer.** This is the same rule that produced
+the `MAX_TOKENS` raise in §10 — the project's recurring failure mode is silence, not
+errors.
+
+### 12b. Two Dockerfiles, one context
+
+`agent/graph.py` imports `mcp_server.config`, so the agent's build context must be the
+harness root — which `mcp_server/Dockerfile` already occupies. `gcloud builds submit
+--tag` insists the Dockerfile sit at the context root, so use an explicit config:
+
+```yaml
+# cloudbuild.agent.yaml
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "-f", "agent/Dockerfile", "-t", "${_IMAGE}", "."]
+images: ["${_IMAGE}"]
+options:
+  logging: CLOUD_LOGGING_ONLY
+```
+
+The Dockerfile copies **only** `mcp_server/__init__.py` and `mcp_server/config.py`. The
+rest of that package imports `google-cloud-aiplatform` and BigQuery, which are
+deliberately absent from this image — the agent reaches all of it through MCP. That is
+why `agent/requirements.txt` is five lines and the harness file is not.
+
+```bash
+gcloud builds submit \
+  --config projects/agent-harness/cloudbuild.agent.yaml \
+  --substitutions _IMAGE=${REGION}-docker.pkg.dev/${PROJECT_ID}/readmission/agent:latest \
+  projects/agent-harness
+```
+
+### 12c. Deploy
+
 ```bash
 gcloud run deploy agent \
   --image ${REGION}-docker.pkg.dev/${PROJECT_ID}/readmission/agent:latest \
@@ -928,12 +991,61 @@ gcloud run deploy agent \
   --min-instances 0 --max-instances 3 --memory 1Gi
 ```
 
-**Verify** end to end with your own identity token, then confirm the chain in logs:
-Django → agent → MCP → endpoint.
+As in §8 and §11, the new service's IAM policy starts **empty**. Grant yourself invoker
+rights or every call is a `403`:
+
+```bash
+gcloud run services add-iam-policy-binding agent \
+  --region ${REGION} \
+  --member="user:$(gcloud config get-value account)" \
+  --role="roles/run.invoker"
+```
+
+### 12d. Verify
+
+Exercise it with your own identity token, then confirm the chain in logs:
+
+```bash
+gcloud logging read 'resource.type="cloud_run_revision"
+  AND resource.labels.service_name="agent" AND httpRequest.requestMethod!=""' \
+  --limit 5 --freshness=20m \
+  --format="value(timestamp,httpRequest.requestMethod,httpRequest.requestUrl,httpRequest.status,httpRequest.latency)"
+```
+
+### Result — deployed 2026-07-30
+
+| Item | Value |
+|---|---|
+| URL | `https://agent-jamycsjjzq-ue.a.run.app` |
+| Revision | `agent-00001-zjd` |
+| Build | 47s |
+| Service account | `agent-sa@trim-icon-498815-a0.iam.gserviceaccount.com` |
+
+| Check | Result |
+|---|---|
+| `/health` unauthenticated | **403** |
+| `/health` with token | 200 in 0.11s |
+| `/ask` known patient | 200 in 5.43s, probability **0.131398**, fixture delta **0.00e+00** |
+| `/ask` repeat | 200 in 4.40s |
+| `/ask` unknown patient | 200, tool returns `unknown_patient`, answer invents nothing |
+| Log chain | agent `POST /ask` → mcp-server `POST /mcp` (200/202), same second |
+| Malformed body / empty question | 400 |
+
+> **The §11 audience warning is now settled.** It could not be reproduced locally,
+> because the `gcloud` fallback token is not audienced to the service URL yet Cloud Run
+> accepts it anyway. In the container the other branch runs: `agent-sa` mints a token
+> from the metadata server audienced to `MCP_URL`, and it is accepted. The warning is
+> real but correct-by-construction here — it bites only if `MCP_URL` and the audience
+> passed to `fetch_id_token` ever diverge.
 
 > **Two cold starts now sit in the path.** First request after idle pays agent + MCP
-> startup. If a live demo feels sluggish, `--min-instances 1` on both services for the
-> day costs a few dollars and is the right trade.
+> startup. The 5.43s above is *not* a true cold-start figure — mcp-server was already
+> warm from local testing. If a live demo feels sluggish, `--min-instances 1` on both
+> services for the day costs a few dollars and is the right trade.
+
+> **Neither Cloud Run service is covered by `teardown.py`.** At `--min-instances 0` they
+> cost approximately nothing, which is why they were left out — but do not read the
+> teardown script as a complete inventory.
 
 ---
 
@@ -953,6 +1065,42 @@ The Phase 2 exit criterion. All four must pass:
 .venv/bin/python -m pytest projects/agent-harness/tests/test_tier1.py -v
 ```
 
+The suite is transport-agnostic, so the same four assertions gate the deployed
+services:
+
+```bash
+MCP_TRANSPORT=http MCP_URL=${MCP_URL} \
+  .venv/bin/python -m pytest projects/agent-harness/tests/test_tier1.py -v
+```
+
+Two module-scoped fixtures hold one real conversation each — one known admission, one
+unknown — so four tests cost two LLM round trips rather than eight.
+
+### 13a. Do not validate against the advertised output schema
+
+The obvious implementation of criterion 4 is to fetch the tool's own
+`output_schema` from `tools/list` and validate against it. **That test cannot fail.**
+The SDK derives the schema from the return annotation, and `predict_readmission` is
+annotated `-> dict`, so what it advertises is:
+
+```json
+{"type": "object", "additionalProperties": true, "title": "predict_readmissionDictOutput"}
+```
+
+Every dict on earth validates against that. Write the §6 shape out explicitly in the
+test instead, with `additionalProperties: false` at both levels — a field silently added
+or renamed breaks the agent, the fixture, and A2UI, and should break here first.
+
+Confirm the schema can actually fail before trusting it. Ten mutations of a real
+payload — extra field, dropped `model_version`, empty `top_factors`, `decision: 2`,
+probability as a string, `direction: "increase"`, `feature_source: "cache"` — must all
+be rejected. Verified 2026-07-30: 11/11 behaved as expected.
+
+> **Assert routing on the trace, never on the prose.** Gemini knows what readmission
+> risk is and will produce a confident, plausible answer with no tool call at all. A
+> check that reads only the answer text passes that case. `test_routing_went_through_mcp`
+> asserts on `state["tool_calls"]` — name, arguments, and absence of a transport error.
+
 > **Do not hardcode `0.1314`.** Load expected values from
 > `tests/fixtures/expected.json` (written by `smoke_test.py --write-fixture` in §3, and
 > regenerated by the full training pass in §20). Compare within the fixture's
@@ -960,16 +1108,32 @@ The Phase 2 exit criterion. All four must pass:
 > retraining and that the failures look like integration bugs rather than an expected
 > model change.
 
+### Result — 2026-07-30
+
+| Run | Result |
+|---|---|
+| `test_tier1.py`, stdio | **4 passed** in 19.16s |
+| `test_tier1.py` + `test_agent_local.py`, http against deployed MCP | **10 passed** in 24.76s |
+| Schema negative check | 11/11 mutations rejected as expected |
+
+**Phase 2 exit criterion met.** The same `0.131398` now holds across the endpoint, the
+MCP server on both transports, the local agent, and the deployed agent service.
+
+`jsonschema` moved into `requirements.txt` as a direct pin. It already arrived
+transitively through `mcp`, but a direct import resting on a transitive dependency
+breaks the day the intermediary drops it.
+
 ---
 
 ## 14. Demo cohort and synthetic names
 
-`scripts/seed_demo_cohort.py` writes a Postgres table on the website's Cloud SQL
-instance:
+`scripts/seed_demo_cohort.py` selects the cohort, rewrites the `demo_cohort` BigQuery
+table, and emits `data/demo_cohort.json`. A Django management command loads that
+artifact into Postgres:
 
 | column | notes |
 |---|---|
-| `hadm_id` | real MIMIC identifier |
+| `hadm_id` | real MIMIC identifier, and the primary key |
 | `display_name` | **synthetic**, deterministic, seeded |
 | `age`, `sex` | from `feat_demographics` — the real record |
 | `summary` | short clinical descriptor for the search result |
@@ -985,6 +1149,74 @@ instance:
 - Descriptors must be **clinical, not outcome-based**: *"72F — CHF, 3 prior admissions"*,
   never *"high risk case"*, which spoils the prediction
 
+### 14a. Select on predicted risk, not on the label
+
+The provisional `build_demo_cohort.py` balanced on `readmission_30d`, which sounds
+equivalent and is not. Scoring its 41 patients showed why:
+
+| Property | Label-balanced cohort | Risk-stratified cohort |
+|---|---|---|
+| Below / at-or-above 0.12 | 10 / 31 | 15 / 17 |
+| Probability range | 0.0539–0.7252 | 0.0447–0.3176 |
+| Gap around the threshold | **0.0991 → 0.1314, nothing between** | 0.1159, 0.1202, 0.1224, 0.1227 |
+
+A balanced *label* does not produce a balanced *score*: the operating threshold is 0.12,
+so most positives and many negatives land above it. The label-balanced cohort contained
+no patient just **below** the line — precisely the case worth demonstrating. The seeder
+therefore scores a wide test-split pool first and fills fixed quotas per risk band,
+expressed relative to the threshold so a recalibration reshapes the cohort instead of
+silently invalidating it.
+
+> **Batch the scoring.** One instance per request costs 1.14s per patient; 50 instances
+> per request costs 0.008s per patient. Scoring 400 candidates takes seconds, which is
+> what makes risk-based selection practical at all.
+
+### 14b. Two details that bite
+
+**The fixture patient is not in the test split.** Admission 20924467 is a *validation*
+row, so a pool filtered to `split_name = 'test'` can never contain it and the pin
+silently does nothing — the seeder's guard caught exactly this. Pinned ids are fetched
+without the split filter. Validation rows were not trained on, so no memorised
+prediction reaches the demo, but this is the one documented exception to the
+test-split-only rule.
+
+**Use `hashlib`, not the builtin `hash()`.** Python salts string hashing per process, so
+`hash()` would reshuffle the cohort and rename every patient on each run — the exact
+opposite of the stored-mapping requirement.
+
+Names come from era-appropriate pools chosen by age band, because a 90-year-old named
+*Madison* is a tell that nobody thought about it.
+
+### 14c. Loading into Postgres
+
+The harness never touches the database and the website never touches BigQuery. The
+handoff is the JSON artifact, copied to `demo/data/demo_cohort.json` in the website repo
+so it ships inside the container:
+
+```bash
+python manage.py makemigrations demo && python manage.py migrate demo
+python manage.py seed_demo_patients          # idempotent, keyed on hadm_id
+python manage.py seed_demo_patients --prune  # also drop patients no longer in the file
+```
+
+`--prune` is opt-in: a truncated artifact should not silently empty the cohort.
+
+> **Production migration is deferred, not forgotten.** The commands above run against
+> local SQLite. Cloud SQL has no `demo_demopatient` table yet, which is harmless only
+> while the deployed image has no `demo` app in it. The moment the website is
+> redeployed, the migration must run **first** — `DemoPatient` is registered in the
+> Django admin, so an un-migrated deploy 500s on `/admin/` with a `ProgrammingError`.
+> Use the existing Cloud Run job (`GCP_DEPLOYMENT_GUIDE.md` §15), pointed at the new
+> image, then a second job execution for `seed_demo_patients`:
+>
+> ```bash
+> gcloud run jobs update migrate --image ${IMAGE} --region us-east1
+> gcloud run jobs execute migrate --region us-east1 --wait
+> ```
+>
+> Sequencing it with §15 avoids building and deploying the website image twice, since
+> §15 adds views, URLs, and the quota model to this same app.
+
 > **Label synthetic names in the UI.** Every patient view shows something like
 > *"Margaret Ellison · synthetic name · MIMIC-IV record 20924467"*. Assigning fake names
 > does not violate the PhysioNet DUA — you are not re-identifying anyone — but a demo
@@ -994,13 +1226,91 @@ instance:
 > Only the **name** is synthetic. All clinical values are real de-identified MIMIC data,
 > and the UI must never blur that.
 
+> **Rewriting the cohort invalidates the Feature Store sync.** The online store still
+> holds the previous admissions. Re-run `setup_feature_store.py --sync-only`, or a live
+> demo on `FEATURE_SOURCE=feature_store` will serve a stale cohort while BigQuery serves
+> the new one.
+
+> **A sync adds and updates; it never removes.** This one is worth internalising,
+> because the output actively misleads you. After rewriting the cohort from 41
+> admissions to 32, `--sync-only` reported `Sync complete — 32 rows synced` and the
+> parity suite passed. Both were true and neither meant what they appeared to. The
+> store held **71** entities: all 39 retired admissions were still being served, and
+> the parity test only exercises the fixture patient, which belonged to both cohorts
+> and so could not detect the problem.
+>
+> The sync summary reports the rows it *wrote*, not the rows the store *contains* —
+> there is no number in the output that would ever reveal the discrepancy. To retire
+> entities you must rebuild the view:
+>
+> ```bash
+> .venv/bin/python projects/agent-harness/scripts/setup_feature_store.py --recreate-view
+> ```
+>
+> Verify removals by fetching an admission you expect to be **gone**. Asserting on what
+> should be present cannot detect a store that is a superset of what you asked for.
+
+> **Deleting a feature view strands its name.** `--recreate-view` deletes and recreates
+> in one pass, and the recreate fails: Vertex rejects the name with
+> `FAILED_PRECONDITION: Re-using the same name as a recently-deleted FeatureView`. The
+> reservation outlasted 3+ minutes of polling and the ceiling is undocumented. Between
+> the delete and the release there is **no view at all**, so the online store serves
+> nothing — this is a self-inflicted outage of the demo's fast path.
+>
+> Do not wait it out. `FEATURE_VIEW_ID` is versioned in `config.py` and overridable by
+> env, so bumping the suffix (`readmission_cohort` → `readmission_cohort_v2`) sidesteps
+> the cooldown and succeeds immediately. Renaming costs nothing here: `teardown.py`
+> enumerates views rather than hardcoding the name, and the deployed `mcp-server` runs
+> `FEATURE_SOURCE=bigquery`, so no redeploy is required.
+>
+> The retry loop in `ensure_feature_view` remains as a safety net, but the intended
+> path for retiring entities is now **create the next version, then delete the old one**
+> — never delete first.
+
+> **Both feature sources must fail the same way.** Probing for a retired admission
+> surfaced a second bug. The BigQuery source raises `KeyError` for an unknown patient
+> and `predict.py` turns that into `unknown_patient`; the online store instead raises
+> `google.api_core.exceptions.NotFound`, which escaped as `feature_fetch_failed`. Same
+> condition, same tool, different error code depending on an environment variable — and
+> the misleading one reads like an outage. `feature_store.py` now flattens `NotFound`
+> into `KeyError`, and `test_missing_patient_raises_the_same_way` holds the line.
+>
+> The original parity suite compared *values* across sources and never compared
+> *failures*, which is why this survived. Error behaviour is part of the contract.
+
+### Result — 2026-07-30
+
+32 patients, 15 below / 17 at or above the threshold, probabilities 0.0447–0.3176,
+ages 21–90, 14M / 18F, with 10 predictions inside ±0.02 of the 0.12 line — the
+boundary cases the risk-band selection existed to produce. `demo` app created in the
+website project with `DemoPatient` + `seed_demo_patients`; 32 created, then 32 updated
+on reseed.
+
+The cohort now lives in four places, and a validation pass confirmed all four agree:
+the JSON artifact, the BigQuery `demo_cohort` table, the website's Postgres, and the
+Feature Store online store (`readmission_cohort_v2`, 0 of the 39 retired admissions
+still served). Tier 1 + parity: **8 passed** under `FEATURE_SOURCE=bigquery` and
+**8 passed** under `FEATURE_SOURCE=feature_store`.
+
 ---
 
 ## 15. Django BFF: auth, quota, token exchange
 
 Three responsibilities, in the website project:
 
+| File | Role |
+|---|---|
+| `demo/models.py` | `DemoQuota` alongside `DemoPatient` |
+| `demo/agent_client.py` | ID token minting + the proxy call |
+| `demo/views.py` | `console` (picker) and `ask` (JSON proxy) |
+| `demo/urls.py` | `demo:console`, `demo:ask` |
+| `demo/templates/demo/console.html` | placeholder UI, replaced in §17 |
+| `demo/templates/registration/login.html` | login only — no signup template |
+| `demo/tests.py` | 18 tests |
+
 **1. Authentication** — `@login_required`. Accounts are issued, not self-registered.
+Wire up `django.contrib.auth.urls` for login/logout; it deliberately ships no signup
+route, and `test_no_signup_route_exists` asserts none appears later by accident.
 
 **2. Per-user quota** in Postgres. The atomic-increment requirement is not optional:
 
@@ -1021,9 +1331,27 @@ if not updated:
 > database where it is atomic. Same reasoning as the earlier two-concurrent-users
 > discussion.
 
+> **Reset the counter lazily, not on a schedule.** `DemoQuota` stores a `period_start`
+> date and rolls over on the first request of a new day, guarded by
+> `filter(period_start__lt=today)` so a race resolves to a no-op. A nightly cron would
+> be one more thing that can fail silently overnight — and its failure mode is locking
+> every user out, discovered only when someone complains.
+
+> **Claim the credit before spending, refund on failure.** Checking the quota after the
+> call lets a burst of concurrent requests all pass the check and all bill. But
+> consuming without refunding means an agent outage quietly eats the day's allowance
+> for an answer nobody received. `refund()` is guarded by `used__gt=0` so it can never
+> drive the counter negative.
+
 **3. Token exchange** — mint an ID token audienced to the agent's Cloud Run URL and
 proxy the request. The browser never talks to the agent, so there is no CORS, no public
-agent, and no client-side credentials.
+agent, and no client-side credentials. The audience is the **service URL**, not the
+`/ask` path; a mismatch returns a 401 identical to a missing IAM binding.
+
+The credential-type check from §11 carries over verbatim: on Cloud Run the metadata
+server mints the token in-process, while local ADC is a *user* credential that cannot.
+Test the type rather than letting `fetch_id_token` fail, whose failure path probes the
+GCE metadata server and stalls for seconds on every local request.
 
 Grant the website's runtime service account invoker rights on the agent:
 
@@ -1033,6 +1361,67 @@ gcloud run services add-iam-policy-binding agent \
   --member="serviceAccount:${PROJECT_NUM}-compute@developer.gserviceaccount.com" \
   --role="roles/run.invoker"
 ```
+
+> **Compose the question server-side.** The picker POSTs `{"hadm_id": 20924467}` and
+> Django builds the wording. Accepting the full prompt from the client would let the
+> phrasing be edited into a leading question, and every demo would read slightly
+> differently. Free text stays available as a separate field for the advanced path.
+
+### Result — 2026-07-30
+
+`manage.py test demo` — **18 passed**. Live check through `agent_client.ask` against the
+deployed private agent: **37.63s**, `tool_calls: ['predict_readmission']`, probability
+**0.131398** — the canonical value, now verified through a fifth path (Django → agent →
+MCP → Vertex). The 37s is two cold starts on one request, which is what
+`DEMO_AGENT_TIMEOUT=120` exists for.
+
+`roles/run.invoker` granted to `778397675435-compute@developer.gserviceaccount.com`
+on `agent` (etag `BwZX224R_AI=`).
+
+### Deployed to production — 2026-07-30
+
+Pushing to `main` fires the `deploy-on-push` trigger, which runs
+`cloudbuild.yaml`: build → push → `migrate` job → `seed-demo-patients` job → deploy.
+Build `b9af67c9` (commit `ee5870c`), all seven steps SUCCESS, revision
+`danielmherman-00004-lxq`.
+
+| Check | Result |
+|---|---|
+| Seed job output | `32 created, 0 updated, 0 pruned` |
+| `/` | 200 — existing site unaffected |
+| `/demo/` | 302 → `/accounts/login/?next=/demo/` |
+| `/accounts/login/` | 200 |
+
+> **Order the pipeline, not your memory.** Migrate and seed are build *steps*, not
+> things to remember to run. If the migration fails the build stops and the previous
+> revision keeps serving; a deploy-first pipeline would briefly run new code against
+> the old schema. Seeding sits between them because the table must exist before rows
+> can go in, and the page should never go live listing zero patients. The seed command
+> is idempotent, so re-running it on every build is free.
+
+> **`gcloud builds list` is region-blind.** The trigger runs in `us-east1`, and the
+> default `gcloud builds list` only shows global builds — so a perfectly healthy build
+> looks like a trigger that never fired. Pass `--region=us-east1`.
+
+> **`--update-env-vars` splits on commas.** Adding the Cloud Run origin to
+> `CSRF_TRUSTED_ORIGINS` requires the `^@^` delimiter, or the value's own commas are
+> read as variable separators and the rest of the list becomes garbage names. Use
+> `--update-env-vars`, never `--set-env-vars`: the service carries seven variables and
+> `--set` replaces the whole set, silently dropping `ALLOWED_HOSTS` and the Cloud SQL
+> connection name.
+
+> **`ALLOWED_HOSTS` and `CSRF_TRUSTED_ORIGINS` are not the same check.** The former had
+> `.run.app`, the latter did not, so the site loaded over the Cloud Run URL but every
+> POST to `/demo/ask/` would have failed a CSRF origin check. A GET-only smoke test
+> passes straight through this.
+
+> **Still on SQLite.** Everything above is verified locally. Cloud SQL has neither the
+> `demo` tables nor the cohort rows, and both jobs must run *before* the service is
+> deployed — see the deferred-migration note in §14c. The image must be rebuilt first,
+> since the deployed one has no `demo` app in it.
+>
+> **Resolved the same day** — see the deployment subsection above. Cloud SQL now holds
+> the 32-patient cohort, applied by the pipeline rather than by hand.
 
 ---
 
@@ -1152,6 +1541,60 @@ Keep payload construction in **one adapter module** so the v1.0 migration
 Remaining points from [a2ui_requirements.md](../../../docs/a2ui_requirements.md): emit
 **fallback text** alongside every payload (R8), and annotate `audience: ["user"]` so raw
 JSON stays out of the LLM's context on later turns (R7).
+
+### 16f. Result
+
+Built and verified 2026-07-30.
+
+| File | Role |
+|---|---|
+| [agent/a2ui.py](../agent/a2ui.py) | The one adapter module. Pure functions, no I/O |
+| [tests/test_a2ui.py](../tests/test_a2ui.py) | 27 tests pinning the v0.9 shape |
+| [spikes/a2ui_render_check.html](../spikes/a2ui_render_check.html) | Renders the adapter's real output in a browser |
+| [agent/server.py](../agent/server.py) | `/ask` now returns an `a2ui` field |
+
+`build_risk_card(payload)` returns an envelope — `messages`, `fallback_text`,
+`audience`, `surface_id` — and never raises. `risk_card_from_tool_calls(calls)` pulls
+the last `predict_readmission` result out of a run and returns `None` when the agent
+answered without predicting, which the caller must treat as "show the prose" rather
+than "show an empty card".
+
+**Full suite: 46 passed.** Render check: all checks pass for both the risk card and the
+error card, with zero console warnings.
+
+> **The catalog id is a literal, and guessing it costs you the whole render.**
+> `createSurface` carries a `catalogId` that the renderer matches against
+> `basicCatalog.id`. The spike read it from JS; Python cannot. The value is
+> `https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json`, read out of the
+> shipped `@a2ui/lit@0.10.2` bundle rather than assumed. A mismatch resolves no
+> components and raises nothing. A test asserts the Python constant equals
+> `basicCatalog.id` at render time, so a version bump that moves it fails loudly.
+
+> **Every Text component is its own Markdown document.** The first version emitted one
+> `Text` per risk factor, each holding `- feature — increases risk`. It looked right.
+> The accessibility tree showed three separate single-item lists instead of one
+> three-item list — correct to a sighted user, wrong to a screen reader. Fixed by
+> joining the factors into a single bound value. **The unit tests could not have caught
+> this**; only the rendered a11y tree showed it.
+
+> **Unit tests pin the shape you believe in; only a browser proves the renderer
+> agrees.** These are different claims, and A2UI's failure mode — a console warning
+> and an empty box — makes the gap invisible. The render check exists to close it, and
+> it promotes `console.warn` to a visible failure precisely because the renderer warns
+> where it ought to throw. Regenerate its fixtures whenever the adapter changes.
+
+> **Values live in the data model, not in the components.** `updateComponents` carries
+> no clinical numbers at all — a test asserts the probability and `hadm_id` do not
+> appear in it. That keeps the component tree a fixed template and confines the
+> payload-specific part to `updateDataModel`, which is what makes the v1.0 migration a
+> single-file change.
+
+**Still open:** §16d vendoring. The render path currently loads eight modules from
+esm.sh, which is a third-party dependency sitting directly in the demo's critical path
+— and esm.sh already returned `ERR_CONNECTION_CLOSED` once during the spike. Vendoring
+belongs with §17, where the page is assembled, because the esm.sh modules import each
+other by absolute URL and rewriting those is part of building the real page rather than
+a separate exercise.
 
 ---
 

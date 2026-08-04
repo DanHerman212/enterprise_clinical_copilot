@@ -1,0 +1,97 @@
+{
+  "surface_id": "risk-card",
+  "audience": [
+    "user"
+  ],
+  "messages": [
+    {
+      "version": "v0.9",
+      "createSurface": {
+        "surfaceId": "risk-card",
+        "catalogId": "https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json"
+      }
+    },
+    {
+      "version": "v0.9",
+      "updateComponents": {
+        "surfaceId": "risk-card",
+        "components": [
+          {
+            "id": "root",
+            "component": "Card",
+            "child": "card-body"
+          },
+          {
+            "id": "card-body",
+            "component": "Column",
+            "children": [
+              "title",
+              "probability",
+              "decision",
+              "factors-title",
+              "factors",
+              "provenance"
+            ]
+          },
+          {
+            "id": "title",
+            "component": "Text",
+            "text": {
+              "path": "/title"
+            }
+          },
+          {
+            "id": "probability",
+            "component": "Text",
+            "text": {
+              "path": "/probability"
+            }
+          },
+          {
+            "id": "decision",
+            "component": "Text",
+            "text": {
+              "path": "/decision"
+            }
+          },
+          {
+            "id": "factors-title",
+            "component": "Text",
+            "text": {
+              "path": "/factors_title"
+            }
+          },
+          {
+            "id": "factors",
+            "component": "Text",
+            "text": {
+              "path": "/factors"
+            }
+          },
+          {
+            "id": "provenance",
+            "component": "Text",
+            "text": {
+              "path": "/provenance"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "version": "v0.9",
+      "updateDataModel": {
+        "surfaceId": "risk-card",
+        "value": {
+          "title": "## Readmission risk \u2014 admission 20924467",
+          "probability": "**13.1%** 30-day readmission probability (0.1314)",
+          "decision": "**Flagged** at a 12% decision threshold",
+          "factors_title": "### What drove this",
+          "factors": "- n\\_prior\\_admissions \u2014 increases risk (+0.4213)\n- days\\_since\\_last\\_discharge \u2014 increases risk (+0.2011)\n- age \u2014 decreases risk (-0.1021)",
+          "provenance": "Model readmission-final-20260723172647 \u00b7 features from bigquery \u00b7 synthetic name, real MIMIC-IV admission"
+        }
+      }
+    }
+  ],
+  "fallback_text": "Admission 20924467: 13.1% 30-day readmission probability (0.1314), flagged at a 12% threshold.\n  - n_prior_admissions increases risk\n  - days_since_last_discharge increases risk\n  - age decreases risk"
+}

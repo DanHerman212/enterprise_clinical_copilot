@@ -1,24 +1,26 @@
-"""Feature source selection.
+"""Feature source.
 
-Defaults to BigQuery — the cheap path — so dev, CI and tests never depend on
-provisioned online-serving infrastructure.
+BigQuery is the only source. Vertex AI Feature Store was removed on 2026-08-03:
+its online store bills ~$0.94/node-hour whether or not anyone is querying it,
+which is not defensible for a demo that is idle most of the time. BigQuery reads
+the same table with no standing infrastructure.
 """
 
-from ..config import FEATURE_SOURCE
 from .base import FeatureRow, FeatureSource, to_vector
 
-__all__ = ["FeatureRow", "FeatureSource", "to_vector", "get_feature_source"]
+# Reported in every prediction payload so the provenance of a score is visible.
+FEATURE_SOURCE = "bigquery"
+
+__all__ = [
+    "FEATURE_SOURCE",
+    "FeatureRow",
+    "FeatureSource",
+    "to_vector",
+    "get_feature_source",
+]
 
 
-def get_feature_source(name: str | None = None) -> FeatureSource:
-    """Return the configured feature source. `name` overrides FEATURE_SOURCE."""
-    choice = (name or FEATURE_SOURCE).lower()
-    if choice == "bigquery":
-        from .bigquery_source import BigQueryFeatureSource
-        return BigQueryFeatureSource()
-    if choice == "feature_store":
-        from .feature_store import FeatureStoreFeatureSource
-        return FeatureStoreFeatureSource()
-    raise ValueError(
-        f"Unknown FEATURE_SOURCE {choice!r}; expected 'bigquery' or 'feature_store'"
-    )
+def get_feature_source() -> FeatureSource:
+    """Return the feature source."""
+    from .bigquery_source import BigQueryFeatureSource
+    return BigQueryFeatureSource()

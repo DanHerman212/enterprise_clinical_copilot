@@ -1,0 +1,61 @@
+{
+  "surface_id": "risk-card",
+  "audience": [
+    "user"
+  ],
+  "messages": [
+    {
+      "version": "v0.9",
+      "createSurface": {
+        "surfaceId": "risk-card",
+        "catalogId": "https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json"
+      }
+    },
+    {
+      "version": "v0.9",
+      "updateComponents": {
+        "surfaceId": "risk-card",
+        "components": [
+          {
+            "id": "root",
+            "component": "Card",
+            "child": "card-body"
+          },
+          {
+            "id": "card-body",
+            "component": "Column",
+            "children": [
+              "title",
+              "detail"
+            ]
+          },
+          {
+            "id": "title",
+            "component": "Text",
+            "text": {
+              "path": "/title"
+            }
+          },
+          {
+            "id": "detail",
+            "component": "Text",
+            "text": {
+              "path": "/detail"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "version": "v0.9",
+      "updateDataModel": {
+        "surfaceId": "risk-card",
+        "value": {
+          "title": "## Prediction unavailable",
+          "detail": "No admission -1 in the feature source (bigquery).\n\n`unknown_patient`"
+        }
+      }
+    }
+  ],
+  "fallback_text": "Prediction unavailable (unknown_patient): No admission -1 in the feature source (bigquery)."
+}

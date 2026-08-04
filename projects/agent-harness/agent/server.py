@@ -17,6 +17,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from agent.a2ui import risk_card_from_tool_calls
 from agent.graph import ask, final_text
 from agent.mcp_client import MCP_TRANSPORT, MCP_URL, toolbox
 from mcp_server.config import GEMINI_MODEL, LOCATION, PROJECT
@@ -75,11 +76,18 @@ async def ask_route(request: Request) -> JSONResponse:
             status_code=502,
         )
 
+    # The A2UI envelope is composed here rather than in the browser so the
+    # rendering contract is testable in Python and versioned with the agent.
+    # It is None when the run answered without predicting, which the caller
+    # must treat as "show the prose" rather than "show an empty card".
+    card = risk_card_from_tool_calls(state["tool_calls"])
+
     return JSONResponse(
         {
             "question": question,
             "answer": final_text(state),
             "tool_calls": state["tool_calls"],
+            "a2ui": card,
             "model": GEMINI_MODEL,
             "mcp_transport": MCP_TRANSPORT,
         }

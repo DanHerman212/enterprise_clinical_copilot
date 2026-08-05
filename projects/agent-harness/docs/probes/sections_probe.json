@@ -1,0 +1,430 @@
+{
+  "generated_utc": "2026-08-05T13:32:42.811189+00:00",
+  "cache_created_utc": "2026-08-05T13:27:14.069547+00:00",
+  "notes_analysed": 33929,
+  "parse": {
+    "coverage_mean": 0.9998,
+    "coverage_median": 0.9998,
+    "coverage_p10": 0.9997,
+    "coverage_p01": 0.9994,
+    "zero_section_notes": 0,
+    "notes_below_0.8": 0,
+    "distinct_unknown_headings": 30182,
+    "top_unknown_headings": [
+      [
+        "heent",
+        35163
+      ],
+      [
+        "impression",
+        30311
+      ],
+      [
+        "mental status",
+        28766
+      ],
+      [
+        "general",
+        28170
+      ],
+      [
+        "level of consciousness",
+        27259
+      ],
+      [
+        "neuro",
+        27188
+      ],
+      [
+        "activity status",
+        27178
+      ],
+      [
+        "disp",
+        26186
+      ],
+      [
+        "cv",
+        23458
+      ],
+      [
+        "neck",
+        22782
+      ],
+      [
+        "abdomen",
+        22767
+      ],
+      [
+        "skin",
+        21385
+      ],
+      [
+        "lungs",
+        21333
+      ],
+      [
+        "ext",
+        20478
+      ],
+      [
+        "abd",
+        14920
+      ],
+      [
+        "extremities",
+        14643
+      ],
+      [
+        "vitals",
+        14266
+      ],
+      [
+        "vs",
+        13582
+      ],
+      [
+        "gen",
+        13044
+      ],
+      [
+        "cardiac",
+        10883
+      ],
+      [
+        "transitional issues",
+        8333
+      ],
+      [
+        "admission labs",
+        8189
+      ],
+      [
+        "tablet refills",
+        8004
+      ],
+      [
+        "discharge labs",
+        7517
+      ],
+      [
+        "findings",
+        7426
+      ],
+      [
+        "pulm",
+        7276
+      ],
+      [
+        "gu",
+        6914
+      ],
+      [
+        "imaging",
+        6731
+      ],
+      [
+        "refills",
+        6165
+      ],
+      [
+        "pulses",
+        5359
+      ],
+      [
+        "primary",
+        4999
+      ],
+      [
+        "resp",
+        4602
+      ],
+      [
+        "primary diagnosis",
+        4359
+      ],
+      [
+        "psych",
+        4350
+      ],
+      [
+        "secondary",
+        4249
+      ],
+      [
+        "heart",
+        4115
+      ],
+      [
+        "gi",
+        3762
+      ],
+      [
+        "neurologic",
+        3720
+      ],
+      [
+        "chest",
+        3720
+      ],
+      [
+        "pulmonary",
+        3048
+      ]
+    ]
+  },
+  "sections": {
+    "name": {
+      "present": 33929,
+      "present_pct": 100.0,
+      "empty": 0,
+      "placeholder_only": 11,
+      "has_content": 33918,
+      "has_content_pct_of_present": 100.0,
+      "median_informative_chars": 6
+    },
+    "unit_no": {
+      "present": 0,
+      "present_pct": 0.0,
+      "empty": 0,
+      "placeholder_only": 0,
+      "has_content": 0,
+      "has_content_pct_of_present": null,
+      "median_informative_chars": null
+    },
+    "admission_date": {
+      "present": 33929,
+      "present_pct": 100.0,
+      "empty": 0,
+      "placeholder_only": 3,
+      "has_content": 33926,
+      "has_content_pct_of_present": 100.0,
+      "median_informative_chars": 13
+    },
+    "discharge_date": {
+      "present": 5,
+      "present_pct": 0.0,
+      "empty": 0,
+      "placeholder_only": 3,
+      "has_content": 2,
+      "has_content_pct_of_present": 40.0,
+      "median_informative_chars": 465
+    },
+    "date_of_birth": {
+      "present": 33929,
+      "present_pct": 100.0,
+      "empty": 0,
+      "placeholder_only": 1,
+      "has_content": 33928,
+      "has_content_pct_of_present": 100.0,
+      "median_informative_chars": 4
+    },
+    "sex": {
+      "present": 6,
+      "present_pct": 0.0,
+      "empty": 0,
+      "placeholder_only": 0,
+      "has_content": 6,
+      "has_content_pct_of_present": 100.0,
+      "median_informative_chars": 527
+    },
+    "service": {
+      "present": 33892,
+      "present_pct": 99.9,
+      "empty": 4,
+      "placeholder_only": 71,
+      "has_content": 33817,
+      "has_content_pct_of_present": 99.8,
+      "median_informative_chars": 8
+    },
+    "allergies": {
+      "present": 33920,
+      "present_pct": 100.0,
+      "empty": 0,
+      "placeholder_only": 573,
+      "has_content": 33347,
+      "has_content_pct_of_present": 98.3,
+      "median_informative_chars": 36
+    },
+    "attending": {
+      "present": 33895,
+      "present_pct": 99.9,
+      "empty": 0,
+      "placeholder_only": 33298,
+      "has_content": 597,
+      "has_content_pct_of_present": 1.8,
+      "median_informative_chars": 27
+    },
+    "chief_complaint": {
+      "present": 32926,
+      "present_pct": 97.0,
+      "empty": 84,
+      "placeholder_only": 141,
+      "has_content": 32701,
+      "has_content_pct_of_present": 99.3,
+      "median_informative_chars": 16
+    },
+    "major_procedure": {
+      "present": 33827,
+      "present_pct": 99.7,
+      "empty": 16,
+      "placeholder_only": 59,
+      "has_content": 33752,
+      "has_content_pct_of_present": 99.8,
+      "median_informative_chars": 4
+    },
+    "history_of_present_illness": {
+      "present": 33359,
+      "present_pct": 98.3,
+      "empty": 971,
+      "placeholder_only": 9,
+      "has_content": 32379,
+      "has_content_pct_of_present": 97.1,
+      "median_informative_chars": 991
+    },
+    "review_of_systems": {
+      "present": 8540,
+      "present_pct": 25.2,
+      "empty": 7,
+      "placeholder_only": 1,
+      "has_content": 8532,
+      "has_content_pct_of_present": 99.9,
+      "median_informative_chars": 167
+    },
+    "past_medical_history": {
+      "present": 33384,
+      "present_pct": 98.4,
+      "empty": 3335,
+      "placeholder_only": 18,
+      "has_content": 30031,
+      "has_content_pct_of_present": 90.0,
+      "median_informative_chars": 184
+    },
+    "past_surgical_history": {
+      "present": 2002,
+      "present_pct": 5.9,
+      "empty": 0,
+      "placeholder_only": 0,
+      "has_content": 2002,
+      "has_content_pct_of_present": 100.0,
+      "median_informative_chars": 79
+    },
+    "social_history": {
+      "present": 33034,
+      "present_pct": 97.4,
+      "empty": 26,
+      "placeholder_only": 32412,
+      "has_content": 596,
+      "has_content_pct_of_present": 1.8,
+      "median_informative_chars": 182
+    },
+    "family_history": {
+      "present": 32950,
+      "present_pct": 97.1,
+      "empty": 677,
+      "placeholder_only": 126,
+      "has_content": 32147,
+      "has_content_pct_of_present": 97.6,
+      "median_informative_chars": 50
+    },
+    "physical_exam": {
+      "present": 32772,
+      "present_pct": 96.6,
+      "empty": 9121,
+      "placeholder_only": 265,
+      "has_content": 23386,
+      "has_content_pct_of_present": 71.4,
+      "median_informative_chars": 535
+    },
+    "pertinent_results": {
+      "present": 33072,
+      "present_pct": 97.5,
+      "empty": 136,
+      "placeholder_only": 7,
+      "has_content": 32929,
+      "has_content_pct_of_present": 99.6,
+      "median_informative_chars": 1316
+    },
+    "brief_hospital_course": {
+      "present": 29693,
+      "present_pct": 87.5,
+      "empty": 249,
+      "placeholder_only": 8,
+      "has_content": 29436,
+      "has_content_pct_of_present": 99.1,
+      "median_informative_chars": 1705
+    },
+    "medications_on_admission": {
+      "present": 31826,
+      "present_pct": 93.8,
+      "empty": 33,
+      "placeholder_only": 4,
+      "has_content": 31789,
+      "has_content_pct_of_present": 99.9,
+      "median_informative_chars": 256
+    },
+    "discharge_medications": {
+      "present": 33347,
+      "present_pct": 98.3,
+      "empty": 7,
+      "placeholder_only": 1,
+      "has_content": 33339,
+      "has_content_pct_of_present": 100.0,
+      "median_informative_chars": 550
+    },
+    "discharge_disposition": {
+      "present": 33509,
+      "present_pct": 98.8,
+      "empty": 0,
+      "placeholder_only": 2,
+      "has_content": 33507,
+      "has_content_pct_of_present": 100.0,
+      "median_informative_chars": 12
+    },
+    "discharge_diagnosis": {
+      "present": 32464,
+      "present_pct": 95.7,
+      "empty": 10,
+      "placeholder_only": 16,
+      "has_content": 32438,
+      "has_content_pct_of_present": 99.9,
+      "median_informative_chars": 64
+    },
+    "discharge_condition": {
+      "present": 33885,
+      "present_pct": 99.9,
+      "empty": 64,
+      "placeholder_only": 1,
+      "has_content": 33820,
+      "has_content_pct_of_present": 99.8,
+      "median_informative_chars": 102
+    },
+    "discharge_instructions": {
+      "present": 33790,
+      "present_pct": 99.6,
+      "empty": 172,
+      "placeholder_only": 4,
+      "has_content": 33614,
+      "has_content_pct_of_present": 99.5,
+      "median_informative_chars": 675
+    },
+    "followup_instructions": {
+      "present": 33399,
+      "present_pct": 98.4,
+      "empty": 0,
+      "placeholder_only": 33398,
+      "has_content": 1,
+      "has_content_pct_of_present": 0.0,
+      "median_informative_chars": 64
+    },
+    "facility": {
+      "present": 16868,
+      "present_pct": 49.7,
+      "empty": 0,
+      "placeholder_only": 15352,
+      "has_content": 1516,
+      "has_content_pct_of_present": 9.0,
+      "median_informative_chars": 81
+    }
+  }
+}

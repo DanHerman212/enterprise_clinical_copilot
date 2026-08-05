@@ -1,0 +1,20 @@
+{
+  "generated_utc": "2026-08-05T13:38:58.584249+00:00",
+  "model_version": "readmission-final-20260723172647",
+  "model_note": "dry-run model, not fully tuned; re-score after HPO",
+  "bundle_uri": "gs://trim-icon-498815-a0-mlops/pipeline-root/778397675435/readmission-training-20260723130737/register-model_-7432301817507086336/serving_model",
+  "threshold": 0.12,
+  "anchor": {
+    "hadm_id": 20924467,
+    "expected": 0.131398,
+    "actual": 0.131398
+  },
+  "rows_scored": 49103,
+  "readmission_rate": 0.2091,
+  "quadrants": {
+    "true_positive": 9201,
+    "false_positive": 26513,
+    "false_negative": 1064,
+    "true_negative": 12325
+  }
+}

@@ -1,0 +1,99 @@
+{
+  "generated_utc": "2026-08-05T15:45:03.880576+00:00",
+  "notes_tagged": 33929,
+  "limit": null,
+  "elapsed_seconds": 2787.5,
+  "tagged_sections": [
+    "history_of_present_illness",
+    "past_medical_history",
+    "social_history",
+    "brief_hospital_course",
+    "discharge_condition"
+  ],
+  "quadrant_sizes": {
+    "tp": 6834,
+    "tn": 7656,
+    "fp": 18681,
+    "fn": 758
+  },
+  "coverage": {
+    "any_gating_concept_all": 12071,
+    "any_gating_concept_all_pct": 35.6,
+    "any_gating_concept_fn": 197,
+    "any_gating_concept_fn_pct": 26.0
+  },
+  "concepts": {
+    "non_adherence": {
+      "gates": true,
+      "fn_with_concept": 25,
+      "tn_with_concept": 243,
+      "rate_fn": 0.033,
+      "rate_tn": 0.0317,
+      "lift": 1.04,
+      "rate_tp": 0.0565
+    },
+    "missed_followup": {
+      "gates": true,
+      "fn_with_concept": 5,
+      "tn_with_concept": 33,
+      "rate_fn": 0.0066,
+      "rate_tn": 0.0043,
+      "lift": 1.53,
+      "rate_tp": 0.0037
+    },
+    "ama": {
+      "gates": true,
+      "fn_with_concept": 2,
+      "tn_with_concept": 48,
+      "rate_fn": 0.0026,
+      "rate_tn": 0.0063,
+      "lift": 0.42,
+      "rate_tp": 0.0233
+    },
+    "substance_use": {
+      "gates": true,
+      "fn_with_concept": 33,
+      "tn_with_concept": 528,
+      "rate_fn": 0.0435,
+      "rate_tn": 0.069,
+      "lift": 0.63,
+      "rate_tp": 0.1095
+    },
+    "functional_decline": {
+      "gates": true,
+      "fn_with_concept": 118,
+      "tn_with_concept": 1138,
+      "rate_fn": 0.1557,
+      "rate_tn": 0.1486,
+      "lift": 1.05,
+      "rate_tp": 0.2154
+    },
+    "polypharmacy": {
+      "gates": true,
+      "fn_with_concept": 6,
+      "tn_with_concept": 28,
+      "rate_fn": 0.0079,
+      "rate_tn": 0.0037,
+      "lift": 2.16,
+      "rate_tp": 0.0056
+    },
+    "goals_of_care": {
+      "gates": true,
+      "fn_with_concept": 35,
+      "tn_with_concept": 347,
+      "rate_fn": 0.0462,
+      "rate_tn": 0.0453,
+      "lift": 1.02,
+      "rate_tp": 0.0852
+    },
+    "hedging": {
+      "gates": false,
+      "fn_with_concept": 73,
+      "tn_with_concept": 782,
+      "rate_fn": 0.0963,
+      "rate_tn": 0.1021,
+      "lift": 0.94,
+      "rate_tp": 0.1554
+    }
+  }
+}

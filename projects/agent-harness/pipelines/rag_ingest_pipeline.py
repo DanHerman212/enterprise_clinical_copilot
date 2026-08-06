@@ -115,7 +115,10 @@ def submit() -> None:
             ),
             "embed_workers": int(os.environ.get("EMBED_WORKERS", "1")),
         },
-        enable_caching=False,
+        # Enable KFP step caching: unchanged steps (chunk-notes, embed) are
+        # skipped on retry, so a fix to build-index alone no longer re-pays the
+        # ~11 min chunk run. A step whose code or inputs changed still re-runs.
+        enable_caching=True,
     )
     job.submit(service_account=os.environ.get("PIPELINE_SA") or None)
 

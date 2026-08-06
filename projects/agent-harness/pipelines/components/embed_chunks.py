@@ -40,6 +40,29 @@ def _rss_mib() -> int:
     return -1
 
 
+def _path_to_gcs_uri(path: str) -> str:
+    """Map a KFP artifact path (mounted under /gcs/) to its gs:// URI."""
+    if path.startswith("/gcs/"):
+        return "gs://" + path[len("/gcs/"):]
+    raise SystemExit(f"cannot derive gs:// URI from artifact path: {path}")
+
+
+def _stream_count(client_s: storage.Client, uri: str) -> tuple[int, int]:
+    """Stream a GCS ingest file once; return (record_count, unique_id_count)."""
+    bucket_name, obj = uri.replace("gs://", "", 1).split("/", 1)
+    blob = client_s.bucket(bucket_name).blob(obj)
+    total = 0
+    unique: set[str] = set()
+    with blob.open("rb") as src:
+        reader = gzip.open(src, "rt", encoding="utf-8") \
+            if obj.endswith(".gz") else io.TextIOWrapper(src, encoding="utf-8")
+        with reader as text:
+            for line in text:
+                total += 1
+                unique.add(json.loads(line)["id"])
+    return total, unique
+
+
 def run_embed_chunks(
     *,
     project_id: str,
@@ -95,6 +118,43 @@ def run_embed_chunks(
 
     pending = [c for c in chunks if datapoint_id(c["chunk_id"]) not in done]
     print(f"pending embed: {len(pending)}")
+
+    # FULL-REUSE FAST PATH: nothing left to embed, so skip the 9 GB
+    # download-to-/tmp + GCS-FUSE re-upload that run 8 showed takes ~10 min of
+    # pure I/O. Instead do a server-side GCS copy of the previous ingest
+    # straight to the output object (same bytes, no data through this pod) and
+    # verify the count/unique-ids in one streaming pass.
+    if previous_ingest_uri and not pending and not previous_ingest_uri.endswith(".gz"):
+        started_fast = time.monotonic()
+        client_s = storage.Client(project=project_id)
+        total, unique = _stream_count(client_s, previous_ingest_uri)
+        if total != n_total or len(unique) != n_total:
+            raise SystemExit(
+                f"previous ingest mismatch: {total} records / {len(unique)} unique "
+                f"vs {n_total} chunks"
+            )
+        dst_uri = _path_to_gcs_uri(ingest_path)
+        dst_bucket, dst_obj = dst_uri.replace("gs://", "", 1).split("/", 1)
+        src_bucket, src_obj = previous_ingest_uri.replace("gs://", "", 1).split("/", 1)
+        src_blob = client_s.bucket(src_bucket).blob(src_obj)
+        dst_blob = client_s.bucket(dst_bucket).blob(dst_obj)
+        dst_blob.rewrite(src_blob)  # server-side; no bytes through this pod
+        elapsed_fast = time.monotonic() - started_fast
+        manifest = {
+            "chunks": n_total,
+            "ingest": total,
+            "unique_ids": len(unique),
+            "reused": total,
+            "new_embedded": 0,
+            "retries": 0,
+            "dimensions": OUTPUT_DIMENSIONALITY,
+            "elapsed_seconds": round(elapsed_fast, 1),
+            "path": "server-side copy",
+        }
+        with open(manifest_path, "w") as handle:
+            json.dump(manifest, handle, indent=2)
+        print(f"embed_chunks: {total} records via server-side copy in {elapsed_fast:.1f}s")
+        return
 
     lock = threading.Lock()
     embedded = 0
@@ -181,9 +241,12 @@ def run_embed_chunks(
             with open(base_path, encoding="utf-8") as handle:
                 for line in handle:
                     out.write(line)
-        with open(new_path, encoding="utf-8") as handle:
-            for line in handle:
-                out.write(line)
+        # new_path only exists when there were pending chunks to embed; on a
+        # full-reuse run (pending == 0) it is never created (hit on run 7).
+        if os.path.exists(new_path):
+            with open(new_path, encoding="utf-8") as handle:
+                for line in handle:
+                    out.write(line)
 
     total = 0
     unique: set[str] = set()

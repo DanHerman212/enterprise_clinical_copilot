@@ -70,6 +70,10 @@ def run_build_index(
         contents_delta_uri=f"gs://{bucket.name}/{full_dir}",
         dimensions=dimensions,
         approximate_neighbors_count=approximate_neighbors,
+        # SDK defaults are None; without these the tree-AH algorithmConfig is
+        # empty and Vertex rejects the build ("algorithmConfig required").
+        leaf_node_embedding_count=1000,
+        leaf_nodes_to_search_percent=10,
         distance_measure_type=dist,
     )
     tree.wait()

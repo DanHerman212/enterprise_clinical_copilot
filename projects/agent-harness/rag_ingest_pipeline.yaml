@@ -1,0 +1,360 @@
+# PIPELINE DEFINITION
+# Name: rag-ingest
+# Description: Assemble the RAG ingest DAG: chunk → embed → index.
+# Inputs:
+#    approximate_neighbors: int [Default: 40.0]
+#    brute_sample: int [Default: 2000.0]
+#    dimensions: int [Default: 768.0]
+#    embed_workers: int [Default: 1.0]
+#    expected_vectors: int [Default: 555770.0]
+#    notes_table_ref: str [Default: 'trim-icon-498815-a0.mimiciv_note.discharge']
+#    pack_to: int [Default: 700.0]
+#    previous_ingest_uri: str [Default: '']
+#    project_id: str [Default: 'trim-icon-498815-a0']
+#    sections_csv: str [Default: 'history_of_present_illness,past_medical_history,family_history,social_history,physical_exam,brief_hospital_course,discharge_condition,discharge_diagnosis,discharge_medications,medications_on_admission,discharge_disposition,discharge_instructions']
+#    split_name: str [Default: 'test']
+#    split_table_ref: str [Default: 'trim-icon-498815-a0.readmission.analytics_dataset_encoded']
+components:
+  comp-build-index:
+    executorLabel: exec-build-index
+    inputDefinitions:
+      artifacts:
+        ingest:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+      parameters:
+        approximate_neighbors:
+          parameterType: NUMBER_INTEGER
+        brute_sample:
+          parameterType: NUMBER_INTEGER
+        dimensions:
+          parameterType: NUMBER_INTEGER
+        expected:
+          parameterType: NUMBER_INTEGER
+        location:
+          parameterType: STRING
+        project_id:
+          parameterType: STRING
+    outputDefinitions:
+      artifacts:
+        manifest:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+  comp-chunk-notes:
+    executorLabel: exec-chunk-notes
+    inputDefinitions:
+      parameters:
+        notes_table_ref:
+          parameterType: STRING
+        pack_to:
+          parameterType: NUMBER_INTEGER
+        project_id:
+          parameterType: STRING
+        sections_csv:
+          parameterType: STRING
+        split_name:
+          parameterType: STRING
+        split_table_ref:
+          parameterType: STRING
+    outputDefinitions:
+      artifacts:
+        chunks:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+        manifest:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+  comp-embed-chunks:
+    executorLabel: exec-embed-chunks
+    inputDefinitions:
+      artifacts:
+        chunks:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+      parameters:
+        location:
+          parameterType: STRING
+        previous_ingest_uri:
+          parameterType: STRING
+        project_id:
+          parameterType: STRING
+        workers:
+          parameterType: NUMBER_INTEGER
+    outputDefinitions:
+      artifacts:
+        ingest:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+        manifest:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+deploymentSpec:
+  executors:
+    exec-build-index:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - build_index
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'google-cloud-aiplatform'\
+          \ 'google-cloud-storage'  &&  python3 -m pip install --quiet --no-warn-script-location\
+          \ 'kfp==2.16.1' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
+          3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef build_index(\n    project_id: str,\n    location: str,\n    ingest:\
+          \ dsl.Input[dsl.Artifact],\n    dimensions: int,\n    brute_sample: int,\n\
+          \    approximate_neighbors: int,\n    expected: int,\n    manifest: dsl.Output[dsl.Artifact],\n\
+          ) -> None:\n    \"\"\"KFP component: build BRUTE_FORCE + TREE_AH Vector\
+          \ Search indexes.\"\"\"\n    from pipelines.components.build_index import\
+          \ run_build_index\n\n    run_build_index(\n        project_id=project_id,\n\
+          \        location=location,\n        ingest_path=ingest.path,\n        dimensions=dimensions,\n\
+          \        brute_sample=brute_sample,\n        approximate_neighbors=approximate_neighbors,\n\
+          \        expected=expected,\n        manifest_path=manifest.path,\n    )\n\
+          \n"
+        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/rag-ingest:latest
+        resources:
+          cpuLimit: 2.0
+          memoryLimit: 8.589934592
+          resourceCpuLimit: '2'
+          resourceMemoryLimit: 8Gi
+    exec-chunk-notes:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - chunk_notes
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'google-cloud-bigquery'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.1'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef chunk_notes(\n    project_id: str,\n    notes_table_ref: str,\n\
+          \    split_table_ref: str,\n    split_name: str,\n    pack_to: int,\n  \
+          \  sections_csv: str,\n    chunks: dsl.Output[dsl.Artifact],\n    manifest:\
+          \ dsl.Output[dsl.Artifact],\n) -> None:\n    \"\"\"KFP component: chunk\
+          \ the test-split discharge notes in BigQuery.\"\"\"\n    from pipelines.components.chunk_notes\
+          \ import run_chunk_notes\n\n    run_chunk_notes(\n        project_id=project_id,\n\
+          \        notes_table_ref=notes_table_ref,\n        split_table_ref=split_table_ref,\n\
+          \        split_name=split_name,\n        pack_to=pack_to,\n        sections_csv=sections_csv,\n\
+          \        chunks_path=chunks.path,\n        manifest_path=manifest.path,\n\
+          \    )\n\n"
+        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/rag-ingest:latest
+        resources:
+          cpuLimit: 2.0
+          memoryLimit: 8.589934592
+          resourceCpuLimit: '2'
+          resourceMemoryLimit: 8Gi
+    exec-embed-chunks:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - embed_chunks
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'google-genai'\
+          \ 'google-cloud-storage'  &&  python3 -m pip install --quiet --no-warn-script-location\
+          \ 'kfp==2.16.1' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
+          3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef embed_chunks(\n    project_id: str,\n    location: str,\n   \
+          \ chunks: dsl.Input[dsl.Artifact],\n    previous_ingest_uri: str,\n    workers:\
+          \ int,\n    ingest: dsl.Output[dsl.Artifact],\n    manifest: dsl.Output[dsl.Artifact],\n\
+          ) -> None:\n    \"\"\"KFP component: embed chunks and emit the Vector Search\
+          \ ingest artifact.\"\"\"\n    from pipelines.components.embed_chunks import\
+          \ run_embed_chunks\n\n    run_embed_chunks(\n        project_id=project_id,\n\
+          \        location=location,\n        chunks_path=chunks.path,\n        previous_ingest_uri=previous_ingest_uri,\n\
+          \        ingest_path=ingest.path,\n        manifest_path=manifest.path,\n\
+          \        workers=workers,\n    )\n\n"
+        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/rag-ingest:latest
+        resources:
+          cpuLimit: 8.0
+          memoryLimit: 25.769803776
+          resourceCpuLimit: '8'
+          resourceMemoryLimit: 24Gi
+pipelineInfo:
+  description: "Assemble the RAG ingest DAG: chunk \u2192 embed \u2192 index."
+  name: rag-ingest
+root:
+  dag:
+    tasks:
+      build-index:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-build-index
+        dependentTasks:
+        - embed-chunks
+        inputs:
+          artifacts:
+            ingest:
+              taskOutputArtifact:
+                outputArtifactKey: ingest
+                producerTask: embed-chunks
+          parameters:
+            approximate_neighbors:
+              componentInputParameter: approximate_neighbors
+            brute_sample:
+              componentInputParameter: brute_sample
+            dimensions:
+              componentInputParameter: dimensions
+            expected:
+              componentInputParameter: expected_vectors
+            location:
+              runtimeValue:
+                constant: us-east1
+            project_id:
+              componentInputParameter: project_id
+        taskInfo:
+          name: build-index
+      chunk-notes:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-chunk-notes
+        inputs:
+          parameters:
+            notes_table_ref:
+              componentInputParameter: notes_table_ref
+            pack_to:
+              componentInputParameter: pack_to
+            project_id:
+              componentInputParameter: project_id
+            sections_csv:
+              componentInputParameter: sections_csv
+            split_name:
+              componentInputParameter: split_name
+            split_table_ref:
+              componentInputParameter: split_table_ref
+        taskInfo:
+          name: chunk-notes
+      embed-chunks:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-embed-chunks
+        dependentTasks:
+        - chunk-notes
+        inputs:
+          artifacts:
+            chunks:
+              taskOutputArtifact:
+                outputArtifactKey: chunks
+                producerTask: chunk-notes
+          parameters:
+            location:
+              runtimeValue:
+                constant: us-east1
+            previous_ingest_uri:
+              componentInputParameter: previous_ingest_uri
+            project_id:
+              componentInputParameter: project_id
+            workers:
+              componentInputParameter: embed_workers
+        taskInfo:
+          name: embed-chunks
+  inputDefinitions:
+    parameters:
+      approximate_neighbors:
+        defaultValue: 40.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      brute_sample:
+        defaultValue: 2000.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      dimensions:
+        defaultValue: 768.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      embed_workers:
+        defaultValue: 1.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      expected_vectors:
+        defaultValue: 555770.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      notes_table_ref:
+        defaultValue: trim-icon-498815-a0.mimiciv_note.discharge
+        isOptional: true
+        parameterType: STRING
+      pack_to:
+        defaultValue: 700.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      previous_ingest_uri:
+        defaultValue: ''
+        isOptional: true
+        parameterType: STRING
+      project_id:
+        defaultValue: trim-icon-498815-a0
+        isOptional: true
+        parameterType: STRING
+      sections_csv:
+        defaultValue: history_of_present_illness,past_medical_history,family_history,social_history,physical_exam,brief_hospital_course,discharge_condition,discharge_diagnosis,discharge_medications,medications_on_admission,discharge_disposition,discharge_instructions
+        isOptional: true
+        parameterType: STRING
+      split_name:
+        defaultValue: test
+        isOptional: true
+        parameterType: STRING
+      split_table_ref:
+        defaultValue: trim-icon-498815-a0.readmission.analytics_dataset_encoded
+        isOptional: true
+        parameterType: STRING
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.16.1

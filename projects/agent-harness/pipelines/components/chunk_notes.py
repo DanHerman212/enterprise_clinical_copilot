@@ -118,5 +118,3 @@ def chunk_notes(
         chunks_path=chunks.path,
         manifest_path=manifest.path,
     )
-    with open(manifest.path) as handle:
-        chunks.metadata = json.load(handle)

@@ -47,13 +47,13 @@ def rag_ingest_pipeline(
     sections_csv: str = ",".join(DEFAULT_SECTIONS),
     previous_ingest_uri: str = "",
     dimensions: int = 768,
-    embed_workers: int = 6,
+    embed_workers: int = 1,
     brute_sample: int = 2000,
     approximate_neighbors: int = 40,
     expected_vectors: int = 555770,
 ) -> None:
     """Assemble the RAG ingest DAG: chunk → embed → index."""
-    chunks = chunk_notes(
+    chunks_task = chunk_notes(
         project_id=project_id,
         notes_table_ref=notes_table_ref,
         split_table_ref=split_table_ref,
@@ -61,24 +61,31 @@ def rag_ingest_pipeline(
         pack_to=pack_to,
         sections_csv=sections_csv,
     )
+    chunks_task.set_cpu_limit("2").set_memory_limit("8Gi")
 
-    ingest = embed_chunks(
+    ingest_task = embed_chunks(
         project_id=project_id,
         location=LOCATION,
-        chunks=chunks.outputs["chunks"],
+        chunks=chunks_task.outputs["chunks"],
         previous_ingest_uri=previous_ingest_uri,
         workers=embed_workers,
     )
+    # Downloads the previous ingest (~4-8 GB, streamed) and holds ~560k chunk
+    # records plus file-I/O page cache. cpu 8 -> e2-standard-8 (32 GB) so the
+    # 24 Gi limit has real headroom; a tight limit on a 16 GB machine OOMs
+    # (observed across runs 2-4).
+    ingest_task.set_cpu_limit("8").set_memory_limit("24Gi")
 
-    build_index(
+    index_task = build_index(
         project_id=project_id,
         location=LOCATION,
-        ingest=ingest.outputs["ingest"],
+        ingest=ingest_task.outputs["ingest"],
         dimensions=dimensions,
         brute_sample=brute_sample,
         approximate_neighbors=approximate_neighbors,
         expected=expected_vectors,
     )
+    index_task.set_cpu_limit("2").set_memory_limit("8Gi")
 
 
 def compile_pipeline(package_path: str = "rag_ingest_pipeline.yaml") -> str:
@@ -106,7 +113,7 @@ def submit() -> None:
                 "PREVIOUS_INGEST_URI",
                 f"gs://{PROJECT_ID}-mlops/rag/embeddings/ingest/embed_ingest.jsonl.gz",
             ),
-            "embed_workers": int(os.environ.get("EMBED_WORKERS", "6")),
+            "embed_workers": int(os.environ.get("EMBED_WORKERS", "1")),
         },
         enable_caching=False,
     )

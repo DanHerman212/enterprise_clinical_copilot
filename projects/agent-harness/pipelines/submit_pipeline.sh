@@ -28,6 +28,7 @@ export PIPELINE_SA="${PIPELINE_SA:-mlops-pipeline@trim-icon-498815-a0.iam.gservi
 export RAG_IMAGE_URI="${RAG_IMAGE_URI:-us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/rag-ingest:latest}"
 # Default: reuse the previous ingest on GCS so a fix re-embeds only changed chunks.
 export PREVIOUS_INGEST_URI="${PREVIOUS_INGEST_URI:-gs://trim-icon-498815-a0-mlops/rag/embeddings/ingest/embed_ingest.jsonl.gz}"
+export EMBED_WORKERS="${EMBED_WORKERS:-1}"
 
 export PYTHONPATH="$HARNESS_DIR${PYTHONPATH:+:$PYTHONPATH}"
 

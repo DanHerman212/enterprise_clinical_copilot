@@ -51,8 +51,11 @@ flowchart LR
     D --> E["Grounded assessment<br/>+ cited intervention plan"]
 ```
 
-Both tools feed the assessment. Per your correction on 2026-08-03: the notes are an
-**input to the risk assessment**, not a decoration applied after the model has spoken.
+Both tools feed the assessment. Per your correction on 2026-08-03, the notes are an
+input to the assessment, not a decoration applied after the model has spoken. Per the
+evidence gate (2026-08-05, §2), the notes' role is **grounded explanation + cited
+intervention plan**: the risk score and SHAP factors come from the model alone — the
+notes do not claim to improve prediction.
 
 ---
 
@@ -77,7 +80,7 @@ Both tools feed the assessment. Per your correction on 2026-08-03: the notes are
 | D1 | Embedding model | `text-embedding-005` (768 dims, cheap) vs `gemini-embedding-001` (3072, truncatable) |
 | D2 | Chunk size | ~1,500 chars w/ 200 overlap vs whole-section chunks |
 | D3 | Index algorithm | `BRUTE_FORCE` validation index first, then `TREE_AH` for scale — or straight to `TREE_AH` |
-| D4 | Concept list for §2 | Confirm or replace the proposed list |
+| D4 | Concept list (now for cohort selection) | Tags at `~/.cache/enterprise_clinical_copilot/note_concepts.jsonl.gz`; drive §10's "citable content" criterion, not a prediction claim |
 
 ---
 
@@ -147,57 +150,70 @@ Already enabled for prediction; Vector Search lives under the same API.
 
 ---
 
-## 2. The evidence gate
+## 2. The evidence gate — completed 2026-08-05
 
-**This step can invalidate the design. Do it first.**
+**Status: RUN, and the gate did not pass.** The design was reframed as a result; this
+section records what was measured and why the system proceeds the way it does.
 
-The premise is that discharge notes carry readmission-relevant context the 49 tabular
-features cannot see. If they don't, we are building expensive infrastructure to retrieve
-noise, and we should know that now rather than after §7.
+### What we set out to test
 
-### Why this is a real question
+The original premise was that discharge notes carry readmission-risk context the 49
+tabular features cannot see — and that we should prove it before building the index.
+The test measured **orthogonal lift**: among test-split admissions the model scored
+*below* threshold, do concept rates differ between patients who were readmitted anyway
+(FN) and those who were not (TN)? Testing concepts against the label directly would
+mostly measure redundancy with the coded features.
 
-An informal probe on 2026-08-03 found that the **Social History** section — the most
-obvious home for "lives alone", "unreliable transportation" — is **fully redacted in
-95.5% of test-split discharge notes** (only 611 of 33,929 have any content). MIMIC's
-de-identification strips it.
+### How it ran (all committed code)
 
-So the first bullet of rag_requirements.md's "what the notes contribute" list is largely
-**unavailable in this corpus**. The other three bullets are unmeasured.
-
-### `scripts/probe_note_signal.py`
-
-One committed script, writing to `readmission.note_signal_probe`, reporting:
-
-1. **Section inventory** — every `^[A-Z][A-Za-z /]+:` header, with frequency across the test split
-2. **Redaction rate per section** — fully redacted (`___` only) vs partial vs has content
-3. **Concept lift** — for each concept, its rate in `readmission_30d = 1` vs `= 0`
-
-Proposed concept list (D4 — confirm or replace):
-
-| Concept | Why it might matter |
+| Step | What |
 |---|---|
-| Non-adherence | Predicts return regardless of physiology |
-| Missed / no follow-up scheduled | The discharge plan failed before it started |
-| Left against medical advice | Incomplete treatment |
-| Substance use | Strong readmission driver, often not in coded features |
-| Functional decline / needs assistance | Discharge destination mismatch |
-| Polypharmacy / complex regimen | Medication error risk post-discharge |
-| Goals of care / palliative | Readmission may be clinically expected, not a failure |
-| Clinician hedging ("borderline", "guarded") | The subjective signal in R-list bullet 3 |
+| Cache | `rag/notes.py`, `scripts/fetch_note_cache.py` — 33,929 test-split notes (378M chars) at `~/.cache/`, outside iCloud |
+| A1 sections | `scripts/probe_sections.py` — parser validated on the corpus: coverage 0.9998, zero unparsed notes |
+| A2 scoring | `scripts/score_test_split.py` — 49,103 scored locally via the production `ReadmissionPredictor`; anchor check reproduced the endpoint-verified 0.131398 exactly |
+| A3 concepts | `rag/concepts.py` + 43 labeled sentences — medspaCy ConText; negated / hypothetical / family mentions excluded; 48/48 tests pass |
+| A4 lift | `scripts/probe_note_signal.py` — full corpus tagged (46.5 min) |
 
-### The gate
+### Results
 
-Read the output and decide:
+Quadrants among noted test admissions: **FN 758 / TN 7,656 / TP 6,834 / FP 18,681**.
+Lift = concept rate in FN ÷ rate in TN (both below threshold):
 
-- **Pass** — at least some concepts show meaningful lift over base rate, and live in
-  sections that survive de-identification. Continue to §3.
-- **Fail** — the notes are mostly boilerplate and redaction. Then we change the design
-  before building on it. Options in that case: pivot the retrieval target to the
-  **discharge plan and instructions** (which are not redacted and are clinically real),
-  or reconsider the corpus.
+| Concept | FN rate | TN rate | Lift | FN events |
+|---|---|---|---|---|
+| polypharmacy | 0.79% | 0.37% | 2.16 | 6 |
+| missed_followup | 0.66% | 0.43% | 1.53 | 5 |
+| functional_decline | 15.6% | 14.9% | 1.05 | 118 |
+| non_adherence | 3.3% | 3.2% | 1.04 | 25 |
+| goals_of_care | 4.6% | 4.5% | 1.02 | 35 |
+| hedging (non-gating) | 9.6% | 10.2% | 0.94 | 73 |
+| substance_use | 4.4% | 6.9% | 0.63 | 33 |
+| ama | 0.26% | 0.63% | 0.42 | 2 |
 
-**Verify:** the probe table exists, you have read it, and you have said pass or fail.
+The only lifts above 1.5 rest on 5–6 events — noise. The well-powered row,
+**functional_decline** (118 events, lift 1.05), is null. Coverage was healthy — 35.6% of
+notes carry ≥1 concept — so the demo has things to *show*; what the probe could not find
+is evidence the concepts *predict* beyond the structured features.
+
+### The corrected redaction picture
+
+The informal 95.5% Social History figure was superseded by per-section measurement:
+Social History is **98.2% placeholder-only** (the typical body is a single `___`);
+de-identification removed entire sections, not just names. The narrative sections the
+system actually uses are nearly fully intact: Brief Hospital Course 99.1% content
+(median 1,705 chars), HPI 97.1% (991), Discharge Instructions 99.5% (675).
+
+### Decision
+
+**The notes' role is grounded explanation + cited intervention plan — the claim that
+they improve prediction is dropped.** The system retrieves the right patient's notes to
+explain the assessment and cite every intervention; the risk score and SHAP factors come
+from the model alone. This is consistent with `rag_requirements.md`, which never required
+notes to improve prediction — it required R1 scoped retrieval, R2 original text, R3
+grounded answers, R4 complement-not-replace, R5 `rag_search` as the second tool.
+
+The concept tags now serve **cohort selection** (§10): they find admissions whose notes
+have citable content worth demonstrating. Full record: `docs/session_2026-08-05_evidence_gate.md`.
 
 ---
 
@@ -444,8 +460,8 @@ code in `scripts/build_demo_cohort.py`:
 - Test split only
 - Stratified by predicted risk, weighted near the calibrated threshold
 - All four confusion-matrix quadrants represented
-- ≥3 cases where notes carry context absent from structured features
-- ≥1 case where notes add nothing — an honest demo shows that too
+- ≥3 cases where notes carry citable content (concept tags from §2 drive this)
+- ≥1 case where notes add little — an honest demo shows that too
 - Documentation floor: every admission has substantive, non-redacted note text
 
 **Verify:** you review all 20 by hand and approve.
@@ -464,8 +480,9 @@ Where the two signals become one assessment.
 
 ### The two rules from your requirements
 
-- **Conflicts must surface.** If risk is low but the notes contain high-risk observations,
-  the output says so. A system that only confirms the model is not adding value.
+- **Conflicts must surface.** If risk is low but the notes contain observations warranting
+  clinician judgment, the output says so — **cited, with no prediction claim**. A system
+  that only confirms the model is not adding value.
 - **Every intervention cites something** — a feature contribution or a note passage. No
   free-floating clinical advice.
 

@@ -1,0 +1,21 @@
+# Cloud Build — build and push the RAG ingest image to Artifact Registry.
+# Usage: gcloud builds submit --config pipelines/cloudbuild.yaml .
+# Build context is projects/agent-harness.
+steps:
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - build
+      - -t
+      - us-east1-docker.pkg.dev/$PROJECT_ID/readmission/rag-ingest:${BUILD_ID}
+      - -t
+      - us-east1-docker.pkg.dev/$PROJECT_ID/readmission/rag-ingest:latest
+      - -f
+      - pipelines/Dockerfile
+      - .
+
+images:
+  - us-east1-docker.pkg.dev/$PROJECT_ID/readmission/rag-ingest:${BUILD_ID}
+  - us-east1-docker.pkg.dev/$PROJECT_ID/readmission/rag-ingest:latest
+
+options:
+  logging: CLOUD_LOGGING_ONLY

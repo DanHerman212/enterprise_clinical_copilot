@@ -30,6 +30,7 @@ CACHE_DIR = Path(
 )
 NOTES_PATH = CACHE_DIR / "discharge_test_split.jsonl.gz"
 MANIFEST_PATH = CACHE_DIR / "discharge_test_split.manifest.json"
+CHUNKS_PATH = CACHE_DIR / "chunks.jsonl.gz"
 
 
 def read_manifest() -> dict:
@@ -59,3 +60,14 @@ def iter_notes() -> Iterator[dict]:
             f"Note cache is corrupt: manifest says {expected} notes, "
             f"file contains {seen}. Re-run scripts/fetch_note_cache.py."
         )
+
+
+def iter_chunks() -> Iterator[dict]:
+    """Yield cached chunk records (scripts/build_chunks.py output)."""
+    if not CHUNKS_PATH.exists():
+        raise FileNotFoundError(
+            f"No chunk cache at {CHUNKS_PATH}. Run scripts/build_chunks.py first."
+        )
+    with gzip.open(CHUNKS_PATH, "rt", encoding="utf-8") as handle:
+        for line in handle:
+            yield json.loads(line)

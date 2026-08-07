@@ -44,6 +44,45 @@ INGEST_URI = f"gs://{BUCKET}/rag/embeddings/ingest/"
 VALIDATION_DIR = f"gs://{BUCKET}/rag/embeddings/validation/"
 DEFAULT_SAMPLE = 2000
 APPROXIMATE_NEIGHBORS = 40  # tune against recall at §12
+ENDPOINT_PREFIX = "readmission"          # matches teardown.py VECTOR_ENDPOINT_PREFIX
+# The 555,770-vector tree-ah index is a MEDIUM shard; Vertex only supports
+# machines >= e2-standard-16 for medium shards (e2-standard-2/4 rejected).
+ENDPOINT_MACHINE = "e2-standard-16"      # ~$0.3752/hr → ~$270/mo (user-approved)
+
+
+def deploy_endpoint(index_id: str) -> str:
+    """§7: create the index endpoint and deploy a tree-ah index to it.
+
+    Starts the ~$68/mo hourly meter. Keeps the index itself (so a teardown and
+    re-deploy does not re-pay the index build). The endpoint display name uses
+    the `readmission` prefix so `teardown.py --only vector-index` finds it.
+    """
+    aiplatform.init(project=PROJECT, location=LOCATION)
+    index = aiplatform.MatchingEngineIndex(index_name=index_id)
+    # Block on the index being READY before deploying to it.
+    index.wait()
+    vectors = index.gca_resource.index_stats.vectors_count
+    print(f"index ready: {vectors} vectors")
+    if not vectors:
+        raise SystemExit(f"index {index_id} has 0 vectors")
+
+    endpoint = aiplatform.MatchingEngineIndexEndpoint.create(
+        display_name=f"{ENDPOINT_PREFIX}-rag-index",
+        public_endpoint_enabled=True,
+    )
+    print(f"endpoint created: {endpoint.resource_name}")
+    endpoint.deploy_index(
+        index=index,
+        deployed_index_id="rag_tree_ah",
+        machine_type=ENDPOINT_MACHINE,
+        min_replica_count=1,
+        max_replica_count=1,
+    )
+    endpoint._sync_gca_resource()
+    di = next(d for d in endpoint.gca_resource.deployed_indexes if d.id == "rag_tree_ah")
+    print(f"deployed 'rag_tree_ah' → {di.index}")
+    print(f"query via: {endpoint.resource_name}")
+    return endpoint.resource_name
 
 
 def write_and_upload_sample(sample: int) -> str:
@@ -87,11 +126,20 @@ def verify(index: aiplatform.MatchingEngineIndex, expected: int, label: str) -> 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=["brute-force", "tree-ah"], required=True)
+    parser.add_argument("--mode", choices=["brute-force", "tree-ah", "deploy"])
+    parser.add_argument("--index-id", default=None,
+                        help="Index resource name/id to deploy (--mode deploy)")
     parser.add_argument("--sample", type=int, default=DEFAULT_SAMPLE)
     args = parser.parse_args()
 
     aiplatform.init(project=PROJECT, location=LOCATION)
+
+    if args.mode == "deploy":
+        if not args.index_id:
+            raise SystemExit("--mode deploy requires --index-id")
+        deploy_endpoint(args.index_id)
+        return 0
+
     ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
 
     if args.mode == "brute-force":

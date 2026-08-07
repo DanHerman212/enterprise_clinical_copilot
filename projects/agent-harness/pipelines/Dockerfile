@@ -8,7 +8,8 @@ RUN pip install --no-cache-dir \
     "google-cloud-storage>=2.14" \
     "google-cloud-aiplatform>=1.60" \
     "google-genai>=1.0" \
-    "kfp==2.16.1"
+    "kfp==2.16.1" \
+    "numpy>=1.24"
 
 # Bake the RAG source in so @dsl.component wrappers can import their run_*
 # helpers (KFP lightweight components only serialize the decorated function
@@ -16,4 +17,6 @@ RUN pip install --no-cache-dir \
 WORKDIR /app
 COPY rag /app/rag
 COPY pipelines /app/pipelines
+# recall@k job (exact vs tree-AH) lives in pipelines/ so it is COPY'd into the
+# image (scripts/ is excluded from the build context by .dockerignore).
 ENV PYTHONPATH=/app

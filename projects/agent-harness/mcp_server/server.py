@@ -20,7 +20,7 @@ from starlette.responses import JSONResponse
 
 from .config import LOCATION, PROJECT
 from .features import FEATURE_SOURCE
-from .tools import predict_readmission
+from .tools import predict_readmission, rag_search
 
 server = MCPServer(
     name="readmission",
@@ -28,10 +28,13 @@ server = MCPServer(
     instructions=(
         "Tools for the MIMIC-IV 30-day readmission model. Use "
         "predict_readmission to score a hospital admission and get the "
-        "feature attributions behind the score."
+        "feature attributions behind the score. Use rag_search to retrieve "
+        "cited passages from a patient's discharge notes for a free-text "
+        "question."
     ),
 )
 server.add_tool(predict_readmission)
+server.add_tool(rag_search)
 
 
 @server.custom_route("/health", methods=["GET"])

@@ -22,6 +22,18 @@ ENTITY_ID_COLUMN = "hadm_id"
 COHORT_TABLE = f"{DATASET}.demo_cohort"
 COHORT_TABLE_FQN = f"{PROJECT}.{COHORT_TABLE}"
 
+# RAG / Vector Search serving.
+# The index endpoint is resolved by display name (like ENDPOINT_NAME) so the
+# deployed id never needs to be hardcoded, and so teardown/stand-up just works.
+INDEX_ENDPOINT_NAME = os.environ.get("INDEX_ENDPOINT_NAME", "readmission-rag-index")
+DEPLOYED_INDEX_ID = os.environ.get("DEPLOYED_INDEX_ID", "rag_tree_ah")
+EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "gemini-embedding-001")
+EMBEDDING_DIM = int(os.environ.get("EMBEDDING_DIM", "768"))
+RESTRICT_NAMESPACE = "hadm_id"
+# The discharge notes table (note_id -> hadm_id mapping, text by note_id).
+DISCHARGE_TABLE = f"{PROJECT}.mimiciv_note.discharge"
+DEFAULT_TOP_K = int(os.environ.get("RAG_TOP_K", "5"))
+
 # Gemini. Verified reachable from us-east1 on 2026-07-30, so the agent stays
 # co-located with the prediction endpoint; "global" is the fallback, not the default.
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")

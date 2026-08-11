@@ -56,9 +56,9 @@ Demo patients with known values (from fixtures):
   `demo_cohort.json`).
 - Dots let the doctor **scan** before opening anything (Orient).
 - Selecting a row → Screen 2 for that patient.
-- The "borderline / attention" hint is a design idea to validate — a subtle text
-  tag next to the dot for borderline and high cases. Could be noise if too many
-  rows have it; revisit in the polish pass.
+- The text "borderline / attention" tag was drafted, then **removed per user
+  feedback (2026-08-11)** — it crowded the row and blocked the name. Dots only;
+  the band label still shows in the thread header after selection.
 
 ---
 

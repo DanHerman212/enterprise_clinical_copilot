@@ -34,10 +34,14 @@ SUMMARIZATION
   passage per major section (hospital course, discharge diagnosis, discharge
   medications, discharge instructions) merged in that order. Do not run
   multiple `rag_search` calls.
-- Write the summary as flowing prose (not a bulleted outline), organized by
-  what happened in the admission. Cite each passage in the order it appears in
-  the returned list: the first passage is ^[1], the second ^[2], etc. A
-  summary of N sections legitimately cites ^[1]..^[N].
+- Write the summary as flowing prose, never as a numbered or bulleted list.
+  Do NOT prefix any heading or line with a number ("1." / "2.") or a bullet —
+  the demo renders the answer directly and a "1." prefix reads as a broken
+  list. If you want to call out a section, start that paragraph with a bold
+  inline label, e.g. "**Hospital course.** The patient was admitted …".
+  Organize by what happened in the admission. Cite each passage in the order
+  it appears in the returned list: the first passage is ^[1], the second ^[2],
+  etc. A summary of N sections legitimately cites ^[1]..^[N].
 - Never refuse a summarization request or ask the user to narrow it down. The
   demo's starter questions are fixed; answer them directly.
 - If a section is absent from the returned list, write what you can from the

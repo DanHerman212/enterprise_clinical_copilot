@@ -10,6 +10,7 @@ may route a follow-up request elsewhere, so a long-lived client session buys
 nothing and breaks when an instance is recycled.
 """
 
+import logging
 import os
 
 from starlette.applications import Starlette
@@ -21,6 +22,8 @@ from agent.a2ui import risk_card_from_tool_calls
 from agent.graph import ask, final_text
 from agent.mcp_client import MCP_TRANSPORT, MCP_URL, toolbox
 from mcp_server.config import GEMINI_MODEL, LOCATION, PROJECT
+
+logger = logging.getLogger(__name__)
 
 # The service is IAM-private, but a bounded input is still the caller's contract
 # rather than an assumption about it.
@@ -71,8 +74,17 @@ async def ask_route(request: Request) -> JSONResponse:
             state = await ask(box, question)
     except Exception as exc:
         # Never let an infrastructure failure surface as a plausible answer.
+        # The MCP SDK raises asyncio.ExceptionGroup when a transport task
+        # fails; unwrap it so the real cause is logged and returned instead of
+        # hiding behind "unhandled errors in a TaskGroup".
+        cause = exc
+        if isinstance(exc, BaseExceptionGroup):
+            cause = Exception(
+                f"{type(exc).__name__}: " + " | ".join(str(e) for e in exc.exceptions)
+            ) from exc
+        logger.error("agent /ask failed", exc_info=cause)
         return JSONResponse(
-            {"error": "agent_failed", "message": f"{type(exc).__name__}: {exc}"},
+            {"error": "agent_failed", "message": f"{type(cause).__name__}: {cause}"},
             status_code=502,
         )
 

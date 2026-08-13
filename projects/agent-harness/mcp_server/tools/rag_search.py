@@ -204,3 +204,63 @@ async def rag_search(hadm_id: int, query: str, top_k: int = 5) -> dict[str, Any]
     # Vertex/gRPC calls are synchronous; under the HTTP transport a blocking
     # tool stalls the event loop, so the work goes to a worker thread.
     return await asyncio.to_thread(_search, hadm_id, query, top_k)
+
+
+# One (query, expected section) per major discharge-note section, in the order
+# a summary should cite them. Broad single queries retrieve poorly against this
+# index (query-side embedding drift vs the index snapshot); these focused
+# queries return their section among the top few — empirically verified 2026-08-13.
+SUMMARY_SECTIONS = (
+    ("admission course and chief complaint", "brief_hospital_course"),
+    ("primary discharge diagnosis", "discharge_diagnosis"),
+    ("discharge medications", "discharge_medications"),
+    ("discharge instructions", "discharge_instructions"),
+)
+
+
+def _search_sections(hadm_id: int) -> dict[str, Any]:
+    """One passage per major note section, merged in a fixed order.
+
+    Deterministic section coverage for summary questions without depending on
+    the model to issue and merge multiple calls: run one focused query per
+    section, prefer the returned passage whose section matches the intent, and
+    return a single deduped, section-ordered passages list. The agent cites
+    ^[n] in this order, so each section maps to a distinct citation number.
+    """
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for query, expected in SUMMARY_SECTIONS:
+        try:
+            res = _search(hadm_id, query, top_k=3)
+        except Exception:
+            continue  # a failed section query must not sink the whole summary
+        if res.get("error"):
+            continue
+        passages = res.get("passages") or []
+        if not passages:
+            continue
+        # Prefer the passage whose section matches the intent; fall back to the
+        # top passage (a wrong-section hit is better than nothing).
+        pick = next((p for p in passages if p["section"] == expected), passages[0])
+        if pick["id"] in seen:
+            continue
+        seen.add(pick["id"])
+        merged.append(pick)
+    return {
+        "hadm_id": hadm_id,
+        "query": "discharge notes",
+        "returned": len(merged),
+        "passages": merged,
+    }
+
+
+async def rag_search_sections(hadm_id: int) -> dict[str, Any]:
+    """Retrieve one cited passage per major discharge-note section (hospital
+    course, discharge diagnosis, discharge medications, discharge
+    instructions), merged in that fixed order. Use for summarization questions
+    so the answer can cite each section distinctly.
+
+    Args:
+        hadm_id: MIMIC-IV hospital admission id.
+    """
+    return await asyncio.to_thread(_search_sections, hadm_id)

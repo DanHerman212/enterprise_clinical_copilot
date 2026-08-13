@@ -79,9 +79,9 @@ async def ask_route(request: Request) -> JSONResponse:
         # hiding behind "unhandled errors in a TaskGroup".
         cause = exc
         if isinstance(exc, BaseExceptionGroup):
-            cause = Exception(
-                f"{type(exc).__name__}: " + " | ".join(str(e) for e in exc.exceptions)
-            ) from exc
+            detail = " | ".join(str(e) for e in exc.exceptions)
+            cause = RuntimeError(f"{type(exc).__name__}: {detail}")
+            cause.__cause__ = exc  # keep the group as the logged root cause
         logger.error("agent /ask failed", exc_info=cause)
         return JSONResponse(
             {"error": "agent_failed", "message": f"{type(cause).__name__}: {cause}"},

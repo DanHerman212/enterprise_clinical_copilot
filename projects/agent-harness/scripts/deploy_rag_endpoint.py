@@ -12,6 +12,7 @@ import os
 import sys
 import time
 
+from google.api_core.exceptions import AlreadyExists
 from google.cloud.aiplatform_v1 import IndexEndpointServiceClient
 from google.cloud.aiplatform_v1.types import (
     DeployedIndex,
@@ -77,23 +78,42 @@ def main() -> int:
         ),
     )
     print(f"deploying {DEPLOYED_ID} → {index_name} ({MACHINE})…", flush=True)
-    op = c.deploy_index(index_endpoint=ep_name, deployed_index=di)
+    try:
+        op = c.deploy_index(index_endpoint=ep_name, deployed_index=di)
+    except AlreadyExists:
+        # A deploy with this id is already in flight (left by an earlier run
+        # whose client died mid-poll). Just wait for it to finish below.
+        print("  deploy already in progress; waiting for it to finish…", flush=True)
+        op = None
+
+    if op is not None:
+        started = time.monotonic()
+        while not op.done():
+            if int(time.monotonic() - started) % 30 < 1:
+                print(f"  …waiting {int(time.monotonic()-started)}s", flush=True)
+            time.sleep(5)
+        err = op.exception()
+        if err is not None:
+            print(f"DEPLOY FAILED: {err}", flush=True)
+            return 1
+
+    # Confirm the endpoint actually serves the index. This also covers the
+    # AlreadyExists path: the earlier in-flight deploy may still be finishing,
+    # and the deployed index only appears in the endpoint once deployment is
+    # complete.
     started = time.monotonic()
     while True:
-        op = c.get_operation(name=op.operation.name)
-        if op.done:
-            break
+        ep = c.get_index_endpoint(name=ep_name)
+        if any(d.id == DEPLOYED_ID for d in ep.deployed_indexes):
+            print("DEPLOY DONE", flush=True)
+            print("deployed:", [(d.id, d.index.split("/")[-1]) for d in ep.deployed_indexes])
+            return 0
+        if time.monotonic() - started > 1800:
+            print("TIMEOUT waiting for deployed index to appear", flush=True)
+            return 1
         if int(time.monotonic() - started) % 30 < 1:
-            print(f"  …waiting {int(time.monotonic()-started)}s", flush=True)
-        time.sleep(5)
-    if op.error.code != 0:
-        print(f"DEPLOY FAILED: {op.error.message}", flush=True)
-        return 1
-
-    print("DEPLOY DONE", flush=True)
-    ep = c.get_index_endpoint(name=ep_name)
-    print("deployed:", [(d.id, d.index.split("/")[-1]) for d in ep.deployed_indexes])
-    return 0
+            print(f"  …confirming {int(time.monotonic()-started)}s", flush=True)
+        time.sleep(10)
 
 
 if __name__ == "__main__":

@@ -22,6 +22,11 @@ you to test with (change/delete it after):
 
 - username `demo_dev` · password `demo-pass-123`
 
+The page is the **Enterprise Clinical Copilot** shell: an ECC brand header (logo +
+wordmark), notifications + user (Dr. Lena Ortiz) top-right, and a left sidebar
+(Dashboard · Readmission Risk). The disclaimer about synthetic names is
+temporarily removed — you're adding it back later.
+
 **Important — what's real right now (fixture mode):**
 - The **risk numbers and dots are real** (computed by running the actual serving
   predictor against every demo patient).
@@ -30,6 +35,8 @@ you to test with (change/delete it after):
   note passage found"* — that is correct behavior, not a bug.
 - Free-typed questions are rejected in fixture mode (endpoints are torn down);
   the message tells you to use a starter chip. That is expected.
+- **Quota badge** (sidebar footer) only counts down in *live* mode — fixture
+  mode makes no real calls, so it stays put. Expected.
 
 **Checklist for section 0:** [ ] server starts · [ ] login works · [ ] page loads
 
@@ -42,12 +49,22 @@ you to test with (change/delete it after):
      unscored patient, with a legend at the bottom of the rail.
    - [ ] No text tag overlaps the patient name (tags were removed).
 
-**1.2** Click **Leonard Castellano**. The row highlights and the thread header
-   shows his name + meta like `70M · borderline · 19.5%`.
-   - [ ] Row highlights · [ ] header meta shows name + band + %.
+**1.2** The list shows **10 patients per page** with pagination below.
+   - [ ] "1–10 of 32" + prev/next; Next advances to 11–20, prev comes back.
+   - [ ] Search filters across **all** patients (e.g., type `e`) and re-paginates.
 
-**1.3** Use the search box — type `e` then clear it.
-   - [ ] List filters as you type · [ ] clearing restores all rows.
+**1.3** Click **Leonard Castellano**. The row highlights and the thread header
+   shows his name + meta like `70M · borderline · 19.5%`, and a **back arrow**
+   appears at the left of the thread header.
+   - [ ] Row highlights · [ ] header meta shows name + band + %
+   - [ ] Back arrow visible · [ ] the ask bar (input + Ask) sits right under
+     the header, close to the starter chips.
+
+**1.4** Click the **back arrow**.
+   - [ ] The thread clears to "Select a patient", the ask bar disables, the row
+     de-selects, and the patient rail resets to its starting state (search
+     cleared, page 1, all patients from the top). Reopening the same patient
+     restores their conversation (history is kept in the browser).
 
 **Questions for you:** Is the list too dense? Is the dot + summary enough to
 scan, or do you still want the band label somewhere (e.g., only in the header,
@@ -61,7 +78,6 @@ which already has it)?
 **2.1** Select a patient you haven't opened yet (e.g., **Erica Abernathy**).
    - [ ] Thread shows the chips: *Run 30-day readmission risk · Summarize recent
      discharge notes · What medications were they discharged on?*
-   - [ ] **No** "Compare to prior assessment" chip yet (nothing to compare).
    - [ ] Canvas shows the empty-state hint.
 
 ### State B — risk assessment
@@ -71,8 +87,10 @@ which already has it)?
    - [ ] Canvas now shows **RISK** (big % , progress bar, threshold marker,
      band label) and **DRIVERS** (top ±5 feature bars with +/− values).
    - [ ] The answer cites a passage with a superscript `^[1]`.
-   - [ ] Below the turns, an **"Ask another question"** chip row appears — and it
-     now **includes "Compare to prior assessment"**.
+   - [ ] The **SOURCE** widget shows exactly what's cited — one source card per
+     footnote, so the count always matches the prose. Each card shows its own
+     **section's text** (e.g. "Brief Hospital Course:"), not the whole note.
+   - [ ] Below the turns, an **"Ask another question"** chip row appears.
 
 **2.3** Do it again for a low-risk patient (Erica) and a borderline one (Leonard)
    — check the numbers/band colors differ sensibly.
@@ -80,13 +98,15 @@ which already has it)?
 
 ### State C — notes query
 **2.4** On **Leonard**, click **What medications were they discharged on?**
-   - [ ] Canvas **Source** widget switches to the `medications` passage
-     (`Source · medications`).
-   - [ ] The passage row shows `[1]` + section `discharge medications` + text,
-     with a **Show full note section** button.
+   - [ ] Canvas **Source** widget switches to the `medications` source
+     (`Source · medications`) with **one card** matching the answer's single
+     footnote.
+   - [ ] The card shows `[1]` + section `discharge medications` + the **actual
+     medications section text**, with a **Show full section** button.
 
-**2.5** Click **Show full note section** on a passage.
-   - [ ] Text expands · [ ] button toggles to *Collapse* and back.
+**2.5** Click **Show full section** on a passage.
+   - [ ] Text expands to the full section · [ ] button toggles to *Collapse* and
+     back.
 
 **2.6** On a patient **other than Leonard** (e.g., Erica), click **What
    medications…**.
@@ -97,16 +117,12 @@ which already has it)?
 ### State D — citation click
 **2.7** On Leonard, after the risk turn, click the `^[1]` superscript in the
    answer.
-   - [ ] The Source widget re-renders for that turn's passages and the **first
-     passage highlights** (blue border).
+   - [ ] The Source widget re-renders for that turn's passages and the **cited
+     source card highlights** (blue border), showing its section text.
 
-### State E — compare to prior
-**2.8** On Leonard (after at least one risk assessment), click **Compare to prior
-   assessment** (in the "Ask another question" row).
-   - [ ] Canvas shows the **Compare assessments** view.
-   - [ ] With one assessment it says *"Only one assessment yet — run a second to
-     compare."* (Run risk again, then compare again — you should get two
-     columns side by side.)
+> Note: the "Compare to prior assessment" chip was **removed** (2026-08-11).
+> The model scores a fixed feature snapshot, so a second assessment is
+> identical — comparing two identical numbers read as broken, not compelling.
 
 **Questions for you:** Is the split (chat left, widgets right) working? Does the
 canvas feel like the right place for the widgets, or too much / too little? Is
@@ -135,8 +151,9 @@ for the technical-evaluator persona, behind the toggle.)
    - [ ] A clear message appears: *"Free-text questions need the live agent
      (DEMO_FIXTURE_MODE=false). Use a starter chip."*
 
-**4.2** Quota badge (top right) counts down by 1 per chip question.
-   - [ ] It decrements after each successful ask.
+**4.2** Quota badge (sidebar footer) — counts down by 1 per chip question **in
+   live mode only**; fixture mode makes no real calls so it stays put.
+   - [ ] Present in the sidebar footer.
 
 **4.3** Switch patients mid-conversation and back.
    - [ ] Each patient keeps their **own** thread and canvas (episodic memory) —

@@ -17,6 +17,7 @@ env/
 
 # --- Jupyter ---------------------------------------------------------------
 .ipynb_checkpoints/
+projects/mlops/notebooks/
 
 # --- Secrets / credentials -------------------------------------------------
 .env

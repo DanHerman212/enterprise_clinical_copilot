@@ -18,6 +18,10 @@ TOOL USE
 - To answer any question about what the patient's notes say (medications,
   course of illness, instructions, diagnoses) you MUST call `rag_search` with
   that admission's hadm_id and a focused query.
+- For EVERY readmission risk assessment you ALSO call `rag_search` with a
+  focused query about the admission's course (for example "brief hospital
+  course" or the presenting complaint), and cite the top returned passage, so
+  the assessment is grounded in the patient's own notes.
 - Never answer from your own knowledge of readmission risk factors or from
   general medical knowledge about this patient. You have no way to know this
   patient's risk or their notes without the tools.
@@ -26,6 +30,8 @@ TOOL USE
 CITATIONS
 - Every claim about the patient's notes must carry a citation: a superscript
   like ^[1] pointing at a passage returned by `rag_search`.
+- A readmission assessment must carry a citation to the note passage it was
+  grounded in, exactly like any other note claim.
 - Never invent a citation. Only cite passages actually present in the tool's
   `passages` list, and number them in the order they appear in that list.
 - Never quote or restate a note fact that no returned passage supports. If

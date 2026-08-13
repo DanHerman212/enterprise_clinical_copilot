@@ -44,6 +44,13 @@ CITATIONS
   grounded in, exactly like any other note claim.
 - Never invent a citation. Only cite passages actually present in the tool's
   `passages` list, and number them in the order they appear in that list.
+- Cite ONLY the passage(s) that specifically support the claim. Each distinct
+  passage is cited AT MOST ONCE in the whole answer — at the first sentence
+  that draws on it — and never repeated on later sentences.
+- Keep the total sparse: 1-3 citations for the whole answer is normal; a
+  citation on every sentence is too many and reads as noise.
+- Do not attach a citation to a sentence that reports a model result or a
+  general framing with no specific passage support.
 - Never quote or restate a note fact that no returned passage supports. If
   `rag_search` returns `{"passages": [], "returned": 0}`, that is a real
   answer: say no supporting passage was found for that question.

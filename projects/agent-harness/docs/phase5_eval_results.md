@@ -38,10 +38,35 @@ Same assertions against the live service.
 > **Code fix:** `validate_rag.py` hardcoded a deleted endpoint ID. Now reads
 > `INDEX_ENDPOINT_ID` env (default = current endpoint). Commit `73214ba`.
 
-## 6. Golden-set rubric (LLM-as-judge) — PENDING
-Design in progress. Decoupled approach: full-holdout ML metrics (quantitative) +
-sampled (50–100, stratified) generative agent eval (qualitative). Results to be
-appended here when complete.
+## 6. Quantitative holdout pass (deployed model, full test split) ✅
+`eval/quant.py` scored the **full test split (49,103 rows)** with the deployed
+endpoint and computed threshold-free + operating-point metrics:
+
+| Metric | Value |
+|---|---|
+| Rows | 49,103 |
+| Readmission rate | 0.2091 |
+| **AUCPR** | **0.4098** (HOSPITAL baseline **0.3325** → **+0.077** ✅) |
+| AUROC | 0.7117 |
+| Brier | 0.1482 |
+| Precision @ 0.12 threshold | 0.2592 |
+| Recall @ 0.12 threshold | 0.8921 |
+
+> **Decision (2026-08-14):** the deployed model clears the HOSPITAL baseline on an
+> honest 49k holdout, consistent with validation (~0.40). **No HPO re-run needed
+> for the demo gate.** A proper full-HPO re-run (inspect config → run → redeploy →
+> re-eval) is tracked as a **post-demo / pre-Phase-7** follow-up.
+
+> **Two holdouts exist:** `split_name='test'` = 49,103 rows (quantitative metrics
+> above). `split_name='demo'` = 3,402 rows (the demo-shaped holdout) — the
+> **agent narrative sample is drawn from the `demo` split**, since those are the
+> patient profiles the demo actually shows.
+
+## 7. Golden-set rubric (LLM-as-judge) — IN PROGRESS
+Decoupled approach: full-holdout ML metrics (above, quantitative) + sampled
+(weighted, calibrated bands) generative agent eval (qualitative). Langfuse
+self-host (standard: Cloud Run + Cloud SQL + Memorystore + GCS) being stood up
+for trace review + rubric-score attachment. Results to be appended when complete.
 
 ## Re-run commands
 ```bash

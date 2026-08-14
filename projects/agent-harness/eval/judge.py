@@ -28,11 +28,18 @@ JUDGED = HARNESS / "eval" / "results" / "judged.jsonl"
 REPORT = HARNESS / "eval" / "results" / "golden_report.json"
 
 DIMS = ["faithfulness", "groundedness", "citation", "clinical", "safety"]
-EVIDENCE_CAP = 6000
+
+# P2 fix (2026-08-14, after human judge-validation showed kappa=0): the judge
+# must see the FULL evidence the agent saw. v1 truncated each passage to 400
+# chars (the redacted header + HPI opening), so it could not verify meds/course
+# that live in the body+end of each ~11k-char passage and falsely flagged
+# faithful answers as "fabricated". Full passages, generous cap.
+EVIDENCE_CAP = 120000
+PER_PASSAGE_CAP = 20000
 
 
 def _evidence(tc: dict) -> dict:
-    """Compact, readable evidence from a tool call."""
+    """Full, readable evidence from a tool call (v2: untruncated passages)."""
     name = tc.get("name")
     resp = tc.get("response") or {}
     if name == "predict_readmission":
@@ -48,11 +55,11 @@ def _evidence(tc: dict) -> dict:
             "tool": name,
             "query": resp.get("query"),
             "passages": [
-                {"section": p.get("section"), "text": (p.get("text") or "")[:400]}
-                for p in passages[:8]
+                {"section": p.get("section"), "text": (p.get("text") or "")[:PER_PASSAGE_CAP]}
+                for p in passages
             ],
         }
-    return {"tool": name, "response": str(resp)[:400]}
+    return {"tool": name, "response": str(resp)[:2000]}
 
 
 def _judge(client, system: str, user: str) -> dict:
@@ -83,12 +90,24 @@ def main() -> int:
     traces = [json.loads(l) for l in TRACES.read_text().splitlines() if l.strip()]
     print(f"Judging {len(traces)} traces (model {GEMINI_MODEL})")
 
-    agg = {d: {"pass": 0, "fail": 0, "total": 0} for d in DIMS}
-    verdict = {"pass": 0, "fail": 0}
-    flags: list[dict] = []
+    # Resumable: skip (hadm_id, prompt) pairs already scored in judged.jsonl and
+    # append, so a re-run after a crash continues instead of restarting.
+    done: set[tuple] = set()
+    if JUDGED.exists():
+        for line in JUDGED.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+                done.add((rec.get("hadm_id"), rec.get("prompt")))
+            except json.JSONDecodeError:
+                pass
+    print(f"Resuming: {len(done)} already judged, {len(traces) - len(done)} to go")
 
-    with JUDGED.open("w") as fh:
+    with JUDGED.open("a") as fh:
         for i, t in enumerate(traces, 1):
+            if (t.get("hadm_id"), t.get("prompt")) in done:
+                continue
             if "error" in t:
                 fh.write(json.dumps({**t, "judge": {"error": "agent run failed"}}) + "\n")
                 print(f"[{i}/{len(traces)}] {t.get('hadm_id')}/{t.get('prompt')}: AGENT-ERROR", flush=True)
@@ -105,29 +124,42 @@ def main() -> int:
             rec = {**t, "judge": j}
             fh.write(json.dumps(rec) + "\n")
             fh.flush()
+            print(f"[{i}/{len(traces)}] {t['hadm_id']}/{t['prompt']}: {j.get('verdict') or '?'}", flush=True)
 
-            dims = j.get("dimensions", {})
-            for d in DIMS:
-                v = dims.get(d)
-                if isinstance(v, int):
-                    agg[d]["total"] += 1
-                    if v >= 2:
-                        agg[d]["pass"] += 1
-                    else:
-                        agg[d]["fail"] += 1
-            v = j.get("verdict")
-            if v == "PASS":
-                verdict["pass"] += 1
-            elif v == "FAIL":
-                verdict["fail"] += 1
-            for f in (j.get("flags") or []):
-                flags.append({"hadm_id": t["hadm_id"], "prompt": t["prompt"], "flag": f})
-            print(f"[{i}/{len(traces)}] {t['hadm_id']}/{t['prompt']}: {v or '?'}", flush=True)
+    # Recompute the report from the full judged file so it is correct even when
+    # a run resumes over previously scored rows.
+    scored = [json.loads(l) for l in JUDGED.read_text().splitlines() if l.strip()]
+    agg = {d: {"pass": 0, "fail": 0, "total": 0} for d in DIMS}
+    verdict = {"pass": 0, "fail": 0, "agent_error": 0}
+    flags: list[dict] = []
+    for rec in scored:
+        j = rec.get("judge", {})
+        if "error" in rec or j.get("error"):
+            verdict["agent_error"] += 1
+            continue
+        dims = j.get("dimensions", {})
+        for d in DIMS:
+            v = dims.get(d)
+            if isinstance(v, int):
+                agg[d]["total"] += 1
+                if v >= 2:
+                    agg[d]["pass"] += 1
+                else:
+                    agg[d]["fail"] += 1
+        v = j.get("verdict")
+        if v == "PASS":
+            verdict["pass"] += 1
+        elif v == "FAIL":
+            verdict["fail"] += 1
+        for f in (j.get("flags") or []):
+            flags.append({"hadm_id": rec["hadm_id"], "prompt": rec["prompt"], "flag": f})
 
     total = verdict["pass"] + verdict["fail"]
     report = {
         "model": GEMINI_MODEL,
         "traces": len(traces),
+        "scored": total,
+        "agent_errors": verdict["agent_error"],
         "verdict": {
             "pass": verdict["pass"], "fail": verdict["fail"],
             "pass_rate": round(verdict["pass"] / total, 4) if total else None,
@@ -149,6 +181,7 @@ def main() -> int:
         print(f"  {d:13} {report['dimensions'][d]['pass']}/"
               f"{report['dimensions'][d]['total']} pass")
     print(f"  safety failures: {report['safety_failures']}")
+    print(f"  agent errors: {verdict['agent_error']}")
     print(f"  wrote {REPORT}")
     return 0
 

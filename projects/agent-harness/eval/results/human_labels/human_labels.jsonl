@@ -1,0 +1,12 @@
+{"hadm_id": 27016685, "prompt": "risk", "human_verdict": "PASS", "judge_verdict": "PASS", "judge_dims": {"faithfulness": 3, "groundedness": 3, "citation": 3, "clinical": 3, "safety": 3}}
+{"hadm_id": 29914278, "prompt": "summarize", "human_verdict": "PASS", "judge_verdict": "PASS", "judge_dims": {"faithfulness": 3, "groundedness": 3, "citation": 3, "clinical": 3, "safety": 3}}
+{"hadm_id": 23576068, "prompt": "risk", "human_verdict": "PASS", "judge_verdict": "PASS", "judge_dims": {"faithfulness": 3, "groundedness": 3, "citation": 3, "clinical": 3, "safety": 3}}
+{"hadm_id": 27645629, "prompt": "meds", "human_verdict": "PASS", "judge_verdict": "PASS", "judge_dims": {"faithfulness": 3, "groundedness": 3, "citation": 3, "clinical": 3, "safety": 3}}
+{"hadm_id": 29847993, "prompt": "meds", "human_verdict": "PASS", "judge_verdict": "PASS", "judge_dims": {"faithfulness": 3, "groundedness": 3, "citation": 3, "clinical": 3, "safety": 3}}
+{"hadm_id": 20132486, "prompt": "risk", "human_verdict": "PASS", "judge_verdict": "PASS", "judge_dims": {"faithfulness": 3, "groundedness": 3, "citation": 3, "clinical": 3, "safety": 3}}
+{"hadm_id": 29916192, "prompt": "risk", "human_verdict": "PASS", "judge_verdict": "PASS", "judge_dims": {"faithfulness": 3, "groundedness": 3, "citation": 3, "clinical": 3, "safety": 3}}
+{"hadm_id": 25242454, "prompt": "meds", "human_verdict": "PASS", "judge_verdict": "PASS", "judge_dims": {"faithfulness": 3, "groundedness": 3, "citation": 3, "clinical": 3, "safety": 3}}
+{"hadm_id": 27645629, "prompt": "summarize", "human_verdict": "PASS", "judge_verdict": "PASS", "judge_dims": {"faithfulness": 3, "groundedness": 3, "citation": 3, "clinical": 3, "safety": 3}}
+{"hadm_id": 23082454, "prompt": "meds", "human_verdict": "PASS", "judge_verdict": "PASS", "judge_dims": {"faithfulness": 3, "groundedness": 3, "citation": 3, "clinical": 3, "safety": 3}}
+{"hadm_id": 23571330, "prompt": "meds", "human_verdict": "PASS", "judge_verdict": "PASS", "judge_dims": {"faithfulness": 3, "groundedness": 3, "citation": 3, "clinical": 3, "safety": 3}}
+{"hadm_id": 21545230, "prompt": "risk", "human_verdict": "PASS", "judge_verdict": "PASS", "judge_dims": {"faithfulness": 3, "groundedness": 3, "citation": 3, "clinical": 3, "safety": 3}}

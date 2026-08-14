@@ -20,6 +20,7 @@ from starlette.routing import Route
 
 from agent.a2ui import risk_card_from_tool_calls
 from agent.graph import ask, final_text
+from agent.guardrail import guard_answer
 from agent.mcp_client import MCP_TRANSPORT, MCP_URL, toolbox
 from mcp_server.config import GEMINI_MODEL, LOCATION, PROJECT
 
@@ -94,10 +95,17 @@ async def ask_route(request: Request) -> JSONResponse:
     # must treat as "show the prose" rather than "show an empty card".
     card = risk_card_from_tool_calls(state["tool_calls"])
 
+    # Deterministic post-hoc guardrails (P4): the LLM proposes, code disposes.
+    # The served answer is the guarded one; flags are returned for observability
+    # (they surface in Langfuse) and so a client can choose to render a note.
+    text = final_text(state)
+    guarded = guard_answer(text, state["tool_calls"])
+
     return JSONResponse(
         {
             "question": question,
-            "answer": final_text(state),
+            "answer": guarded["answer"],
+            "guardrail_flags": guarded["flags"],
             "tool_calls": state["tool_calls"],
             "a2ui": card,
             "model": GEMINI_MODEL,

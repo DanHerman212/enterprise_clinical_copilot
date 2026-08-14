@@ -12,3 +12,4 @@ langgraph==1.2.10
 google-genai==1.75.0
 google-auth==2.50.0
 uvicorn==0.47.0
+langfuse==2.60.10

@@ -1,0 +1,1157 @@
+Running 100 cases x 3 prompts = 300 agent runs
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+I0814 12:57:16.959409 17261502 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[08/14/26 12:57:17] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+I0814 12:57:18.169745 17261636 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(16, generation: 1)
+I0814 12:57:18.170059 17261636 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[1/300] 25242454/risk: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 12:57:27] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[2/300] 25242454/meds: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 12:57:47] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 12:57:49] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 12:57:50] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+                    INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[3/300] 25242454/summarize: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+I0814 12:58:03.398426 17263612 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[08/14/26 12:58:04] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+I0814 12:58:04.663263 17263739 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(16, generation: 1)
+I0814 12:58:04.663528 17263739 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[4/300] 24856944/risk: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 12:58:21] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[5/300] 24856944/meds: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 12:58:30] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 12:58:33] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 12:58:34] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 12:58:35] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[6/300] 24856944/summarize: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+I0814 12:59:05.723649 17265973 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[08/14/26 12:59:06] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+I0814 12:59:07.078112 17266112 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(16, generation: 1)
+I0814 12:59:07.078346 17266112 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[7/300] 23743503/risk: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 12:59:27] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[8/300] 23743503/meds: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 12:59:36] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 12:59:39] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 12:59:40] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 12:59:41] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[9/300] 23743503/summarize: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+I0814 13:00:05.182578 17269096 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[08/14/26 13:00:05] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+I0814 13:00:06.362883 17269255 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(16, generation: 1)
+I0814 13:00:06.362998 17269255 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[10/300] 23764631/risk: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:00:43] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[11/300] 23764631/meds: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:00:51] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:00:54] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:00:55] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:00:56] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[12/300] 23764631/summarize: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+I0814 13:01:08.768700 17272630 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[08/14/26 13:01:09] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+I0814 13:01:10.290421 17272749 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(16, generation: 1)
+I0814 13:01:10.290690 17272749 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+    (attempt 1 failed: ExceptionGroup)
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+I0814 13:01:20.218990 17273592 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[08/14/26 13:01:20] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+I0814 13:01:21.469565 17273729 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(16, generation: 1)
+I0814 13:01:21.469835 17273729 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[13/300] 24455702/risk: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:01:31] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[14/300] 24455702/meds: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:01:41] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:01:43] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:01:45] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+                    INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+    (attempt 1 failed: ExceptionGroup)
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:01:52] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:01:54] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:01:56] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:01:57] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[15/300] 24455702/summarize: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+I0814 13:02:33.060648 17277369 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[08/14/26 13:02:33] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+I0814 13:02:34.224254 17277497 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(16, generation: 1)
+I0814 13:02:34.224496 17277497 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[16/300] 23571330/risk: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:02:49] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[17/300] 23571330/meds: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:02:59] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:03:01] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:03:02] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:03:03] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[18/300] 23571330/summarize: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+I0814 13:03:16.344710 17279676 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[08/14/26 13:03:16] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+I0814 13:03:17.586553 17279790 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(16, generation: 1)
+I0814 13:03:17.586747 17279790 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[19/300] 28845427/risk: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+Task exception was never retrieved
+future: <Task finished name='Task-505' coro=<BaseApiClient.aclose() done, defined at /Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/genai/_api_client.py:2271> exception=RuntimeError('Event loop is closed')>
+Traceback (most recent call last):
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/genai/_api_client.py", line 2276, in aclose
+    await self._async_httpx_client.aclose()  # type: ignore[union-attr]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpx/_client.py", line 1985, in aclose
+    await self._transport.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpx/_transports/default.py", line 406, in aclose
+    await self._pool.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpcore/_async/connection_pool.py", line 353, in aclose
+    await self._close_connections(closing_connections)
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpcore/_async/connection_pool.py", line 345, in _close_connections
+    await connection.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpcore/_async/connection.py", line 173, in aclose
+    await self._connection.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpcore/_async/http11.py", line 258, in aclose
+    await self._network_stream.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpcore/_backends/anyio.py", line 53, in aclose
+    await self._stream.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/anyio/streams/tls.py", line 236, in aclose
+    await self.transport_stream.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/anyio/_backends/_asyncio.py", line 1344, in aclose
+    self._transport.close()
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/selector_events.py", line 1210, in close
+    super().close()
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/selector_events.py", line 875, in close
+    self._loop.call_soon(self._call_connection_lost, None)
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/base_events.py", line 795, in call_soon
+    self._check_closed()
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/base_events.py", line 541, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed
+Task exception was never retrieved
+future: <Task finished name='Task-508' coro=<BaseApiClient.aclose() done, defined at /Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/genai/_api_client.py:2271> exception=RuntimeError('Event loop is closed')>
+Traceback (most recent call last):
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/genai/_api_client.py", line 2276, in aclose
+    await self._async_httpx_client.aclose()  # type: ignore[union-attr]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpx/_client.py", line 1985, in aclose
+    await self._transport.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpx/_transports/default.py", line 406, in aclose
+    await self._pool.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpcore/_async/connection_pool.py", line 353, in aclose
+    await self._close_connections(closing_connections)
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpcore/_async/connection_pool.py", line 345, in _close_connections
+    await connection.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpcore/_async/connection.py", line 173, in aclose
+    await self._connection.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpcore/_async/http11.py", line 258, in aclose
+    await self._network_stream.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpcore/_backends/anyio.py", line 53, in aclose
+    await self._stream.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/anyio/streams/tls.py", line 236, in aclose
+    await self.transport_stream.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/anyio/_backends/_asyncio.py", line 1344, in aclose
+    self._transport.close()
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/selector_events.py", line 1210, in close
+    super().close()
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/selector_events.py", line 875, in close
+    self._loop.call_soon(self._call_connection_lost, None)
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/base_events.py", line 795, in call_soon
+    self._check_closed()
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/base_events.py", line 541, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed
+[08/14/26 13:03:27] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[20/300] 28845427/meds: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:03:43] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:03:44] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:03:46] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:03:47] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[21/300] 28845427/summarize: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+I0814 13:04:01.543203 17283013 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[08/14/26 13:04:02] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+I0814 13:04:02.727234 17283137 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(16, generation: 1)
+I0814 13:04:02.727456 17283137 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[22/300] 22247761/risk: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:04:13] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[23/300] 22247761/meds: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:04:24] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:04:25] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+                    INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:04:27] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[24/300] 22247761/summarize: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+I0814 13:04:51.214660 17285451 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[08/14/26 13:04:51] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+I0814 13:04:52.386200 17285577 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(16, generation: 1)
+I0814 13:04:52.386464 17285577 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[25/300] 23871904/risk: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:05:01] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[26/300] 23871904/meds: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:05:11] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:05:13] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:05:14] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:05:15] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[27/300] 23871904/summarize: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+    (attempt 1 failed: ExceptionGroup)
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+I0814 13:05:33.245721 17287624 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[08/14/26 13:05:33] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[28/300] 22169981/risk: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:05:41] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[29/300] 22169981/meds: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+Task exception was never retrieved
+future: <Task finished name='Task-762' coro=<BaseApiClient.aclose() done, defined at /Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/genai/_api_client.py:2271> exception=RuntimeError('Event loop is closed')>
+Traceback (most recent call last):
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/genai/_api_client.py", line 2276, in aclose
+    await self._async_httpx_client.aclose()  # type: ignore[union-attr]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpx/_client.py", line 1985, in aclose
+    await self._transport.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpx/_transports/default.py", line 406, in aclose
+    await self._pool.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpcore/_async/connection_pool.py", line 353, in aclose
+    await self._close_connections(closing_connections)
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpcore/_async/connection_pool.py", line 345, in _close_connections
+    await connection.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpcore/_async/connection.py", line 173, in aclose
+    await self._connection.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpcore/_async/http11.py", line 258, in aclose
+    await self._network_stream.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpcore/_backends/anyio.py", line 53, in aclose
+    await self._stream.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/anyio/streams/tls.py", line 236, in aclose
+    await self.transport_stream.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/anyio/_backends/_asyncio.py", line 1344, in aclose
+    self._transport.close()
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/selector_events.py", line 1210, in close
+    super().close()
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/selector_events.py", line 875, in close
+    self._loop.call_soon(self._call_connection_lost, None)
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/base_events.py", line 795, in call_soon
+    self._check_closed()
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/base_events.py", line 541, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed
+[08/14/26 13:05:56] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:05:57] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:05:59] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:06:00] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[30/300] 22169981/summarize: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+I0814 13:06:12.076159 17289537 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[08/14/26 13:06:12] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+I0814 13:06:13.703070 17289672 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(16, generation: 1)
+I0814 13:06:13.703347 17289672 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[31/300] 20840241/risk: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:06:24] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[32/300] 20840241/meds: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:06:40] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:06:41] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:06:43] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:06:44] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[33/300] 20840241/summarize: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+    (attempt 1 failed: ExceptionGroup)
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+I0814 13:07:12.198122 17291987 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[08/14/26 13:07:12] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+I0814 13:07:13.412296 17292106 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(16, generation: 1)
+I0814 13:07:13.412609 17292106 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[34/300] 23082454/risk: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:07:22] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[35/300] 23082454/meds: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:07:30] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:07:31] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:07:33] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+                    INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[36/300] 23082454/summarize: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+I0814 13:07:45.788857 17293884 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[08/14/26 13:07:46] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+I0814 13:07:46.951188 17294014 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(16, generation: 1)
+I0814 13:07:46.951419 17294014 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[37/300] 28830463/risk: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:07:56] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[38/300] 28830463/meds: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:08:06] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:08:09] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:08:10] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:08:11] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[39/300] 28830463/summarize: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+Task exception was never retrieved
+future: <Task finished name='Task-1019' coro=<BaseApiClient.aclose() done, defined at /Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/genai/_api_client.py:2271> exception=RuntimeError('Event loop is closed')>
+Traceback (most recent call last):
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/genai/_api_client.py", line 2276, in aclose
+    await self._async_httpx_client.aclose()  # type: ignore[union-attr]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpx/_client.py", line 1985, in aclose
+    await self._transport.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpx/_transports/default.py", line 406, in aclose
+    await self._pool.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpcore/_async/connection_pool.py", line 353, in aclose
+    await self._close_connections(closing_connections)
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpcore/_async/connection_pool.py", line 345, in _close_connections
+    await connection.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpcore/_async/connection.py", line 173, in aclose
+    await self._connection.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpcore/_async/http11.py", line 258, in aclose
+    await self._network_stream.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpcore/_backends/anyio.py", line 53, in aclose
+    await self._stream.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/anyio/streams/tls.py", line 236, in aclose
+    await self.transport_stream.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/anyio/_backends/_asyncio.py", line 1344, in aclose
+    self._transport.close()
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/selector_events.py", line 1210, in close
+    super().close()
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/selector_events.py", line 875, in close
+    self._loop.call_soon(self._call_connection_lost, None)
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/base_events.py", line 795, in call_soon
+    self._check_closed()
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/base_events.py", line 541, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed
+I0814 13:08:26.265946 17296082 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[08/14/26 13:08:26] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+I0814 13:08:27.483718 17296215 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(16, generation: 1)
+I0814 13:08:27.483976 17296215 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[40/300] 28668944/risk: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:08:58] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[41/300] 28668944/meds: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:09:07] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:09:10] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:09:12] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:09:13] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[42/300] 28668944/summarize: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+I0814 13:09:29.594200 17298460 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[08/14/26 13:09:30] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+I0814 13:09:30.757314 17298592 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(16, generation: 1)
+I0814 13:09:30.757558 17298592 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[43/300] 29206147/risk: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:09:40] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[44/300] 29206147/meds: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:09:50] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:09:52] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:09:54] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:09:55] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[45/300] 29206147/summarize: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+I0814 13:10:12.257632 17300559 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[08/14/26 13:10:12] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+I0814 13:10:13.563165 17300711 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(16, generation: 1)
+I0814 13:10:13.563407 17300711 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+    (attempt 1 failed: ExceptionGroup)
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+I0814 13:10:22.688518 17301399 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[08/14/26 13:10:23] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+I0814 13:10:24.080068 17301517 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(16, generation: 1)
+I0814 13:10:24.080359 17301517 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[46/300] 22990451/risk: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:10:34] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[47/300] 22990451/meds: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:10:54] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:10:55] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+                    INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:10:57] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[48/300] 22990451/summarize: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+    (attempt 1 failed: ExceptionGroup)
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+Task exception was never retrieved
+future: <Task finished name='Task-1275' coro=<BaseApiClient.aclose() done, defined at /Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/genai/_api_client.py:2271> exception=RuntimeError('Event loop is closed')>
+Traceback (most recent call last):
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/genai/_api_client.py", line 2276, in aclose
+    await self._async_httpx_client.aclose()  # type: ignore[union-attr]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpx/_client.py", line 1985, in aclose
+    await self._transport.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpx/_transports/default.py", line 406, in aclose
+    await self._pool.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpcore/_async/connection_pool.py", line 353, in aclose
+    await self._close_connections(closing_connections)
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpcore/_async/connection_pool.py", line 345, in _close_connections
+    await connection.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpcore/_async/connection.py", line 173, in aclose
+    await self._connection.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpcore/_async/http11.py", line 258, in aclose
+    await self._network_stream.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/httpcore/_backends/anyio.py", line 53, in aclose
+    await self._stream.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/anyio/streams/tls.py", line 236, in aclose
+    await self.transport_stream.aclose()
+  File "/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/anyio/_backends/_asyncio.py", line 1344, in aclose
+    self._transport.close()
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/selector_events.py", line 1210, in close
+    super().close()
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/selector_events.py", line 875, in close
+    self._loop.call_soon(self._call_connection_lost, None)
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/base_events.py", line 795, in call_soon
+    self._check_closed()
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/base_events.py", line 541, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed
+I0814 13:11:21.182021 17303884 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[08/14/26 13:11:21] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+I0814 13:11:23.075644 17304020 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(16, generation: 1)
+I0814 13:11:23.075918 17304020 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[49/300] 24681344/risk: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:11:33] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[50/300] 24681344/meds: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:11:41] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:11:44] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+                    INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:11:46] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[51/300] 24681344/summarize: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+I0814 13:12:03.517333 17305979 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[08/14/26 13:12:04] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[52/300] 27016685/risk: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:12:11] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[53/300] 27016685/meds: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:12:20] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:12:22] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:12:23] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:12:24] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[54/300] 27016685/summarize: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+I0814 13:12:38.047617 17307772 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[08/14/26 13:12:38] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+I0814 13:12:39.319320 17307897 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(16, generation: 1)
+I0814 13:12:39.319640 17307897 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[55/300] 27799745/risk: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:12:57] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[56/300] 27799745/meds: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:13:08] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:13:09] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+                    INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[08/14/26 13:13:11] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[57/300] 27799745/summarize: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+I0814 13:13:25.267527 17310337 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[08/14/26 13:13:25] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+I0814 13:13:26.555349 17310450 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(16, generation: 1)
+I0814 13:13:26.555840 17310450 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+[58/300] 24059266/risk: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils
+[08/14/26 13:13:37] INFO     HTTP Request: POST                  _client.py:1025
+                             https://us-east1-aiplatform.googlea                
+                             pis.com/v1beta1/projects/trim-icon-                
+                             498815-a0/locations/us-east1/publis                
+                             hers/google/models/gemini-embedding                
+                             -001:predict "HTTP/1.1 200 OK"                     
+[59/300] 24059266/meds: ok
+/Users/danherman/Desktop/enterprise_clinical_copilot/.venv/lib/python3.12/site-packages/google/cloud/aiplatform/models.py:52: FutureWarning: Support for google-cloud-storage < 3.0.0 will be removed in a future version of google-cloud-aiplatform. Please upgrade to google-cloud-storage >= 3.0.0.
+  from google.cloud.aiplatform.utils import gcs_utils

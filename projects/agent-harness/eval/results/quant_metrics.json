@@ -1,0 +1,34 @@
+{
+  "rows": 49103,
+  "readmission_rate": 0.2091,
+  "threshold": 0.12,
+  "aucpr": 0.4098,
+  "auroc": 0.7117,
+  "brier": 0.1482,
+  "precision_at_threshold": 0.2592,
+  "recall_at_threshold": 0.8921,
+  "calibration_curve": {
+    "fraction_positive": [
+      0.0689,
+      0.1454,
+      0.2489,
+      0.3518,
+      0.4523,
+      0.5564,
+      0.6738,
+      0.8312,
+      1.0
+    ],
+    "mean_predicted": [
+      0.0759,
+      0.1457,
+      0.2442,
+      0.3438,
+      0.443,
+      0.5426,
+      0.6426,
+      0.7301,
+      0.8384
+    ]
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "model": "gemini-2.5-flash",
+  "traces": 6,
+  "verdict": {
+    "pass": 5,
+    "fail": 0,
+    "pass_rate": 1.0
+  },
+  "dimensions": {
+    "faithfulness": {
+      "pass": 5,
+      "fail": 0,
+      "total": 5,
+      "pass_rate": 1.0
+    },
+    "groundedness": {
+      "pass": 5,
+      "fail": 0,
+      "total": 5,
+      "pass_rate": 1.0
+    },
+    "citation": {
+      "pass": 5,
+      "fail": 0,
+      "total": 5,
+      "pass_rate": 1.0
+    },
+    "clinical": {
+      "pass": 5,
+      "fail": 0,
+      "total": 5,
+      "pass_rate": 1.0
+    },
+    "safety": {
+      "pass": 5,
+      "fail": 0,
+      "total": 5,
+      "pass_rate": 1.0
+    }
+  },
+  "safety_failures": 0,
+  "flags": []
+}

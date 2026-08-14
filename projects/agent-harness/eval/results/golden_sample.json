@@ -1,0 +1,807 @@
+{
+  "seed": 20260814,
+  "n": 100,
+  "source": "test-split (RAG-covered)",
+  "patients": [
+    {
+      "hadm_id": 25242454,
+      "probability": 0.056577,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "low",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 24856944,
+      "probability": 0.065895,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "low",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 23743503,
+      "probability": 0.073472,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "low",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 23764631,
+      "probability": 0.076176,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "low",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 24455702,
+      "probability": 0.078294,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "low",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 23571330,
+      "probability": 0.079906,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "low",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 28845427,
+      "probability": 0.081817,
+      "threshold": 0.12,
+      "readmission_30d": 1,
+      "band": "low",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 22247761,
+      "probability": 0.082062,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "low",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 23871904,
+      "probability": 0.083909,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "low",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 22169981,
+      "probability": 0.084105,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "low",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 20840241,
+      "probability": 0.084828,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "low",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 23082454,
+      "probability": 0.085703,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "low",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 28830463,
+      "probability": 0.086472,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "low",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 28668944,
+      "probability": 0.090197,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "low",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 29206147,
+      "probability": 0.091706,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "low",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 22990451,
+      "probability": 0.092459,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "low",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 24681344,
+      "probability": 0.094263,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "low",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 27016685,
+      "probability": 0.096609,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "low",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 27799745,
+      "probability": 0.097781,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "low",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 24059266,
+      "probability": 0.09881,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "low",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 29117773,
+      "probability": 0.100896,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 26782091,
+      "probability": 0.100998,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 22966155,
+      "probability": 0.106202,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 29763228,
+      "probability": 0.108959,
+      "threshold": 0.12,
+      "readmission_30d": 1,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 25440811,
+      "probability": 0.110511,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 20132486,
+      "probability": 0.112025,
+      "threshold": 0.12,
+      "readmission_30d": 1,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 26420848,
+      "probability": 0.11516,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 23576068,
+      "probability": 0.115834,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 20046470,
+      "probability": 0.116413,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 29916192,
+      "probability": 0.125325,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 29635592,
+      "probability": 0.126664,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 25282181,
+      "probability": 0.126927,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 28047998,
+      "probability": 0.126968,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 21499853,
+      "probability": 0.12728,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 26099449,
+      "probability": 0.1315,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 27382649,
+      "probability": 0.133892,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 25731024,
+      "probability": 0.13493,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 20799289,
+      "probability": 0.136001,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 29184624,
+      "probability": 0.137718,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 22976616,
+      "probability": 0.139547,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 24985165,
+      "probability": 0.142742,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 29914278,
+      "probability": 0.144077,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 26329920,
+      "probability": 0.144186,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 22294008,
+      "probability": 0.148313,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 29410559,
+      "probability": 0.148425,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 20233106,
+      "probability": 0.150763,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 27645629,
+      "probability": 0.152001,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 25146630,
+      "probability": 0.153834,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 27376583,
+      "probability": 0.155838,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 20841588,
+      "probability": 0.167029,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 23536556,
+      "probability": 0.167959,
+      "threshold": 0.12,
+      "readmission_30d": 1,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 20764576,
+      "probability": 0.169167,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 21371046,
+      "probability": 0.170501,
+      "threshold": 0.12,
+      "readmission_30d": 1,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 20411148,
+      "probability": 0.171371,
+      "threshold": 0.12,
+      "readmission_30d": 1,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 29379012,
+      "probability": 0.182251,
+      "threshold": 0.12,
+      "readmission_30d": 1,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 20866529,
+      "probability": 0.183826,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 29052725,
+      "probability": 0.188381,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 29666555,
+      "probability": 0.198788,
+      "threshold": 0.12,
+      "readmission_30d": 1,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 22123414,
+      "probability": 0.198891,
+      "threshold": 0.12,
+      "readmission_30d": 1,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 21545230,
+      "probability": 0.199849,
+      "threshold": 0.12,
+      "readmission_30d": 1,
+      "band": "borderline",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 29871774,
+      "probability": 0.204323,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 24868407,
+      "probability": 0.205758,
+      "threshold": 0.12,
+      "readmission_30d": 1,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 27234542,
+      "probability": 0.212736,
+      "threshold": 0.12,
+      "readmission_30d": 1,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 21424760,
+      "probability": 0.213618,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 23704751,
+      "probability": 0.218183,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 25002581,
+      "probability": 0.219628,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 29176178,
+      "probability": 0.224581,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 25282456,
+      "probability": 0.230205,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 23613661,
+      "probability": 0.242346,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 22528693,
+      "probability": 0.242528,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 29751994,
+      "probability": 0.251912,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 25523583,
+      "probability": 0.261287,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 24347369,
+      "probability": 0.270415,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 23763897,
+      "probability": 0.272904,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 29847993,
+      "probability": 0.274677,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 21044429,
+      "probability": 0.274965,
+      "threshold": 0.12,
+      "readmission_30d": 1,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 29922552,
+      "probability": 0.283123,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 21672011,
+      "probability": 0.289965,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 27282362,
+      "probability": 0.296914,
+      "threshold": 0.12,
+      "readmission_30d": 1,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 28528590,
+      "probability": 0.298407,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 23930385,
+      "probability": 0.315872,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 27610117,
+      "probability": 0.318419,
+      "threshold": 0.12,
+      "readmission_30d": 1,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 22200412,
+      "probability": 0.320773,
+      "threshold": 0.12,
+      "readmission_30d": 1,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 24102990,
+      "probability": 0.3336,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 26906905,
+      "probability": 0.336105,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 24542260,
+      "probability": 0.342551,
+      "threshold": 0.12,
+      "readmission_30d": 1,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 27196296,
+      "probability": 0.356199,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 27421167,
+      "probability": 0.360799,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 21635816,
+      "probability": 0.384528,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 25695495,
+      "probability": 0.401668,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 21508795,
+      "probability": 0.410296,
+      "threshold": 0.12,
+      "readmission_30d": 1,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 22183686,
+      "probability": 0.412685,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 21105561,
+      "probability": 0.439243,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 29318404,
+      "probability": 0.475929,
+      "threshold": 0.12,
+      "readmission_30d": 1,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 27146369,
+      "probability": 0.47834,
+      "threshold": 0.12,
+      "readmission_30d": 1,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 25464738,
+      "probability": 0.485259,
+      "threshold": 0.12,
+      "readmission_30d": 1,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 27233831,
+      "probability": 0.517611,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 27064124,
+      "probability": 0.540445,
+      "threshold": 0.12,
+      "readmission_30d": 0,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 23744149,
+      "probability": 0.599609,
+      "threshold": 0.12,
+      "readmission_30d": 1,
+      "band": "high",
+      "rag_verified": true
+    },
+    {
+      "hadm_id": 24592634,
+      "probability": 0.643425,
+      "threshold": 0.12,
+      "readmission_30d": 1,
+      "band": "high",
+      "rag_verified": true
+    }
+  ]
+}

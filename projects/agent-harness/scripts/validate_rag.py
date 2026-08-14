@@ -16,6 +16,7 @@ Live tier (needs the deployed endpoint). Usage:
 """
 
 import argparse
+import os
 import sys
 from collections import Counter
 
@@ -38,8 +39,10 @@ from pipelines.components.chunk_notes import DEFAULT_SECTIONS  # noqa: E402
 
 PROJECT = "trim-icon-498815-a0"
 LOCATION = "us-east1"
-ENDPOINT = ("projects/778397675435/locations/us-east1/"
-            "indexEndpoints/4397109727197134848")
+# Endpoint IDs change on every redeploy, so make it overridable.
+INDEX_ENDPOINT_ID = os.environ.get("INDEX_ENDPOINT_ID", "5244349407096209408")
+ENDPOINT = (f"projects/778397675435/locations/us-east1/"
+            f"indexEndpoints/{INDEX_ENDPOINT_ID}")
 DEPLOYED_ID = "rag_tree_ah"
 DEMO_COHORT = f"{PROJECT}.readmission.demo_cohort"
 DISCHARGE = f"{PROJECT}.mimiciv_note.discharge"

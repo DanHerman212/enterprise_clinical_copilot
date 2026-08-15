@@ -14,36 +14,7 @@ The engineering goal is the full path — warehouse to features to training to a
 
 ## Architecture
 
-```mermaid
-flowchart LR
-  subgraph SRC["Data"]
-    BQ["BigQuery<br/>MIMIC-IV"]
-    DF["Dataform<br/>ELT · 49 features"]
-  end
-  subgraph MLO["MLOps"]
-    TR["Vertex Pipelines<br/>train + HPO"]
-    EP["Vertex Endpoint<br/>XGBoost + SHAP"]
-  end
-  subgraph RG["Agentic RAG"]
-    VS["Vector Search<br/>clinical notes"]
-  end
-  subgraph AG["Agent Harness"]
-    MCP["MCP Server"]
-    LG["LangGraph Agent<br/>Cloud Run"]
-    GM["Gemini Flash"]
-  end
-  DJ["Django + A2UI"]
-
-  BQ --> DF --> TR --> EP --> MCP
-  DF -.notes.-> VS -.-> MCP
-  MCP --> LG <--> GM
-  LG --> DJ
-
-  classDef planned stroke-dasharray:5 5,color:#888
-  class VS,RG planned
-```
-
-Dashed elements are designed but not yet built.
+<img src="assets/ai-project-architecture.png" alt="AI project architecture" width="800">
 
 ## Projects
 

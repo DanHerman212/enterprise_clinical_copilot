@@ -14,7 +14,7 @@ The engineering goal is the full path — warehouse to features to training to a
 
 ## Architecture
 
-<img src="assets/ai-project-architecture.png" alt="AI project architecture" width="800">
+<img src="assets/ai-architecture-diagram-2.png" alt="AI project architecture" width="800">
 
 ## Projects
 

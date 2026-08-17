@@ -1,0 +1,18 @@
+# `gcloud builds submit --tag` requires the Dockerfile at the context root, but
+# the mcp-server's context must be the harness root (it needs both mcp_server/
+# and the pure-stdlib rag/ package that rag_search.py imports), while
+# mcp_server/Dockerfile owns that root. This config builds it with -f, mirroring
+# cloudbuild.agent.yaml.
+#
+# Usage:
+#   gcloud builds submit --config projects/agent-harness/cloudbuild.mcp.yaml \
+#     --substitutions _IMAGE=us-east1-docker.pkg.dev/<PROJECT>/readmission/mcp-server:latest \
+#     projects/agent-harness
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "-f", "mcp_server/Dockerfile", "-t", "${_IMAGE}", "."]
+
+images: ["${_IMAGE}"]
+
+options:
+  logging: CLOUD_LOGGING_ONLY

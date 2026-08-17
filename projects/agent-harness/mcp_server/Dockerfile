@@ -1,5 +1,6 @@
-# Build context is this directory:
-#   gcloud builds submit --tag ... projects/agent-harness/mcp_server
+# Build context is the harness root, so both the package and the pure-stdlib
+# rag/ section parser (imported by rag_search.py) are available:
+#   gcloud builds submit --tag ... projects/agent-harness
 FROM python:3.12-slim
 
 # No gcc / libpq-dev: nothing here compiles. The website image carried them for
@@ -9,13 +10,17 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-COPY requirements.txt ./
+COPY mcp_server/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 # The package must sit at /app/mcp_server so `python -m mcp_server.server`
 # resolves — the source directory name (agent-harness) contains a hyphen and is
-# not importable, which is why the build context is the package itself.
-COPY . ./mcp_server/
+# not importable, which is why the context is the harness root and the package
+# is copied to a clean /app/mcp_server path.
+COPY mcp_server/ ./mcp_server/
+# rag/ is pure stdlib (re, dataclasses only) and rag_search.py anchors section
+# queries to the section parser it defines, so it ships alongside the server.
+COPY rag/ ./rag/
 
 # Cloud Run sets PORT; the server reads it. Non-root by default.
 USER 1000

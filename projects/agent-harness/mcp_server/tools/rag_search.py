@@ -37,6 +37,8 @@ from google.cloud.aiplatform.matching_engine.matching_engine_index_endpoint impo
 )
 from google.genai import types
 
+from rag.sections import parse_note
+
 from ..config import (
     DEPLOYED_INDEX_ID,
     DISCHARGE_TABLE,
@@ -161,6 +163,23 @@ def _search(hadm_id: int, query: str, top_k: int) -> dict[str, Any]:
 
     neighbors = res[0] if res else []
     if not neighbors:
+        # Free-text queries embed far from the stored chunks for some patients
+        # (query-side drift, root-caused 2026-08-17 on hadm 23613002: the meds
+        # chip's "discharge medications" query returned 0 though the chunks are
+        # indexed). When the query clearly targets a discharge-note section, retry
+        # with that section's ACTUAL text as the query — the section body embeds
+        # next to the chunk it came from, so retrieval no longer depends on query
+        # luck. Keeps the hadm restrict and the same index (RAG intact). The
+        # returned `query` stays the caller's original phrase (the UI shows it as
+        # the source-card title), not the section body used internally.
+        anchor = _section_for_query(query)
+        if anchor is not None:
+            body = _section_bodies(hadm_id).get(anchor)
+            if body:
+                res = _search(hadm_id, body, top_k)
+                if res.get("error"):
+                    return res
+                return {**res, "query": query}
         return {"hadm_id": hadm_id, "query": query, "returned": 0, "passages": []}
 
     # Resolve text by note_id in one batched query.
@@ -206,32 +225,88 @@ async def rag_search(hadm_id: int, query: str, top_k: int = 5) -> dict[str, Any]
     return await asyncio.to_thread(_search, hadm_id, query, top_k)
 
 
-# One (query, expected section) per major discharge-note section, in the order
-# a summary should cite them. Broad single queries retrieve poorly against this
-# index (query-side embedding drift vs the index snapshot); these focused
-# queries return their section among the top few — empirically verified 2026-08-13.
+# Discharge-note sections a summary should cite, in the order a summary
+# should cite them. Queries are anchored to each section's ACTUAL text (see
+# _search_sections): short free-text phrases embed far from the stored chunks
+# for some patients (query-side drift, root-caused 2026-08-17 on hadm
+# 23613002), so we query with the section body itself instead.
 SUMMARY_SECTIONS = (
-    ("admission course and chief complaint", "brief_hospital_course"),
-    ("primary discharge diagnosis", "discharge_diagnosis"),
-    ("discharge medications", "discharge_medications"),
-    ("discharge instructions", "discharge_instructions"),
+    "brief_hospital_course",
+    "discharge_diagnosis",
+    "discharge_medications",
+    "discharge_instructions",
 )
+
+
+def _fetch_note(hadm_id: int) -> str | None:
+    """The patient's discharge note text, for section anchoring.
+
+    The index stores chunk embeddings, not raw text, so the section body is
+    re-fetched from BigQuery and re-parsed with the same section parser the
+    chunker uses. That keeps the anchored query aligned with what the index
+    embeds (same chunk boundaries).
+    """
+    rows = _bigquery().query(
+        f"SELECT text FROM `{DISCHARGE_TABLE}` WHERE hadm_id = @hadm_id LIMIT 1",
+        job_config=bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("hadm_id", "INTEGER", hadm_id)
+            ]
+        ),
+    ).result()
+    for row in rows:
+        return row["text"]
+    return None
+
+
+def _section_bodies(hadm_id: int) -> dict[str, str]:
+    """section name -> body text, from the patient's discharge note."""
+    text = _fetch_note(hadm_id)
+    if not text:
+        return {}
+    parsed = parse_note(text)
+    return {s.name: s.body for s in parsed.sections}
+
+
+def _section_for_query(query: str) -> str | None:
+    """Map a free-text query to the discharge-note section it clearly targets.
+
+    Used as a retrieval fallback: when the raw query embedding misses, retry
+    with the section's actual body text. Only matches unambiguous intent so the
+    free-text path is unchanged for open-ended questions.
+    """
+    q = query.lower().strip()
+    if "medication" in q or "discharged on" in q or "meds" in q:
+        return "discharge_medications"
+    if "discharge diagnosis" in q or "diagnoses" in q:
+        return "discharge_diagnosis"
+    if "instruction" in q:
+        return "discharge_instructions"
+    if "hospital course" in q or "admission course" in q:
+        return "brief_hospital_course"
+    return None
 
 
 def _search_sections(hadm_id: int) -> dict[str, Any]:
     """One passage per major note section, merged in a fixed order.
 
     Deterministic section coverage for summary questions without depending on
-    the model to issue and merge multiple calls: run one focused query per
-    section, prefer the returned passage whose section matches the intent, and
-    return a single deduped, section-ordered passages list. The agent cites
-    ^[n] in this order, so each section maps to a distinct citation number.
+    the model to issue and merge multiple calls. Each section is queried with
+    that section's ACTUAL body text as the query (not a short free-text phrase)
+    — short phrases embed far from the stored chunk vectors for some patients
+    (query-side drift), while the section's own text lands next to the chunk it
+    came from. The agent cites ^[n] in the fixed order, so each section maps to
+    a distinct citation number.
     """
+    bodies = _section_bodies(hadm_id)
     merged: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for query, expected in SUMMARY_SECTIONS:
+    for expected in SUMMARY_SECTIONS:
+        body = bodies.get(expected)
+        if not body:
+            continue  # note lacks this section -> nothing to cite
         try:
-            res = _search(hadm_id, query, top_k=3)
+            res = _search(hadm_id, body, top_k=3)
         except Exception:
             continue  # a failed section query must not sink the whole summary
         if res.get("error"):

@@ -181,3 +181,93 @@ def test_index_endpoint_reconstructs_with_full_name():
 
     assert result is _real
     assert new_.call_args[0][1] == resource_name
+
+
+# --- Section-anchored retrieval fallback (2026-08-17 regression) ------------
+#
+# Root cause: the meds chip's free-text query "discharge medications" embedded
+# far from the patient's discharge_medications chunks (query-side drift), so
+# rag_search returned 0 even though the chunks were indexed. The fix retries
+# with the section's ACTUAL text as the query. These tests pin that behavior.
+
+
+class _Recorder:
+    """Fake endpoint that records queries and returns neighbors per call."""
+
+    def __init__(self, first_round: list, second_round: list):
+        self._rounds = [first_round, second_round]
+        self.calls = 0
+        self.queries = []
+        self.last_filter = None
+
+    def find_neighbors(self, *, deployed_index_id, queries, num_neighbors, filter=None):
+        self.calls += 1
+        self.queries.append(queries[0])
+        self.last_filter = filter
+        return [self._rounds[min(self.calls - 1, 1)]]
+
+
+_NOTE = ("MEDICATIONS ON ADMISSION\nSome home meds.\n\n"
+         "Discharge Medications:\n1. Docusate Sodium 100 mg Capsule PO BID\n"
+         "2. Albuterol 90 mcg Aerosol Q4H PRN\n\n"
+         "Discharge Instructions:\nFollow up with PCP.")
+
+
+def test_meds_query_falls_back_to_section_anchor():
+    """A meds query with 0 direct hits must retry with the section's text.
+
+    Regression for hadm 23613002: "discharge medications" returned 0 though
+    the discharge_medications chunks are indexed. The fallback re-queries with
+    the section body and returns the meds passage.
+    """
+    meds_neighbor = _FakeNeighbor("13219116-DS-18_discharge_medications_1", 0.28)
+    endpoint = _Recorder([], [meds_neighbor])
+    embed = _FakeEmbedClient()
+
+    def fake_fetch(note_ids):
+        return {nid: _NOTE for nid in note_ids}
+
+    with patch.object(rs, "_index_endpoint", lambda: endpoint), \
+         patch.object(rs, "_embed_client", lambda: embed), \
+         patch.object(rs, "_fetch_texts", fake_fetch), \
+         patch.object(rs, "_fetch_note", lambda hadm: _NOTE):
+        result = _run(rs.rag_search(hadm_id=23613002, query="discharge medications"))
+
+    # Fell back to the section-anchored query (second call) and returned the meds passage.
+    assert endpoint.calls == 2
+    assert result["returned"] == 1
+    assert result["passages"][0]["section"] == "discharge_medications"
+    assert result["passages"][0]["text"] == _NOTE
+    # The fallback embeds the section's body, not the original short phrase:
+    # the last embed call's contents carry the section text.
+    assert embed.models.last_contents is not None
+    assert "Docusate Sodium" in embed.models.last_contents[0]
+    # The response `query` stays the caller's original phrase (the UI renders it
+    # as the source-card title) — the section body must NOT leak into it.
+    assert result["query"] == "discharge medications"
+
+
+def test_non_section_query_still_returns_empty():
+    """A query with no section intent and 0 hits stays empty (no fabrication)."""
+    endpoint = _Recorder([], [])
+    with patch.object(rs, "_index_endpoint", lambda: endpoint), \
+         patch.object(rs, "_embed_client", lambda: _FakeEmbedClient()), \
+         patch.object(rs, "_fetch_texts", lambda note_ids: {}):
+        result = _run(rs.rag_search(hadm_id=23613002, query="what did the nurse chart say"))
+
+    assert result == {"hadm_id": 23613002, "query": "what did the nurse chart say",
+                      "returned": 0, "passages": []}
+    assert endpoint.calls == 1
+
+
+def test_meds_fallback_keeps_hadm_restrict():
+    """The fallback re-query must still apply the hadm restrict server-side."""
+    endpoint = _Recorder([], [_FakeNeighbor("13219116-DS-18_discharge_medications_1", 0.28)])
+    with patch.object(rs, "_index_endpoint", lambda: endpoint), \
+         patch.object(rs, "_embed_client", lambda: _FakeEmbedClient()), \
+         patch.object(rs, "_fetch_texts", lambda note_ids: {nid: _NOTE for nid in note_ids}), \
+         patch.object(rs, "_fetch_note", lambda hadm: _NOTE):
+        _run(rs.rag_search(hadm_id=23613002, query="discharge medications"))
+    assert endpoint.calls == 2
+    assert endpoint.last_filter is not None
+    assert endpoint.last_filter[0].allow_tokens == ["23613002"]

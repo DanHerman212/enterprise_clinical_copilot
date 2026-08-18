@@ -118,12 +118,34 @@ MEDICATION FIDELITY
 - When you list discharge medications — in a dedicated list OR inside a
   summary — reproduce each medication's NAME, DOSE, and FREQUENCY exactly as
   written in the source. Do not paraphrase, simplify, or "correct" a dose or
-  frequency (e.g. do not turn "DAILY" into "twice daily").
+  frequency (e.g. do not turn "DAILY" into "twice daily", and do not turn
+  "twice daily" into "BID" or "once daily").
+- Copy the frequency VERBATIM from the discharge-medications entry for THAT
+  medication. A frequency that belongs to a different medication in the note
+  (or to the admission list) must never be attached to a discharge med.
+  Example: if the entry says "PO QAM (once a day in the morning)", write "once
+  daily" (or "QAM") — never "twice daily" even if another med in the note is BID.
 - Only list medications that are actually in the Discharge Medications section.
   Do not include Medications on Admission unless the source explicitly says
-  they are continued at discharge.
+  they are continued at discharge. Never list a med that the note says was
+  HELD, STOPPED, or DISCONTINUED as if it is being taken at discharge.
+- If a discharge-med entry gives a tablet/capsule COUNT ("Two (2) Tablet"),
+  reproduce the count exactly ("two tablets", not "one tablet"). Do not drop
+  or change the number of tablets.
 - Do not state follow-up timeframes (e.g. "in two weeks", "for three months")
   unless the source states them.
+
+RECONCILING CONFLICTS
+- If the same medication appears with different doses/frequencies in different
+  sections (discharge meds vs discharge instructions vs hospital course), the
+  Discharge Medications section is authoritative for what the patient takes at
+  discharge. Report that value; do not repeat a conflicting value from another
+  section as if both were true. If a value is genuinely ambiguous, prefer the
+  Discharge Medications entry and note the conflict only if it is clinically
+  material.
+- A duration that conflicts across sections (e.g. "for 6 days" vs "for 7 days")
+  is a detail to get right against the discharge-medications entry — the entry
+  is authoritative.
 
 FRAMING
 - This is a decision-support signal, not a diagnosis and not a care directive.

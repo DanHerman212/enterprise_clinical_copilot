@@ -57,11 +57,19 @@ def _norm_doses(text: str) -> set[str]:
     return {_norm_dose(m) for m in _DOSE_RE.finditer(text)}
 
 # Normalize an answer/source frequency phrase to a canonical token.
+#
+# P3.2 (2026-08-18): the swaps the judge flagged in the golden re-run were
+# written as "once daily"/"twice daily" (metoprolol "once daily" vs section
+# "PO BID"; Bupropion "twice daily" vs "PO QAM"), but the canonicalizer only
+# matched "1/2 times a day"/"BID" forms, so the guardrail could not see them.
+# Added the prose forms once/twice a day|daily, every day, and QD.
 _FREQ_PATTERNS = [
-    (re.compile(r"\b(?:2|two)\s*(?:x|times)?\s*(?:a\s*day|daily|per\s*day)\b|\bBID\b", re.I), "BID"),
+    (re.compile(r"\b(?:2|two)\s*(?:x|times)?\s*(?:a\s*day|daily|per\s*day)\b"
+                r"|\btwice\s*(?:a\s*day|daily)\b|\bBID\b", re.I), "BID"),
     (re.compile(r"\b(?:3|three)\s*(?:x|times)?\s*(?:a\s*day|daily|per\s*day)\b|\bTID\b", re.I), "TID"),
     (re.compile(r"\b(?:4|four)\s*(?:x|times)?\s*(?:a\s*day|daily|per\s*day)\b|\bQID\b", re.I), "QID"),
-    (re.compile(r"\b(?:1|one)\s*(?:x|times)?\s*(?:a\s*day|daily|per\s*day)\b|\bDAILY\b|\bQAM\b", re.I), "DAILY"),
+    (re.compile(r"\b(?:1|one)\s*(?:x|times)?\s*(?:a\s*day|daily|per\s*day)\b"
+                r"|\bonce\s*(?:a\s*day|daily)\b|\bevery\s*day\b|\bDAILY\b|\bQD\b|\bQAM\b", re.I), "DAILY"),
     (re.compile(r"\bat\s*bedtime\b|\bHS\b|\bQHS\b", re.I), "HS"),
     (re.compile(r"\bQ([1-9][0-9]?)H\b", re.I), lambda m: f"Q{m.group(1)}H"),
     (re.compile(r"\bPRN\b|\bas\s*needed\b", re.I), "PRN"),
@@ -105,7 +113,12 @@ def _passage_sections(tool_calls: list[dict]) -> tuple[list[dict], str]:
     med_texts = []
     for p in passages:
         sec = (p.get("section") or "").lower()
-        if "medication" in sec or "Discharge Medications" in p.get("text", ""):
+        # Per-med verification needs ONLY the discharge_medications section.
+        # Including medications_on_admission (or any passage whose body merely
+        # mentions "Discharge Medications") concatenates whole notes and makes
+        # _section_med_entries parse HPI/PMH numbered lists into junk entries
+        # (observed: 97 entries named 'nausea', 'htn', … in a 41k-char blob).
+        if sec == "discharge_medications":
             med_texts.append(p["text"])
     return passages, "\n".join(med_texts)
 
@@ -168,9 +181,197 @@ def check_citations(answer: str, passages: list[dict]) -> list[str]:
     return [f"citation_out_of_range:^{c}" for c in bad] if bad else []
 
 
+# --- Per-med frequency verification (P3.2, 2026-08-18) ----------------------
+#
+# The token-GLOBAL freq check cannot catch a per-med swap: answer says
+# "metoprolol tartrate … once daily" but the med's own discharge entry says
+# "PO BID", and "once daily"/DAILY exists elsewhere in the note, so the global
+# check sees DAILY as "supported". This guardrail verifies each med's freq
+# against THAT MED's entry in the discharge_medications section, matching by
+# name AND dose (a med can appear at multiple doses, e.g. Levetiracetam 500 mg
+# QAM + 1000 mg HS — dose disambiguates). A freq that contradicts the med's own
+# entry is DROPPED (a missing freq is safer than a wrong one) and flagged.
+
+_ENTRY_START = re.compile(r"(?m)^\s*\d+[\.\)]\s+")
+
+
+def _med_name(chunk: str) -> str:
+    """Leading med-name tokens up to the first digit ('metoprolol tartrate 25
+    mg …' -> 'metoprolol tartrate'). Lowercased, punctuation stripped."""
+    m = re.match(r"^[A-Za-z][A-Za-z\-']*(?:\s+[A-Za-z][A-Za-z\-']*)*", chunk)
+    if not m:
+        return ""
+    return re.sub(r"[^a-z]+", " ", m.group(0).lower()).strip()
+
+
+def _section_med_entries(med_text: str) -> list[dict]:
+    """Per-med entries from the discharge_medications section: {name, doses, freqs}.
+
+    A new entry starts only at a numbered line ("1. Drug …"). Continuation lines
+    (RX detail, multi-line sigs, "as needed for …", following sub-headers) are
+    APPENDED to the current entry — splitting them out produced junk entries whose
+    freqs (e.g. Q24H/PRN from the med's own sig) then matched an answer chunk for a
+    DIFFERENT med and dropped a correct freq. Trailing sections (Disposition /
+    Diagnosis) bleed into the last entry's freqs, which only makes the check more
+    permissive (safe direction)."""
+    idx = med_text.find("Discharge Medications")
+    body = med_text[idx:] if idx != -1 else med_text
+    entries: list[dict] = []
+    cur: list[str] = []
+    for line in body.splitlines():
+        if _ENTRY_START.match(line):
+            if cur:
+                entries.append(_make_entry(cur))
+            cur = [line.strip()]
+        elif line.strip():
+            cur.append(line.strip())
+    if cur:
+        entries.append(_make_entry(cur))
+    return [e for e in entries if e is not None]
+
+
+def _make_entry(lines: list[str]) -> dict | None:
+    """Build an entry dict from the lines of one numbered med entry."""
+    text = " ".join(lines)
+    first = lines[0] if lines else ""
+    # The numbered prefix ("1. metoprolol tartrate …") must be stripped before
+    # name extraction — _med_name requires the first char to be a letter.
+    first = _ENTRY_START.sub("", first).strip()
+    name = _med_name(first)
+    if not name:
+        return None
+    return {
+        "name": name,
+        "doses": _norm_doses(text),
+        "freqs": _canon_freqs(text),
+    }
+
+
+def _match_entry(chunk: str, doses: set[str], entries: list[dict]) -> dict | None:
+    """Best section entry for an answer med-chunk.
+
+    Match by finding which section entry's med name appears in the chunk
+    (the answer embeds prose like 'the patient was prescribed metoprolol
+    tartrate 25 mg…', so we look the clean section name up inside the chunk
+    rather than trying to parse a name out of the prose). Among name matches,
+    prefer the entry whose dose intersects the chunk's dose — a med can appear
+    at multiple doses (Levetiracetam 500 mg QAM + 1000 mg HS).
+
+    CONSERVATIVE: returns None when the chunk contains MORE THAN ONE distinct
+    med name (e.g. 'Diltiazem 60 mg PO TID and amLODIPine 5 mg PO DAILY' —
+    the answer glued two meds with 'and' and no separator). Verifying a
+    multi-med chunk would misattribute one med's freq to the other and could
+    DROP A CORRECT FREQ, so we skip it entirely. Also requires a real name
+    (>= 4 chars) to avoid junk matches."""
+    cl = chunk.lower()
+    name_matches = [
+        e for e in entries
+        if e["name"] and len(e["name"]) >= 4 and e["name"] in cl
+    ]
+    if not name_matches:
+        return None
+    # Multi-med chunk -> not safe to act on (see docstring).
+    distinct = {e["name"] for e in name_matches}
+    if len(distinct) > 1:
+        return None
+    if doses:
+        for e in name_matches:
+            if e["doses"] & doses:
+                return e
+    return next((e for e in name_matches if e["freqs"]), None)
+
+
+def _freq_token(m: re.Match, repl) -> str:
+    return repl(m) if callable(repl) else repl
+
+
+def _remove_spans(text: str, spans: list[tuple[int, int]]) -> str:
+    """Remove [start,end) slices (sorted, non-overlapping assumed)."""
+    out = []
+    prev = 0
+    for s, e in sorted(spans):
+        if s >= prev:
+            out.append(text[prev:s])
+            prev = e
+    out.append(text[prev:])
+    return "".join(out)
+
+
+def verify_med_freqs_per_med(answer: str, med_text: str) -> tuple[str, list[str]]:
+    """Drop a freq that contradicts the SAME med's discharge entry (per-med,
+    name+dose matched). Flags f"med_freq_permed_mismatch:{name}:{token}"."""
+    flags: list[str] = []
+    if not med_text or not answer:
+        return answer, flags
+    entries = _section_med_entries(med_text)
+    if not entries:
+        return answer, flags
+
+    # Answer's Discharge Medications region (or the whole answer if none).
+    idx = answer.lower().find("discharge medication")
+    region = answer[idx:] if idx != -1 else answer
+    for hdr in ("discharge instructions", "brief hospital course",
+                "discharge diagnosis", "discharge disposition"):
+        j = region.lower().find(hdr)
+        if j > 0:
+            region = region[:j]
+            break
+
+    spans_to_remove: list[tuple[int, int]] = []
+    base = idx if idx != -1 else 0
+    # Chunk on newlines, commas AND semicolons: the meds prompt lists meds one
+    # per line ("docusate sodium 100 mg … PO BID.\nsenna …"), while summarize
+    # embeds them as comma- or semicolon-separated prose. Splitting on commas
+    # alone turns a newline or semicolon list into one giant chunk and
+    # misattributes every med's freq to the first name.
+    for m in re.finditer(r"[^\n,;]+", region):
+        raw = m.group(0)
+        chunk = raw.strip()
+        if not chunk or not any(c.isdigit() for c in chunk):
+            continue
+        chunk_doses = _norm_doses(chunk)
+        # CONSERVATIVE: only act on a clean single-med chunk.
+        #  - exactly ONE dose token: a chunk naming several meds ("… amLODIPine
+        #    5 mg PO DAILY" glued on) or a held med list carries several doses
+        #    and must not have one med's freq attributed to another.
+        #  - no held/stopped/discontinued marker: held meds (Alyacen,
+        #    GlipiZIDE, HYDROcodone) are NOT in the discharge section, so their
+        #    chunk matches a section med by accident and their freq gets dropped.
+        if len(chunk_doses) != 1:
+            continue
+        if re.search(r"\b(?:held|stop(?:ped)?|discontin|not\s*restart)\b", chunk, re.I):
+            continue
+        chunk_freqs = _canon_freqs(chunk)
+        if not chunk_freqs:
+            continue
+        entry = _match_entry(chunk, chunk_doses, entries)
+        if entry is None or not entry["freqs"]:
+            continue
+        bad = chunk_freqs - entry["freqs"]
+        if not bad:
+            continue
+        for tok in sorted(bad):
+            flags.append(f"med_freq_permed_mismatch:{entry['name']}:{tok}")
+        # Remove the wrong freq phrases inside this chunk. Spans must be
+        # relative to the RAW (unstripped) match so offsets line up.
+        for pat, repl in _FREQ_PATTERNS:
+            for fm in pat.finditer(raw):
+                if _freq_token(fm, repl) in bad:
+                    spans_to_remove.append((base + m.start() + fm.start(),
+                                            base + m.start() + fm.end()))
+    if not spans_to_remove:
+        return answer, flags
+    cleaned = _remove_spans(answer, spans_to_remove)
+    # Fix only the "word ," artifacts left by a removal. Deliberately do NOT
+    # collapse runs of spaces globally — that destroys markdown bullet
+    # indentation ("*   Acetaminophen") and is a regression on passing answers.
+    cleaned = re.sub(r" +([,.;:])", r"\1", cleaned)
+    return cleaned.strip(), flags
+
+
 def guard_answer(answer: str, tool_calls: list[dict]) -> dict:
     """Apply all guardrails. Returns {'answer': str, 'flags': [str]}."""
-    passages, _med_source = _passage_sections(tool_calls)
+    passages, med_source = _passage_sections(tool_calls)
     full_text = "\n".join(p.get("text") or "" for p in passages)
     flags: list[str] = []
 
@@ -178,6 +379,9 @@ def guard_answer(answer: str, tool_calls: list[dict]) -> dict:
     flags += f
     # Verify med claims against the FULL retrieved evidence (see docstring).
     answer, f = verify_med_tokens(answer, full_text)
+    flags += f
+    # Per-med freq verification against the med's OWN discharge entry (P3.2).
+    answer, f = verify_med_freqs_per_med(answer, med_source)
     flags += f
     flags += check_citations(answer, passages)
 

@@ -34,8 +34,18 @@ DIMS = ["faithfulness", "groundedness", "citation", "clinical", "safety"]
 # chars (the redacted header + HPI opening), so it could not verify meds/course
 # that live in the body+end of each ~11k-char passage and falsely flagged
 # faithful answers as "fabricated". Full passages, generous cap.
-EVIDENCE_CAP = 120000
-PER_PASSAGE_CAP = 20000
+#
+# P3.1 fix (2026-08-17, after golden re-run root-cause): some discharge notes are
+# up to ~32k chars and the "Discharge Medications:" list lives at the END of the
+# passage (past the old 20k cap). A 20k per-passage cap silently hid the med list,
+# so the judge flagged FAITHFUL med answers as "all medications invented /
+# hallucinated" (7 false safety failures in the Aug-17 run: 21508795, 26329920,
+# 29318404, 21635816, 24592634). Max section length measured across all 300
+# traces = 32105; max total evidence = 128420. Caps raised with margin so the
+# judge always sees the med list. POC re-judge of the 7 artifact pairs confirmed
+# they flip to PASS with the full passage.
+EVIDENCE_CAP = 200000
+PER_PASSAGE_CAP = 40000
 
 
 def _evidence(tc: dict) -> dict:

@@ -57,3 +57,8 @@ Archive/
 .venv-311/
 .venv-kfp/
 .venv-nlp/
+
+# --- Agent eval runtime artifacts (regenerable; durable trace archive is GCP) ---
+projects/agent-harness/eval/results/*.log
+projects/agent-harness/eval/results/*.jsonl
+projects/agent-harness/eval/results/*.txt

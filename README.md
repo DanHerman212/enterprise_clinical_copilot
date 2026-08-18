@@ -6,11 +6,11 @@
 
 Predicting 30-day hospital readmission risk at discharge — and giving clinicians an agent that can explain it.
 
-## What this is
+## Project Overview
 
-A production-shaped ML system built on MIMIC-IV. A gradient-boosted model scores each patient's readmission risk at discharge and attributes that score to specific clinical factors. An orchestration agent sits on top, combining the model's quantitative signal with retrieval over unstructured EHR notes so a clinician can interrogate the prediction in plain language rather than accepting a number on faith.
+A production-grade machine learning system built on MIMIC-IV. A gradient-boosted model scores each patient's readmission risk at discharge and attributes that score to specific clinical factors. An orchestration agent sits on top, combining the model's quantitative signal with retrieval over unstructured EHR notes, so a clinician can interrogate the prediction in plain language rather than accepting a number on faith.
 
-The engineering goal is the full path — warehouse to features to training to a served endpoint to an agent that consumes it — not a notebook that reports an AUC.
+The engineering goal is the full production path — from warehouse to features to training to a served endpoint to the agent that consumes it — rather than a notebook that reports an AUC.
 
 ## Architecture
 
@@ -20,9 +20,9 @@ The engineering goal is the full path — warehouse to features to training to a
 
 | Project | What it does | Status |
 |---|---|---|
-| **[MLOps](projects/mlops/)** | Cohort, feature engineering, training pipeline, and the served risk model | Model trained, endpoint validated |
-| **[Agent Harness](projects/agent-harness/)** | LangGraph agent, MCP tool server, and the Django + A2UI interface | Design complete, build in progress |
-| **Agentic RAG** | Retrieval over discharge and radiology notes to ground the agent's reasoning | Planned |
+| **[MLOps](projects/mlops/)** | Cohort, feature engineering, training pipeline, and the served risk model | Model trained; endpoint validated |
+| **[Agent Harness](projects/agent-harness/)** | LangGraph agent, MCP tool server, and the Django + A2UI interface | Agent built and evaluated — 95% pass on a 300-trace golden set |
+| **[Agentic RAG](projects/agentic-rag/)** | Retrieval over discharge and radiology notes to ground the agent's reasoning | Built and validated |
 
 Each project's README opens with its own architecture diagram.
 
@@ -46,7 +46,7 @@ Each prediction returns a probability, a decision at threshold, and the parent-a
 ├── projects/
 │   ├── mlops/              # Readmission-risk ML system  → see its README
 │   ├── agent-harness/      # Orchestration agent + UI    → see its README
-│   └── agentic-rag/        # Retrieval layer (planned)
+│   └── agentic-rag/        # Retrieval layer             → see its README
 │
 ├── definitions/            # Dataform ELT: sources → staging → features → marts
 ├── docs/

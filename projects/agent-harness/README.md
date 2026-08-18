@@ -2,7 +2,7 @@
 
 The orchestration layer: an agent that reasons over the risk model's output, exposed to
 a clinician through a web interface. The model answers *what* the risk is; this project
-answers *why*, and lets a clinician push back.
+answers *why*, allowing a clinician to interrogate the prediction.
 
 ## Architecture
 
@@ -13,17 +13,12 @@ flowchart LR
   LG <--> GM["Gemini Flash<br/>Vertex"]
   LG --> MCP["MCP Server<br/>stdio dev · HTTP prod"]
   MCP --> T1["predict_readmission"]
-  MCP -.-> T2["rag_search"]
+  MCP --> T2["rag_search"]
   T1 --> EP["Vertex Endpoint"]
-  T1 --> FS["Feature source<br/>BigQuery / Feature Store"]
-  T2 -.-> VS["Vector Search"]
+  T1 --> FS["Feature source<br/>BigQuery"]
+  T2 --> VS["Vector Search"]
   LG --> A2["A2UI components"]
-
-  classDef planned stroke-dasharray:5 5,color:#888
-  class T2,VS planned
 ```
-
-Dashed elements are designed but not yet built.
 
 ## Stack
 
@@ -34,7 +29,7 @@ Dashed elements are designed but not yet built.
 | LLM | **Gemini Flash** via Vertex | Near-free per token, managed, and keeps clinical text inside GCP |
 | Tool exposure | **MCP server** | Reusable by this agent, by desktop clients, by future agents |
 | Transport | **stdio** (dev) + **streamable HTTP** (prod) | One implementation; develop locally, deploy remote |
-| Feature source | Pluggable — **Feature Store or BigQuery** | Low-latency for demos, near-free for dev and CI |
+| Feature source | **BigQuery** | Low-latency for demos, near-free for dev and CI |
 | Rendering | **A2UI** | Agent output is designed to be renderable as components, not just prose |
 | UI ↔ agent auth | **Thin BFF in Django** | Agent stays private; auth and quota centralized in one place |
 | Shared state | **Cloud SQL (Postgres)** — no Redis | Postgres covers quota, sessions, and checkpoints durably across instances |
@@ -52,8 +47,8 @@ during development and over authenticated HTTP in production, with no change to 
 logic. Adding retrieval later is adding a tool, not rearchitecting.
 
 **Orchestration is deliberately thin at first.** With one tool, the agent's routing is
-nearly trivial — and that is the point. The value of the first build is the plumbing
-(MCP + runtime + deploy path) so that the second tool is cheap.
+nearly trivial — and that is intentional. The value of the first build is the plumbing
+(MCP + runtime + deploy path), which makes adding subsequent tools inexpensive.
 
 **Cloud Run is stateless and scales to zero**, so anything crossing requests — per-user
 quota, sessions, agent checkpoints — lives in Postgres. Redis is deliberately absent;
@@ -64,33 +59,29 @@ which is out of scope.
 
 Two tiers, kept separate because conflating them is how agent projects lose credibility.
 
-**Tier 1 — integration (deterministic, CI-able).** Did the agent call the right tool
-with the right arguments? Did it route through MCP rather than bypassing it? Does the
+**Tier 1 — integration (deterministic, CI-able).** Does the agent call the right tool
+with the right arguments? Does it route through MCP rather than bypassing it? Does the
 response schema validate? Does `hadm_id=20924467` return the known-good `0.1314`? Does
 an invalid ID fail gracefully?
 
-**Tier 2 — output quality (semantic).** Is the narrative *faithful* to the tool
-outputs — no invented SHAP factors — and, once retrieval lands, *grounded* in retrieved
-passages? Measured against a golden set with expected key facts, plus LLM-as-judge
-against a versioned rubric.
+**Tier 2 — output quality (semantic).** Is the narrative *faithful* to the tool outputs
+— no invented SHAP factors — and *grounded* in retrieved passages? Measured against a
+300-trace golden set (100 held-out patients × 3 prompts: risk, medications, summarize)
+with an LLM-as-judge against a versioned rubric. Latest run (`gemini-2.5-flash`):
+
+| Metric | Result |
+|---|---|
+| Pass rate | **95%** (285 / 300) |
+| Agent errors | 0 |
+| Faithfulness | 96% |
+| Groundedness | 98.7% |
+| Citation accuracy | 99.7% |
+| Clinical correctness | 99% |
+| Safety | 99% — 3 medication-safety failures remain (contradictory instructions, an invented dosage, an incorrect frequency) |
 
 The critical principle: this is **not** re-evaluating the model. Model correctness is
 the MLOps AUCPR, already established. Agent evaluation measures only whether the
 narrative is supported by what the tools actually returned.
-
-## Cost posture
-
-Cloud Run scales to zero and is near-free idle. The **Vertex endpoint and online
-Feature Store bill continuously**, so development runs against BigQuery and a local
-serving container; both are brought up only when a live demo needs them.
-
-## Open items
-
-- Confirm Gemini region availability against the `us-east1` MLOps footprint
-- MCP HTTP server authentication on Cloud Run
-- A2UI maturity check before it lands on the critical path
-- Conversational session model (deferred until the demo needs multi-turn)
-- PhysioNet DUA review for sending clinical text to a hosted LLM
 
 ## Deeper reading
 

@@ -1,0 +1,51 @@
+{
+  "model": "gemini-2.5-flash",
+  "traces": 9,
+  "scored": 9,
+  "agent_errors": 0,
+  "verdict": {
+    "pass": 8,
+    "fail": 1,
+    "pass_rate": 0.8889
+  },
+  "dimensions": {
+    "faithfulness": {
+      "pass": 9,
+      "fail": 0,
+      "total": 9,
+      "pass_rate": 1.0
+    },
+    "groundedness": {
+      "pass": 8,
+      "fail": 1,
+      "total": 9,
+      "pass_rate": 0.8889
+    },
+    "citation": {
+      "pass": 8,
+      "fail": 1,
+      "total": 9,
+      "pass_rate": 0.8889
+    },
+    "clinical": {
+      "pass": 9,
+      "fail": 0,
+      "total": 9,
+      "pass_rate": 1.0
+    },
+    "safety": {
+      "pass": 9,
+      "fail": 0,
+      "total": 9,
+      "pass_rate": 1.0
+    }
+  },
+  "safety_failures": 0,
+  "flags": [
+    {
+      "hadm_id": 23743503,
+      "prompt": "risk",
+      "flag": "The claim that the patient's headache improved by discharge is not explicitly supported by the provided passage."
+    }
+  ]
+}

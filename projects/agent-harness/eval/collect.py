@@ -80,6 +80,10 @@ def main() -> int:
                         "probability": patient["probability"],
                         "band": patient.get("band"),
                     }
+                    # Keep the Langfuse trace id (when Langfuse is enabled) so
+                    # judge.py can attach rubric scores to the right trace.
+                    if state.get("langfuse_trace_id"):
+                        rec["langfuse_trace_id"] = state["langfuse_trace_id"]
                 except Exception as e:  # keep going; judge flags it later
                     rec = {"hadm_id": patient["hadm_id"], "prompt": ptype,
                            "error": f"{type(e).__name__}: {e}"}

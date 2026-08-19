@@ -10,6 +10,7 @@ Usage (harness root):
 """
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -46,6 +47,43 @@ DIMS = ["faithfulness", "groundedness", "citation", "clinical", "safety"]
 # they flip to PASS with the full passage.
 EVIDENCE_CAP = 200000
 PER_PASSAGE_CAP = 40000
+
+
+# --- Langfuse score attachment (optional; no-op without keys) ---------------
+# judge.py writes judged.jsonl as the durable archive AND attaches the rubric
+# scores to the matching Langfuse trace (keyed by the trace id collect.py
+# recorded when Langfuse was enabled), so the fix-and-retest loop can browse
+# scored traces in the Langfuse UI. Runs without Langfuse env behave exactly as
+# before — scoring is purely additive.
+
+def _langfuse_client():
+    env = {k: os.environ.get(k) for k in
+           ("LANGFUSE_HOST", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY")}
+    if not all(env.values()):
+        return None
+    from langfuse import Langfuse
+    return Langfuse(host=env["LANGFUSE_HOST"],
+                    public_key=env["LANGFUSE_PUBLIC_KEY"],
+                    secret_key=env["LANGFUSE_SECRET_KEY"])
+
+
+def _attach_scores(client, trace_id: str, j: dict) -> int:
+    """Attach the judge verdict + per-dimension scores to a Langfuse trace.
+
+    Returns the number of scores attached (0 when no client or trace id).
+    """
+    if client is None or not trace_id:
+        return 0
+    dims = j.get("dimensions") or {}
+    flags = " | ".join(j.get("flags") or []) or (j.get("reason") or "")[:300]
+    n = 0
+    for dim in DIMS:
+        if dim in dims:
+            client.score(trace_id=trace_id, name=dim, value=dims[dim], comment=flags)
+            n += 1
+    client.score(trace_id=trace_id, name="verdict",
+                 value=1 if j.get("verdict") == "PASS" else 0, comment=flags)
+    return n + 1
 
 
 def _evidence(tc: dict) -> dict:
@@ -97,8 +135,10 @@ def _judge(client, system: str, user: str) -> dict:
 
 def main() -> int:
     client = genai.Client(vertexai=True, project=PROJECT, location=LOCATION)
+    lf = _langfuse_client()
     traces = [json.loads(l) for l in TRACES.read_text().splitlines() if l.strip()]
     print(f"Judging {len(traces)} traces (model {GEMINI_MODEL})")
+    print(f"Langfuse score attachment: {'ON' if lf else 'OFF (no LANGFUSE_* env)'}")
 
     # Resumable: skip (hadm_id, prompt) pairs already scored in judged.jsonl and
     # append, so a re-run after a crash continues instead of restarting.
@@ -114,6 +154,7 @@ def main() -> int:
                 pass
     print(f"Resuming: {len(done)} already judged, {len(traces) - len(done)} to go")
 
+    attached = 0
     with JUDGED.open("a") as fh:
         for i, t in enumerate(traces, 1):
             if (t.get("hadm_id"), t.get("prompt")) in done:
@@ -134,7 +175,13 @@ def main() -> int:
             rec = {**t, "judge": j}
             fh.write(json.dumps(rec) + "\n")
             fh.flush()
+            if "error" not in j:
+                attached += _attach_scores(lf, t.get("langfuse_trace_id") or "", j)
             print(f"[{i}/{len(traces)}] {t['hadm_id']}/{t['prompt']}: {j.get('verdict') or '?'}", flush=True)
+
+    if lf is not None:
+        lf.flush()
+        print(f"Langfuse: flushed; {attached} scores attached for this run")
 
     # Recompute the report from the full judged file so it is correct even when
     # a run resumes over previously scored rows.

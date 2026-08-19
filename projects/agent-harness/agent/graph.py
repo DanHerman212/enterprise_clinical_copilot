@@ -245,6 +245,9 @@ async def ask(toolbox: MCPToolbox, question: str, model: str = GEMINI_MODEL) -> 
             },
             metadata={"model": model, "project": PROJECT},
         )
+        # Publish the Langfuse trace id on the returned state so the eval loop
+        # (collect -> judge) can attach rubric scores to the right trace.
+        state["langfuse_trace_id"] = langfuse_context.get_current_trace_id()
     return state
 
 

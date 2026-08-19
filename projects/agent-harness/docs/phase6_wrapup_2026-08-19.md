@@ -32,24 +32,36 @@ _Short, plain-language summary of what happened today and what's next._
    - `collect` records each trace's Langfuse ID; `judge` attaches 6 scores per
      trace (5 dimensions + verdict) with the judge's comments.
    - Verified on a 9-trace pilot (54 scores landed in Langfuse, values correct).
-   - **Full 300-trace eval launched with Langfuse** (in progress ~138/300 at
-     write time, zero errors) — when it finishes, the full judge attaches scores
-     to all 300 traces for review.
+   - **Full 300-trace eval completed with Langfuse** — every trace scored in
+     Langfuse (1,854 scores total across the run + pilot).
 
-5. **Infra / housekeeping.**
-   - Mapped `observability.danielmherman.com` → Langfuse (DNS record =
-     `CNAME observability → ghs.googlehosted.com`, one step at the registrar).
+5. **Completed the full golden eval (reproducible).** Collect 300/300 (zero
+   errors), judge 300/300 → **95% pass (285/300), 3 safety failures, 0 agent
+   errors — identical to the 08-18 run**, confirming the eval is stable.
+
+6. **Hardened the eval pipeline.** Both `collect` and `judge` could hang
+   forever on a stuck Vertex/Gemini call (collect stalled 55 min at 210/300;
+   judge stalled 18 min at 117/300). Both now have a per-call timeout and
+   resume support, so a hang retries/flags instead of freezing the run.
+
+7. **Infra / housekeeping.**
+   - Mapped `observability.danielmherman.com` → Langfuse (DNS record added).
+   - Teardown: both billable endpoints deleted — billing stopped.
    - Discussed eval-pipeline automation (recommend Cloud Run Jobs or Prefect)
      and Terraform IaC for the cleanup pass.
 
 ## Where the demo stands
 
-- The eval gate has passed: **95% raw pass**, 3 safety failures, guardrail safe.
-- The full live journey works on deployed endpoints; Langfuse is capturing and
-  scoring traces.
-- Phase 6 is essentially complete; remaining wrap-up: agent-down 502 test
-  (piggybacked on tonight's teardown), tick `go_live_plan.md` boxes, commit the
-  Langfuse build.
+- The eval gate has passed and is **reproducible**: **95% pass (285/300)**, 3
+  safety failures, 0 agent errors — identical across two independent full runs.
+- **Every trace is scored in Langfuse** (per-dimension scores + judge comments),
+  ready for review and the fix-and-retest loop.
+- The full live journey works on deployed endpoints; endpoints are now torn
+  down for the night (billing stopped).
+- Phase 6 is essentially complete; remaining wrap-up: commit the Langfuse build
+  (`graph.py` / `collect.py` / `judge.py`), tick `go_live_plan.md` boxes,
+  Block B agent-down live verify (quick check now that endpoints are down),
+  and a confirmed quota-refund gap fix (see tomorrow's agenda).
 
 ## Tomorrow's plan (repurposed priorities)
 
@@ -67,7 +79,11 @@ must do before launch), GitHub cleanup, and public website project page cleanup.
 
 ## Housekeeping
 
-- Endpoints bill hourly and are needed until the eval finishes — teardown EOD
-  (with the Block B agent-down test) via `teardown.py --yes`.
+- Endpoints torn down EOD (`teardown.py --yes`) — billing stopped. Cloud Run
+  services (agent / mcp-server / Langfuse) left running; they scale to zero.
+- **Found a real bug tonight:** quota is NOT refunded when the agent surfaces a
+  downstream (endpoint) failure as HTTP 200 — the BFF only refunds on 502. The
+  fix (check for errored tool responses, refund + 502) is designed and on
+  tomorrow's agenda.
 - The Langfuse build (`graph.py` / `collect.py` / `judge.py`) still needs
   committing.

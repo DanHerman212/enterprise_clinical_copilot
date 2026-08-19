@@ -33,6 +33,13 @@ PROMPTS = {
 }
 
 
+# A single agent run can hang forever on a stuck Vertex/Gemini call (observed
+# 2026-08-19: the full run stalled ~55min at trace 210/300 with no output). The
+# timeout makes a hang raise (-> retried, then flagged) instead of stalling the
+# whole collect.
+_ASK_TIMEOUT_SECONDS = 180
+
+
 def _run(question: str, retries: int = 2) -> dict:
     async def go():
         async with toolbox() as box:
@@ -41,8 +48,8 @@ def _run(question: str, retries: int = 2) -> dict:
     last = None
     for attempt in range(retries + 1):
         try:
-            return asyncio.run(go())
-        except Exception as e:  # transient transport/Vertex errors
+            return asyncio.run(asyncio.wait_for(go(), timeout=_ASK_TIMEOUT_SECONDS))
+        except Exception as e:  # transient transport/Vertex errors + hangs
             last = e
             print(f"    (attempt {attempt + 1} failed: {type(e).__name__})",
                   flush=True)
@@ -64,10 +71,27 @@ def main() -> int:
     total = len(sample) * len(prompts)
     print(f"Running {len(sample)} cases x {len(prompts)} prompts = {total} agent runs")
 
-    with OUT.open("w") as fh:
-        done = 0
+    # Resumable: skip (hadm_id, prompt) pairs already traced so a restart after
+    # a crash or hang continues instead of redoing everything (append-only,
+    # mirroring judge.py's resume).
+    done: set[tuple] = set()
+    if OUT.exists():
+        for line in OUT.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+                done.add((rec.get("hadm_id"), rec.get("prompt")))
+            except json.JSONDecodeError:
+                pass
+    print(f"Resuming: {len(done)} already traced, {total - len(done)} to go")
+
+    completed = len(done)
+    with OUT.open("a") as fh:
         for patient in sample:
             for ptype in prompts:
+                if (patient["hadm_id"], ptype) in done:
+                    continue
                 q = PROMPTS[ptype](patient["hadm_id"])
                 try:
                     state = _run(q)
@@ -89,9 +113,9 @@ def main() -> int:
                            "error": f"{type(e).__name__}: {e}"}
                 fh.write(json.dumps(rec) + "\n")
                 fh.flush()
-                done += 1
+                completed += 1
                 status = "ok" if "error" not in rec else "ERROR"
-                print(f"[{done}/{total}] {patient['hadm_id']}/{ptype}: {status}",
+                print(f"[{completed}/{total}] {patient['hadm_id']}/{ptype}: {status}",
                       flush=True)
 
     print(f"Wrote {OUT}")

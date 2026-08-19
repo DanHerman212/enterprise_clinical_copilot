@@ -11,7 +11,9 @@ Usage (harness root):
 
 import json
 import os
+import queue
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -29,6 +31,12 @@ JUDGED = HARNESS / "eval" / "results" / "judged.jsonl"
 REPORT = HARNESS / "eval" / "results" / "golden_report.json"
 
 DIMS = ["faithfulness", "groundedness", "citation", "clinical", "safety"]
+
+# A single judge call can hang forever on a stuck Gemini request (observed
+# 2026-08-19: the run stalled ~18min at trace 117/300 with no output). The
+# timeout makes a hang raise (-> retried, then flagged) instead of stalling the
+# whole judge. Mirrors collect.py's per-ask timeout.
+_JUDGE_TIMEOUT_SECONDS = 120
 
 # P2 fix (2026-08-14, after human judge-validation showed kappa=0): the judge
 # must see the FULL evidence the agent saw. v1 truncated each passage to 400
@@ -110,27 +118,45 @@ def _evidence(tc: dict) -> dict:
     return {"tool": name, "response": str(resp)[:2000]}
 
 
+def _judge_once(client, system: str, user: str) -> dict:
+    """One synchronous judge call to Gemini (no timeout on this client API)."""
+    resp = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=user,
+        config=types.GenerateContentConfig(
+            system_instruction=system,
+            response_mime_type="application/json",
+            temperature=0,
+        ),
+    )
+    txt = (resp.text or "").strip()
+    if txt.startswith("```"):
+        txt = txt.strip("`").removeprefix("json").strip()
+    return json.loads(txt)
+
+
 def _judge(client, system: str, user: str) -> dict:
+    """Judge with a hard timeout so a stuck Gemini call cannot stall the run.
+
+    The google-genai client does NOT accept a `timeout` kwarg on
+    generate_content, so enforce the bound by running the call in a daemon
+    thread and waiting on a queue. On timeout the daemon thread is abandoned
+    (it never blocks process exit) and the attempt is retried, then flagged.
+    """
     for attempt in range(4):
+        q: queue.Queue[dict] = queue.Queue(maxsize=1)
+        t = threading.Thread(
+            target=lambda: q.put(_judge_once(client, system, user)), daemon=True)
+        t.start()
         try:
-            resp = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=user,
-                config=types.GenerateContentConfig(
-                    system_instruction=system,
-                    response_mime_type="application/json",
-                    temperature=0,
-                ),
-            )
-            txt = (resp.text or "").strip()
-            if txt.startswith("```"):
-                txt = txt.strip("`").removeprefix("json").strip()
-            return json.loads(txt)
+            return q.get(timeout=_JUDGE_TIMEOUT_SECONDS)
+        except queue.Empty:
+            last = "timeout"
         except Exception as e:
-            if attempt < 3:
-                time.sleep(2 ** attempt)
-            else:
-                return {"error": f"{type(e).__name__}: {e}"}
+            last = f"{type(e).__name__}: {e}"
+        if attempt < 3:
+            time.sleep(2 ** attempt)
+    return {"error": str(last)}
 
 
 def main() -> int:

@@ -40,17 +40,21 @@ _ANSWER_AGE = re.compile(
 
 # A STANDALONE dose+unit token. The lookarounds exclude compound doses like
 # "500-100-40 mg-unit-mcg" (the "40" and "500" are part of a multi-part dose).
+# The number allows a thousands separator ("2,000 mcg") so it normalizes to
+# the same key as the answer's "2000 mcg" — a comma used to break the match and
+# made the verifier drop a CORRECT dose (regression on 24592634/summarize).
 _DOSE_RE = re.compile(
-    r"(?<![\d\-])(\d+(?:\.\d+)?)\s*(mg|mcg|g|mEq|units?|mL|%)\b(?![\-])",
+    r"(?<![\d\-])(\d+(?:,\d{3})*(?:\.\d+)?)\s*(mg|mcg|g|mEq|units?|mL|%)\b(?![-])",
     re.IGNORECASE,
 )
 
 
 def _norm_dose(m: re.Match) -> str:
     """Normalize a dose match to a comparable key (handles "10 units" vs
-    "10units", "300  mg" vs "300 mg", "1000 units" vs "1000 UNIT")."""
+    "10units", "300  mg" vs "300 mg", "1000 units" vs "1000 UNIT", and
+    "2,000 mcg" vs "2000 mcg")."""
     num, unit = m.group(1), m.group(2).lower().rstrip("s")  # units -> unit
-    return f"{num}{unit}"
+    return f"{num.replace(',', '')}{unit}"
 
 
 def _norm_doses(text: str) -> set[str]:
@@ -78,14 +82,26 @@ _FREQ_PATTERNS = [
 
 
 def _canon_freqs(text: str) -> set[str]:
-    out = set()
+    out: set[str] = set()
+    work = text
     for pat, repl in _FREQ_PATTERNS:
-        if callable(repl):
-            for m in pat.finditer(text):
-                out.add(repl(m))
-        else:
-            for m in pat.finditer(text):
-                out.add(repl)
+        ms = list(pat.finditer(work))
+        if not ms:
+            continue
+        for m in ms:
+            out.add(repl(m) if callable(repl) else repl)
+        # Blank each consumed span so a lower-priority pattern cannot re-match
+        # inside a compound already canonicalized. Without this, "twice daily"
+        # yields BOTH BID (via the BID pattern) and DAILY (the bare \bDAILY\b
+        # branch re-matching the "daily" inside it) — a spurious {BID, DAILY}
+        # that made the per-med verifier drop a correct "daily" and flag
+        # med_freq_permed_mismatch:*:DAILY on passing answers (regression
+        # caught by the P4 dry-run, 2026-08-18).
+        chars = list(work)
+        for m in ms:
+            for i in range(m.start(), m.end()):
+                chars[i] = " "
+        work = "".join(chars)
     return out
 
 
@@ -172,7 +188,11 @@ def verify_med_tokens(answer: str, evidence_text: str) -> tuple[str, list[str]]:
         flags.append(f"med_freq_mismatch:{freq}")
     if not dropped:
         return answer, flags
-    return re.sub(r"\s{2,}", " ", cleaned).strip(), flags
+    # Collapse only intra-line space runs — never across newlines. The earlier
+    # `re.sub(r"\s{2,}", ...)` also collapsed `\n\n` paragraph breaks and
+    # markdown structure, which modified a passing summarize answer after a
+    # dose drop (regression observed on 24592634/summarize).
+    return re.sub(r"[ \t]{2,}", " ", cleaned).strip(), flags
 
 
 def check_citations(answer: str, passages: list[dict]) -> list[str]:

@@ -33,6 +33,25 @@ def test_canon_freqs_sees_qd():
     assert "DAILY" in g._canon_freqs("aspirin 81 mg PO QD")
 
 
+# --- regression: compound freqs must not double-count (2026-08-19) -----------
+
+def test_canon_freqs_twice_daily_is_bid_only():
+    # "twice daily" -> BID; the bare-DAILY branch used to re-match the "daily"
+    # inside it and add a spurious DAILY token.
+    assert g._canon_freqs("furosemide 20 mg tablet twice daily") == {"BID"}
+
+
+def test_canon_freqs_once_daily_is_daily_only():
+    assert g._canon_freqs("metoprolol tartrate 25 mg tablet once daily") == {"DAILY"}
+
+
+def test_canon_freqs_keeps_standalone_daily_beside_twice_daily():
+    # Masking must not eat a legit standalone "daily" elsewhere in the text.
+    freqs = g._canon_freqs("furosemide 20 mg tablet twice daily, "
+                           "simvastatin 10 mg tablet daily")
+    assert freqs == {"BID", "DAILY"}
+
+
 # --- per-med swap detection (the judge's metoprolol/Bupropion class) ---------
 
 # 27382649 discharge_medications entry.
@@ -80,6 +99,20 @@ def test_permed_leaves_correct_freq_alone():
               "tablet daily ^[3].")
     cleaned, flags = g.verify_med_freqs_per_med(answer, METOPROLOL_SECTION)
     assert cleaned == answer  # "twice a day" == BID -> no change
+    assert flags == []
+
+
+def test_permed_twice_daily_matching_bid_is_untouched():
+    # Regression (2026-08-18 dry-run, 22247761): "twice daily" was read as
+    # {BID, DAILY}; the spurious DAILY dropped a correct "daily" from a
+    # PASSING answer. Now "twice daily" canonicalizes to BID only -> no change.
+    section = ("Discharge Medications:\n"
+               "1. furosemide 20 mg Tablet Sig: One (1) Tablet PO BID (2 times a day).\n")
+    answer = ("Discharge Medications.** At discharge, the patient was prescribed "
+              "furosemide 20 mg tablet twice daily, simvastatin 10 mg tablet "
+              "daily ^[1].")
+    cleaned, flags = g.verify_med_freqs_per_med(answer, section)
+    assert cleaned == answer
     assert flags == []
 
 
@@ -135,6 +168,34 @@ def test_newlines_preserved():
               "The patient was treated ^[2].")
     cleaned, _ = g.verify_med_freqs_per_med(answer, section)
     assert "\n\n**Hospital Course.**" in cleaned
+
+
+def test_verify_med_tokens_keeps_paragraph_break_after_dose_drop():
+    # Regression (2026-08-18 dry-run, 24592634): dropping an unverifiable dose
+    # collapsed the \n\n paragraph break via re.sub(r"\s{2,}"). The cleanup
+    # must collapse only intra-line space runs, never newlines.
+    evidence = "cyanocobalamin 1000 mcg oral, vitamin D 800 IU oral"
+    answer = ("The patient was given cyanocobalamin 2000 UNIT oral.\n\n"
+              "**Discharge Diagnosis.** Pneumonia ^[1].")
+    cleaned, flags = g.verify_med_tokens(answer, evidence)
+    assert "\n\n**Discharge Diagnosis.**" in cleaned
+    assert any("2000 UNIT" in f for f in flags)
+
+
+def test_dose_with_thousands_separator_is_not_dropped():
+    # Regression (2026-08-18 dry-run, 24592634): source "2,000 mcg" / "2,000
+    # unit" (RX line) never matched the answer's "2000 mcg" / "2000 UNIT"
+    # because the comma broke _DOSE_RE, so a CORRECT dose was dropped from a
+    # PASSING answer. Normalization must equate "2,000" with "2000".
+    evidence = ("5.  Cyanocobalamin ___ mcg PO DAILY\n"
+                "RX *cyanocobalamin (vitamin B-12) 2,000 mcg 1 tablet(s) by mouth\n"
+                "11.  Vitamin D ___ UNIT PO DAILY\n"
+                "RX *ergocalciferol (vitamin D2) 2,000 unit 1 tablet(s) by mouth\n")
+    answer = ("Discharge Medications.** Cyanocobalamin 2000 mcg PO DAILY, "
+              "Vitamin D 2000 UNIT PO DAILY ^[1].")
+    cleaned, flags = g.verify_med_tokens(answer, evidence)
+    assert cleaned == answer
+    assert flags == []
 
 
 # --- section entry parsing ---------------------------------------------------

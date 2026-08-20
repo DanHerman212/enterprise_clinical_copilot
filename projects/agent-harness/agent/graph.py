@@ -120,6 +120,25 @@ def _jsonable(value: Any) -> Any:
         return repr(value)
 
 
+def _system_instruction(instruction: Any) -> Any:
+    """Serialize GenerateContentConfig.system_instruction into a JSON-safe
+    shape so the Langfuse input shows the FULL prompt — system prompt +
+    conversation — not just the conversation messages. The system prompt is
+    the thing that tells the model *how* to behave; without it in the trace,
+    you cannot see what the model was actually instructed to do."""
+    if instruction is None:
+        return None
+    if isinstance(instruction, str):
+        return instruction
+    # genai Content (may have multiple parts) — robust fallback.
+    if isinstance(instruction, types.Content):
+        return [
+            part.text if part.text else _jsonable(part)
+            for part in instruction.parts or []
+        ]
+    return _jsonable(instruction)
+
+
 @observe(as_type="generation", name="gemini.generate")
 async def _generate(
     client: genai.Client,
@@ -134,7 +153,10 @@ async def _generate(
     if LANGFUSE_ENABLED:
         langfuse_context.update_current_observation(
             model=model,
-            input=_serialize_contents(contents),
+            input={
+                "system_instruction": _system_instruction(config.system_instruction),
+                "messages": _serialize_contents(contents),
+            },
             output=response.text,
             metadata={
                 "finish_reason": (

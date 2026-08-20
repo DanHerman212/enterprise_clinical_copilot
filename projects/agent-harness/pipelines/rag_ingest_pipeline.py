@@ -51,6 +51,7 @@ def rag_ingest_pipeline(
     brute_sample: int = 2000,
     approximate_neighbors: int = 40,
     expected_vectors: int = 555770,
+    shard_size: str = "SHARD_SIZE_MEDIUM",
     # Resource limits per step. Defaults are sized for the real ~560k-chunk
     # corpus; small synthetic runs pass tiny values (e.g. "1"/"2Gi") so Vertex
     # schedules cheap machines. KFP set_* takes string quantities.
@@ -95,6 +96,7 @@ def rag_ingest_pipeline(
         brute_sample=brute_sample,
         approximate_neighbors=approximate_neighbors,
         expected=expected_vectors,
+        shard_size=shard_size,
     )
     index_task.set_cpu_limit(index_cpu).set_memory_limit(index_mem)
 
@@ -115,7 +117,7 @@ def submit() -> None:
 
       NOTES_TABLE_REF / SPLIT_TABLE_REF / SPLIT_NAME     source tables
       PREVIOUS_INGEST_URI / EMBED_WORKERS / EXPECTED_VECTORS / BRUTE_SAMPLE
-      CHUNK_CPU / CHUNK_MEM / EMBED_CPU / EMBED_MEM / INDEX_CPU / INDEX_MEM
+      SHARD_SIZE / CHUNK_CPU / CHUNK_MEM / EMBED_CPU / EMBED_MEM / INDEX_CPU / INDEX_MEM
     """
     package_path = compile_pipeline()
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -136,6 +138,7 @@ def submit() -> None:
             "embed_workers": int(os.environ.get("EMBED_WORKERS", "1")),
             "expected_vectors": int(os.environ.get("EXPECTED_VECTORS", "555770")),
             "brute_sample": int(os.environ.get("BRUTE_SAMPLE", "2000")),
+            "shard_size": os.environ.get("SHARD_SIZE", "SHARD_SIZE_MEDIUM"),
             "chunk_cpu": os.environ.get("CHUNK_CPU", "2"),
             "chunk_mem": os.environ.get("CHUNK_MEM", "8Gi"),
             "embed_cpu": os.environ.get("EMBED_CPU", "8"),

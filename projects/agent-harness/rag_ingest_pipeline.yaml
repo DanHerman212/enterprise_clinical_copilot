@@ -18,6 +18,7 @@
 #    previous_ingest_uri: str [Default: '']
 #    project_id: str [Default: 'trim-icon-498815-a0']
 #    sections_csv: str [Default: 'history_of_present_illness,past_medical_history,family_history,social_history,physical_exam,brief_hospital_course,discharge_condition,discharge_diagnosis,discharge_medications,medications_on_admission,discharge_disposition,discharge_instructions']
+#    shard_size: str [Default: 'SHARD_SIZE_MEDIUM']
 #    split_name: str [Default: 'test']
 #    split_table_ref: str [Default: 'trim-icon-498815-a0.readmission.analytics_dataset_encoded']
 components:
@@ -41,6 +42,10 @@ components:
         location:
           parameterType: STRING
         project_id:
+          parameterType: STRING
+        shard_size:
+          defaultValue: SHARD_SIZE_MEDIUM
+          isOptional: true
           parameterType: STRING
     outputDefinitions:
       artifacts:
@@ -133,13 +138,14 @@ deploymentSpec:
           \ *\n\ndef build_index(\n    project_id: str,\n    location: str,\n    ingest:\
           \ dsl.Input[dsl.Artifact],\n    dimensions: int,\n    brute_sample: int,\n\
           \    approximate_neighbors: int,\n    expected: int,\n    manifest: dsl.Output[dsl.Artifact],\n\
-          ) -> None:\n    \"\"\"KFP component: build BRUTE_FORCE + TREE_AH Vector\
-          \ Search indexes.\"\"\"\n    from pipelines.components.build_index import\
-          \ run_build_index\n\n    run_build_index(\n        project_id=project_id,\n\
-          \        location=location,\n        ingest_path=ingest.path,\n        dimensions=dimensions,\n\
-          \        brute_sample=brute_sample,\n        approximate_neighbors=approximate_neighbors,\n\
-          \        expected=expected,\n        manifest_path=manifest.path,\n    )\n\
-          \n"
+          \    shard_size: str = \"SHARD_SIZE_MEDIUM\",\n) -> None:\n    \"\"\"KFP\
+          \ component: build BRUTE_FORCE + TREE_AH Vector Search indexes.\"\"\"\n\
+          \    from pipelines.components.build_index import run_build_index\n\n  \
+          \  run_build_index(\n        project_id=project_id,\n        location=location,\n\
+          \        ingest_path=ingest.path,\n        dimensions=dimensions,\n    \
+          \    brute_sample=brute_sample,\n        approximate_neighbors=approximate_neighbors,\n\
+          \        expected=expected,\n        shard_size=shard_size,\n        manifest_path=manifest.path,\n\
+          \    )\n\n"
         image: python:3.12-slim
         resources:
           resourceCpuLimit: '{{$.inputs.parameters[''pipelinechannel--index_cpu'']}}'
@@ -268,6 +274,8 @@ root:
               componentInputParameter: index_mem
             project_id:
               componentInputParameter: project_id
+            shard_size:
+              componentInputParameter: shard_size
         taskInfo:
           name: build-index
       chunk-notes:
@@ -400,6 +408,10 @@ root:
         parameterType: STRING
       sections_csv:
         defaultValue: history_of_present_illness,past_medical_history,family_history,social_history,physical_exam,brief_hospital_course,discharge_condition,discharge_diagnosis,discharge_medications,medications_on_admission,discharge_disposition,discharge_instructions
+        isOptional: true
+        parameterType: STRING
+      shard_size:
+        defaultValue: SHARD_SIZE_MEDIUM
         isOptional: true
         parameterType: STRING
       split_name:

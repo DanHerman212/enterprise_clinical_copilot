@@ -30,6 +30,7 @@ def run_build_index(
     brute_sample: int,
     approximate_neighbors: int,
     expected: int,
+    shard_size: str = "SHARD_SIZE_MEDIUM",
     manifest_path: str,
 ) -> None:
     client_s = storage.Client(project=project_id)
@@ -70,6 +71,7 @@ def run_build_index(
         contents_delta_uri=f"gs://{bucket.name}/{full_dir}",
         dimensions=dimensions,
         approximate_neighbors_count=approximate_neighbors,
+        shard_size=shard_size,
         # SDK defaults are None; without these the tree-AH algorithmConfig is
         # empty and Vertex rejects the build ("algorithmConfig required").
         leaf_node_embedding_count=1000,
@@ -109,6 +111,7 @@ def build_index(
     approximate_neighbors: int,
     expected: int,
     manifest: dsl.Output[dsl.Artifact],
+    shard_size: str = "SHARD_SIZE_MEDIUM",
 ) -> None:
     """KFP component: build BRUTE_FORCE + TREE_AH Vector Search indexes."""
     from pipelines.components.build_index import run_build_index
@@ -121,5 +124,6 @@ def build_index(
         brute_sample=brute_sample,
         approximate_neighbors=approximate_neighbors,
         expected=expected,
+        shard_size=shard_size,
         manifest_path=manifest.path,
     )

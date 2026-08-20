@@ -14,7 +14,10 @@ BUNDLE_URI_OVERRIDE = os.environ.get("BUNDLE_URI")
 
 # BigQuery feature source
 DATASET = "readmission"
-TABLE = f"{DATASET}.analytics_dataset_encoded"
+# Overridable so the deployed agent can serve the synthetic cohort (whose
+# feature rows live in readmission.synthetic_features) without the real
+# MIMIC-derived analytics_dataset_encoded table shipping anywhere public.
+TABLE = os.environ.get("FEATURE_TABLE", f"{DATASET}.analytics_dataset_encoded")
 TABLE_FQN = f"{PROJECT}.{TABLE}"
 ENTITY_ID_COLUMN = "hadm_id"
 

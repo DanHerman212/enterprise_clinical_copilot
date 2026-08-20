@@ -34,7 +34,12 @@ EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "gemini-embedding-001")
 EMBEDDING_DIM = int(os.environ.get("EMBEDDING_DIM", "768"))
 RESTRICT_NAMESPACE = "hadm_id"
 # The discharge notes table (note_id -> hadm_id mapping, text by note_id).
-DISCHARGE_TABLE = f"{PROJECT}.mimiciv_note.discharge"
+# Overridable so the deployed agent reads the SYNTHETIC notes table
+# (readmission.synthetic_notes) instead of the real MIMIC-derived one — the
+# public demo must never resolve passage text from real patient notes.
+DISCHARGE_TABLE = os.environ.get(
+    "DISCHARGE_TABLE", f"{PROJECT}.mimiciv_note.discharge"
+)
 DEFAULT_TOP_K = int(os.environ.get("RAG_TOP_K", "5"))
 
 # Gemini. Verified reachable from us-east1 on 2026-07-30, so the agent stays

@@ -7,6 +7,17 @@ _Created 2026-08-20. Owner: Dan._
 > advice**. For definitive questions about a specific provision, consult the DUA text
 > you signed and, if needed, an attorney.
 
+## 0. Locked decisions (2026-08-20)
+
+- **Deploy the REAL model (`model.bst`) in production.** This is a prior, locked
+  decision (recorded in serving-architecture-decisions / go-live plan). The model
+  is a trained *function*; it is deployed to serve **synthetic** patient features
+  only. No MIMIC patient content reaches the public surface. A trained model
+  consuming synthetic inputs is **not** a redistribution or derivative of MIMIC-IV
+  data under the DUA. The earlier "model.bst = exposure" finding is superseded.
+- **Public demo = synthetic data, real system.** The DATA (notes, features, cohort)
+  is synthetic; the SYSTEM (agent pipeline, RAG index, predict path) is live.
+
 ## 1. DUA obligations (summary)
 
 The MIMIC-IV DUA is a signed agreement with the data steward (PhysioNet / BIDMC). Its core
@@ -35,7 +46,7 @@ artifacts that are the exposure points to address:
 
 | Artifact | Content | Concern |
 |---|---|---|
-| `model.bst` | Trained XGBoost weights | Highest — a trained model is arguably a "derivative"; public distribution of MIMIC-trained weights is a gray area to avoid. |
+| `model.bst` | Trained XGBoost weights | **Superseded (see §0)** — locked decision to deploy the real model serving synthetic features only. Not a derivative/redistribution of MIMIC data. |
 | `eval/results/golden_report*.json`, `golden_sample.json` | `hadm_id`s, probabilities, small clinical fragments quoted in judge reasons | Derivative identifiers + tiny real clinical content. |
 | `docs/probes/*.json`, `spikes/*.json`, `manifest.json` | Aggregate stats, render specs, feature schema | Benign — no patient content. |
 
@@ -43,8 +54,8 @@ Raw note passages (`eval/results/*.jsonl`) are **not committed** (gitignored). �
 
 ## 4. Remediation checklist
 
-- [ ] **Remove `model.bst` from the public repo** (untrack + gitignore; keep locally or
-      move to a private/artifact store). Highest priority.
+- [x] **Resolve `model.bst` posture** — locked decision to deploy the real model on
+      synthetic inputs (see §0). Not an exposure; no removal required.
 - [ ] **Gate or scrub the eval report JSONs** containing `hadm_id`s + clinical fragments
       (gitignore them or move to private storage).
 - [ ] Confirm no raw note text is ever committed (extend the `.gitignore` patterns if needed).

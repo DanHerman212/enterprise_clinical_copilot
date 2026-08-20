@@ -8,8 +8,11 @@
 # NOT langchain-google-vertexai: pins pyarrow<24.0.0 for one model call.
 
 mcp==2.0.0
-langgraph==1.2.10
+langgraph==1.2.11
 google-genai==1.75.0
 google-auth==2.50.0
 uvicorn==0.47.0
-langfuse==2.60.10
+langfuse==4.14.4
+# langchain 1.x is required by langfuse 4.x's CallbackHandler, which graph.py
+# uses for the official LangGraph trace (2026-08-20 v4 migration).
+langchain==1.3.16

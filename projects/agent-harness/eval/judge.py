@@ -87,10 +87,10 @@ def _attach_scores(client, trace_id: str, j: dict) -> int:
     n = 0
     for dim in DIMS:
         if dim in dims:
-            client.score(trace_id=trace_id, name=dim, value=dims[dim], comment=flags)
+            client.create_score(trace_id=trace_id, name=dim, value=dims[dim], comment=flags)
             n += 1
-    client.score(trace_id=trace_id, name="verdict",
-                 value=1 if j.get("verdict") == "PASS" else 0, comment=flags)
+    client.create_score(trace_id=trace_id, name="verdict",
+                        value=1 if j.get("verdict") == "PASS" else 0, comment=flags)
     return n + 1
 
 

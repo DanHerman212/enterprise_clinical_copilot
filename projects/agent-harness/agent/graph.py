@@ -14,6 +14,7 @@ import json
 import operator
 import os
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Annotated, Any, TypedDict
 
@@ -32,10 +33,12 @@ from mcp_server.config import (  # noqa: E402
     PROJECT,
 )
 
-# --- Langfuse observability (optional, no-op without keys) ---
+# --- Langfuse observability (OTel-native, v4; optional no-op without keys) ---
 # Enabled only when all three env vars are present, so local/dev runs without
-# them never import langfuse and never log. When enabled, every /ask becomes a
-# Langfuse trace with a generation span for the Gemini call and a span per MCP
+# them never import langfuse and never log. Every /ask becomes a Langfuse trace
+# whose observations follow the LangGraph structure (the agent <-> tools loop,
+# rendered as a graph) via the official Langfuse LangChain callback, plus a
+# generation observation for each Gemini call and a tool observation per MCP
 # tool call, so the golden-eval fix-and-retest loop can open a failing case and
 # see exactly which passages went in and what the model said.
 LANGFUSE_ENABLED = bool(
@@ -44,28 +47,25 @@ LANGFUSE_ENABLED = bool(
     and os.environ.get("LANGFUSE_HOST")
 )
 
-if LANGFUSE_ENABLED:
-    from langfuse.decorators import (  # noqa: E402
-        langfuse_context,
-        observe as _langfuse_observe,
-    )
 
-    langfuse_context.configure(
-        public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
-        secret_key=os.environ["LANGFUSE_SECRET_KEY"],
-        host=os.environ["LANGFUSE_HOST"],
-    )
+def _lf() -> Any:
+    """The v4 Langfuse client (initialized from env) when enabled, else None."""
+    if not LANGFUSE_ENABLED:
+        return None
+    from langfuse import get_client  # noqa: E402
 
-    def observe(*args: Any, **kwargs: Any):
-        return _langfuse_observe(*args, **kwargs)
+    return get_client()
 
-else:
 
-    def observe(*args: Any, **kwargs: Any):
-        def decorator(fn):
-            return fn
+def _langgraph_callback() -> Any:
+    """The official Langfuse LangChain callback for the LangGraph run, bound to
+    the current OpenTelemetry trace context. Returns None when Langfuse is
+    disabled so the graph runs exactly as before (no import, no logging)."""
+    if not LANGFUSE_ENABLED:
+        return None
+    from langfuse.langchain import CallbackHandler  # noqa: E402
 
-        return decorator
+    return CallbackHandler()
 
 
 class AgentState(TypedDict):
@@ -139,47 +139,60 @@ def _system_instruction(instruction: Any) -> Any:
     return _jsonable(instruction)
 
 
-@observe(as_type="generation", name="gemini.generate")
 async def _generate(
     client: genai.Client,
     model: str,
     contents: list[types.Content],
     config: types.GenerateContentConfig,
 ):
-    """One Gemini call, captured as a Langfuse generation span."""
-    response = await client.aio.models.generate_content(
-        model=model, contents=contents, config=config
-    )
-    if LANGFUSE_ENABLED:
-        langfuse_context.update_current_observation(
+    """One Gemini call, captured as a Langfuse generation observation."""
+    lf = _lf()
+    cm = (
+        lf.start_as_current_observation(
+            as_type="generation",
+            name="gemini.generate",
             model=model,
             input={
                 "system_instruction": _system_instruction(config.system_instruction),
                 "messages": _serialize_contents(contents),
             },
-            output=response.text,
-            metadata={
-                "finish_reason": (
-                    str(response.candidates[0].finish_reason)
-                    if response.candidates
-                    else None
-                ),
-            },
         )
-    return response
+        if lf is not None
+        else nullcontext()
+    )
+    with cm as gen:
+        response = await client.aio.models.generate_content(
+            model=model, contents=contents, config=config
+        )
+        if gen is not None:
+            gen.update(
+                output=response.text,
+                metadata={
+                    "finish_reason": (
+                        str(response.candidates[0].finish_reason)
+                        if response.candidates
+                        else None
+                    ),
+                },
+            )
+        return response
 
 
-@observe(as_type="span", name="mcp.tool")
 async def _call_tool(box: MCPToolbox, name: str, arguments: dict) -> dict:
-    """One MCP tool call, captured as a Langfuse span."""
-    payload = await box.call(name, arguments)
-    if LANGFUSE_ENABLED:
-        langfuse_context.update_current_observation(
-            name=f"tool.{name}",
-            input=_jsonable(arguments),
-            output=_jsonable(payload),
+    """One MCP tool call, captured as a Langfuse tool observation."""
+    lf = _lf()
+    cm = (
+        lf.start_as_current_observation(
+            as_type="tool", name=f"tool.{name}", input=_jsonable(arguments)
         )
-    return payload
+        if lf is not None
+        else nullcontext()
+    )
+    with cm as span:
+        payload = await box.call(name, arguments)
+        if span is not None:
+            span.update(output=_jsonable(payload))
+        return payload
 
 
 def build_graph(toolbox: MCPToolbox, model: str = GEMINI_MODEL):
@@ -248,28 +261,47 @@ def build_graph(toolbox: MCPToolbox, model: str = GEMINI_MODEL):
     return graph.compile()
 
 
-@observe(name="agent.ask")
 async def ask(toolbox: MCPToolbox, question: str, model: str = GEMINI_MODEL) -> dict:
-    """Run one question to completion. Returns the final state."""
+    """Run one question to completion. Returns the final state.
+
+    When Langfuse is enabled, the run is wrapped in an ``agent.ask``
+    observation and the official Langfuse LangChain callback is attached to the
+    graph run, so the resulting trace renders as the LangGraph structure
+    (the agent <-> tools loop) rather than a flat list of steps.
+    """
     graph = build_graph(toolbox, model=model)
-    state = await graph.ainvoke(
-        {
-            "messages": [types.Content(role="user", parts=[types.Part(text=question)])],
-            "tool_calls": [],
-        }
-    )
-    if LANGFUSE_ENABLED:
-        langfuse_context.update_current_trace(
-            input=question,
-            output={
-                "answer": final_text(state),
-                "tool_calls": _jsonable(state["tool_calls"]),
-            },
-            metadata={"model": model, "project": PROJECT},
+    lf = _lf()
+    cm = (
+        lf.start_as_current_observation(
+            as_type="agent", name="agent.ask", input=question
         )
-        # Publish the Langfuse trace id on the returned state so the eval loop
-        # (collect -> judge) can attach rubric scores to the right trace.
-        state["langfuse_trace_id"] = langfuse_context.get_current_trace_id()
+        if lf is not None
+        else nullcontext()
+    )
+    with cm as span:
+        handler = _langgraph_callback()
+        config = {"callbacks": [handler]} if handler is not None else None
+        state = await graph.ainvoke(
+            {
+                "messages": [
+                    types.Content(role="user", parts=[types.Part(text=question)])
+                ],
+                "tool_calls": [],
+            },
+            config=config,
+        )
+        if span is not None:
+            span.update(
+                output={
+                    "answer": final_text(state),
+                    "tool_calls": _jsonable(state["tool_calls"]),
+                },
+                metadata={"model": model, "project": PROJECT},
+            )
+            # Publish the Langfuse trace id on the returned state so the eval
+            # loop (collect -> judge) can attach rubric scores to the right
+            # trace.
+            state["langfuse_trace_id"] = lf.get_current_trace_id()
     return state
 
 

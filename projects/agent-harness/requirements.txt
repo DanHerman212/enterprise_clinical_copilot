@@ -14,7 +14,13 @@ google-cloud-storage==2.19.0
 # Deliberately NOT langchain-google-vertexai either: it pins pyarrow<24.0.0,
 # which downgrades the pyarrow that google-cloud-bigquery uses in the feature
 # path. google-genai already ships with google-cloud-aiplatform.
-langgraph==1.2.10
+langgraph==1.2.11
+
+# Langfuse v4 (OTel-native) + langchain 1.x for the official LangGraph trace
+# callback (2026-08-20 migration). langfuse 4.x needs langchain 1.x in its
+# CallbackHandler, and langgraph must be >= 1.2.11 for langchain-core 1.x.
+langfuse==4.14.4
+langchain==1.3.16
 
 # Tests. jsonschema arrives transitively today (via mcp), but test_tier1.py
 # imports it directly, and a direct import on a transitive dependency breaks

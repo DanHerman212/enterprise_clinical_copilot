@@ -4,9 +4,15 @@
 # Inputs:
 #    approximate_neighbors: int [Default: 40.0]
 #    brute_sample: int [Default: 2000.0]
+#    chunk_cpu: str [Default: '2']
+#    chunk_mem: str [Default: '8Gi']
 #    dimensions: int [Default: 768.0]
+#    embed_cpu: str [Default: '8']
+#    embed_mem: str [Default: '24Gi']
 #    embed_workers: int [Default: 1.0]
 #    expected_vectors: int [Default: 555770.0]
+#    index_cpu: str [Default: '2']
+#    index_mem: str [Default: '8Gi']
 #    notes_table_ref: str [Default: 'trim-icon-498815-a0.mimiciv_note.discharge']
 #    pack_to: int [Default: 700.0]
 #    previous_ingest_uri: str [Default: '']
@@ -134,12 +140,10 @@ deploymentSpec:
           \        brute_sample=brute_sample,\n        approximate_neighbors=approximate_neighbors,\n\
           \        expected=expected,\n        manifest_path=manifest.path,\n    )\n\
           \n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/rag-ingest:latest
+        image: python:3.12-slim
         resources:
-          cpuLimit: 2.0
-          memoryLimit: 8.589934592
-          resourceCpuLimit: '2'
-          resourceMemoryLimit: 8Gi
+          resourceCpuLimit: '{{$.inputs.parameters[''pipelinechannel--index_cpu'']}}'
+          resourceMemoryLimit: '{{$.inputs.parameters[''pipelinechannel--index_mem'']}}'
     exec-chunk-notes:
       container:
         args:
@@ -177,12 +181,10 @@ deploymentSpec:
           \        split_name=split_name,\n        pack_to=pack_to,\n        sections_csv=sections_csv,\n\
           \        chunks_path=chunks.path,\n        manifest_path=manifest.path,\n\
           \    )\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/rag-ingest:latest
+        image: python:3.12-slim
         resources:
-          cpuLimit: 2.0
-          memoryLimit: 8.589934592
-          resourceCpuLimit: '2'
-          resourceMemoryLimit: 8Gi
+          resourceCpuLimit: '{{$.inputs.parameters[''pipelinechannel--chunk_cpu'']}}'
+          resourceMemoryLimit: '{{$.inputs.parameters[''pipelinechannel--chunk_mem'']}}'
     exec-embed-chunks:
       container:
         args:
@@ -219,12 +221,10 @@ deploymentSpec:
           \        location=location,\n        chunks_path=chunks.path,\n        previous_ingest_uri=previous_ingest_uri,\n\
           \        ingest_path=ingest.path,\n        manifest_path=manifest.path,\n\
           \        workers=workers,\n    )\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/rag-ingest:latest
+        image: python:3.12-slim
         resources:
-          cpuLimit: 8.0
-          memoryLimit: 25.769803776
-          resourceCpuLimit: '8'
-          resourceMemoryLimit: 24Gi
+          resourceCpuLimit: '{{$.inputs.parameters[''pipelinechannel--embed_cpu'']}}'
+          resourceMemoryLimit: '{{$.inputs.parameters[''pipelinechannel--embed_mem'']}}'
 pipelineInfo:
   description: "Assemble the RAG ingest DAG: chunk \u2192 embed \u2192 index."
   name: rag-ingest
@@ -249,6 +249,9 @@ root:
               componentInputParameter: approximate_neighbors
             brute_sample:
               componentInputParameter: brute_sample
+            cpu_limit:
+              runtimeValue:
+                constant: '{{$.inputs.parameters[''pipelinechannel--index_cpu'']}}'
             dimensions:
               componentInputParameter: dimensions
             expected:
@@ -256,6 +259,13 @@ root:
             location:
               runtimeValue:
                 constant: us-east1
+            memory_limit:
+              runtimeValue:
+                constant: '{{$.inputs.parameters[''pipelinechannel--index_mem'']}}'
+            pipelinechannel--index_cpu:
+              componentInputParameter: index_cpu
+            pipelinechannel--index_mem:
+              componentInputParameter: index_mem
             project_id:
               componentInputParameter: project_id
         taskInfo:
@@ -267,10 +277,20 @@ root:
           name: comp-chunk-notes
         inputs:
           parameters:
+            cpu_limit:
+              runtimeValue:
+                constant: '{{$.inputs.parameters[''pipelinechannel--chunk_cpu'']}}'
+            memory_limit:
+              runtimeValue:
+                constant: '{{$.inputs.parameters[''pipelinechannel--chunk_mem'']}}'
             notes_table_ref:
               componentInputParameter: notes_table_ref
             pack_to:
               componentInputParameter: pack_to
+            pipelinechannel--chunk_cpu:
+              componentInputParameter: chunk_cpu
+            pipelinechannel--chunk_mem:
+              componentInputParameter: chunk_mem
             project_id:
               componentInputParameter: project_id
             sections_csv:
@@ -295,9 +315,19 @@ root:
                 outputArtifactKey: chunks
                 producerTask: chunk-notes
           parameters:
+            cpu_limit:
+              runtimeValue:
+                constant: '{{$.inputs.parameters[''pipelinechannel--embed_cpu'']}}'
             location:
               runtimeValue:
                 constant: us-east1
+            memory_limit:
+              runtimeValue:
+                constant: '{{$.inputs.parameters[''pipelinechannel--embed_mem'']}}'
+            pipelinechannel--embed_cpu:
+              componentInputParameter: embed_cpu
+            pipelinechannel--embed_mem:
+              componentInputParameter: embed_mem
             previous_ingest_uri:
               componentInputParameter: previous_ingest_uri
             project_id:
@@ -316,10 +346,26 @@ root:
         defaultValue: 2000.0
         isOptional: true
         parameterType: NUMBER_INTEGER
+      chunk_cpu:
+        defaultValue: '2'
+        isOptional: true
+        parameterType: STRING
+      chunk_mem:
+        defaultValue: 8Gi
+        isOptional: true
+        parameterType: STRING
       dimensions:
         defaultValue: 768.0
         isOptional: true
         parameterType: NUMBER_INTEGER
+      embed_cpu:
+        defaultValue: '8'
+        isOptional: true
+        parameterType: STRING
+      embed_mem:
+        defaultValue: 24Gi
+        isOptional: true
+        parameterType: STRING
       embed_workers:
         defaultValue: 1.0
         isOptional: true
@@ -328,6 +374,14 @@ root:
         defaultValue: 555770.0
         isOptional: true
         parameterType: NUMBER_INTEGER
+      index_cpu:
+        defaultValue: '2'
+        isOptional: true
+        parameterType: STRING
+      index_mem:
+        defaultValue: 8Gi
+        isOptional: true
+        parameterType: STRING
       notes_table_ref:
         defaultValue: trim-icon-498815-a0.mimiciv_note.discharge
         isOptional: true

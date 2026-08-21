@@ -100,15 +100,49 @@ KNOWN_HEADINGS: dict[str, tuple[str, ...]] = {
     SERVICE: ("Service",),
     ALLERGIES: ("Allergies",),
     ATTENDING: ("Attending",),
-    CHIEF_COMPLAINT: ("Chief Complaint",),
+    CHIEF_COMPLAINT: (
+        "Chief Complaint",
+        # MTSamples uses the reason for admission as its opening statement.
+        "Reason for Admission",
+    ),
     MAJOR_PROCEDURE: (
         "Major Surgical or Invasive Procedure",
         "Major Surgical or Invasive Procedures",
+        # MTSamples procedures sections (deliberate: a procedures block is the
+        # closest thing these notes have to the major-procedure line).
+        "Procedure",
+        "Procedures",
+        "Procedures Performed",
+        "Operations Performed",
+        "Principal Procedure",
+        "Principal Procedures",
+        "Procedure Performed During This Hospitalization",
+        "Procedures During This Hospitalization",
+        "Procedures During Hospitalization",
+        "Operations and Procedures",
     ),
-    HISTORY_OF_PRESENT_ILLNESS: ("History of Present Illness", "HPI"),
+    HISTORY_OF_PRESENT_ILLNESS: (
+        "History of Present Illness", "HPI",
+        # MTSamples opens its narrative with a bare "History:"/"Brief History:"
+        # (or a plain "History of Illness:"). Deliberate: the body is the HPI
+        # narrative, not a structured past-medical-history block.
+        "History",
+        "History of Illness",
+        "Brief History",
+        "Brief History of Present Illness",
+        "Current History",
+    ),
     REVIEW_OF_SYSTEMS: ("Review of Systems", "ROS"),
-    PAST_MEDICAL_HISTORY: ("Past Medical History", "PMH"),
-    PAST_SURGICAL_HISTORY: ("Past Surgical History",),
+    PAST_MEDICAL_HISTORY: (
+        "Past Medical History", "PMH",
+        "Past History",
+        "Past Medical/Family/Social History",
+        "Past Medical, Family, Social History",
+    ),
+    PAST_SURGICAL_HISTORY: (
+        "Past Surgical History",
+        "Surgical History",
+    ),
     SOCIAL_HISTORY: ("Social History",),
     FAMILY_HISTORY: ("Family History",),
     PHYSICAL_EXAM: (
@@ -118,16 +152,97 @@ KNOWN_HEADINGS: dict[str, tuple[str, ...]] = {
         "Admission Physical Exam",
         "Discharge Exam",
         "Discharge Physical Exam",
+        # MTSamples discharge-focused physical exam headings.
+        "Discharge Physical Examination",
+        "Physical Examination at the Time of Discharge",
+        "Physical Examination on Discharge",
     ),
-    PERTINENT_RESULTS: ("Pertinent Results", "Pertinent Labs"),
-    BRIEF_HOSPITAL_COURSE: ("Brief Hospital Course", "Hospital Course"),
+    PERTINENT_RESULTS: (
+        "Pertinent Results", "Pertinent Labs",
+        # MTSamples laboratory blocks are the pertinent-results equivalent.
+        "Laboratory Data",
+        "Laboratory Studies",
+        "Laboratory",
+        "Pertinent Laboratories",
+        "Discharge Labs",
+        "Laboratories on Admission",
+        "Significant Labs and X-Rays",
+        "Additional Laboratory Studies",
+    ),
+    BRIEF_HOSPITAL_COURSE: (
+        "Brief Hospital Course", "Hospital Course",
+        "Course in the Hospital",
+        "History and Hospital Course",
+        "Brief Hospital Course Summary",
+        "Brief Summary of Hospital Course",
+    ),
     MEDICATIONS_ON_ADMISSION: ("Medications on Admission",),
-    DISCHARGE_MEDICATIONS: ("Discharge Medications",),
-    DISCHARGE_DISPOSITION: ("Discharge Disposition",),
-    DISCHARGE_DIAGNOSIS: ("Discharge Diagnosis", "Discharge Diagnoses"),
-    DISCHARGE_CONDITION: ("Discharge Condition",),
-    DISCHARGE_INSTRUCTIONS: ("Discharge Instructions",),
-    FOLLOWUP_INSTRUCTIONS: ("Followup Instructions", "Follow-up Instructions"),
+    DISCHARGE_MEDICATIONS: (
+        "Discharge Medications",
+        # MTSamples: a bare "Medications:" in a discharge summary is the
+        # discharge list (admission meds are labelled "Medications on
+        # Admission:" and hit MEDICATIONS_ON_ADMISSION instead).
+        "Medications",
+        "Medications on Discharge",
+        "Home Medications",
+        "New Medications",
+        "Current Medications",
+        "Medications and Advice on Discharge",
+        "Discharge Medications/Instructions",
+    ),
+    DISCHARGE_DISPOSITION: (
+        "Discharge Disposition",
+        # MTSamples heading for where the patient went on discharge.
+        "Disposition",
+    ),
+    DISCHARGE_DIAGNOSIS: (
+        "Discharge Diagnosis", "Discharge Diagnoses",
+        # MTSamples lists admission/admitting/secondary/final diagnoses; these
+        # all feed the same diagnosis picture for our purposes.
+        "Admission Diagnosis",
+        "Admission Diagnoses",
+        "Admitting Diagnosis",
+        "Admitting Diagnoses",
+        "Secondary Diagnosis",
+        "Secondary Diagnoses",
+        "Diagnoses on Admission",
+        "Diagnoses on Discharge",
+        "Primary Diagnoses",
+        "Final Diagnosis",
+        "Final Diagnoses",
+    ),
+    DISCHARGE_CONDITION: (
+        "Discharge Condition",
+        "Condition",
+        "Condition on Discharge",
+        "Conditions on Discharge",
+        "Condition Upon Discharge",
+        "Condition at Discharge",
+        "Condition of Patient on Discharge",
+        "Condition of the Patient at Discharge",
+    ),
+    DISCHARGE_INSTRUCTIONS: (
+        "Discharge Instructions",
+        # MTSamples discharge plan/instructions equivalents. Deliberate: a
+        # "Discharge Plan:" block is a plan of care (meds, diet, activity,
+        # followup) — instructions content, not a condition statement.
+        "Discharge Plan",
+        "Additional Instructions",
+        "Special Instructions",
+        "Instructions to Patient",
+        "Discharge Diet",
+        "Discharge Activities",
+        "Physical Activity",
+    ),
+    FOLLOWUP_INSTRUCTIONS: (
+        "Followup Instructions", "Follow-up Instructions",
+        # MTSamples followup headings (plural/abbreviated forms).
+        "Followup",
+        "Follow Up",
+        "Follow-Up",
+        "Followup Appointments",
+        "Instructions for Followup",
+    ),
     FACILITY: ("Facility",),
 }
 

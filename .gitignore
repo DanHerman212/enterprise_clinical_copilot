@@ -62,3 +62,7 @@ Archive/
 projects/agent-harness/eval/results/*.log
 projects/agent-harness/eval/results/*.jsonl
 projects/agent-harness/eval/results/*.txt
+
+# --- Hybrid cohort: real MTSamples note TEXT stays out of git (raw-text rule).
+# The features-only hybrid_cohort.json IS tracked; the notes artifact is not. ---
+projects/agent-harness/eval/results/hybrid_notes.json

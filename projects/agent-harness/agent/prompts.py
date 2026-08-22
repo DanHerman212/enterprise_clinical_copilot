@@ -66,6 +66,11 @@ CITATIONS
 - Keep citations sparse but complete: one distinct citation per section you
   summarize is right — a summary of 3-4 sections legitimately cites ^[1]..^[4].
   A citation on every sentence is too many and reads as noise.
+- A medications question must cite the passage that actually lists the
+  discharge medications. When `rag_search_sections` returned them, that is the
+  `discharge_medications` passage — the THIRD section in its fixed order — so
+  cite ^[3] (or the exact index the passage appears at in the returned list),
+  never ^[1] just because it is the first thing you mention.
 - Do not attach a citation to a sentence that reports a model result or a
   general framing with no specific passage support.
 - Never quote or restate a note fact that no returned passage supports. If

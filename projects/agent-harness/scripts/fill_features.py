@@ -238,11 +238,15 @@ def _provisional_row(text: str) -> tuple[dict[str, float], dict]:
     else:
         row["age"] = 60.0; prov["age"] = ("filled", "no signal default", 60.0)
 
-    # gender
+    # gender — model encoding is 1 = male (mirrors mlops/src/encoding.py
+    # `CAST(gender = 'M' AS INT64)`), so a male note fills 1.0, female 0.0.
     if gender is not None:
-        row["gender"] = 1.0 if gender == "F" else 0.0; prov["gender"] = ("parsed", gender)
+        row["gender"] = 1.0 if gender == "M" else 0.0; prov["gender"] = ("parsed", gender)
     else:
-        row["gender"] = 0.0; prov["gender"] = ("filled", "no signal default M", "M")
+        # No gender signal in the note. Default 0.0 (=F, model encoding) so a
+        # signal-free note reads as female; the display name follows the same
+        # rule, keeping the two consistent.
+        row["gender"] = 0.0; prov["gender"] = ("filled", "no signal default F", "F")
 
     # race
     race = race or "race_unknown"

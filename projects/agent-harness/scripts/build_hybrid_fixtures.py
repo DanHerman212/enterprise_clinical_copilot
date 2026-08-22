@@ -44,8 +44,11 @@ PROJECT = "trim-icon-498815-a0"
 LOCATION = "us-east1"
 
 # Hybrid patients to emit per-patient predict fixtures for: one per band with
-# full chip support (low=90000001, borderline=90000009, high=90000017).
-PREDICT_PATIENTS = [90000001, 90000009, 90000017]
+# full chip support (low=90000001, borderline=90000009, high=90000023). The
+# high patient moved from 90000017 to 90000023 when the cohort was re-scored
+# with corrected gender (90000017 is now borderline; 90000023 is the top high
+# at 0.3262).
+PREDICT_PATIENTS = [90000001, 90000009, 90000023]
 
 # The primary patient for rag fixtures (borderline — all chips return passages).
 PRIMARY_HADM = int(os.environ.get("PRIMARY_HADM", "90000009"))

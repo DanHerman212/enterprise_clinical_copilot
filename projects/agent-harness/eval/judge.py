@@ -9,6 +9,7 @@ Usage (harness root):
     .venv/bin/python eval/judge.py
 """
 
+import argparse
 import json
 import os
 import queue
@@ -160,17 +161,29 @@ def _judge(client, system: str, user: str) -> dict:
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--in", dest="traces_path", type=str, default=str(TRACES),
+                    help="traces JSONL to judge (default: traces.jsonl)")
+    ap.add_argument("--out", dest="judged_path", type=str, default=str(JUDGED),
+                    help="judged JSONL to append (default: judged.jsonl)")
+    ap.add_argument("--report", dest="report_path", type=str, default=str(REPORT),
+                    help="report JSON to write (default: golden_report.json)")
+    args = ap.parse_args()
+    traces_path = Path(args.traces_path)
+    judged_path = Path(args.judged_path)
+    report_path = Path(args.report_path)
+
     client = genai.Client(vertexai=True, project=PROJECT, location=LOCATION)
     lf = _langfuse_client()
-    traces = [json.loads(l) for l in TRACES.read_text().splitlines() if l.strip()]
+    traces = [json.loads(l) for l in traces_path.read_text().splitlines() if l.strip()]
     print(f"Judging {len(traces)} traces (model {GEMINI_MODEL})")
     print(f"Langfuse score attachment: {'ON' if lf else 'OFF (no LANGFUSE_* env)'}")
 
     # Resumable: skip (hadm_id, prompt) pairs already scored in judged.jsonl and
     # append, so a re-run after a crash continues instead of restarting.
     done: set[tuple] = set()
-    if JUDGED.exists():
-        for line in JUDGED.read_text().splitlines():
+    if judged_path.exists():
+        for line in judged_path.read_text().splitlines():
             if not line.strip():
                 continue
             try:
@@ -181,7 +194,7 @@ def main() -> int:
     print(f"Resuming: {len(done)} already judged, {len(traces) - len(done)} to go")
 
     attached = 0
-    with JUDGED.open("a") as fh:
+    with judged_path.open("a") as fh:
         for i, t in enumerate(traces, 1):
             if (t.get("hadm_id"), t.get("prompt")) in done:
                 continue
@@ -256,7 +269,7 @@ def main() -> int:
         "safety_failures": agg["safety"]["fail"],
         "flags": flags[:50],
     }
-    REPORT.write_text(json.dumps(report, indent=2) + "\n")
+    report_path.write_text(json.dumps(report, indent=2) + "\n")
 
     print("\n=== GOLDEN REPORT ===")
     print(f"  verdict pass rate: {report['verdict']}")
@@ -265,7 +278,7 @@ def main() -> int:
               f"{report['dimensions'][d]['total']} pass")
     print(f"  safety failures: {report['safety_failures']}")
     print(f"  agent errors: {verdict['agent_error']}")
-    print(f"  wrote {REPORT}")
+    print(f"  wrote {report_path}")
     return 0
 
 

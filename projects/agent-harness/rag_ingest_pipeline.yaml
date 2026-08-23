@@ -146,7 +146,7 @@ deploymentSpec:
           \    brute_sample=brute_sample,\n        approximate_neighbors=approximate_neighbors,\n\
           \        expected=expected,\n        shard_size=shard_size,\n        manifest_path=manifest.path,\n\
           \    )\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/rag-ingest:b0479ae5-a5e2-4d18-bba5-fd6a53e29971
+        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/rag-ingest:latest
         resources:
           resourceCpuLimit: '{{$.inputs.parameters[''pipelinechannel--index_cpu'']}}'
           resourceMemoryLimit: '{{$.inputs.parameters[''pipelinechannel--index_mem'']}}'
@@ -187,7 +187,7 @@ deploymentSpec:
           \        split_name=split_name,\n        pack_to=pack_to,\n        sections_csv=sections_csv,\n\
           \        chunks_path=chunks.path,\n        manifest_path=manifest.path,\n\
           \    )\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/rag-ingest:b0479ae5-a5e2-4d18-bba5-fd6a53e29971
+        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/rag-ingest:latest
         resources:
           resourceCpuLimit: '{{$.inputs.parameters[''pipelinechannel--chunk_cpu'']}}'
           resourceMemoryLimit: '{{$.inputs.parameters[''pipelinechannel--chunk_mem'']}}'
@@ -227,7 +227,7 @@ deploymentSpec:
           \        location=location,\n        chunks_path=chunks.path,\n        previous_ingest_uri=previous_ingest_uri,\n\
           \        ingest_path=ingest.path,\n        manifest_path=manifest.path,\n\
           \        workers=workers,\n    )\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/rag-ingest:b0479ae5-a5e2-4d18-bba5-fd6a53e29971
+        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/rag-ingest:latest
         resources:
           resourceCpuLimit: '{{$.inputs.parameters[''pipelinechannel--embed_cpu'']}}'
           resourceMemoryLimit: '{{$.inputs.parameters[''pipelinechannel--embed_mem'']}}'

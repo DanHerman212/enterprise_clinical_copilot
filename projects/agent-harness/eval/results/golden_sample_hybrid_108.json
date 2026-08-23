@@ -1,0 +1,654 @@
+{
+ "seed": 42,
+ "n": 108,
+ "patients": [
+  {
+   "hadm_id": 90000001,
+   "probability": 0.064882,
+   "band": "low",
+   "archetype": "mtsamples:2760"
+  },
+  {
+   "hadm_id": 90000002,
+   "probability": 0.098937,
+   "band": "low",
+   "archetype": "mtsamples:1106"
+  },
+  {
+   "hadm_id": 90000003,
+   "probability": 0.082062,
+   "band": "low",
+   "archetype": "mtsamples:2792"
+  },
+  {
+   "hadm_id": 90000004,
+   "probability": 0.106617,
+   "band": "low",
+   "archetype": "mtsamples:1493"
+  },
+  {
+   "hadm_id": 90000005,
+   "probability": 0.121444,
+   "band": "borderline",
+   "archetype": "mtsamples:1148"
+  },
+  {
+   "hadm_id": 90000006,
+   "probability": 0.125961,
+   "band": "borderline",
+   "archetype": "mtsamples:2027"
+  },
+  {
+   "hadm_id": 90000007,
+   "probability": 0.134487,
+   "band": "borderline",
+   "archetype": "mtsamples:1563"
+  },
+  {
+   "hadm_id": 90000008,
+   "probability": 0.113709,
+   "band": "low",
+   "archetype": "mtsamples:1180"
+  },
+  {
+   "hadm_id": 90000009,
+   "probability": 0.125356,
+   "band": "borderline",
+   "archetype": "mtsamples:1568"
+  },
+  {
+   "hadm_id": 90000010,
+   "probability": 0.144349,
+   "band": "borderline",
+   "archetype": "mtsamples:1621"
+  },
+  {
+   "hadm_id": 90000011,
+   "probability": 0.101725,
+   "band": "low",
+   "archetype": "mtsamples:1069"
+  },
+  {
+   "hadm_id": 90000012,
+   "probability": 0.129303,
+   "band": "borderline",
+   "archetype": "mtsamples:2791"
+  },
+  {
+   "hadm_id": 90000013,
+   "probability": 0.139268,
+   "band": "borderline",
+   "archetype": "mtsamples:1194"
+  },
+  {
+   "hadm_id": 90000014,
+   "probability": 0.118875,
+   "band": "low",
+   "archetype": "mtsamples:2181"
+  },
+  {
+   "hadm_id": 90000015,
+   "probability": 0.151509,
+   "band": "borderline",
+   "archetype": "mtsamples:2788"
+  },
+  {
+   "hadm_id": 90000016,
+   "probability": 0.136803,
+   "band": "borderline",
+   "archetype": "mtsamples:1657"
+  },
+  {
+   "hadm_id": 90000017,
+   "probability": 0.157151,
+   "band": "borderline",
+   "archetype": "mtsamples:978"
+  },
+  {
+   "hadm_id": 90000018,
+   "probability": 0.163404,
+   "band": "borderline",
+   "archetype": "mtsamples:1295"
+  },
+  {
+   "hadm_id": 90000019,
+   "probability": 0.196836,
+   "band": "borderline",
+   "archetype": "mtsamples:2789"
+  },
+  {
+   "hadm_id": 90000020,
+   "probability": 0.188213,
+   "band": "borderline",
+   "archetype": "mtsamples:2182"
+  },
+  {
+   "hadm_id": 90000021,
+   "probability": 0.195222,
+   "band": "borderline",
+   "archetype": "mtsamples:1956"
+  },
+  {
+   "hadm_id": 90000022,
+   "probability": 0.214601,
+   "band": "high",
+   "archetype": "mtsamples:1073"
+  },
+  {
+   "hadm_id": 90000023,
+   "probability": 0.326222,
+   "band": "high",
+   "archetype": "mtsamples:1054"
+  },
+  {
+   "hadm_id": 90000024,
+   "probability": 0.21041,
+   "band": "high",
+   "archetype": "mtsamples:1236"
+  },
+  {
+   "hadm_id": 90000025,
+   "probability": 0.067658,
+   "band": "low",
+   "archetype": "mtsamples:1567"
+  },
+  {
+   "hadm_id": 90000026,
+   "probability": 0.071558,
+   "band": "low",
+   "archetype": "mtsamples:2486"
+  },
+  {
+   "hadm_id": 90000027,
+   "probability": 0.074614,
+   "band": "low",
+   "archetype": "mtsamples:1510"
+  },
+  {
+   "hadm_id": 90000028,
+   "probability": 0.07521,
+   "band": "low",
+   "archetype": "mtsamples:1847"
+  },
+  {
+   "hadm_id": 90000029,
+   "probability": 0.076,
+   "band": "low",
+   "archetype": "mtsamples:2764"
+  },
+  {
+   "hadm_id": 90000030,
+   "probability": 0.077607,
+   "band": "low",
+   "archetype": "mtsamples:86"
+  },
+  {
+   "hadm_id": 90000031,
+   "probability": 0.078428,
+   "band": "low",
+   "archetype": "mtsamples:2203"
+  },
+  {
+   "hadm_id": 90000032,
+   "probability": 0.08308,
+   "band": "low",
+   "archetype": "mtsamples:1214"
+  },
+  {
+   "hadm_id": 90000033,
+   "probability": 0.083943,
+   "band": "low",
+   "archetype": "mtsamples:2058"
+  },
+  {
+   "hadm_id": 90000034,
+   "probability": 0.085056,
+   "band": "low",
+   "archetype": "mtsamples:1274"
+  },
+  {
+   "hadm_id": 90000035,
+   "probability": 0.085056,
+   "band": "low",
+   "archetype": "mtsamples:1923"
+  },
+  {
+   "hadm_id": 90000036,
+   "probability": 0.087118,
+   "band": "low",
+   "archetype": "mtsamples:1068"
+  },
+  {
+   "hadm_id": 90000037,
+   "probability": 0.087974,
+   "band": "low",
+   "archetype": "mtsamples:2209"
+  },
+  {
+   "hadm_id": 90000038,
+   "probability": 0.089125,
+   "band": "low",
+   "archetype": "mtsamples:2023"
+  },
+  {
+   "hadm_id": 90000039,
+   "probability": 0.089136,
+   "band": "low",
+   "archetype": "mtsamples:1501"
+  },
+  {
+   "hadm_id": 90000040,
+   "probability": 0.090485,
+   "band": "low",
+   "archetype": "mtsamples:1848"
+  },
+  {
+   "hadm_id": 90000041,
+   "probability": 0.090789,
+   "band": "low",
+   "archetype": "mtsamples:2568"
+  },
+  {
+   "hadm_id": 90000042,
+   "probability": 0.093646,
+   "band": "low",
+   "archetype": "mtsamples:2028"
+  },
+  {
+   "hadm_id": 90000043,
+   "probability": 0.093974,
+   "band": "low",
+   "archetype": "mtsamples:2617"
+  },
+  {
+   "hadm_id": 90000044,
+   "probability": 0.096555,
+   "band": "low",
+   "archetype": "mtsamples:2618"
+  },
+  {
+   "hadm_id": 90000045,
+   "probability": 0.097928,
+   "band": "low",
+   "archetype": "mtsamples:1240"
+  },
+  {
+   "hadm_id": 90000046,
+   "probability": 0.09802,
+   "band": "low",
+   "archetype": "mtsamples:2626"
+  },
+  {
+   "hadm_id": 90000047,
+   "probability": 0.099689,
+   "band": "low",
+   "archetype": "mtsamples:1565"
+  },
+  {
+   "hadm_id": 90000048,
+   "probability": 0.099993,
+   "band": "low",
+   "archetype": "mtsamples:85"
+  },
+  {
+   "hadm_id": 90000049,
+   "probability": 0.100327,
+   "band": "low",
+   "archetype": "mtsamples:1071"
+  },
+  {
+   "hadm_id": 90000050,
+   "probability": 0.105089,
+   "band": "low",
+   "archetype": "mtsamples:2211"
+  },
+  {
+   "hadm_id": 90000051,
+   "probability": 0.108281,
+   "band": "low",
+   "archetype": "mtsamples:1849"
+  },
+  {
+   "hadm_id": 90000052,
+   "probability": 0.10891,
+   "band": "low",
+   "archetype": "mtsamples:2520"
+  },
+  {
+   "hadm_id": 90000053,
+   "probability": 0.109898,
+   "band": "low",
+   "archetype": "mtsamples:646"
+  },
+  {
+   "hadm_id": 90000054,
+   "probability": 0.110798,
+   "band": "low",
+   "archetype": "mtsamples:1846"
+  },
+  {
+   "hadm_id": 90000055,
+   "probability": 0.11151,
+   "band": "low",
+   "archetype": "mtsamples:2587"
+  },
+  {
+   "hadm_id": 90000056,
+   "probability": 0.112871,
+   "band": "low",
+   "archetype": "mtsamples:2202"
+  },
+  {
+   "hadm_id": 90000057,
+   "probability": 0.114806,
+   "band": "low",
+   "archetype": "mtsamples:2189"
+  },
+  {
+   "hadm_id": 90000058,
+   "probability": 0.11484,
+   "band": "low",
+   "archetype": "mtsamples:2619"
+  },
+  {
+   "hadm_id": 90000059,
+   "probability": 0.114851,
+   "band": "low",
+   "archetype": "mtsamples:2589"
+  },
+  {
+   "hadm_id": 90000060,
+   "probability": 0.115097,
+   "band": "low",
+   "archetype": "mtsamples:1254"
+  },
+  {
+   "hadm_id": 90000061,
+   "probability": 0.117713,
+   "band": "low",
+   "archetype": "mtsamples:647"
+  },
+  {
+   "hadm_id": 90000062,
+   "probability": 0.121961,
+   "band": "borderline",
+   "archetype": "mtsamples:2581"
+  },
+  {
+   "hadm_id": 90000063,
+   "probability": 0.123057,
+   "band": "borderline",
+   "archetype": "mtsamples:649"
+  },
+  {
+   "hadm_id": 90000064,
+   "probability": 0.128455,
+   "band": "borderline",
+   "archetype": "mtsamples:2586"
+  },
+  {
+   "hadm_id": 90000065,
+   "probability": 0.133297,
+   "band": "borderline",
+   "archetype": "mtsamples:2193"
+  },
+  {
+   "hadm_id": 90000066,
+   "probability": 0.13498,
+   "band": "borderline",
+   "archetype": "mtsamples:1866"
+  },
+  {
+   "hadm_id": 90000067,
+   "probability": 0.136184,
+   "band": "borderline",
+   "archetype": "mtsamples:2616"
+  },
+  {
+   "hadm_id": 90000068,
+   "probability": 0.136489,
+   "band": "borderline",
+   "archetype": "mtsamples:650"
+  },
+  {
+   "hadm_id": 90000069,
+   "probability": 0.137738,
+   "band": "borderline",
+   "archetype": "mtsamples:2113"
+  },
+  {
+   "hadm_id": 90000070,
+   "probability": 0.139164,
+   "band": "borderline",
+   "archetype": "mtsamples:1566"
+  },
+  {
+   "hadm_id": 90000071,
+   "probability": 0.140876,
+   "band": "borderline",
+   "archetype": "mtsamples:1562"
+  },
+  {
+   "hadm_id": 90000072,
+   "probability": 0.141027,
+   "band": "borderline",
+   "archetype": "mtsamples:1548"
+  },
+  {
+   "hadm_id": 90000073,
+   "probability": 0.143309,
+   "band": "borderline",
+   "archetype": "mtsamples:1793"
+  },
+  {
+   "hadm_id": 90000074,
+   "probability": 0.145723,
+   "band": "borderline",
+   "archetype": "mtsamples:1179"
+  },
+  {
+   "hadm_id": 90000075,
+   "probability": 0.146861,
+   "band": "borderline",
+   "archetype": "mtsamples:2623"
+  },
+  {
+   "hadm_id": 90000076,
+   "probability": 0.148815,
+   "band": "borderline",
+   "archetype": "mtsamples:2425"
+  },
+  {
+   "hadm_id": 90000077,
+   "probability": 0.149965,
+   "band": "borderline",
+   "archetype": "mtsamples:2761"
+  },
+  {
+   "hadm_id": 90000078,
+   "probability": 0.150901,
+   "band": "borderline",
+   "archetype": "mtsamples:2345"
+  },
+  {
+   "hadm_id": 90000079,
+   "probability": 0.155998,
+   "band": "borderline",
+   "archetype": "mtsamples:1237"
+  },
+  {
+   "hadm_id": 90000080,
+   "probability": 0.157081,
+   "band": "borderline",
+   "archetype": "mtsamples:1351"
+  },
+  {
+   "hadm_id": 90000081,
+   "probability": 0.158161,
+   "band": "borderline",
+   "archetype": "mtsamples:1262"
+  },
+  {
+   "hadm_id": 90000082,
+   "probability": 0.159958,
+   "band": "borderline",
+   "archetype": "mtsamples:1072"
+  },
+  {
+   "hadm_id": 90000083,
+   "probability": 0.160296,
+   "band": "borderline",
+   "archetype": "mtsamples:2582"
+  },
+  {
+   "hadm_id": 90000084,
+   "probability": 0.163404,
+   "band": "borderline",
+   "archetype": "mtsamples:1864"
+  },
+  {
+   "hadm_id": 90000085,
+   "probability": 0.163404,
+   "band": "borderline",
+   "archetype": "mtsamples:2024"
+  },
+  {
+   "hadm_id": 90000086,
+   "probability": 0.166961,
+   "band": "borderline",
+   "archetype": "mtsamples:1564"
+  },
+  {
+   "hadm_id": 90000087,
+   "probability": 0.168411,
+   "band": "borderline",
+   "archetype": "mtsamples:2230"
+  },
+  {
+   "hadm_id": 90000088,
+   "probability": 0.169142,
+   "band": "borderline",
+   "archetype": "mtsamples:2216"
+  },
+  {
+   "hadm_id": 90000089,
+   "probability": 0.172367,
+   "band": "borderline",
+   "archetype": "mtsamples:2763"
+  },
+  {
+   "hadm_id": 90000090,
+   "probability": 0.177116,
+   "band": "borderline",
+   "archetype": "mtsamples:2759"
+  },
+  {
+   "hadm_id": 90000091,
+   "probability": 0.182247,
+   "band": "borderline",
+   "archetype": "mtsamples:1197"
+  },
+  {
+   "hadm_id": 90000092,
+   "probability": 0.183591,
+   "band": "borderline",
+   "archetype": "mtsamples:2765"
+  },
+  {
+   "hadm_id": 90000093,
+   "probability": 0.187911,
+   "band": "borderline",
+   "archetype": "mtsamples:1195"
+  },
+  {
+   "hadm_id": 90000094,
+   "probability": 0.19788,
+   "band": "borderline",
+   "archetype": "mtsamples:1118"
+  },
+  {
+   "hadm_id": 90000095,
+   "probability": 0.202574,
+   "band": "high",
+   "archetype": "mtsamples:2790"
+  },
+  {
+   "hadm_id": 90000096,
+   "probability": 0.202692,
+   "band": "high",
+   "archetype": "mtsamples:648"
+  },
+  {
+   "hadm_id": 90000097,
+   "probability": 0.204766,
+   "band": "high",
+   "archetype": "mtsamples:1041"
+  },
+  {
+   "hadm_id": 90000098,
+   "probability": 0.209767,
+   "band": "high",
+   "archetype": "mtsamples:1200"
+  },
+  {
+   "hadm_id": 90000099,
+   "probability": 0.212194,
+   "band": "high",
+   "archetype": "mtsamples:1223"
+  },
+  {
+   "hadm_id": 90000100,
+   "probability": 0.22427,
+   "band": "high",
+   "archetype": "mtsamples:2762"
+  },
+  {
+   "hadm_id": 90000101,
+   "probability": 0.236823,
+   "band": "high",
+   "archetype": "mtsamples:1042"
+  },
+  {
+   "hadm_id": 90000102,
+   "probability": 0.242158,
+   "band": "high",
+   "archetype": "mtsamples:486"
+  },
+  {
+   "hadm_id": 90000103,
+   "probability": 0.256513,
+   "band": "high",
+   "archetype": "mtsamples:2771"
+  },
+  {
+   "hadm_id": 90000104,
+   "probability": 0.260115,
+   "band": "high",
+   "archetype": "mtsamples:2590"
+  },
+  {
+   "hadm_id": 90000105,
+   "probability": 0.280024,
+   "band": "high",
+   "archetype": "mtsamples:1246"
+  },
+  {
+   "hadm_id": 90000106,
+   "probability": 0.295693,
+   "band": "high",
+   "archetype": "mtsamples:2588"
+  },
+  {
+   "hadm_id": 90000107,
+   "probability": 0.29975,
+   "band": "high",
+   "archetype": "mtsamples:1922"
+  },
+  {
+   "hadm_id": 90000108,
+   "probability": 0.355278,
+   "band": "high",
+   "archetype": "mtsamples:2163"
+  }
+ ]
+}

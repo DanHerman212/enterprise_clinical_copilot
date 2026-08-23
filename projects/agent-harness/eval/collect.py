@@ -40,10 +40,11 @@ PROMPTS = {
 _ASK_TIMEOUT_SECONDS = 180
 
 
-def _run(question: str, retries: int = 2) -> dict:
+def _run(question: str, retries: int = 2, *, name: str | None = None,
+         tags: list[str] | None = None) -> dict:
     async def go():
         async with toolbox() as box:
-            return await ask(box, question)
+            return await ask(box, question, name=name, tags=tags)
 
     last = None
     for attempt in range(retries + 1):
@@ -61,9 +62,14 @@ def main() -> int:
     ap.add_argument("--max-cases", type=int, default=None)
     ap.add_argument("--prompt", choices=["risk", "meds", "summarize", "all"],
                     default="all")
+    ap.add_argument("--sample", type=str, default=str(SAMPLE),
+                    help="golden sample JSON path (default: 100-MIMIC golden_sample.json)")
+    ap.add_argument("--out", type=str, default=str(OUT),
+                    help="traces JSONL output, appended (default: traces.jsonl)")
     args = ap.parse_args()
 
-    sample = json.loads(SAMPLE.read_text())["patients"]
+    out = Path(args.out)
+    sample = json.loads(Path(args.sample).read_text())["patients"]
     if args.max_cases:
         sample = sample[: args.max_cases]
     prompts = list(PROMPTS) if args.prompt == "all" else [args.prompt]
@@ -75,8 +81,8 @@ def main() -> int:
     # a crash or hang continues instead of redoing everything (append-only,
     # mirroring judge.py's resume).
     done: set[tuple] = set()
-    if OUT.exists():
-        for line in OUT.read_text().splitlines():
+    if out.exists():
+        for line in out.read_text().splitlines():
             if not line.strip():
                 continue
             try:
@@ -87,14 +93,19 @@ def main() -> int:
     print(f"Resuming: {len(done)} already traced, {total - len(done)} to go")
 
     completed = len(done)
-    with OUT.open("a") as fh:
+    with out.open("a") as fh:
         for patient in sample:
             for ptype in prompts:
                 if (patient["hadm_id"], ptype) in done:
                     continue
                 q = PROMPTS[ptype](patient["hadm_id"])
+                hadm = patient["hadm_id"]
                 try:
-                    state = _run(q)
+                    state = _run(
+                        q,
+                        name=f"eval.{ptype}",
+                        tags=["eval", "hybrid-108", f"hadm:{hadm}"],
+                    )
                     rec = {
                         "hadm_id": patient["hadm_id"],
                         "prompt": ptype,
@@ -118,7 +129,7 @@ def main() -> int:
                 print(f"[{completed}/{total}] {patient['hadm_id']}/{ptype}: {status}",
                       flush=True)
 
-    print(f"Wrote {OUT}")
+    print(f"Wrote {out}")
     return 0
 
 

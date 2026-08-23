@@ -40,8 +40,17 @@ PROMPTS = {
 _ASK_TIMEOUT_SECONDS = 180
 
 
-def _run(question: str, retries: int = 2, *, name: str | None = None,
-         tags: list[str] | None = None) -> dict:
+async def _run_async(question: str, retries: int = 2, *, name: str | None = None,
+                     tags: list[str] | None = None) -> dict:
+    """Run one question on the shared event loop.
+
+    A single persistent loop (asyncio.run(main()) at the bottom) is used for the
+    whole run: per-question asyncio.run() churn left the Google GenAI clients'
+    aclose() tasks stranded after each loop teardown ("Event loop is closed"),
+    which accumulated across many questions and could block the loop, stalling
+    the run (observed 2026-08-23 at 60/324). With one loop, wait_for can cancel
+    a hung call instead of the loop being wedged during teardown.
+    """
     async def go():
         async with toolbox() as box:
             return await ask(box, question, name=name, tags=tags)
@@ -49,7 +58,7 @@ def _run(question: str, retries: int = 2, *, name: str | None = None,
     last = None
     for attempt in range(retries + 1):
         try:
-            return asyncio.run(asyncio.wait_for(go(), timeout=_ASK_TIMEOUT_SECONDS))
+            return await asyncio.wait_for(go(), timeout=_ASK_TIMEOUT_SECONDS)
         except Exception as e:  # transient transport/Vertex errors + hangs
             last = e
             print(f"    (attempt {attempt + 1} failed: {type(e).__name__})",
@@ -57,7 +66,7 @@ def _run(question: str, retries: int = 2, *, name: str | None = None,
     raise last
 
 
-def main() -> int:
+async def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--max-cases", type=int, default=None)
     ap.add_argument("--prompt", choices=["risk", "meds", "summarize", "all"],
@@ -101,7 +110,7 @@ def main() -> int:
                 q = PROMPTS[ptype](patient["hadm_id"])
                 hadm = patient["hadm_id"]
                 try:
-                    state = _run(
+                    state = await _run_async(
                         q,
                         name=f"eval.{ptype}",
                         tags=["eval", "hybrid-108", f"hadm:{hadm}"],
@@ -134,4 +143,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(asyncio.run(main()))

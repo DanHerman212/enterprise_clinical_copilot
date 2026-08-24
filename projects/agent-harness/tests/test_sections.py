@@ -229,6 +229,17 @@ def test_heading_aliases_fold_to_one_canonical_name(heading):
     assert parsed.body(FOLLOWUP_INSTRUCTIONS) == "See your PCP in 1 week."
 
 
+def test_long_form_discharge_instructions_header_folds_to_canonical():
+    """MTSamples long-form header (hadm 90000015) must parse as discharge
+    instructions, not bury the block inside discharge_diagnosis."""
+    note = ("DISCHARGE MEDICATIONS:\nTylenol 650 mg q.6h.\n\n"
+            "INSTRUCTIONS GIVEN TO THE PATIENT AT THE TIME OF DISCHARGE:\n"
+            "Continue Tylenol and follow up in one week.\n")
+    parsed = parse_note(note)
+    assert parsed.body(DISCHARGE_INSTRUCTIONS).startswith("Continue Tylenol")
+    assert "Tylenol 650 mg" not in parsed.body(DISCHARGE_INSTRUCTIONS)
+
+
 def test_leading_whitespace_before_a_heading_is_tolerated():
     parsed = parse_note("   Social History:\nLives alone.\n")
 

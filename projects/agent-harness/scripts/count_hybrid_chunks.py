@@ -18,17 +18,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from google.cloud import bigquery  # noqa: E402
 from rag.chunking import DEFAULT_MAX_CHARS, chunk_note  # noqa: E402
+# Single source of truth for the whitelist (must match the pipeline component).
+from pipelines.components.chunk_notes import DEFAULT_SECTIONS as WHITELIST  # noqa: E402
 
 PROJECT = "trim-icon-498815-a0"
 NOTES = f"{PROJECT}.readmission.hybrid_notes"
 SPLIT = f"{PROJECT}.readmission.hybrid_split"
 PACK_TO = 700  # must match pipelines/components/chunk_notes.py default
-WHITELIST = (
-    "history_of_present_illness", "past_medical_history", "family_history",
-    "social_history", "physical_exam", "brief_hospital_course",
-    "discharge_condition", "discharge_diagnosis", "discharge_medications",
-    "medications_on_admission", "discharge_disposition", "discharge_instructions",
-)
 
 
 def main() -> int:

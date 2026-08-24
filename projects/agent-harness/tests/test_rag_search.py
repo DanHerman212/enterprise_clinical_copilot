@@ -237,7 +237,11 @@ def test_meds_query_falls_back_to_section_anchor():
     assert endpoint.calls == 2
     assert result["returned"] == 1
     assert result["passages"][0]["section"] == "discharge_medications"
-    assert result["passages"][0]["text"] == _NOTE
+    # Passage text is the exact SECTION chunk (re-chunked deterministically),
+    # not the whole note — other sections must not leak into the citation.
+    assert "Docusate Sodium" in result["passages"][0]["text"]
+    assert "Some home meds" not in result["passages"][0]["text"]
+    assert "Follow up with PCP" not in result["passages"][0]["text"]
     # The fallback embeds the section's body, not the original short phrase:
     # the last embed call's contents carry the section text.
     assert embed.models.last_contents is not None
@@ -245,6 +249,30 @@ def test_meds_query_falls_back_to_section_anchor():
     # The response `query` stays the caller's original phrase (the UI renders it
     # as the source-card title) — the section body must NOT leak into it.
     assert result["query"] == "discharge medications"
+
+
+def test_meds_query_retries_when_intended_section_not_rank_one():
+    """A section-intent query whose top hit is a DIFFERENT section must retry
+    with the section's text so the intended section ranks first (2026-08-24
+    enhancement: recall@1 82% -> ~100%)."""
+    course_neighbor = _FakeNeighbor("13219116-DS-18_brief_hospital_course_1", 0.25)
+    meds_neighbor = _FakeNeighbor("13219116-DS-18_discharge_medications_1", 0.28)
+    endpoint = _Recorder([course_neighbor], [meds_neighbor])
+    embed = _FakeEmbedClient()
+
+    with patch.object(rs, "_index_endpoint", lambda: endpoint), \
+         patch.object(rs, "_embed_client", lambda: embed), \
+         patch.object(rs, "_fetch_texts", lambda note_ids: {nid: _NOTE for nid in note_ids}), \
+         patch.object(rs, "_fetch_note", lambda hadm: _NOTE):
+        result = _run(rs.rag_search(hadm_id=23613002, query="medications"))
+
+    assert endpoint.calls == 2
+    assert result["returned"] == 1
+    assert result["passages"][0]["section"] == "discharge_medications"
+    # The retry embedded the section's body text, not the short phrase.
+    assert embed.models.last_contents is not None
+    assert "Docusate Sodium" in embed.models.last_contents[0]
+    assert result["query"] == "medications"
 
 
 def test_non_section_query_still_returns_empty():
@@ -258,6 +286,65 @@ def test_non_section_query_still_returns_empty():
     assert result == {"hadm_id": 23613002, "query": "what did the nurse chart say",
                       "returned": 0, "passages": []}
     assert endpoint.calls == 1
+
+
+# --- Section-chunk text (2026-08-24) ----------------------------------------
+#
+# Root cause: passages returned the WHOLE note as text even though the index
+# matched a section-level chunk, so citations leaked unrelated sections and the
+# agent read the full note in every passage. Fix: deterministically re-chunk
+# each fetched note and return the exact section chunk the id names.
+
+
+_MEDS_NOTE = ("HOSPITAL COURSE: The patient recovered well.\n\n"
+              "DISCHARGE DIAGNOSES: 1. Pneumonia.\n\n"
+              "MEDICATIONS: Tylenol 650 mg q.6h., Lasix 80 mg daily.")
+
+
+def test_passage_text_is_the_section_chunk_not_the_whole_note():
+    """rag_search returns the exact chunk text for the matched id."""
+    endpoint = _FakeEndpoint([
+        _FakeNeighbor("MT-1-DS_discharge_medications_1", 0.21),
+    ])
+    with patch.object(rs, "_index_endpoint", lambda: endpoint), \
+         patch.object(rs, "_embed_client", lambda: _FakeEmbedClient()), \
+         patch.object(rs, "_fetch_texts",
+                      lambda note_ids: {nid: _MEDS_NOTE for nid in note_ids}):
+        result = _run(rs.rag_search(hadm_id=90000015, query="medications"))
+
+    assert result["returned"] == 1
+    text = result["passages"][0]["text"]
+    assert "Tylenol" in text
+    assert "HOSPITAL COURSE" not in text
+    assert "Pneumonia" not in text
+
+
+def test_search_sections_is_deterministic_and_complete():
+    """_search_sections returns every present section in fixed order, with the
+    exact chunk text — 100% recall by construction, no whole-note leakage."""
+    with patch.object(rs, "_fetch_note_row",
+                      lambda hadm: ("MT-1-DS", _MEDS_NOTE)):
+        result = rs._search_sections(90000015)
+
+    assert result["returned"] == 3
+    sections = [p["section"] for p in result["passages"]]
+    assert sections == [
+        "brief_hospital_course", "discharge_diagnosis", "discharge_medications"]
+    meds = result["passages"][2]
+    assert meds["id"].startswith("MT-1-DS_discharge_medications_")
+    assert "Tylenol" in meds["text"]
+    assert "HOSPITAL COURSE" not in meds["text"]
+    assert "Pneumonia" not in meds["text"]
+
+
+def test_search_sections_honest_empty_when_no_summary_sections():
+    """A note with no summary sections is an honest empty, not a guess."""
+    note = "HISTORY: The patient is a 45-year-old male.\n\nREVIEW OF SYSTEMS: Negative."
+    with patch.object(rs, "_fetch_note_row", lambda hadm: ("MT-2-DS", note)):
+        result = rs._search_sections(90000016)
+    assert result["returned"] == 0
+    assert result["passages"] == []
+    assert "no discharge summary sections" in result.get("note", "")
 
 
 def test_meds_fallback_keeps_hadm_restrict():

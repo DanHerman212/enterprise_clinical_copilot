@@ -14,10 +14,11 @@ BUNDLE_URI_OVERRIDE = os.environ.get("BUNDLE_URI")
 
 # BigQuery feature source
 DATASET = "readmission"
-# Overridable so the deployed agent can serve the synthetic cohort (whose
-# feature rows live in readmission.synthetic_features) without the real
-# MIMIC-derived analytics_dataset_encoded table shipping anywhere public.
-TABLE = os.environ.get("FEATURE_TABLE", f"{DATASET}.analytics_dataset_encoded")
+# Defaults to the HYBRID features table — the eval/demo cohort is the hybrid
+# admissions (90000001+), whose feature rows live in readmission.hybrid_features.
+# The real MIMIC-derived analytics_dataset_encoded table is out of scope for
+# the demo and never carries the synthetic/hybrid admissions.
+TABLE = os.environ.get("FEATURE_TABLE", f"{DATASET}.hybrid_features")
 TABLE_FQN = f"{PROJECT}.{TABLE}"
 ENTITY_ID_COLUMN = "hadm_id"
 
@@ -34,11 +35,12 @@ EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "gemini-embedding-001")
 EMBEDDING_DIM = int(os.environ.get("EMBEDDING_DIM", "768"))
 RESTRICT_NAMESPACE = "hadm_id"
 # The discharge notes table (note_id -> hadm_id mapping, text by note_id).
-# Overridable so the deployed agent reads the SYNTHETIC notes table
-# (readmission.synthetic_notes) instead of the real MIMIC-derived one — the
-# public demo must never resolve passage text from real patient notes.
+# Defaults to the HYBRID notes table — the deployed RAG index is built from
+# these MT-* notes, so serving must read passage text from the same place.
+# The real MIMIC-derived table is out of scope for the demo and must never
+# resolve passage text from real patient notes.
 DISCHARGE_TABLE = os.environ.get(
-    "DISCHARGE_TABLE", f"{PROJECT}.mimiciv_note.discharge"
+    "DISCHARGE_TABLE", f"{PROJECT}.readmission.hybrid_notes"
 )
 DEFAULT_TOP_K = int(os.environ.get("RAG_TOP_K", "5"))
 

@@ -38,6 +38,7 @@ from google.cloud.aiplatform.matching_engine.matching_engine_index_endpoint impo
 from google.genai import types
 
 from rag.sections import parse_note
+from rag.chunking import chunk_note
 
 from ..config import (
     DEPLOYED_INDEX_ID,
@@ -67,6 +68,7 @@ _KNOWN_SECTIONS = (
     "medications_on_admission",
     "discharge_disposition",
     "discharge_instructions",
+    "discharge_summary",
 )
 _SECTION_RE = re.compile(r"_(?P<section>(" + "|".join(_KNOWN_SECTIONS) + r"))_")
 
@@ -127,6 +129,37 @@ def _fetch_texts(note_ids: list[str]) -> dict[str, str]:
     return {str(r["note_id"]): r["text"] for r in rows}
 
 
+def _fetch_note_row(hadm_id: int) -> tuple[str | None, str | None]:
+    """(note_id, text) for one admission, or (None, None)."""
+    rows = _bigquery().query(
+        f"SELECT note_id, text FROM `{DISCHARGE_TABLE}` "
+        "WHERE hadm_id = @hadm_id LIMIT 1",
+        job_config=bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter("hadm_id", "INTEGER", hadm_id),
+        ]),
+    ).result()
+    for row in rows:
+        return str(row["note_id"]), row["text"]
+    return None, None
+
+
+def _chunk_texts_for(note_id: str, text: str) -> dict[str, str]:
+    """Index-form chunk id -> chunk text, deterministically re-chunked.
+
+    The index stores section-level chunk embeddings (datapoint id =
+    "{note_id}_{section}_{ordinal}"). Re-running the same deterministic chunker
+    over the note reproduces each chunk's exact text, so a passage can return
+    the SECTION it cites instead of the whole note — whole-note text is what
+    leaks unrelated sections (allergies, activity) into a citation.
+    """
+    out: dict[str, str] = {}
+    if not text:
+        return out
+    for chunk in chunk_note({"hadm_id": 0, "note_id": note_id, "text": text}):
+        out[chunk.chunk_id.replace(":", "_")] = chunk.text
+    return out
+
+
 def _search(hadm_id: int, query: str, top_k: int) -> dict[str, Any]:
     """Blocking implementation. Wrapped in a thread by the tool below."""
     if not isinstance(hadm_id, int) or hadm_id <= 0:
@@ -162,6 +195,24 @@ def _search(hadm_id: int, query: str, top_k: int) -> dict[str, Any]:
         return _error(hadm_id, "search_failed", f"{type(exc).__name__}: {exc}")
 
     neighbors = res[0] if res else []
+
+    # A query that clearly targets one note section (medications, instructions,
+    # hospital course, diagnoses) can still rank a sibling section first — the
+    # near-tie chunk embeddings. When the intended section did NOT win rank 1
+    # (or is absent from the top-k), retry with the section's ACTUAL text as the
+    # query so the matching chunk ranks first. This generalizes the zero-hit
+    # query-side-drift fallback below to wrong-rank results.
+    anchor = _section_for_query(query)
+    if neighbors and anchor is not None:
+        top_sections = [_parse_datapoint_id(nb.id)[1] for nb in neighbors]
+        if (not top_sections or top_sections[0] != anchor
+                or anchor not in top_sections):
+            body = _section_bodies(hadm_id).get(anchor)
+            if body:
+                retried = _search(hadm_id, body, top_k)
+                if not retried.get("error"):
+                    return {**retried, "query": query}
+
     if not neighbors:
         # Free-text queries embed far from the stored chunks for some patients
         # (query-side drift, root-caused 2026-08-17 on hadm 23613002: the meds
@@ -172,7 +223,6 @@ def _search(hadm_id: int, query: str, top_k: int) -> dict[str, Any]:
         # luck. Keeps the hadm restrict and the same index (RAG intact). The
         # returned `query` stays the caller's original phrase (the UI shows it as
         # the source-card title), not the section body used internally.
-        anchor = _section_for_query(query)
         if anchor is not None:
             body = _section_bodies(hadm_id).get(anchor)
             if body:
@@ -187,6 +237,10 @@ def _search(hadm_id: int, query: str, top_k: int) -> dict[str, Any]:
     note_ids = [p[0] for p in parsed if p[0]]
     texts = _fetch_texts(note_ids)
 
+    # Deterministically re-chunk each fetched note so a passage returns the
+    # exact SECTION chunk the index matched, not the whole note.
+    chunk_texts = {nid: _chunk_texts_for(nid, t) for nid, t in texts.items()}
+
     passages = []
     for nb, (note_id, section) in zip(neighbors, parsed):
         text = texts.get(note_id or "")
@@ -197,10 +251,13 @@ def _search(hadm_id: int, query: str, top_k: int) -> dict[str, Any]:
                 hadm_id, "missing_text",
                 f"Index returned id {nb.id} but no note {note_id} in {DISCHARGE_TABLE}",
             )
+        # Prefer the exact chunk; fall back to the whole note only if the id
+        # cannot be reproduced (chunker drift) so retrieval never breaks.
+        body = chunk_texts.get(note_id or "", {}).get(nb.id) or text
         passages.append({
             "id": nb.id,
             "section": section,
-            "text": text,
+            "text": body,
             "score": round(float(nb.distance), 4),
         })
 
@@ -235,6 +292,7 @@ SUMMARY_SECTIONS = (
     "discharge_diagnosis",
     "discharge_medications",
     "discharge_instructions",
+    "discharge_summary",
 )
 
 
@@ -290,43 +348,42 @@ def _section_for_query(query: str) -> str | None:
 def _search_sections(hadm_id: int) -> dict[str, Any]:
     """One passage per major note section, merged in a fixed order.
 
-    Deterministic section coverage for summary questions without depending on
-    the model to issue and merge multiple calls. Each section is queried with
-    that section's ACTUAL body text as the query (not a short free-text phrase)
-    — short phrases embed far from the stored chunk vectors for some patients
-    (query-side drift), while the section's own text lands next to the chunk it
-    came from. The agent cites ^[n] in the fixed order, so each section maps to
-    a distinct citation number.
+    Deterministic section coverage for summary questions WITHOUT relying on the
+    embedding index: re-parse the note and re-chunk it with the same
+    deterministic chunker that built the index, so every section present in the
+    note is returned with its exact chunk text. The agent cites ^[n] in this
+    fixed order, so each section maps to a distinct citation number and recall
+    is 100% by construction — no top-k luck, no whole-note leakage, no
+    dropped sections.
     """
-    bodies = _section_bodies(hadm_id)
+    note_id, text = _fetch_note_row(hadm_id)
+    if not text:
+        return {"hadm_id": hadm_id, "query": "discharge notes",
+                "returned": 0, "passages": [],
+                "note": "no discharge note found for this admission"}
+    chunks = _chunk_texts_for(note_id, text)
+    by_section: dict[str, list[tuple[str, str]]] = {}
+    for cid, ctext in chunks.items():
+        m = _SECTION_RE.search(cid)
+        if m:
+            by_section.setdefault(m.group("section"), []).append((cid, ctext))
+
     merged: list[dict[str, Any]] = []
-    seen: set[str] = set()
     for expected in SUMMARY_SECTIONS:
-        body = bodies.get(expected)
-        if not body:
+        picks = by_section.get(expected)
+        if not picks:
             continue  # note lacks this section -> nothing to cite
-        try:
-            res = _search(hadm_id, body, top_k=3)
-        except Exception:
-            continue  # a failed section query must not sink the whole summary
-        if res.get("error"):
-            continue
-        passages = res.get("passages") or []
-        if not passages:
-            continue
-        # Prefer the passage whose section matches the intent; fall back to the
-        # top passage (a wrong-section hit is better than nothing).
-        pick = next((p for p in passages if p["section"] == expected), passages[0])
-        if pick["id"] in seen:
-            continue
-        seen.add(pick["id"])
-        merged.append(pick)
-    return {
-        "hadm_id": hadm_id,
-        "query": "discharge notes",
-        "returned": len(merged),
-        "passages": merged,
-    }
+        cid, ctext = picks[0]
+        merged.append({"id": cid, "section": expected, "text": ctext, "score": 1.0})
+
+    if not merged:
+        # A real note can lack all discharge-narrative summary sections (e.g. a
+        # speech-therapy or narrative note). Honest empty rather than guessing.
+        return {"hadm_id": hadm_id, "query": "discharge notes",
+                "returned": 0, "passages": [],
+                "note": "no discharge summary sections found in this note"}
+    return {"hadm_id": hadm_id, "query": "discharge notes",
+            "returned": len(merged), "passages": merged}
 
 
 async def rag_search_sections(hadm_id: int) -> dict[str, Any]:

@@ -84,6 +84,7 @@ DISCHARGE_DISPOSITION = "discharge_disposition"
 DISCHARGE_DIAGNOSIS = "discharge_diagnosis"
 DISCHARGE_CONDITION = "discharge_condition"
 DISCHARGE_INSTRUCTIONS = "discharge_instructions"
+DISCHARGE_SUMMARY = "discharge_summary"
 FOLLOWUP_INSTRUCTIONS = "followup_instructions"
 FACILITY = "facility"
 
@@ -175,6 +176,8 @@ KNOWN_HEADINGS: dict[str, tuple[str, ...]] = {
         "History and Hospital Course",
         "Brief Hospital Course Summary",
         "Brief Summary of Hospital Course",
+        # MTSamples: "Course on Admission" is the admission hospital course.
+        "Course on Admission",
     ),
     MEDICATIONS_ON_ADMISSION: ("Medications on Admission",),
     DISCHARGE_MEDICATIONS: (
@@ -210,6 +213,9 @@ KNOWN_HEADINGS: dict[str, tuple[str, ...]] = {
         "Primary Diagnoses",
         "Final Diagnosis",
         "Final Diagnoses",
+        # MTSamples: "Diagnosis at Admission" and a bare "Diagnoses" block.
+        "Diagnosis at Admission",
+        "Diagnoses",
     ),
     DISCHARGE_CONDITION: (
         "Discharge Condition",
@@ -233,6 +239,16 @@ KNOWN_HEADINGS: dict[str, tuple[str, ...]] = {
         "Discharge Diet",
         "Discharge Activities",
         "Physical Activity",
+        "Recommendations",
+        "Discharge Instructions/Medications",
+        # MTSamples 2788-style long-form header (site alias already knows it;
+        # adopting it here means parse_note/chunking treat it as discharge
+        # instructions instead of burying it inside another section).
+        "Instructions Given to the Patient at the Time of Discharge",
+    ),
+    DISCHARGE_SUMMARY: (
+        "Discharge Summary",
+        "Discharge Summaries",
     ),
     FOLLOWUP_INSTRUCTIONS: (
         "Followup Instructions", "Follow-up Instructions",
@@ -252,6 +268,14 @@ KNOWN_HEADINGS: dict[str, tuple[str, ...]] = {
 # ("1. Diabetes: controlled") without needing a special case.
 _HEADING_RE = re.compile(
     r"^[ \t]*([A-Za-z][A-Za-z0-9 /&'\-]{1,60}?)[ \t]*:",
+    re.MULTILINE,
+)
+
+# A full line that is exactly a known heading with NO trailing colon. Used for
+# the MTSamples numbered-list format ("DISCHARGE DIAGNOSES\n1. ...") where a
+# recognised heading carries no colon and _HEADING_RE would miss it.
+_BARE_HEADING_RE = re.compile(
+    r"^[ \t]*([A-Za-z][A-Za-z0-9 /&'\-]{1,60})[ \t]*$",
     re.MULTILINE,
 )
 
@@ -362,6 +386,7 @@ def parse_note(text: str) -> ParsedNote:
 
     known: list[tuple[re.Match[str], str]] = []
     unknown: list[str] = []
+    seen_spans: list[tuple[int, int]] = []
     for match in _HEADING_RE.finditer(normalised):
         raw = match.group(1).strip()
         canonical = _HEADING_LOOKUP.get(_normalise_heading(raw))
@@ -369,6 +394,21 @@ def parse_note(text: str) -> ParsedNote:
             unknown.append(raw)
         else:
             known.append((match, canonical))
+            seen_spans.append((match.start(), match.end()))
+
+    # Second pass for the numbered-list format: a full line that is exactly a
+    # known heading (no colon) is a heading. Unknown bare lines stay in the
+    # surrounding body, preserving the allowlist design.
+    for match in _BARE_HEADING_RE.finditer(normalised):
+        if any(match.start() < end and match.end() > start
+               for start, end in seen_spans):
+            continue
+        canonical = _HEADING_LOOKUP.get(_normalise_heading(match.group(1).strip()))
+        if canonical is None:
+            continue
+        known.append((match, canonical))
+        seen_spans.append((match.start(), match.end()))
+    known.sort(key=lambda mc: mc[0].start())
 
     sections: list[Section] = []
     for index, (match, canonical) in enumerate(known):

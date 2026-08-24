@@ -31,6 +31,7 @@ DEFAULT_SECTIONS = (
     "medications_on_admission",
     "discharge_disposition",
     "discharge_instructions",
+    "discharge_summary",
 )
 
 

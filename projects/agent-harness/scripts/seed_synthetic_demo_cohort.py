@@ -16,6 +16,8 @@ cohort quality bar is unchanged.
 Env:
     SITE_DATA   site demo/data dir to also write (default:
                 ../../danielmherman/demo/data — resolves next to the repo)
+    COHORT_SOURCE  scored cohort JSON to render (default: hybrid_cohort.json —
+                the full hybrid-108 demo cohort; previously synthetic_cohort.json)
 """
 
 import hashlib
@@ -24,7 +26,10 @@ import os
 from pathlib import Path
 
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
-COHORT_SOURCE = HARNESS_ROOT / "eval" / "results" / "synthetic_cohort.json"
+COHORT_SOURCE = Path(os.environ.get(
+    "COHORT_SOURCE",
+    HARNESS_ROOT / "eval" / "results" / "hybrid_cohort.json",
+))
 OUTPUT_PATH = HARNESS_ROOT / "data" / "demo_cohort.json"
 # The site lives as a sibling workspace folder: Desktop/danielmherman.
 SITE_DATA = Path(os.environ.get(

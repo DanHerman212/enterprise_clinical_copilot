@@ -17,7 +17,7 @@
 #    pack_to: int [Default: 700.0]
 #    previous_ingest_uri: str [Default: '']
 #    project_id: str [Default: 'trim-icon-498815-a0']
-#    sections_csv: str [Default: 'history_of_present_illness,past_medical_history,family_history,social_history,physical_exam,brief_hospital_course,discharge_condition,discharge_diagnosis,discharge_medications,medications_on_admission,discharge_disposition,discharge_instructions']
+#    sections_csv: str [Default: 'history_of_present_illness,past_medical_history,family_history,social_history,physical_exam,brief_hospital_course,discharge_condition,discharge_diagnosis,discharge_medications,medications_on_admission,discharge_disposition,discharge_instructions,discharge_summary']
 #    shard_size: str [Default: 'SHARD_SIZE_MEDIUM']
 #    split_name: str [Default: 'test']
 #    split_table_ref: str [Default: 'trim-icon-498815-a0.readmission.analytics_dataset_encoded']
@@ -407,7 +407,7 @@ root:
         isOptional: true
         parameterType: STRING
       sections_csv:
-        defaultValue: history_of_present_illness,past_medical_history,family_history,social_history,physical_exam,brief_hospital_course,discharge_condition,discharge_diagnosis,discharge_medications,medications_on_admission,discharge_disposition,discharge_instructions
+        defaultValue: history_of_present_illness,past_medical_history,family_history,social_history,physical_exam,brief_hospital_course,discharge_condition,discharge_diagnosis,discharge_medications,medications_on_admission,discharge_disposition,discharge_instructions,discharge_summary
         isOptional: true
         parameterType: STRING
       shard_size:

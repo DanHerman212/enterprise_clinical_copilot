@@ -65,6 +65,30 @@ PER_PASSAGE_CAP = 40000
 # scored traces in the Langfuse UI. Runs without Langfuse env behave exactly as
 # before — scoring is purely additive.
 
+def _load_env_file(path: Path) -> None:
+    """Load KEY=VALUE lines into os.environ.
+
+    `.env.lanfuse` is `KEY=VALUE` with no `export`, so bash `source` only sets
+    shell-local vars that standalone `python eval/judge.py` never sees. Loading
+    here (mirrors run_eval_parallel.py) makes score attachment work when the
+    judge is run on its own.
+    """
+    if not path.exists():
+        return
+    loaded = 0
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k, v = k.strip(), v.strip()
+        if k and not os.environ.get(k):
+            os.environ[k] = v
+            loaded += 1
+    if loaded:
+        print(f"langfuse: loaded {loaded} vars from {path.name}", flush=True)
+
+
 def _langfuse_client():
     env = {k: os.environ.get(k) for k in
            ("LANGFUSE_HOST", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY")}
@@ -88,10 +112,10 @@ def _attach_scores(client, trace_id: str, j: dict) -> int:
     n = 0
     for dim in DIMS:
         if dim in dims:
-            client.score(trace_id=trace_id, name=dim, value=dims[dim], comment=flags)
+            client.create_score(trace_id=trace_id, name=dim, value=dims[dim], comment=flags)
             n += 1
-    client.score(trace_id=trace_id, name="verdict",
-                 value=1 if j.get("verdict") == "PASS" else 0, comment=flags)
+    client.create_score(trace_id=trace_id, name="verdict",
+                        value=1 if j.get("verdict") == "PASS" else 0, comment=flags)
     return n + 1
 
 
@@ -173,6 +197,7 @@ def main() -> int:
     judged_path = Path(args.judged_path)
     report_path = Path(args.report_path)
 
+    _load_env_file(HARNESS / ".env.lanfuse")
     client = genai.Client(vertexai=True, project=PROJECT, location=LOCATION)
     lf = _langfuse_client()
     traces = [json.loads(l) for l in traces_path.read_text().splitlines() if l.strip()]
@@ -223,8 +248,11 @@ def main() -> int:
         print(f"Langfuse: flushed; {attached} scores attached for this run")
 
     # Recompute the report from the full judged file so it is correct even when
-    # a run resumes over previously scored rows.
-    scored = [json.loads(l) for l in JUDGED.read_text().splitlines() if l.strip()]
+    # a run resumes over previously scored rows. Use the judged file we actually
+    # wrote (args.judged_path), not the default constant — otherwise a run with
+    # --out to a custom path reports stale/default stats (observed 2026-08-23:
+    # a 3-trace test run reported 285/300 from the old eval/results/judged.jsonl).
+    scored = [json.loads(l) for l in judged_path.read_text().splitlines() if l.strip()]
     agg = {d: {"pass": 0, "fail": 0, "total": 0} for d in DIMS}
     verdict = {"pass": 0, "fail": 0, "agent_error": 0}
     flags: list[dict] = []

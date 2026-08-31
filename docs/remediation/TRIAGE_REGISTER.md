@@ -5,8 +5,8 @@ One row per finding, merged from `enterprise_clinical_copilot/docs/REVIEW_BACKLO
 remediation detail stays in those files and in `docs/adversarial_code_review/` —
 this register is the working triage view. Sorted severity → cluster → ID.
 
-**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **25 Major** open, 43 Minor
-open, 57 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
+**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **23 Major** open, 37 Minor
+open, 65 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
 
 Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spend/quota/DoS ·
 **D** chunker determinism · **E** fail-loud build pipeline · **F** isolation & retrieval (R1) ·
@@ -55,8 +55,8 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | S1-16 | site | I | security | requirements.txt | 72 known CVEs across Django/pillow/sqlparse/bleach pins | **resolved 2026-08-31** |
 | ECC-55 | ECC | I | ops | serving/cpr/Dockerfile, deploy_cpr.py | Content-hash image tag is false — mutable base + unpinned SDK mean same tag, different image | open |
 | ECC-61 | ECC | I | security/ops | predictor.py load, cpr cloudbuild | No bundle checksum, `:latest` provenance, `_TAG` defaults to latest — mutable supply chain end to end | open |
-| S6-01 | site | J | security | content templates, models | Stored XSS: `\|safe` rendering with no server-side sanitization anywhere | open |
-| S6-06 | site | J | security | content/sectioning.py | Sectioning round-trip un-escapes entities — author-escaped text becomes live markup | open |
+| S6-01 | site | J | security | content templates, models | Stored XSS: `\|safe` rendering with no server-side sanitization anywhere | **resolved 2026-08-31** |
+| S6-06 | site | J | security | content/sectioning.py | Sectioning round-trip un-escapes entities — author-escaped text becomes live markup | **resolved 2026-08-31** |
 | S6-02 | site | K | ops | ContactView.post | Public contact form: no rate limiting, unbounded TextField — spam/DB bloat | open |
 | S6-03 | site | K | correctness | ContactView.post | No server-side validation — long inputs raise `DataError` → 500 on prod Postgres | open |
 | S6-07 | site | K | correctness | content/sectioning.py | Drill-down silently drops all content before the first `<h2>` | open |
@@ -119,12 +119,12 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | ECC-69 | ECC | I | ops | _image.py, components | Unpinned xgboost/optuna/sklearn/pandas — irreproducible runs; CPR parity unenforced | open |
 | S6-09 | site | I | security | content/base.html | CDN scripts without SRI; Mermaid on floating `@10` | open |
 | S9-05 | site | I | security/ops | requirements.txt | Dead `django-ckeditor` (CKEditor 4, known CVEs) + stale bleach in prod image; Django pinned to bare 6.0 | **resolved 2026-08-31** |
-| S1-13 | site | J | security | settings.py | CKEditor `htmlSupport` allows everything; public upload route; `publicRead` default ACL | open |
-| S6-10 | site | J | ops | settings.py | No Content-Security-Policy anywhere (the backstop for `\|safe` + CDN scripts) | open |
-| S6-11 | site | J | security | content_extras.py | `first_sentence` wrongly declares `is_safe=True` | open |
-| S7-01 | site | J | security | demo_flow.js | `showEmpty` innerHTML sink — safe today, latent XSS for any future dynamic caller | open |
-| S7-03 | site | J | ops | demo JS | No CSP backstop for the demo surface (shared with S6-10) | open |
-| S7-10 | site | J | security | a2ui vendor + demo_a2ui.js | DOMPurify defaults allow `<a>`/`<img>` — phishing/beacon channel inside the clinical canvas | open |
+| S1-13 | site | J | security | settings.py | CKEditor `htmlSupport` allows everything; public upload route; `publicRead` default ACL | **resolved 2026-08-31** |
+| S6-10 | site | J | ops | settings.py | No Content-Security-Policy anywhere (the backstop for `\|safe` + CDN scripts) | **resolved 2026-08-31** |
+| S6-11 | site | J | security | content_extras.py | `first_sentence` wrongly declares `is_safe=True` | **resolved 2026-08-31** |
+| S7-01 | site | J | security | demo_flow.js | `showEmpty` innerHTML sink — safe today, latent XSS for any future dynamic caller | **resolved 2026-08-31** |
+| S7-03 | site | J | ops | demo JS | No CSP backstop for the demo surface (shared with S6-10) | **resolved 2026-08-31** |
+| S7-10 | site | J | security | a2ui vendor + demo_a2ui.js | DOMPurify defaults allow `<a>`/`<img>` — phishing/beacon channel inside the trusted clinical canvas | **resolved 2026-08-31** |
 | S6-04 | site | K | correctness | content/models.py | Duplicate title → slug collision → 500 on admin save | open |
 | S6-08 | site | K | security | content/urls.py | Section slugged `preview` shadowed by the staff preview route | open |
 | S6-12 | site | K | correctness | ContactView.post | Error path loses user input, returns 200, accepts whitespace-only values | open |

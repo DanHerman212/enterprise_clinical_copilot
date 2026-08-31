@@ -5,8 +5,8 @@ One row per finding, merged from `enterprise_clinical_copilot/docs/REVIEW_BACKLO
 remediation detail stays in those files and in `docs/adversarial_code_review/` —
 this register is the working triage view. Sorted severity → cluster → ID.
 
-**Snapshot (2026-08-31):** 124 findings — **4 Critical**, **41 Major** open, 65 Minor
-open, 14 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
+**Snapshot (2026-08-31):** 124 findings — **3 Critical**, **39 Major** open, 60 Minor
+open, 22 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
 
 Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spend/quota/DoS ·
 **D** chunker determinism · **E** fail-loud build pipeline · **F** isolation & retrieval (R1) ·
@@ -14,14 +14,14 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 **J** XSS/sanitization/CSP · **K** public content & contact form · **L** MLOps gate integrity ·
 **M** deploy/infra ops · **N** front-end correctness · **Q** SQL parameterization · **Z** misc
 
-## Critical (4 open, 1 resolved)
+## Critical (3 open, 2 resolved)
 
 | ID | Repo | Cluster | Category | Location | One-liner | Status |
 |---|---|---|---|---|---|---|
 | ECC-46 | ECC+site | A | ops/security | cloudbuild*.yaml, settings.py | Runtime env unversioned; `ENVIRONMENT` fails open to development — recreating a service yields a public debug site | **resolved 2026-08-31** |
 | ECC-04 | ECC | B | correctness | agent/guardrail.py, graph.py | No guard that a stated risk number matches (or even came from) a predict call — fabricated risk served with 200 | open |
 | ECC-20 | ECC | C | ops/spend | mcp_server/tools/rag_search.py | Anchored retry recurses with no depth guard — thousands of billed embed/search/BQ calls from one query | open |
-| ECC-32 | ECC | D | correctness | rag_search.py vs chunk pipeline | Index built with `pack_to=700`, serving re-chunks with `None` — silent whole-note fallback leaks metadata into citations | open |
+| ECC-32 | ECC | D | correctness | rag_search.py vs chunk pipeline | Index built with `pack_to=700`, serving re-chunks with `None` — silent whole-note fallback leaks metadata into citations | **resolved 2026-08-31** |
 | ECC-64 | ECC | L | correctness | pipelines/components/load_data.py | No train/val/test patient-disjointness assertion — every gate potentially leakage-contaminated | open |
 
 ## Major (46)
@@ -40,8 +40,8 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | ECC-09 | ECC | C | ops | agent/mcp_client.py | Synchronous ID-token fetch inside async path blocks the entire event loop on every request | open |
 | ECC-25 | ECC | C | security | mcp_server/server.py | MCP HTTP transport has no app-layer auth/authorization — one `--allow-unauthenticated` exposes data + spend | open |
 | S1-09 | site | C | security | demo/views.py, models.py | Refund loop defeats the spend cap: guaranteed-tool-error requests always refunded; `hadm_id` never validated | open |
-| ECC-41 | ECC | D | correctness | rag/sections.py | Any bare single-word alias line becomes a section boundary — truncation + corpus-wide chunk-id shifts | open |
-| ECC-23 | ECC | D | correctness | rag_search.py | Unknown section id yields a null-text citation; `_KNOWN_SECTIONS` is a stale 13-name copy of a ~29-name vocab | open |
+| ECC-41 | ECC | D | correctness | rag/sections.py | Any bare single-word alias line becomes a section boundary — truncation + corpus-wide chunk-id shifts | **resolved 2026-08-31** |
+| ECC-23 | ECC | D | correctness | rag_search.py | Unknown section id yields a null-text citation; `_KNOWN_SECTIONS` is a stale 13-name copy of a ~29-name vocab | **resolved 2026-08-31** |
 | ECC-38 | ECC | E | correctness | embed_chunks.py (script + component) | `zip()` silently truncates short embed responses — chunks vanish from the ingest with no error | open |
 | ECC-39 | ECC | E | ops | scripts/embed_chunks.py | Inverted exit codes: failed batches exit 0 (and still upload); a clean run exits nonzero | open |
 | ECC-40 | ECC | E | ops | scripts/deploy_index.py | Count verification asserts hardcoded `555770` — wrong for every rebuild | open |
@@ -75,7 +75,7 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | ECC-37 | ECC | Q | security | pipelines/components/chunk_notes.py + scripts | Pipeline params f-string'd into SQL (`split_name`, table refs) — CWE-89 surface | open |
 | ECC-63 | ECC | Q | security | pipelines/components/load_data.py | All SQL inputs interpolated with no query parameters — exfiltration possible via crafted split name | open |
 
-## Minor (65 open) + resolved
+## Minor (60 open) + resolved
 
 | ID | Repo | Cluster | Category | Location | One-liner | Status |
 |---|---|---|---|---|---|---|
@@ -95,11 +95,11 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | S1-08 | site | C | ops | deployment_strategy.md | No global daily budget / kill switch (per-user quota only) | open |
 | S1-11 | site | C | correctness | demo/views.py, agent_client.py | Unvalidated agent response shape — 500 after credit consumed, refund path skipped | open |
 | S1-15 | site | C | architecture | agent_client.py, Dockerfile | Blocking 120s `requests.post` in sync views can exhaust the thread pool and stall the whole site | open |
-| ECC-26 | ECC | D | correctness | rag_search.py | Chunk-id miss silently falls back to the entire note; `or` also swallows legitimately-empty chunks | open |
-| ECC-33 | ECC | D | maintainability | build_chunks.py, rag_search.py, sections.py | Section vocabulary duplicated in three hand-maintained lists | open |
-| ECC-34 | ECC | D | correctness | rag/chunking.py | Fixed-width fallback cuts mid-word | open |
-| ECC-43 | ECC | D | correctness | rag_search.py (sections) | `rag_search_sections` cites datapoint ids that don't exist in the index, with a fake `score: 1.0` | open |
-| ECC-44 | ECC | D | correctness | rag/chunking.py (`_pack`) | Span merging re-includes filtered redaction-only pieces in packed chunks | open |
+| ECC-26 | ECC | D | correctness | rag_search.py | Chunk-id miss silently falls back to the entire note; `or` also swallows legitimately-empty chunks | **resolved 2026-08-31** |
+| ECC-33 | ECC | D | maintainability | build_chunks.py, rag_search.py, sections.py | Section vocabulary duplicated in three hand-maintained lists | **resolved 2026-08-31** |
+| ECC-34 | ECC | D | correctness | rag/chunking.py | Fixed-width fallback cuts mid-word | **resolved 2026-08-31** |
+| ECC-43 | ECC | D | correctness | rag_search.py (sections) | `rag_search_sections` cites datapoint ids that don't exist in the index, with a fake `score: 1.0` | **resolved 2026-08-31** |
+| ECC-44 | ECC | D | correctness | rag/chunking.py (`_pack`) | Span merging re-includes filtered redaction-only pieces in packed chunks | **resolved 2026-08-31** |
 | S7-02 | site | D | maintainability | demo_flow.js | Client `SECTION_ALIASES` is a 4th hand-maintained copy of the section vocabulary | open |
 | ECC-45 | ECC | E | ops | rag/notes.py | Chunks cache has no manifest/count check; notes verification only fires on full exhaustion | open |
 | ECC-70 | ECC | E | correctness | rag_ingest_pipeline.py | KFP cache key ignores table contents — re-submission silently reuses stale chunks/embeddings | open |

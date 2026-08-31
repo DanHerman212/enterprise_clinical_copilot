@@ -95,6 +95,56 @@ class AgentState(TypedDict):
     tool_calls: Annotated[list[dict[str, Any]], operator.add]
 
 
+# Spend bounds (ECC-02). One question is one tool call in every designed flow;
+# these caps exist so a pathological model turn cannot buy unbounded Vertex/
+# BigQuery spend. RECURSION_LIMIT counts LangGraph supersteps: agent -> tools
+# -> agent is 3, so 10 allows ~4 tool rounds before the graph raises.
+MAX_TOOL_CALLS_PER_TURN = 5
+RECURSION_LIMIT = 10
+
+
+async def _execute_tool_calls(
+    toolbox: MCPToolbox, calls: list[dict],
+) -> tuple[list[BaseMessage], list[dict[str, Any]]]:
+    """Run one turn's tool calls, refusing those beyond the per-turn budget.
+
+    Refused calls get a structured error payload (the same contract as tool
+    failures) so the model sees WHY the result is missing instead of silently
+    losing a call.
+    """
+    messages: list[BaseMessage] = []
+    recorded: list[dict[str, Any]] = []
+    for index, call in enumerate(calls):
+        arguments = dict(call.get("args") or {})
+        # langchain-google-genai (Vertex backend) can nest the real args
+        # under a single "kwargs" key. Flatten it so the first call
+        # succeeds instead of burning a turn on a pydantic validation
+        # error (the model self-corrects, but why waste the call).
+        if len(arguments) == 1 and isinstance(arguments.get("kwargs"), dict):
+            arguments = arguments["kwargs"]
+        if index >= MAX_TOOL_CALLS_PER_TURN:
+            payload: dict[str, Any] = {
+                "error": "tool_call_limit",
+                "message": (
+                    f"Per-turn tool budget is {MAX_TOOL_CALLS_PER_TURN} calls; "
+                    "this call was not executed."
+                ),
+            }
+        else:
+            payload = await toolbox.call(call["name"], arguments)
+        recorded.append(
+            {"name": call["name"], "args": arguments, "response": payload}
+        )
+        messages.append(
+            ToolMessage(
+                content=payload if isinstance(payload, str) else str(payload),
+                tool_call_id=call.get("id", ""),
+                name=call["name"],
+            )
+        )
+    return messages, recorded
+
+
 class _MCPTool(BaseTool):
     """One MCP tool, exposed to the model as a LangChain tool.
 
@@ -154,29 +204,7 @@ def build_graph(toolbox: MCPToolbox, model: str = GEMINI_MODEL):
     async def tool_node(state: AgentState) -> dict:
         last = state["messages"][-1]
         calls = last.tool_calls if isinstance(last, AIMessage) else []
-        messages: list[BaseMessage] = []
-        recorded: list[dict[str, Any]] = []
-
-        for call in calls:
-            arguments = dict(call.get("args") or {})
-            # langchain-google-genai (Vertex backend) can nest the real args
-            # under a single "kwargs" key. Flatten it so the first call
-            # succeeds instead of burning a turn on a pydantic validation
-            # error (the model self-corrects, but why waste the call).
-            if len(arguments) == 1 and isinstance(arguments.get("kwargs"), dict):
-                arguments = arguments["kwargs"]
-            payload = await toolbox.call(call["name"], arguments)
-            recorded.append(
-                {"name": call["name"], "args": arguments, "response": payload}
-            )
-            messages.append(
-                ToolMessage(
-                    content=payload if isinstance(payload, str) else str(payload),
-                    tool_call_id=call.get("id", ""),
-                    name=call["name"],
-                )
-            )
-
+        messages, recorded = await _execute_tool_calls(toolbox, calls)
         return {"messages": messages, "tool_calls": recorded}
 
     def route(state: AgentState) -> str:
@@ -208,7 +236,8 @@ async def ask(
     graph = build_graph(toolbox, model=model)
     handler = _make_handler()
 
-    config: dict = {"callbacks": [handler] if LANGFUSE_ENABLED else None}
+    config: dict = {"callbacks": [handler] if LANGFUSE_ENABLED else None,
+                    "recursion_limit": RECURSION_LIMIT}
     if name is not None:
         config["run_name"] = name
     if tags:

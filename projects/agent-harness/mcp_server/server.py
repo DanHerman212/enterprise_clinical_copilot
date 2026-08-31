@@ -55,6 +55,34 @@ async def health(request: Request) -> JSONResponse:
     })
 
 
+# Defense-in-depth (ECC-25): on Cloud Run (K_SERVICE is platform-injected) the
+# IAM front end forwards the caller's Authorization header; a request without
+# one means the service was deployed --allow-unauthenticated by mistake and
+# would otherwise expose the dataset AND billable Vertex/BigQuery calls.
+# Local runs (no K_SERVICE) are unaffected.
+_REQUIRE_AUTH_HEADER = bool(os.environ.get("K_SERVICE")) and (
+    os.environ.get("ALLOW_UNAUTHENTICATED", "").lower() != "true"
+)
+
+
+def _require_auth_header(app):
+    """Reject non-/health HTTP requests that carry no Authorization header."""
+    async def guarded(scope, receive, send):
+        if scope["type"] == "http" and scope.get("path") != "/health":
+            names = {name.lower() for name, _ in scope.get("headers") or []}
+            if b"authorization" not in names:
+                response = JSONResponse(
+                    {"error": "unauthenticated",
+                     "message": "This service requires an identity token."},
+                    status_code=401,
+                )
+                await response(scope, receive, send)
+                return
+        await app(scope, receive, send)
+
+    return guarded
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Readmission MCP server")
     parser.add_argument("--transport", choices=["stdio", "http"], default="stdio")
@@ -75,12 +103,15 @@ def main() -> None:
         # one instance; behind a Cloud Run load balancer a follow-up request
         # can land on a different instance and fail to find its session. This
         # tool holds no per-session state, so there is nothing to lose.
-        server.run(
-            "streamable-http",
-            host=args.host,
-            port=args.port,
+        app = server.streamable_http_app(
             stateless_http=not args.stateful,
+            host=args.host,
         )
+        if _REQUIRE_AUTH_HEADER:
+            app = _require_auth_header(app)
+        import uvicorn
+
+        uvicorn.run(app, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

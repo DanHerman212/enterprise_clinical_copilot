@@ -14,11 +14,13 @@ Transport is selected by environment so local development stays on stdio:
 Run service. `toolbox()` picks; the graph never knows which it got.
 """
 
+import asyncio
 import contextlib
 import json
 import os
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -79,7 +81,9 @@ class MCPToolbox:
     """The MCP tools of one session, exposed as Gemini function declarations."""
 
     session: ClientSession
-    call_timeout_seconds: float = 180.0
+    # Must stay below the site's 120s upstream deadline and the agent server's
+    # ASK_TIMEOUT_SECONDS — a tool that outlives its caller is pure spend.
+    call_timeout_seconds: float = 100.0
     _tools: dict[str, Any] = field(default_factory=dict)
 
     async def load(self) -> "MCPToolbox":
@@ -180,6 +184,21 @@ def id_token(audience: str) -> str:
     return result.stdout.strip()
 
 
+# ID tokens live one hour; refresh with headroom. Cached per audience so a
+# fresh per-request toolbox does not mint (or fork gcloud for) a new token on
+# every /ask.
+_TOKEN_TTL_SECONDS = 45 * 60
+_token_cache: dict[str, tuple[str, float]] = {}
+
+
+def _cached_id_token(audience: str) -> str:
+    token, fresh_until = _token_cache.get(audience, ("", 0.0))
+    if time.monotonic() >= fresh_until:
+        token = id_token(audience)
+        _token_cache[audience] = (token, time.monotonic() + _TOKEN_TTL_SECONDS)
+    return token
+
+
 @contextlib.asynccontextmanager
 async def http_toolbox(url: str | None = None):
     """Connect to the deployed MCP server over authenticated streamable HTTP."""
@@ -187,11 +206,16 @@ async def http_toolbox(url: str | None = None):
     if not base:
         raise RuntimeError("MCP_URL is not set; required when MCP_TRANSPORT=http")
 
-    headers = {"Authorization": f"Bearer {id_token(base)}"}
+    # Token minting is blocking I/O (metadata server or a gcloud fork); off the
+    # event loop so concurrent requests aren't stalled behind it (ECC-09).
+    token = await asyncio.to_thread(_cached_id_token, base)
+    headers = {"Authorization": f"Bearer {token}"}
 
     # SDK 2.0 takes an http_client, not headers — and it must be httpx2, which
     # the SDK vendors alongside the ordinary httpx other libraries pull in.
-    async with httpx2.AsyncClient(headers=headers, timeout=180) as http_client:
+    # Transport timeout sits just above the per-call read timeout so the tool
+    # deadline fires first with a structured error.
+    async with httpx2.AsyncClient(headers=headers, timeout=110) as http_client:
         async with streamable_http_client(f"{base}/mcp", http_client=http_client) as (
             read,
             write,

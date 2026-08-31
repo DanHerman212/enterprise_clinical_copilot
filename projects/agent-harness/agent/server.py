@@ -10,6 +10,7 @@ may route a follow-up request elsewhere, so a long-lived client session buys
 nothing and breaks when an instance is recycled.
 """
 
+import asyncio
 import logging
 import os
 
@@ -29,6 +30,19 @@ logger = logging.getLogger(__name__)
 # The service is IAM-private, but a bounded input is still the caller's contract
 # rather than an assumption about it.
 MAX_QUESTION_CHARS = 2000
+
+# Hard deadline on one question, just under the site's 120s proxy timeout so
+# the caller gets a structured 504 instead of a dropped connection — and a
+# runaway graph cannot keep billing after the caller is gone (ECC-02).
+ASK_TIMEOUT_SECONDS = float(os.environ.get("ASK_TIMEOUT_SECONDS", "110"))
+
+# Defense-in-depth (ECC-07): on Cloud Run (K_SERVICE is platform-injected) the
+# IAM front end forwards the caller's Authorization header; a request without
+# one means the service was deployed --allow-unauthenticated by mistake.
+# Local runs (no K_SERVICE) are unaffected.
+REQUIRE_AUTH_HEADER = bool(os.environ.get("K_SERVICE")) and (
+    os.environ.get("ALLOW_UNAUTHENTICATED", "").lower() != "true"
+)
 
 
 async def health(request: Request) -> JSONResponse:
@@ -50,6 +64,12 @@ async def health(request: Request) -> JSONResponse:
 
 
 async def ask_route(request: Request) -> JSONResponse:
+    if REQUIRE_AUTH_HEADER and "authorization" not in request.headers:
+        return JSONResponse(
+            {"error": "unauthenticated",
+             "message": "This service requires an identity token."},
+            status_code=401,
+        )
     try:
         body = await request.json()
     except Exception:
@@ -71,8 +91,16 @@ async def ask_route(request: Request) -> JSONResponse:
         )
 
     try:
-        async with toolbox() as box:
-            state = await ask(box, question)
+        async with asyncio.timeout(ASK_TIMEOUT_SECONDS):
+            async with toolbox() as box:
+                state = await ask(box, question)
+    except TimeoutError:
+        logger.error("agent /ask timed out after %.0fs", ASK_TIMEOUT_SECONDS)
+        return JSONResponse(
+            {"error": "timeout",
+             "message": f"The agent did not answer within {ASK_TIMEOUT_SECONDS:.0f}s."},
+            status_code=504,
+        )
     except Exception as exc:
         # Never let an infrastructure failure surface as a plausible answer.
         # The MCP SDK raises asyncio.ExceptionGroup when a transport task

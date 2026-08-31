@@ -157,8 +157,15 @@ def _chunk_texts_for(note_id: str, text: str) -> dict[str, str]:
     return out
 
 
-def _search(hadm_id: int, query: str, top_k: int) -> dict[str, Any]:
-    """Blocking implementation. Wrapped in a thread by the tool below."""
+def _search(hadm_id: int, query: str, top_k: int, *,
+            is_retry: bool = False) -> dict[str, Any]:
+    """Blocking implementation. Wrapped in a thread by the tool below.
+
+    `is_retry` marks the single permitted section-anchored retry: the retried
+    call must never anchor again, or a section body that itself matches a
+    section intent recurses without bound — every level a billed embed +
+    index query + BigQuery fetch.
+    """
     if not isinstance(hadm_id, int) or hadm_id <= 0:
         return _error(hadm_id, "bad_request", "hadm_id must be a positive integer")
     if not query or not query.strip():
@@ -195,19 +202,19 @@ def _search(hadm_id: int, query: str, top_k: int) -> dict[str, Any]:
 
     # A query that clearly targets one note section (medications, instructions,
     # hospital course, diagnoses) can still rank a sibling section first — the
-    # near-tie chunk embeddings. When the intended section did NOT win rank 1
-    # (or is absent from the top-k), retry with the section's ACTUAL text as the
-    # query so the matching chunk ranks first. This generalizes the zero-hit
-    # query-side-drift fallback below to wrong-rank results.
-    anchor = _section_for_query(query)
+    # near-tie chunk embeddings. When the intended section did NOT win rank 1,
+    # retry ONCE with the section's ACTUAL text as the query so the matching
+    # chunk ranks first. This generalizes the zero-hit query-side-drift
+    # fallback below to wrong-rank results (2026-08-24, recall@1 82% -> ~100%).
+    anchor = None if is_retry else _section_for_query(query)
     if neighbors and anchor is not None:
-        top_sections = [_parse_datapoint_id(nb.id)[1] for nb in neighbors]
-        if (not top_sections or top_sections[0] != anchor
-                or anchor not in top_sections):
+        if _parse_datapoint_id(neighbors[0].id)[1] != anchor:
             body = _section_bodies(hadm_id).get(anchor)
             if body:
-                retried = _search(hadm_id, body, top_k)
-                if not retried.get("error"):
+                retried = _search(hadm_id, body, top_k, is_retry=True)
+                # Keep the original hits unless the retry actually improved on
+                # them — an empty or failed retry must not destroy real recall.
+                if not retried.get("error") and retried.get("returned", 0) > 0:
                     return {**retried, "query": query}
 
     if not neighbors:
@@ -223,7 +230,7 @@ def _search(hadm_id: int, query: str, top_k: int) -> dict[str, Any]:
         if anchor is not None:
             body = _section_bodies(hadm_id).get(anchor)
             if body:
-                res = _search(hadm_id, body, top_k)
+                res = _search(hadm_id, body, top_k, is_retry=True)
                 if res.get("error"):
                     return res
                 return {**res, "query": query}

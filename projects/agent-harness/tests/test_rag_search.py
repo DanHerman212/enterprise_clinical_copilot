@@ -325,6 +325,46 @@ def test_meds_query_retries_when_intended_section_not_rank_one():
     assert result["query"] == "medications"
 
 
+def test_anchored_retry_fires_at_most_once():
+    """The retry is structurally single-shot (ECC-20): a section body that
+    itself reads like a section-intent query must NOT re-anchor — every extra
+    level is a billed embed + index query + BigQuery fetch."""
+    course_neighbor = _FakeNeighbor("13219116-DS-18_brief_hospital_course_1", 0.25)
+    # Both rounds rank the WRONG section first; the note's meds body contains
+    # the phrase "discharge medications", so pre-fix the retry re-anchors and
+    # recurses without bound.
+    endpoint = _Recorder([course_neighbor], [course_neighbor])
+    note = ("Brief Hospital Course:\nRecovered well.\n\n"
+            "Discharge Medications:\nsee the discharge medications list.\n")
+
+    with patch.object(rs, "_index_endpoint", lambda: endpoint), \
+         patch.object(rs, "_embed_client", lambda: _FakeEmbedClient()), \
+         patch.object(rs, "_fetch_texts", lambda note_ids: {nid: note for nid in note_ids}), \
+         patch.object(rs, "_fetch_note", lambda hadm: note):
+        result = _run(rs.rag_search(hadm_id=23613002, query="medications"))
+
+    assert endpoint.calls == 2  # original + exactly one anchored retry
+    assert result["returned"] == 1
+    assert result["query"] == "medications"
+
+
+def test_empty_retry_does_not_discard_real_hits():
+    """A wrong-rank retry that comes back EMPTY must not replace the original
+    non-empty result (ECC-24) — fall through to the real neighbors."""
+    course_neighbor = _FakeNeighbor("13219116-DS-18_brief_hospital_course_1", 0.25)
+    endpoint = _Recorder([course_neighbor], [])
+
+    with patch.object(rs, "_index_endpoint", lambda: endpoint), \
+         patch.object(rs, "_embed_client", lambda: _FakeEmbedClient()), \
+         patch.object(rs, "_fetch_texts", lambda note_ids: {nid: _NOTE for nid in note_ids}), \
+         patch.object(rs, "_fetch_note", lambda hadm: _NOTE):
+        result = _run(rs.rag_search(hadm_id=23613002, query="medications"))
+
+    assert endpoint.calls == 2
+    assert result["returned"] == 1
+    assert result["passages"][0]["section"] == "brief_hospital_course"
+
+
 def test_non_section_query_still_returns_empty():
     """A query with no section intent and 0 hits stays empty (no fabrication)."""
     endpoint = _Recorder([], [])

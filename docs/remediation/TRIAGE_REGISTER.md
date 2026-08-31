@@ -5,8 +5,8 @@ One row per finding, merged from `enterprise_clinical_copilot/docs/REVIEW_BACKLO
 remediation detail stays in those files and in `docs/adversarial_code_review/` —
 this register is the working triage view. Sorted severity → cluster → ID.
 
-**Snapshot (2026-08-31):** 124 findings — **2 Critical**, **35 Major** open, 58 Minor
-open, 29 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
+**Snapshot (2026-08-31):** 124 findings — **2 Critical**, **34 Major** open, 55 Minor
+open, 33 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
 
 Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spend/quota/DoS ·
 **D** chunker determinism · **E** fail-loud build pipeline · **F** isolation & retrieval (R1) ·
@@ -39,7 +39,7 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | ECC-02 | ECC | C | ops/spend | agent/graph.py, server.py | Unbounded per-request spend: no recursion limit, no tool cap, 180s tool timeout exceeds upstream 120s deadline | **resolved 2026-08-31** |
 | ECC-09 | ECC | C | ops | agent/mcp_client.py | Synchronous ID-token fetch inside async path blocks the entire event loop on every request | **resolved 2026-08-31** |
 | ECC-25 | ECC | C | security | mcp_server/server.py | MCP HTTP transport has no app-layer auth/authorization — one `--allow-unauthenticated` exposes data + spend | **resolved 2026-08-31** |
-| S1-09 | site | C | security | demo/views.py, models.py | Refund loop defeats the spend cap: guaranteed-tool-error requests always refunded; `hadm_id` never validated | open |
+| S1-09 | site | C | security | demo/views.py, models.py | Refund loop defeats the spend cap: guaranteed-tool-error requests always refunded; `hadm_id` never validated | **resolved 2026-08-31** |
 | ECC-41 | ECC | D | correctness | rag/sections.py | Any bare single-word alias line becomes a section boundary — truncation + corpus-wide chunk-id shifts | **resolved 2026-08-31** |
 | ECC-23 | ECC | D | correctness | rag_search.py | Unknown section id yields a null-text citation; `_KNOWN_SECTIONS` is a stale 13-name copy of a ~29-name vocab | **resolved 2026-08-31** |
 | ECC-38 | ECC | E | correctness | embed_chunks.py (script + component) | `zip()` silently truncates short embed responses — chunks vanish from the ingest with no error | open |
@@ -91,10 +91,10 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | ECC-14 | ECC | B | correctness | agent/guardrail.py | Citation check is range-only + advisory — out-of-range markers served intact | open |
 | ECC-35 | ECC | B | correctness | guardrail.py, chunking.py | Redaction guard covers only age — all other `___` fields rely on the prompt alone | open |
 | ECC-07 | ECC | C | security | agent/server.py | No app-level auth on `/ask` — relies wholly on Cloud Run IAM | **resolved 2026-08-31** |
-| S1-07 | site | C | correctness | demo/models.py | UTC-midnight quota rollover; refund not tied to the period it debited | open |
+| S1-07 | site | C | correctness | demo/models.py | UTC-midnight quota rollover; refund not tied to the period it debited | **resolved 2026-08-31** |
 | S1-08 | site | C | ops | deployment_strategy.md | No global daily budget / kill switch (per-user quota only) | open |
-| S1-11 | site | C | correctness | demo/views.py, agent_client.py | Unvalidated agent response shape — 500 after credit consumed, refund path skipped | open |
-| S1-15 | site | C | architecture | agent_client.py, Dockerfile | Blocking 120s `requests.post` in sync views can exhaust the thread pool and stall the whole site | open |
+| S1-11 | site | C | correctness | demo/views.py, agent_client.py | Unvalidated agent response shape — 500 after credit consumed, refund path skipped | **resolved 2026-08-31** |
+| S1-15 | site | C | architecture | agent_client.py, Dockerfile | Blocking 120s `requests.post` in sync views can exhaust the thread pool and stall the whole site | **resolved 2026-08-31** |
 | ECC-26 | ECC | D | correctness | rag_search.py | Chunk-id miss silently falls back to the entire note; `or` also swallows legitimately-empty chunks | **resolved 2026-08-31** |
 | ECC-33 | ECC | D | maintainability | build_chunks.py, rag_search.py, sections.py | Section vocabulary duplicated in three hand-maintained lists | **resolved 2026-08-31** |
 | ECC-34 | ECC | D | correctness | rag/chunking.py | Fixed-width fallback cuts mid-word | **resolved 2026-08-31** |

@@ -77,9 +77,18 @@ DEFAULT_XGB_PARAMS = {
 
 
 def _load_hospital_baseline() -> float:
-    """Single source of truth for the HOSPITAL baseline AUCPR (build-time)."""
+    """Single source of truth for the HOSPITAL baseline AUCPR (build-time).
+
+    The artifact is versioned in the repo (method, n_patients, prevalence,
+    generated_at_utc — its provenance); the value is validated here and again
+    fail-closed inside each gate (ECC-65).
+    """
     path = Path(__file__).resolve().parents[1] / "artifacts" / "hospital_baseline.json"
-    return float(json.loads(path.read_text())["aucpr"])
+    record = json.loads(path.read_text())
+    aucpr = float(record["aucpr"])
+    if not (0.0 < aucpr < 1.0):
+        raise ValueError(f"hospital_baseline.json aucpr ({aucpr}) is implausible")
+    return aucpr
 
 
 # Resolved once at build/submit time and baked into the compiled pipeline.
@@ -108,6 +117,7 @@ def training_pipeline(
     max_drifted_share: float = 0.2,
     hospital_aucpr: float = HOSPITAL_AUCPR,
     serving_container_image_uri: str = "",
+    parent_model: str = "",
 ):
     """Assemble the readmission training DAG."""
     data = load_data(
@@ -196,12 +206,12 @@ def training_pipeline(
         pipeline_job_name=dsl.PIPELINE_JOB_NAME_PLACEHOLDER,
     )
 
-    shap_explain(
+    shap = shap_explain(
         x_test_path=data.outputs["x_test"],
         model_artifact_path=final.outputs["model_artifact"],
     )
 
-    fairness_audit(
+    fairness = fairness_audit(
         x_test=data.outputs["x_test"],
         y_test=data.outputs["y_test"],
         model_artifact=final.outputs["model_artifact"],
@@ -211,6 +221,9 @@ def training_pipeline(
         pipeline_job_name=dsl.PIPELINE_JOB_NAME_PLACEHOLDER,
     )
 
+    # Registration waits on the eval gate AND both audits (ECC-71): a crash in
+    # shap_explain or fairness_audit must never leave an already-registered
+    # model with no audit artifacts.
     register_model(
         project_id=project_id,
         booster_model=final.outputs["booster_model"],
@@ -221,7 +234,8 @@ def training_pipeline(
         benchmark_aucpr=bench.outputs["Output"],
         tuned_threshold=calib.outputs["Output"],
         beta=fbeta_beta,
-    ).after(evalt)
+        parent_model=parent_model,
+    ).after(evalt).after(shap).after(fairness)
 
 
 def compile_pipeline(package_path: str = "readmission_training_pipeline.yaml") -> str:

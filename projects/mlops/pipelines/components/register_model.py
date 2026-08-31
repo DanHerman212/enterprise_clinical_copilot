@@ -8,6 +8,7 @@ Bundle-only handoff (the pipeline does NOT build or deploy a serving container):
         model.bst        # native booster (booster.save_model)
         manifest.json    # feature_order + one-hot -> parent groups
         threshold.json   # operating threshold (decision layer only)
+        gate_metrics.json  # gate metrics persisted with the bundle (ECC-71)
 
 The registry entry (display name ``readmission-final-<ts>``) points at this
 bundle via ``artifact_uri`` and tags the CPR serving image for provenance. The
@@ -83,6 +84,7 @@ def run_register_model(
     benchmark_aucpr: float,
     tuned_threshold: float,
     beta: float = 2.0,
+    parent_model: str = "",
 ) -> str:
     """Assemble the bundle, record a provenance model entry, return its name."""
     from google.cloud import aiplatform
@@ -99,15 +101,40 @@ def run_register_model(
         beta=beta,
     )
 
+    # Persist the gate metrics WITH the bundle (ECC-71) — previously they were
+    # only printed to the component log and lost with it.
+    gate_metrics = {
+        "test_aucpr": float(test_aucpr),
+        "hpo_val_aucpr": float(hpo_val_aucpr),
+        "benchmark_aucpr": float(benchmark_aucpr),
+        "tuned_threshold": float(tuned_threshold),
+        "beta": float(beta),
+        "registered_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    with open(os.path.join(bundle_dir, "gate_metrics.json"), "w") as f:
+        json.dump(gate_metrics, f, indent=2)
+
     ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     display_name = f"readmission-final-{ts}"
+
+    def _label(value: float) -> str:
+        # Registry label values allow [a-z0-9_-] only — encode the decimal point.
+        return f"{value:.4f}".replace(".", "-")
 
     aiplatform.init(project=project_id, location=location)
     model = aiplatform.Model.upload(
         display_name=display_name,
         artifact_uri=bundle_uri,
         serving_container_image_uri=serving_image,
-        labels={"pipeline": "readmission-training", "stage": "final"},
+        # Version lineage (ECC-71): pass the registry resource name of the
+        # previous model to version under it instead of a flat namespace.
+        parent_model=parent_model or None,
+        labels={
+            "pipeline": "readmission-training",
+            "stage": "final",
+            "test_aucpr": _label(test_aucpr),
+            "tuned_threshold": _label(tuned_threshold),
+        },
     )
     model_name = model.resource_name
 
@@ -138,6 +165,7 @@ def register_model(
     serving_model: dsl.Output[dsl.Model],
     location: str = "us-east1",
     beta: float = 2.0,
+    parent_model: str = "",
 ) -> NamedTuple("RegistryOutputs", [("model_id", str)]):
     """KFP component: publish the serving bundle + a CPR provenance record."""
     from pipelines.components.register_model import run_register_model
@@ -155,5 +183,6 @@ def register_model(
         benchmark_aucpr=benchmark_aucpr,
         tuned_threshold=tuned_threshold,
         beta=beta,
+        parent_model=parent_model,
     )
     return (model_id,)

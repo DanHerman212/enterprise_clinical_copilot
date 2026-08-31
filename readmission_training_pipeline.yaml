@@ -10,6 +10,7 @@
 #    label_col: str [Default: 'readmission_30d']
 #    max_drifted_share: float [Default: 0.2]
 #    n_trials: int [Default: 50.0]
+#    parent_model: str [Default: '']
 #    project_id: str
 #    selected_features: list [Default: ['age', 'prior_admission_count', 'prior_inpatient_days', 'recent_ed_visits', 'index_los_days', 'procedure_count', 'medication_count', 'medication_order_count', 'rbc_last', 'rbc_min', 'rdw_max', 'monocytes_min', 'hemoglobin_min', 'sodium_last', 'sodium_max', 'sodium_min', 'gender', 'has_procedure', 'oncology_flag', 'race_white', 'race_black', 'race_hispanic', 'race_asian', 'race_amind', 'race_nhpi', 'race_unknown', 'admission_type_ew_emer', 'admission_type_eu_obs', 'admission_type_obs_admit', 'admission_type_urgent', 'admission_type_direct_emer', 'admission_type_ambulatory_obs', 'admission_type_direct_obs', 'admission_type_unknown', 'discharge_location_home', 'discharge_location_home_health', 'discharge_location_snf', 'discharge_location_rehab', 'discharge_location_ltac', 'discharge_location_hospice', 'discharge_location_ama', 'discharge_location_psych', 'discharge_location_assisted_living', 'discharge_location_unknown', 'insurance_medicare', 'insurance_medicaid', 'insurance_private', 'insurance_other', 'insurance_unknown']]
 #    serving_container_image_uri: str [Default: '']
@@ -17,7 +18,7 @@
 #    test_split: str [Default: 'test']
 #    train_split: str [Default: 'train']
 #    val_split: str [Default: 'validation']
-#    xgb_params: dict [Default: {'colsample_bytree': 0.8, 'subsample': 0.8, 'learning_rate': 0.05, 'random_state': 42.0, 'max_depth': 6.0, 'n_estimators': 300.0}]
+#    xgb_params: dict [Default: {'max_depth': 6.0, 'n_estimators': 300.0, 'subsample': 0.8, 'random_state': 42.0, 'learning_rate': 0.05, 'colsample_bytree': 0.8}]
 components:
   comp-benchmark-gate:
     executorLabel: exec-benchmark-gate
@@ -378,6 +379,10 @@ components:
           defaultValue: us-east1
           isOptional: true
           parameterType: STRING
+        parent_model:
+          defaultValue: ''
+          isOptional: true
+          parameterType: STRING
         project_id:
           parameterType: STRING
         serving_container_image_uri:
@@ -558,7 +563,7 @@ deploymentSpec:
           \ import run_benchmark_gate\n\n    passed = run_benchmark_gate(\n      \
           \  benchmark_aucpr=benchmark_aucpr, hospital_aucpr=hospital_aucpr,\n   \
           \ )\n    return (passed,)\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-benchmark-xgboost:
       container:
         args:
@@ -595,7 +600,7 @@ deploymentSpec:
           \      x_train_path=x_train.path, y_train_path=y_train.path,\n        x_val_path=x_val.path,\
           \ y_val_path=y_val.path,\n        xgb_params=xgb_params, cat_features=cat_features,\n\
           \        model_artifact_path=model_artifact.path,\n    )\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-calibrate-threshold:
       container:
         args:
@@ -658,7 +663,7 @@ deploymentSpec:
           \            \"tuned_threshold\": record[\"threshold\"],\n            \"\
           fbeta_at_threshold\": record[\"fbeta\"],\n        })\n\n    return threshold\n\
           \n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-evaluate-test:
       container:
         args:
@@ -738,7 +743,7 @@ deploymentSpec:
           \ \"w\") as f:\n        f.write(_build_eval_html(result))\n\n    return\
           \ (result[\"test_aucpr\"], result[\"beat_hospital\"], result[\"stable\"\
           ])\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-fairness-audit:
       container:
         args:
@@ -795,7 +800,7 @@ deploymentSpec:
           \        experiment=experiment_name, pipeline_job_name=pipeline_job_name,\n\
           \    ) as ap:\n        safe_log_metrics(ap, flat)\n\n    return (report[\"\
           equal_opportunity_pass\"], report[\"predictive_equality_pass\"])\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-load-data:
       container:
         args:
@@ -840,7 +845,7 @@ deploymentSpec:
           \ y_test_path=y_test.path,\n        groups_train_path=groups_train.path,\n\
           \        groups_val_path=groups_val.path,\n        manifest_path=manifest.path,\n\
           \    )\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-optuna-hpo:
       container:
         args:
@@ -884,7 +889,7 @@ deploymentSpec:
           \        timeout_seconds=timeout_seconds,\n        project_id=project_id,\
           \ location=location,\n        experiment=experiment_name, run_name=pipeline_job_name,\n\
           \    )\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-register-model:
       container:
         args:
@@ -916,17 +921,19 @@ deploymentSpec:
           \    manifest: dsl.Input[dsl.Artifact],\n    serving_container_image_uri:\
           \ str,\n    test_aucpr: float,\n    hpo_val_aucpr: float,\n    benchmark_aucpr:\
           \ float,\n    tuned_threshold: float,\n    serving_model: dsl.Output[dsl.Model],\n\
-          \    location: str = \"us-east1\",\n    beta: float = 2.0,\n) -> NamedTuple(\"\
-          RegistryOutputs\", [(\"model_id\", str)]):\n    \"\"\"KFP component: publish\
-          \ the serving bundle + a CPR provenance record.\"\"\"\n    from pipelines.components.register_model\
-          \ import run_register_model\n\n    model_id = run_register_model(\n    \
-          \    project_id=project_id,\n        location=location,\n        booster_path=booster_model.path,\n\
-          \        manifest_path=manifest.path,\n        bundle_dir=serving_model.path,\n\
+          \    location: str = \"us-east1\",\n    beta: float = 2.0,\n    parent_model:\
+          \ str = \"\",\n) -> NamedTuple(\"RegistryOutputs\", [(\"model_id\", str)]):\n\
+          \    \"\"\"KFP component: publish the serving bundle + a CPR provenance\
+          \ record.\"\"\"\n    from pipelines.components.register_model import run_register_model\n\
+          \n    model_id = run_register_model(\n        project_id=project_id,\n \
+          \       location=location,\n        booster_path=booster_model.path,\n \
+          \       manifest_path=manifest.path,\n        bundle_dir=serving_model.path,\n\
           \        bundle_uri=serving_model.uri,\n        serving_container_image_uri=serving_container_image_uri,\n\
           \        test_aucpr=test_aucpr,\n        hpo_val_aucpr=hpo_val_aucpr,\n\
           \        benchmark_aucpr=benchmark_aucpr,\n        tuned_threshold=tuned_threshold,\n\
-          \        beta=beta,\n    )\n    return (model_id,)\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+          \        beta=beta,\n        parent_model=parent_model,\n    )\n    return\
+          \ (model_id,)\n\n"
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-shap-explain:
       container:
         args:
@@ -984,7 +991,7 @@ deploymentSpec:
           \n    return (\n        shap_summary_png, \n        shap_beeswarm_png,\n\
           \        shap_waterfall_png,\n        shap_local_plots_dir,\n        shap_values_parquet\n\
           \    )\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-train-final:
       container:
         args:
@@ -1042,7 +1049,7 @@ deploymentSpec:
           \ pass\n\n    # Render the training curve as an HTML plot on the pipeline\
           \ DAG node.\n    with open(training_curve_plot.path, \"w\") as f:\n    \
           \    f.write(_build_training_curve_html(curve))\n\n    return score\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
     exec-validate-data:
       container:
         args:
@@ -1079,7 +1086,7 @@ deploymentSpec:
           \ x_val_path=x_val.path,\n        drift_report_html=drift_html.path,\n \
           \       quality_report_html=quality_html.path,\n        max_drifted_share=max_drifted_share,\n\
           \        fail_on_drift=fail_on_drift,\n    )\n\n"
-        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/training:latest
+        image: us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
 pipelineInfo:
   description: "30-day readmission risk: load \u2192 validate \u2192 benchmark \u2192\
     \ HPO \u2192 train \u2192 evaluate/explain/audit \u2192 register."
@@ -1339,8 +1346,10 @@ root:
         - benchmark-xgboost
         - calibrate-threshold
         - evaluate-test
+        - fairness-audit
         - load-data
         - optuna-hpo
+        - shap-explain
         - train-final
         inputs:
           artifacts:
@@ -1363,6 +1372,8 @@ root:
               taskOutputParameter:
                 outputParameterKey: Output
                 producerTask: optuna-hpo
+            parent_model:
+              componentInputParameter: parent_model
             project_id:
               componentInputParameter: project_id
             serving_container_image_uri:
@@ -1498,6 +1509,10 @@ root:
         defaultValue: 50.0
         isOptional: true
         parameterType: NUMBER_INTEGER
+      parent_model:
+        defaultValue: ''
+        isOptional: true
+        parameterType: STRING
       project_id:
         parameterType: STRING
       selected_features:

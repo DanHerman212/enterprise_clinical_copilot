@@ -21,6 +21,42 @@ from src import encoding
 from ._image import TRAINING_IMAGE, component
 
 
+def assert_patient_disjoint(
+    train_df: pd.DataFrame,
+    val_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    id_col: str,
+) -> None:
+    """Hard-fail if any patient's admissions straddle two splits (ECC-64).
+
+    Everything downstream — the test AUCPR gate, the stability check, the
+    fairness audit — assumes patient-level disjointness but only the upstream
+    `split_name` column enforces it. If it ever regresses, every gate is
+    leakage-contaminated while reporting PASS. One set intersection per pair
+    is cheap insurance against that silent failure.
+    """
+    ids = {
+        "train": set(train_df[id_col]),
+        "val": set(val_df[id_col]),
+        "test": set(test_df[id_col]),
+    }
+    leaked = {
+        f"{a}/{b}": ids[a] & ids[b]
+        for a, b in (("train", "val"), ("train", "test"), ("val", "test"))
+        if ids[a] & ids[b]
+    }
+    if leaked:
+        detail = "; ".join(
+            f"{pair}: {len(overlap)} shared {id_col}s (e.g. {sorted(overlap)[:3]})"
+            for pair, overlap in leaked.items()
+        )
+        raise ValueError(
+            f"Patient leakage across splits — {detail}. The upstream "
+            f"'{id_col}' split assignment is broken; every downstream gate "
+            "would be contaminated. Refusing to emit training data."
+        )
+
+
 def run_load_data(
     *,
     project_id: str,
@@ -63,6 +99,7 @@ def run_load_data(
         return df[df[split_col] == name].reset_index(drop=True)
 
     train_df, val_df, test_df = _split(train_split), _split(val_split), _split(test_split)
+    assert_patient_disjoint(train_df, val_df, test_df, id_col)
 
     def _xy(frame: pd.DataFrame):
         # All feature columns are already numeric; coerce to float64 so NULLs

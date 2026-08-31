@@ -81,7 +81,9 @@ def run_train_final(
     fit_params = {**best_params}
     fit_params.pop("early_stopping_rounds", None)
     # Probability output: the served raw booster must emit calibrated
-    # probabilities (Vertex Sampled Shapley then attributes probability units).
+    # probabilities (objective=binary:logistic). Note: TreeSHAP attributions
+    # (pred_contribs=True) on this objective are in LOG-ODDS (margin) space,
+    # not probability units — the CPR response declares this (ECC-73).
     fit_params.setdefault("objective", "binary:logistic")
     fit_params.setdefault("eval_metric", "aucpr")
 

@@ -12,10 +12,16 @@ XGBoost's native missing), and instances may be positional lists or named dicts.
 Request  : {"instances": [[f0, f1, ... f48], ...]}  (null allowed for missing)
         or {"instances": [{"age": 90, "sodium_min": null, ...}, ...]}
 Response : {"predictions": [{"probability", "prediction", "threshold",
-                             "base_value", "attributions", "top_factors"}, ...]}
+                             "base_value", "attributions", "attribution_units",
+                             "top_factors"}, ...]}
+
+Attributions are exact native TreeSHAP contributions (`pred_contribs=True` on a
+`binary:logistic` booster) and are therefore in LOG-ODDS (margin) space, not
+probability deltas — declared per prediction as `attribution_units`.
 """
 
 import json
+import math
 import os
 
 import numpy as np
@@ -24,36 +30,97 @@ from google.cloud.aiplatform.prediction.predictor import Predictor
 from google.cloud.aiplatform.utils import prediction_utils
 
 TOP_K = 10
+# Cap the per-request batch: attributions are O(rows × trees × features), so an
+# unbounded batch is a one-request DoS on the endpoint.
+MAX_BATCH = 100
+ATTRIBUTION_UNITS = "log_odds"
 
 
 class ReadmissionPredictor(Predictor):
     def load(self, artifacts_uri: str) -> None:
-        """Download the serving bundle (model.bst + manifest.json [+ threshold.json])."""
+        """Download the serving bundle (model.bst + manifest.json + threshold.json)."""
         prediction_utils.download_model_artifacts(artifacts_uri)
 
         with open("manifest.json") as f:
             manifest = json.load(f)
         self._feature_order: list[str] = manifest["feature_order"]
+        self._feature_set = set(self._feature_order)
         self._groups: dict[str, list[str]] = manifest.get("groups", {})
 
-        self._threshold = 0.5
-        if os.path.exists("threshold.json"):
-            with open("threshold.json") as f:
-                self._threshold = float(json.load(f).get("threshold", 0.5))
+        # Fail loudly — never fall back to 0.5 (ECC-68). The shipped threshold
+        # is a recall-weighted F2 optimum, typically well below 0.5; a silent
+        # default would flip many readmit decisions to negative with no signal.
+        if not os.path.exists("threshold.json"):
+            raise RuntimeError(
+                "threshold.json missing from the serving bundle — the operating "
+                "threshold is part of the serving contract; refusing to start "
+                "with an implicit 0.5 default."
+            )
+        with open("threshold.json") as f:
+            self._threshold = float(json.load(f)["threshold"])
 
         self._booster = xgb.Booster()
         self._booster.load_model("model.bst")
 
     def preprocess(self, prediction_input: dict) -> np.ndarray:
-        """Build a float32 matrix in feature order; JSON null -> NaN (missing)."""
-        instances = prediction_input["instances"]
+        """Validate + build a float32 matrix in feature order; null -> NaN.
+
+        Every instance is validated (ECC-60): unknown dict keys are rejected
+        instead of silently becoming NaN (XGBoost treats NaN as "missing" and
+        would return a confident, silently wrong probability for a typo'd
+        key); positional lists must match the feature count; values must be
+        finite numbers or null.
+        """
+        instances = prediction_input.get("instances")
+        if not isinstance(instances, list) or not instances:
+            raise ValueError("Request must contain a non-empty 'instances' list.")
+        if len(instances) > MAX_BATCH:
+            raise ValueError(
+                f"Batch size {len(instances)} exceeds the maximum of {MAX_BATCH}."
+            )
+        n = len(self._feature_order)
         rows = []
-        for inst in instances:
+        for i, inst in enumerate(instances):
             if isinstance(inst, dict):
+                unknown = set(inst) - self._feature_set
+                if unknown:
+                    raise ValueError(
+                        f"Instance {i}: unknown feature keys "
+                        f"{sorted(unknown)[:5]} — check the manifest "
+                        "feature_order (a typo'd key would silently be "
+                        "treated as missing)."
+                    )
                 raw = [inst.get(c) for c in self._feature_order]
-            else:
+            elif isinstance(inst, (list, tuple)):
+                if len(inst) != n:
+                    raise ValueError(
+                        f"Instance {i}: expected {n} values in feature order, "
+                        f"got {len(inst)}."
+                    )
                 raw = list(inst)
-            rows.append([np.nan if v is None else float(v) for v in raw])
+            else:
+                raise ValueError(
+                    f"Instance {i}: must be a dict of named features or a "
+                    f"list of {n} values."
+                )
+            row = []
+            for name, v in zip(self._feature_order, raw):
+                if v is None:
+                    row.append(np.nan)
+                    continue
+                if isinstance(v, bool) or not isinstance(v, (int, float)):
+                    raise ValueError(
+                        f"Instance {i}, feature '{name}': expected a number "
+                        f"or null, got {type(v).__name__}."
+                    )
+                value = float(v)
+                if not math.isfinite(value):
+                    raise ValueError(
+                        f"Instance {i}, feature '{name}': non-finite values "
+                        "are not accepted; send null for missing."
+                    )
+                row.append(value)
+            rows.append(row)
         return np.asarray(rows, dtype=np.float32)
 
     def predict(self, instances: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -85,6 +152,9 @@ class ReadmissionPredictor(Predictor):
                     "threshold": self._threshold,
                     "base_value": base,
                     "attributions": attributions,
+                    # TreeSHAP on binary:logistic is margin-space (ECC-73) —
+                    # these are NOT probability deltas.
+                    "attribution_units": ATTRIBUTION_UNITS,
                     "top_factors": [
                         {"feature": name, "attribution": val} for name, val in top
                     ],

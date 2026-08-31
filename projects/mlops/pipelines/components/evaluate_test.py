@@ -1,9 +1,15 @@
 """
 evaluate_test — Score the trained model against the held-out test set.
 
-Gates registration: test AUCPR must beat the HOSPITAL baseline (passed in;
-single source of truth). Also reports a stability flag comparing the honest
-HPO validation AUCPR (``hpo_val_aucpr``) to the unbiased test AUCPR.
+Gates registration: test AUCPR must beat the HOSPITAL baseline by a margin
+(passed in; single source of truth; fail-closed on implausible values —
+ECC-65). The val→test stability check is a HARD gate (ECC-66): the reference
+(``hpo_val_aucpr`` = Optuna ``best_value``) is optimistically biased (winner's
+curse over ~50 trials), which biases the measured degradation HIGH — so the
+gate can only over-trigger, never silently under-trigger, making a hard fail
+safe. Also verifies the shipped OOF-selected threshold on the final model
+(ECC-67) by reporting the F-beta it actually achieves at that threshold vs.
+the test-optimal F-beta.
 """
 
 from typing import NamedTuple
@@ -21,7 +27,13 @@ from sklearn.metrics import (
 )
 from kfp import dsl
 from ._image import TRAINING_IMAGE, component
-from src.thresholds import net_benefit, net_benefit_curve, point_metrics
+from .benchmark_gate import MIN_GATE_MARGIN, validate_baseline
+from src.thresholds import (
+    net_benefit,
+    net_benefit_curve,
+    point_metrics,
+    select_threshold_fbeta,
+)
 
 MAX_VAL_TEST_DEGRADATION = 0.02  # max absolute AUCPR drop val → test
 _ROC_MAX_POINTS = 300  # downsample ROC points for a responsive UI chart
@@ -46,6 +58,7 @@ def run_evaluate_test(
     benchmark_aucpr: float,
     hospital_aucpr: float,
     beta: float = 2.0,
+    min_margin: float = MIN_GATE_MARGIN,
 ) -> dict:
     """Score model on the hold-out test set from PROBABILITIES (never labels).
 
@@ -58,6 +71,7 @@ def run_evaluate_test(
     X_test = pd.read_parquet(x_test_path)
     y_test = pd.read_parquet(y_test_path).iloc[:, 0]
 
+    validate_baseline(hospital_aucpr)
     model = joblib.load(model_artifact_path)
     proba = model.predict_proba(X_test)[:, 1]
 
@@ -65,7 +79,7 @@ def run_evaluate_test(
     test_auroc = float(roc_auc_score(y_test, proba))
     brier = float(brier_score_loss(y_test, proba))
 
-    beat_hospital = test_aucpr > hospital_aucpr
+    beat_hospital = test_aucpr > hospital_aucpr + min_margin
     degradation = hpo_val_aucpr - test_aucpr
     stable = degradation <= MAX_VAL_TEST_DEGRADATION
 
@@ -89,17 +103,30 @@ def run_evaluate_test(
     if not beat_hospital:
         raise ValueError(
             f"Test AUCPR ({test_aucpr:.4f}) did not beat "
-            f"HOSPITAL baseline ({hospital_aucpr:.4f})."
+            f"HOSPITAL baseline ({hospital_aucpr:.4f}) by the required "
+            f"margin ({min_margin})."
         )
     if not stable:
-        print(
-            f"  WARNING: val→test degradation ({degradation:+.4f}) exceeds "
-            f"threshold ({MAX_VAL_TEST_DEGRADATION}). Model may be overfit."
+        # HARD gate (ECC-66). The reference is optimistically biased, so the
+        # true degradation is at most what we measured — a model failing this
+        # check is overfit by any defensible reading.
+        raise ValueError(
+            f"Val→test degradation ({degradation:+.4f}) exceeds "
+            f"{MAX_VAL_TEST_DEGRADATION} — model looks overfit; refusing to "
+            "register."
         )
 
     # --- Threshold-dependent diagnostics at the tuned operating threshold ----
     pm = point_metrics(y_test, proba, tuned_threshold, beta=beta)
     nb_at_threshold = net_benefit(y_test, proba, tuned_threshold)
+
+    # ECC-67: the shipped threshold was selected on OOF probabilities of CV
+    # models, but is applied to a different model (refit on train+80% val) —
+    # verify it on the FINAL model by reporting the F-beta it actually
+    # achieves at the shipped threshold vs. the best F-beta available on test
+    # (diagnostic only — the threshold is never re-tuned on test).
+    opt_threshold, opt_fbeta, _ = select_threshold_fbeta(y_test, proba, beta=beta)
+    fbeta_shortfall = float(opt_fbeta - pm["fbeta"])
 
     # Precision-Recall curve (downsampled, kept paired via shared indices).
     prec, rec, _ = precision_recall_curve(y_test, proba)
@@ -114,6 +141,9 @@ def run_evaluate_test(
     dca = net_benefit_curve(y_test, proba)
 
     print(f"  Tuned threshold: {tuned_threshold:.4f}  (F{beta:g})")
+    print(f"  F{beta:g} @ shipped thr:  {pm['fbeta']:.4f}")
+    print(f"  F{beta:g} @ test-optimal: {opt_fbeta:.4f} (thr {opt_threshold:.4f}, "
+          f"shortfall {fbeta_shortfall:+.4f})")
     print(f"  Precision/Recall: {pm['precision']:.3f} / {pm['recall']:.3f}")
     print(f"  Specificity/NPV:  {pm['specificity']:.3f} / {pm['npv']:.3f}")
     print(f"  Net benefit @ thr: {nb_at_threshold:.4f}")
@@ -127,6 +157,10 @@ def run_evaluate_test(
         "tuned_threshold": float(tuned_threshold),
         "beta": float(beta),
         "point_metrics": pm,
+        "fbeta_at_threshold": float(pm["fbeta"]),
+        "test_optimal_threshold": float(opt_threshold),
+        "test_optimal_fbeta": float(opt_fbeta),
+        "threshold_fbeta_shortfall": fbeta_shortfall,
         "net_benefit_at_threshold": float(nb_at_threshold),
         "roc": {
             "fpr": [float(v) for v in fpr],

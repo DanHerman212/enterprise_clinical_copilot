@@ -3,10 +3,11 @@
 Pins:
   * HOSPITAL_AUCPR is a passed-in value (single source of truth), not a
     hardcoded module constant duplicated across components;
+  * both gates fail closed on an implausible baseline and require a minimum
+    margin over it (ECC-65);
   * benchmark_gate hard-fails when the benchmark does not beat the baseline;
   * evaluate_test scores the hold-out test set, hard-fails below the baseline,
-    and reports a stability flag comparing the honest HPO validation AUCPR
-    (renamed ``hpo_val_aucpr``) to the test AUCPR.
+    and hard-fails on val→test instability (ECC-66).
 """
 
 import warnings
@@ -41,6 +42,22 @@ def test_benchmark_gate_uses_passed_baseline():
     # A high passed baseline must cause failure, proving no hardcoded 0.3325.
     with pytest.raises(ValueError):
         run_benchmark_gate(benchmark_aucpr=0.50, hospital_aucpr=0.90)
+
+
+def test_benchmark_gate_requires_a_margin():
+    """A 0.0001 "improvement" must not pass (ECC-65)."""
+    with pytest.raises(ValueError):
+        run_benchmark_gate(benchmark_aucpr=0.3326, hospital_aucpr=0.3325)
+
+
+def test_gates_fail_closed_on_a_neutralized_baseline():
+    """Passing hospital_aucpr=0.0 used to neutralize both gates (ECC-65)."""
+    with pytest.raises(ValueError):
+        run_benchmark_gate(benchmark_aucpr=0.50, hospital_aucpr=0.0)
+    with pytest.raises(ValueError):
+        run_benchmark_gate(benchmark_aucpr=0.50, hospital_aucpr=-1.0)
+    with pytest.raises(ValueError):
+        run_benchmark_gate(benchmark_aucpr=0.50, hospital_aucpr=1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +103,10 @@ def test_evaluate_beats_baseline_and_stable(tmp_path):
     assert result["beat_hospital"] is True
     assert result["stable"] is True
     assert abs(result["test_aucpr"] - test_aucpr) < 1e-9
+    # ECC-67: the shipped threshold is verified on the final model.
+    assert result["fbeta_at_threshold"] == result["point_metrics"]["fbeta"]
+    assert result["test_optimal_fbeta"] >= result["fbeta_at_threshold"]
+    assert result["threshold_fbeta_shortfall"] >= 0.0
     # Threshold-free extras for experiment tracking.
     assert 0.0 <= result["test_auroc"] <= 1.0
     assert 0.0 <= result["brier_score"] <= 1.0
@@ -115,15 +136,15 @@ def test_evaluate_hard_fails_below_baseline(tmp_path):
         )
 
 
-def test_evaluate_flags_instability(tmp_path):
+def test_evaluate_hard_fails_on_instability(tmp_path):
+    """The val→test stability check is a HARD gate (ECC-66), not a warning."""
     model_path, x_path, y_path, test_aucpr = _trained_model(tmp_path)
-    result = run_evaluate_test(
-        x_test_path=x_path, y_test_path=y_path,
-        model_artifact_path=model_path,
-        tuned_threshold=0.5,
-        hpo_val_aucpr=test_aucpr + 0.30,   # big val->test drop
-        benchmark_aucpr=0.40,
-        hospital_aucpr=0.10,
-    )
-    assert result["beat_hospital"] is True
-    assert result["stable"] is False
+    with pytest.raises(ValueError, match="degradation"):
+        run_evaluate_test(
+            x_test_path=x_path, y_test_path=y_path,
+            model_artifact_path=model_path,
+            tuned_threshold=0.5,
+            hpo_val_aucpr=test_aucpr + 0.30,   # big val->test drop
+            benchmark_aucpr=0.40,
+            hospital_aucpr=0.10,
+        )

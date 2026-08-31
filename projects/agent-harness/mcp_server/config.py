@@ -48,6 +48,13 @@ TABLE_FQN = f"{PROJECT}.{TABLE}"
 ENTITY_ID_COLUMN = "hadm_id"
 
 # The hand-picked demo cohort. Built by scripts/build_demo_cohort.py.
+#
+# Authorization boundary (ECC-22): the demo site enforces cohort membership —
+# it rejects any hadm_id not in its DemoPatient allowlist BEFORE calling the
+# agent (S1-09). The tables the MCP tools read (hybrid_features/hybrid_notes)
+# hold ONLY the synthetic hybrid cohort (hadm_id 90000001+, MT-* notes) by
+# construction, so even a request that bypassed the site can only ever reach
+# synthetic demo rows — never real MIMIC data.
 COHORT_TABLE = f"{DATASET}.demo_cohort"
 COHORT_TABLE_FQN = f"{PROJECT}.{COHORT_TABLE}"
 

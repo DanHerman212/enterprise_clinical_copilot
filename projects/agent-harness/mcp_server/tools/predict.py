@@ -12,6 +12,7 @@ from typing import Any
 from ..endpoint import predict_one
 from ..features import FEATURE_SOURCE, FeatureSource, get_feature_source, to_vector
 from ..features.manifest import feature_order, model_version
+from ._validation import valid_hadm_id
 
 # The risk card renders five; returning all 23 parent groups would just be
 # tokens the model has to skim past.
@@ -36,6 +37,8 @@ def _error(hadm_id: int, code: str, message: str) -> dict[str, Any]:
 
 def _predict(hadm_id: int) -> dict[str, Any]:
     """Blocking implementation. Wrapped in a thread by the tool below."""
+    if not valid_hadm_id(hadm_id):
+        return _error(hadm_id, "bad_request", "hadm_id must be a positive integer")
     order = feature_order()
 
     try:

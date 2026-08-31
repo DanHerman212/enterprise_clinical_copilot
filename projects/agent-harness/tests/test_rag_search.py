@@ -12,6 +12,8 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # `mcp_server.tools.rag_search` is shadowed by the function of the same name
@@ -77,7 +79,7 @@ def _run_search(endpoint: _FakeEndpoint, note_texts: dict | None = None, **kwarg
     embed = _FakeEmbedClient()
     note_texts = note_texts or {}
 
-    def fake_fetch(note_ids):
+    def fake_fetch(note_ids, hadm_id):
         # Only return texts that were explicitly provided — a missing note_id
         # stays missing so the missing_text error path can be exercised.
         return {nid: note_texts[nid] for nid in note_ids if nid in note_texts}
@@ -274,7 +276,7 @@ def test_meds_query_falls_back_to_section_anchor():
     endpoint = _Recorder([], [meds_neighbor])
     embed = _FakeEmbedClient()
 
-    def fake_fetch(note_ids):
+    def fake_fetch(note_ids, hadm_id):
         return {nid: _NOTE for nid in note_ids}
 
     with patch.object(rs, "_index_endpoint", lambda: endpoint), \
@@ -312,7 +314,7 @@ def test_meds_query_retries_when_intended_section_not_rank_one():
 
     with patch.object(rs, "_index_endpoint", lambda: endpoint), \
          patch.object(rs, "_embed_client", lambda: embed), \
-         patch.object(rs, "_fetch_texts", lambda note_ids: {nid: _NOTE for nid in note_ids}), \
+         patch.object(rs, "_fetch_texts", lambda note_ids, hadm_id: {nid: _NOTE for nid in note_ids}), \
          patch.object(rs, "_fetch_note", lambda hadm: _NOTE):
         result = _run(rs.rag_search(hadm_id=23613002, query="medications"))
 
@@ -339,7 +341,7 @@ def test_anchored_retry_fires_at_most_once():
 
     with patch.object(rs, "_index_endpoint", lambda: endpoint), \
          patch.object(rs, "_embed_client", lambda: _FakeEmbedClient()), \
-         patch.object(rs, "_fetch_texts", lambda note_ids: {nid: note for nid in note_ids}), \
+         patch.object(rs, "_fetch_texts", lambda note_ids, hadm_id: {nid: note for nid in note_ids}), \
          patch.object(rs, "_fetch_note", lambda hadm: note):
         result = _run(rs.rag_search(hadm_id=23613002, query="medications"))
 
@@ -356,7 +358,7 @@ def test_empty_retry_does_not_discard_real_hits():
 
     with patch.object(rs, "_index_endpoint", lambda: endpoint), \
          patch.object(rs, "_embed_client", lambda: _FakeEmbedClient()), \
-         patch.object(rs, "_fetch_texts", lambda note_ids: {nid: _NOTE for nid in note_ids}), \
+         patch.object(rs, "_fetch_texts", lambda note_ids, hadm_id: {nid: _NOTE for nid in note_ids}), \
          patch.object(rs, "_fetch_note", lambda hadm: _NOTE):
         result = _run(rs.rag_search(hadm_id=23613002, query="medications"))
 
@@ -370,7 +372,7 @@ def test_non_section_query_still_returns_empty():
     endpoint = _Recorder([], [])
     with patch.object(rs, "_index_endpoint", lambda: endpoint), \
          patch.object(rs, "_embed_client", lambda: _FakeEmbedClient()), \
-         patch.object(rs, "_fetch_texts", lambda note_ids: {}):
+         patch.object(rs, "_fetch_texts", lambda note_ids, hadm_id: {}):
         result = _run(rs.rag_search(hadm_id=23613002, query="what did the nurse chart say"))
 
     assert result == {"hadm_id": 23613002, "query": "what did the nurse chart say",
@@ -399,7 +401,7 @@ def test_passage_text_is_the_section_chunk_not_the_whole_note():
     with patch.object(rs, "_index_endpoint", lambda: endpoint), \
          patch.object(rs, "_embed_client", lambda: _FakeEmbedClient()), \
          patch.object(rs, "_fetch_texts",
-                      lambda note_ids: {nid: _MEDS_NOTE for nid in note_ids}):
+                      lambda note_ids, hadm_id: {nid: _MEDS_NOTE for nid in note_ids}):
         result = _run(rs.rag_search(hadm_id=90000015, query="medications"))
 
     assert result["returned"] == 1
@@ -442,9 +444,112 @@ def test_meds_fallback_keeps_hadm_restrict():
     endpoint = _Recorder([], [_FakeNeighbor("13219116-DS-18_discharge_medications_1", 0.28)])
     with patch.object(rs, "_index_endpoint", lambda: endpoint), \
          patch.object(rs, "_embed_client", lambda: _FakeEmbedClient()), \
-         patch.object(rs, "_fetch_texts", lambda note_ids: {nid: _NOTE for nid in note_ids}), \
+         patch.object(rs, "_fetch_texts", lambda note_ids, hadm_id: {nid: _NOTE for nid in note_ids}), \
          patch.object(rs, "_fetch_note", lambda hadm: _NOTE):
         _run(rs.rag_search(hadm_id=23613002, query="discharge medications"))
     assert endpoint.calls == 2
     assert endpoint.last_filter is not None
     assert endpoint.last_filter[0].allow_tokens == ["23613002"]
+
+
+# --- Cluster F: cross-patient isolation & retrieval correctness -------------
+
+
+class _FakeBQ:
+    """Records the SQL and returns canned rows from .query().result()."""
+
+    def __init__(self, rows):
+        self.rows = rows
+        self.last_query = None
+
+    def query(self, sql, job_config=None):
+        self.last_query = sql
+
+        class _Job:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def result(self):
+                return self._rows
+
+        return _Job(self.rows)
+
+
+def test_fetch_texts_rechecks_hadm_and_raises_on_foreign_note():
+    """ECC-19: a resolved note belonging to ANOTHER admission is a hard
+    IsolationViolation at the BigQuery layer, never a served passage."""
+    bq = _FakeBQ([
+        {"note_id": "MT-1-DS", "hadm_id": 90000015, "text": "mine"},
+        {"note_id": "MT-9-DS", "hadm_id": 90000099, "text": "someone else's"},
+    ])
+    with patch.object(rs, "_bigquery", lambda: bq):
+        with pytest.raises(rs.IsolationViolation) as exc:
+            rs._fetch_texts(["MT-1-DS", "MT-9-DS"], 90000015)
+    assert "MT-9-DS" in str(exc.value)
+    assert "90000015" in str(exc.value)
+
+
+def test_fetch_texts_passes_when_all_rows_match():
+    bq = _FakeBQ([{"note_id": "MT-1-DS", "hadm_id": 90000015, "text": "mine"}])
+    with patch.object(rs, "_bigquery", lambda: bq):
+        texts = rs._fetch_texts(["MT-1-DS"], 90000015)
+    assert texts == {"MT-1-DS": "mine"}
+    assert "hadm_id" in bq.last_query  # the re-check column is fetched
+
+
+def test_isolation_violation_is_a_structured_error():
+    """End to end: an isolation breach surfaces as a structured error the
+    agent can read, not an exception."""
+    endpoint = _FakeEndpoint([
+        _FakeNeighbor("MT-9-DS_brief_hospital_course_1", 0.3),
+    ])
+
+    def raising_fetch(note_ids, hadm_id):
+        raise rs.IsolationViolation("note MT-9-DS belongs to another admission")
+
+    with patch.object(rs, "_index_endpoint", lambda: endpoint), \
+         patch.object(rs, "_embed_client", lambda: _FakeEmbedClient()), \
+         patch.object(rs, "_fetch_texts", raising_fetch):
+        result = _run(rs.rag_search(hadm_id=90000015, query="course"))
+
+    assert result["error"] == "isolation_violation"
+    assert "another admission" in result["message"]
+
+
+def test_note_row_queries_are_deterministic():
+    """ECC-27: both single-note queries order by note_id so a multi-note
+    admission cites the same note on every call."""
+    bq = _FakeBQ([])
+    with patch.object(rs, "_bigquery", lambda: bq):
+        rs._fetch_note_row(90000015)
+        assert "ORDER BY note_id" in bq.last_query
+        rs._fetch_note(90000015)
+        assert "ORDER BY note_id" in bq.last_query
+
+
+def test_bool_hadm_id_rejected_everywhere():
+    """ECC-28: bool is an int subclass and must be rejected by every entry
+    point through the shared validator."""
+    from mcp_server.tools import predict as pr
+    from mcp_server.tools._validation import valid_hadm_id
+
+    assert not valid_hadm_id(True)
+    assert not valid_hadm_id(False)
+    assert not valid_hadm_id(0)
+    assert not valid_hadm_id(-1)
+    assert not valid_hadm_id("90000015")
+    assert valid_hadm_id(90000015)
+
+    # rag_search
+    result = _run_search(_FakeEndpoint([]), hadm_id=True, query="sepsis")
+    assert result["error"] == "bad_request"
+
+    # rag_search_sections (previously had NO validation at all)
+    for bad in (True, 0, -5, "x"):
+        result = rs._search_sections(bad)
+        assert result["error"] == "bad_request"
+
+    # predict_readmission (previously had NO validation at all)
+    for bad in (True, 0, -5):
+        result = pr._predict(bad)
+        assert result["error"] == "bad_request"

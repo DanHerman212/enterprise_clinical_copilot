@@ -56,6 +56,7 @@ from ..config import (
     PROJECT,
     RESTRICT_NAMESPACE,
 )
+from ._validation import valid_hadm_id
 
 # The narrative sections we index — single-sourced from rag.chunking, the same
 # tuple the ingest pipeline whitelists, so build and serving can never drift.
@@ -110,25 +111,53 @@ def _parse_datapoint_id(datapoint_id: str) -> tuple[str | None, str | None]:
     return note_id, match.group("section")
 
 
-def _fetch_texts(note_ids: list[str]) -> dict[str, str]:
-    """note_id -> full note text, one batched BigQuery query."""
+class IsolationViolation(Exception):
+    """A retrieved note resolved to a DIFFERENT admission (R1 breach)."""
+
+
+def _fetch_texts(note_ids: list[str], hadm_id: int) -> dict[str, str]:
+    """note_id -> full note text, one batched BigQuery query.
+
+    Second, independent enforcement of R1 (ECC-19): the index restrict is the
+    first layer, but any upstream defect (wrong/missing restrict token, stale
+    index, datapoint-id truncation) would flow another patient's text straight
+    into a citation. Every resolved row's hadm_id is re-checked here at the
+    BigQuery layer and a mismatch is a hard error, never a served passage.
+    """
     if not note_ids:
         return {}
     deduped = sorted(set(note_ids))
     params = [bigquery.ArrayQueryParameter("note_ids", "STRING", deduped)]
     rows = _bigquery().query(
-        f"SELECT note_id, text FROM `{DISCHARGE_TABLE}` "
+        f"SELECT note_id, hadm_id, text FROM `{DISCHARGE_TABLE}` "
         "WHERE note_id IN UNNEST(@note_ids)",
         job_config=bigquery.QueryJobConfig(query_parameters=params),
     ).result()
-    return {str(r["note_id"]): r["text"] for r in rows}
+    texts: dict[str, str] = {}
+    foreign: list[str] = []
+    for r in rows:
+        if int(r["hadm_id"]) != hadm_id:
+            foreign.append(str(r["note_id"]))
+        else:
+            texts[str(r["note_id"])] = r["text"]
+    if foreign:
+        raise IsolationViolation(
+            f"Index returned note(s) {foreign} that do not belong to "
+            f"admission {hadm_id} — index restrict defect; refusing to serve."
+        )
+    return texts
 
 
 def _fetch_note_row(hadm_id: int) -> tuple[str | None, str | None]:
-    """(note_id, text) for one admission, or (None, None)."""
+    """(note_id, text) for one admission, or (None, None).
+
+    ORDER BY note_id (ECC-27): BigQuery gives LIMIT 1 no ordering guarantee,
+    so with multiple note rows the cited note would be nondeterministic
+    across calls.
+    """
     rows = _bigquery().query(
         f"SELECT note_id, text FROM `{DISCHARGE_TABLE}` "
-        "WHERE hadm_id = @hadm_id LIMIT 1",
+        "WHERE hadm_id = @hadm_id ORDER BY note_id LIMIT 1",
         job_config=bigquery.QueryJobConfig(query_parameters=[
             bigquery.ScalarQueryParameter("hadm_id", "INTEGER", hadm_id),
         ]),
@@ -166,7 +195,7 @@ def _search(hadm_id: int, query: str, top_k: int, *,
     section intent recurses without bound — every level a billed embed +
     index query + BigQuery fetch.
     """
-    if not isinstance(hadm_id, int) or hadm_id <= 0:
+    if not valid_hadm_id(hadm_id):
         return _error(hadm_id, "bad_request", "hadm_id must be a positive integer")
     if not query or not query.strip():
         return _error(hadm_id, "bad_request", "query must be non-empty")
@@ -236,10 +265,15 @@ def _search(hadm_id: int, query: str, top_k: int, *,
                 return {**res, "query": query}
         return {"hadm_id": hadm_id, "query": query, "returned": 0, "passages": []}
 
-    # Resolve text by note_id in one batched query.
+    # Resolve text by note_id in one batched query, re-checking that every
+    # note belongs to THIS admission (second R1 layer — ECC-19).
     parsed = [_parse_datapoint_id(nb.id) for nb in neighbors]
     note_ids = [p[0] for p in parsed if p[0]]
-    texts = _fetch_texts(note_ids)
+    try:
+        texts = _fetch_texts(note_ids, hadm_id)
+    except IsolationViolation as exc:
+        _LOG.error("rag_search: %s", exc)
+        return _error(hadm_id, "isolation_violation", str(exc))
 
     # Deterministically re-chunk each fetched note so a passage returns the
     # exact SECTION chunk the index matched, not the whole note.
@@ -328,7 +362,8 @@ def _fetch_note(hadm_id: int) -> str | None:
     embeds (same chunk boundaries).
     """
     rows = _bigquery().query(
-        f"SELECT text FROM `{DISCHARGE_TABLE}` WHERE hadm_id = @hadm_id LIMIT 1",
+        f"SELECT text FROM `{DISCHARGE_TABLE}` WHERE hadm_id = @hadm_id "
+        "ORDER BY note_id LIMIT 1",
         job_config=bigquery.QueryJobConfig(
             query_parameters=[
                 bigquery.ScalarQueryParameter("hadm_id", "INTEGER", hadm_id)
@@ -379,6 +414,8 @@ def _search_sections(hadm_id: int) -> dict[str, Any]:
     is 100% by construction — no top-k luck, no whole-note leakage, no
     dropped sections.
     """
+    if not valid_hadm_id(hadm_id):
+        return _error(hadm_id, "bad_request", "hadm_id must be a positive integer")
     note_id, text = _fetch_note_row(hadm_id)
     if not text:
         return {"hadm_id": hadm_id, "query": "discharge notes",

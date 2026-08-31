@@ -5,8 +5,8 @@ One row per finding, merged from `enterprise_clinical_copilot/docs/REVIEW_BACKLO
 remediation detail stays in those files and in `docs/adversarial_code_review/` —
 this register is the working triage view. Sorted severity → cluster → ID.
 
-**Snapshot (2026-08-31):** 124 findings — **3 Critical**, **39 Major** open, 60 Minor
-open, 22 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
+**Snapshot (2026-08-31):** 124 findings — **2 Critical**, **35 Major** open, 58 Minor
+open, 29 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
 
 Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spend/quota/DoS ·
 **D** chunker determinism · **E** fail-loud build pipeline · **F** isolation & retrieval (R1) ·
@@ -14,13 +14,13 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 **J** XSS/sanitization/CSP · **K** public content & contact form · **L** MLOps gate integrity ·
 **M** deploy/infra ops · **N** front-end correctness · **Q** SQL parameterization · **Z** misc
 
-## Critical (3 open, 2 resolved)
+## Critical (2 open, 3 resolved)
 
 | ID | Repo | Cluster | Category | Location | One-liner | Status |
 |---|---|---|---|---|---|---|
 | ECC-46 | ECC+site | A | ops/security | cloudbuild*.yaml, settings.py | Runtime env unversioned; `ENVIRONMENT` fails open to development — recreating a service yields a public debug site | **resolved 2026-08-31** |
 | ECC-04 | ECC | B | correctness | agent/guardrail.py, graph.py | No guard that a stated risk number matches (or even came from) a predict call — fabricated risk served with 200 | open |
-| ECC-20 | ECC | C | ops/spend | mcp_server/tools/rag_search.py | Anchored retry recurses with no depth guard — thousands of billed embed/search/BQ calls from one query | open |
+| ECC-20 | ECC | C | ops/spend | mcp_server/tools/rag_search.py | Anchored retry recurses with no depth guard — thousands of billed embed/search/BQ calls from one query | **resolved 2026-08-31** |
 | ECC-32 | ECC | D | correctness | rag_search.py vs chunk pipeline | Index built with `pack_to=700`, serving re-chunks with `None` — silent whole-note fallback leaks metadata into citations | **resolved 2026-08-31** |
 | ECC-64 | ECC | L | correctness | pipelines/components/load_data.py | No train/val/test patient-disjointness assertion — every gate potentially leakage-contaminated | open |
 
@@ -36,9 +36,9 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | ECC-10 | ECC | B | correctness | agent/graph.py, mcp_client.py | MCP input schemas never reach the model (no `args_schema`) — model guesses arg names; `kwargs` heuristic fragile | open |
 | ECC-11 | ECC | B | correctness | agent/guardrail.py | Dose removal via `str.replace` — removing an unsupported "5 mg" corrupts a supported "2.5 mg" | open |
 | ECC-12 | ECC | B | correctness | agent/graph.py, server.py | `final_text` falls back to stale earlier AI text when the final turn is empty — served with 200 | open |
-| ECC-02 | ECC | C | ops/spend | agent/graph.py, server.py | Unbounded per-request spend: no recursion limit, no tool cap, 180s tool timeout exceeds upstream 120s deadline | open |
-| ECC-09 | ECC | C | ops | agent/mcp_client.py | Synchronous ID-token fetch inside async path blocks the entire event loop on every request | open |
-| ECC-25 | ECC | C | security | mcp_server/server.py | MCP HTTP transport has no app-layer auth/authorization — one `--allow-unauthenticated` exposes data + spend | open |
+| ECC-02 | ECC | C | ops/spend | agent/graph.py, server.py | Unbounded per-request spend: no recursion limit, no tool cap, 180s tool timeout exceeds upstream 120s deadline | **resolved 2026-08-31** |
+| ECC-09 | ECC | C | ops | agent/mcp_client.py | Synchronous ID-token fetch inside async path blocks the entire event loop on every request | **resolved 2026-08-31** |
+| ECC-25 | ECC | C | security | mcp_server/server.py | MCP HTTP transport has no app-layer auth/authorization — one `--allow-unauthenticated` exposes data + spend | **resolved 2026-08-31** |
 | S1-09 | site | C | security | demo/views.py, models.py | Refund loop defeats the spend cap: guaranteed-tool-error requests always refunded; `hadm_id` never validated | open |
 | ECC-41 | ECC | D | correctness | rag/sections.py | Any bare single-word alias line becomes a section boundary — truncation + corpus-wide chunk-id shifts | **resolved 2026-08-31** |
 | ECC-23 | ECC | D | correctness | rag_search.py | Unknown section id yields a null-text citation; `_KNOWN_SECTIONS` is a stale 13-name copy of a ~29-name vocab | **resolved 2026-08-31** |
@@ -47,7 +47,7 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | ECC-40 | ECC | E | ops | scripts/deploy_index.py | Count verification asserts hardcoded `555770` — wrong for every rebuild | open |
 | ECC-42 | ECC | E | ops | scripts/prune_rag_datapoints.py | Index-removal failure ignored; BQ rows deleted anyway — stale vectors left with no source text | open |
 | ECC-19 | ECC | F | security | rag_search.py `_fetch_texts` | R1 isolation rests on the index restrict alone — no hadm_id re-check when resolving passage text | open |
-| ECC-24 | ECC | F | correctness | rag_search.py | Retry replaces a non-empty original result with an empty retried one — real hits discarded | open |
+| ECC-24 | ECC | F | correctness | rag_search.py | Retry replaces a non-empty original result with an empty retried one — real hits discarded | **resolved 2026-08-31** |
 | ECC-06 | ECC | G | ops/security | agent/server.py | 502 body + `/health` leak internal topology (MCP_URL, project, IAM detail) to any direct caller | open |
 | S1-03 | site | G | security | demo/views.py | 502 `detail` returns `str(exc)` to the browser — private agent host leaks verbatim | open |
 | S1-05 | site | H | security/ops | /accounts/login/, /admin/ | No throttling/lockout on login or admin; admin at the default path | open |
@@ -90,7 +90,7 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | ECC-13 | ECC | B | correctness | agent/graph.py | Tool results serialized as Python repr (not JSON) into ToolMessage | open |
 | ECC-14 | ECC | B | correctness | agent/guardrail.py | Citation check is range-only + advisory — out-of-range markers served intact | open |
 | ECC-35 | ECC | B | correctness | guardrail.py, chunking.py | Redaction guard covers only age — all other `___` fields rely on the prompt alone | open |
-| ECC-07 | ECC | C | security | agent/server.py | No app-level auth on `/ask` — relies wholly on Cloud Run IAM | open |
+| ECC-07 | ECC | C | security | agent/server.py | No app-level auth on `/ask` — relies wholly on Cloud Run IAM | **resolved 2026-08-31** |
 | S1-07 | site | C | correctness | demo/models.py | UTC-midnight quota rollover; refund not tied to the period it debited | open |
 | S1-08 | site | C | ops | deployment_strategy.md | No global daily budget / kill switch (per-user quota only) | open |
 | S1-11 | site | C | correctness | demo/views.py, agent_client.py | Unvalidated agent response shape — 500 after credit consumed, refund path skipped | open |
@@ -106,7 +106,7 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | ECC-22 | ECC | F | correctness | predict.py, rag_search.py | No demo-cohort restriction server-side — any hadm_id present in the tables works | open |
 | ECC-27 | ECC | F | correctness | rag_search.py | `LIMIT 1` without `ORDER BY` — nondeterministic note selection for multi-note admissions | open |
 | ECC-28 | ECC | F | correctness | predict.py, rag_search.py | Inconsistent `hadm_id` validation across the three tools (bool passes isinstance int) | open |
-| ECC-30 | ECC | F | correctness | rag_search.py | Retry trigger reduces to "not rank 1" — broader and costlier than the intended "absent from top-k" | open |
+| ECC-30 | ECC | F | correctness | rag_search.py | Retry trigger reduces to "not rank 1" — broader and costlier than the intended "absent from top-k" | **resolved 2026-08-31** |
 | ECC-08 | ECC | G | architecture | agent/server.py | Full `tool_calls` payloads forwarded to the browser in live mode | open |
 | ECC-21 | ECC | G | security | mcp_server/tools/* | Tool errors embed raw exception text that reaches the model + Langfuse | open |
 | S1-04 | site | H | security | settings.py | Default 2-week session cookie; survives browser close | open |

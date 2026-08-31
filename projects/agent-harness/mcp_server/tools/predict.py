@@ -6,6 +6,7 @@ composes A2UI from this payload in §16 of the build guide.
 """
 
 import asyncio
+import logging
 from functools import lru_cache
 from typing import Any
 
@@ -17,6 +18,8 @@ from ._validation import valid_hadm_id
 # The risk card renders five; returning all 23 parent groups would just be
 # tokens the model has to skim past.
 MAX_FACTORS = 5
+
+_LOG = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=1)
@@ -49,7 +52,13 @@ def _predict(hadm_id: int) -> dict[str, Any]:
             f"No admission {hadm_id} in the feature source ({FEATURE_SOURCE}).",
         )
     except Exception as exc:  # network, auth, unsynced online store
-        return _error(hadm_id, "feature_fetch_failed", f"{type(exc).__name__}: {exc}")
+        # Detail stays server-side (ECC-21): exception text can embed table
+        # names, project ids and URLs, and the error message reaches the model.
+        _LOG.error("predict: feature fetch failed for hadm %s", hadm_id, exc_info=exc)
+        return _error(
+            hadm_id, "feature_fetch_failed",
+            "The feature source could not be read. Try again shortly.",
+        )
 
     # A missing *value* is legitimate — the model reads null as NaN by design.
     # A missing *column* is not: to_vector fills absent keys with None, so a
@@ -65,7 +74,11 @@ def _predict(hadm_id: int) -> dict[str, Any]:
     try:
         pred = predict_one(to_vector(row, order))
     except Exception as exc:
-        return _error(hadm_id, "prediction_failed", f"{type(exc).__name__}: {exc}")
+        _LOG.error("predict: prediction failed for hadm %s", hadm_id, exc_info=exc)
+        return _error(
+            hadm_id, "prediction_failed",
+            "The prediction service could not be reached. Try again shortly.",
+        )
 
     factors = [
         {

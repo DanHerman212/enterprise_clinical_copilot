@@ -13,6 +13,7 @@ nothing and breaks when an instance is recycled.
 import asyncio
 import logging
 import os
+import uuid
 
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -22,8 +23,8 @@ from starlette.routing import Route
 from agent.a2ui import risk_card_from_tool_calls
 from agent.graph import ask, final_text
 from agent.guardrail import guard_answer
-from agent.mcp_client import MCP_TRANSPORT, MCP_URL, toolbox
-from mcp_server.config import GEMINI_MODEL, LOCATION, PROJECT
+from agent.mcp_client import MCP_TRANSPORT, toolbox
+from mcp_server.config import GEMINI_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -50,15 +51,15 @@ async def health(request: Request) -> JSONResponse:
 
     A deep check would bill on every probe of a scale-to-zero service and would
     mark the container unhealthy whenever a dependency blipped.
+
+    No project/region/MCP URL (ECC-06): the route is unauthenticated at the
+    app layer, and internal topology must not leak to a direct caller.
     """
     return JSONResponse(
         {
             "status": "ok",
-            "project": PROJECT,
-            "location": LOCATION,
             "model": GEMINI_MODEL,
             "mcp_transport": MCP_TRANSPORT,
-            "mcp_url": MCP_URL or None,
         }
     )
 
@@ -104,16 +105,22 @@ async def ask_route(request: Request) -> JSONResponse:
     except Exception as exc:
         # Never let an infrastructure failure surface as a plausible answer.
         # The MCP SDK raises asyncio.ExceptionGroup when a transport task
-        # fails; unwrap it so the real cause is logged and returned instead of
-        # hiding behind "unhandled errors in a TaskGroup".
+        # fails; unwrap it so the real cause is logged instead of hiding
+        # behind "unhandled errors in a TaskGroup".
         cause = exc
         if isinstance(exc, BaseExceptionGroup):
             detail = " | ".join(str(e) for e in exc.exceptions)
             cause = RuntimeError(f"{type(exc).__name__}: {detail}")
             cause.__cause__ = exc  # keep the group as the logged root cause
-        logger.error("agent /ask failed", exc_info=cause)
+        # Detail stays server-side (ECC-06): exception text routinely embeds
+        # the private MCP URL, IAM/audience detail and table names. The caller
+        # gets a stable code + correlation id that pairs with the log line.
+        correlation_id = uuid.uuid4().hex[:12]
+        logger.error("agent /ask failed [%s]", correlation_id, exc_info=cause)
         return JSONResponse(
-            {"error": "agent_failed", "message": f"{type(cause).__name__}: {cause}"},
+            {"error": "agent_failed",
+             "message": "The agent failed to answer. Please retry.",
+             "correlation_id": correlation_id},
             status_code=502,
         )
 
@@ -139,12 +146,20 @@ async def ask_route(request: Request) -> JSONResponse:
         )
     guarded = guard_answer(text, state["tool_calls"])
 
+    # tool_calls are trimmed to what the site's canvas composition reads
+    # (name + response) — the raw arguments never need to reach the browser
+    # (ECC-08). Guardrails above ran on the full records.
+    trimmed_calls = [
+        {"name": tc["name"], "response": tc["response"]}
+        for tc in state["tool_calls"]
+    ]
+
     return JSONResponse(
         {
             "question": question,
             "answer": guarded["answer"],
             "guardrail_flags": guarded["flags"],
-            "tool_calls": state["tool_calls"],
+            "tool_calls": trimmed_calls,
             "a2ui": card,
             "model": GEMINI_MODEL,
             "mcp_transport": MCP_TRANSPORT,

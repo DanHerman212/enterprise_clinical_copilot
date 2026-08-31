@@ -214,7 +214,11 @@ def _search(hadm_id: int, query: str, top_k: int, *,
         )
         query_vec = [float(v) for v in resp.embeddings[0].values]
     except Exception as exc:  # network, auth, model unreachable
-        return _error(hadm_id, "embed_failed", f"{type(exc).__name__}: {exc}")
+        # Detail stays server-side (ECC-21): exception text can embed project
+        # ids, URLs and IAM detail, and the error message reaches the model.
+        _LOG.error("rag_search: embed failed for hadm %s", hadm_id, exc_info=exc)
+        return _error(hadm_id, "embed_failed",
+                      "The embedding service could not be reached. Try again shortly.")
 
     # Query the index with the hadm_id restrict applied server-side.
     try:
@@ -225,7 +229,9 @@ def _search(hadm_id: int, query: str, top_k: int, *,
             filter=[Namespace(RESTRICT_NAMESPACE, [str(hadm_id)])],
         )
     except Exception as exc:
-        return _error(hadm_id, "search_failed", f"{type(exc).__name__}: {exc}")
+        _LOG.error("rag_search: index query failed for hadm %s", hadm_id, exc_info=exc)
+        return _error(hadm_id, "search_failed",
+                      "The retrieval index could not be reached. Try again shortly.")
 
     neighbors = res[0] if res else []
 

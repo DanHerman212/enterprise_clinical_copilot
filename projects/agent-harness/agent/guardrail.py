@@ -7,12 +7,17 @@ Guardrails (P3 root-cause -> targeted):
   1. REDACTED-FIELD GUARD  — never fill a value MIMIC redacted to '___' (the
      main remaining class: invented patient age/dose). If the source redacts
      the age and the answer states a specific age, the age is dropped.
+     Invented calendar dates are flagged (ECC-35).
   2. MEDICATION VERIFIER   — every dose+unit and frequency the answer asserts
      must appear in the retrieved Discharge Medications text. A dose/freq not
      found there is dropped from the answer (an unverifiable medical claim is
      safer absent) and flagged. This catches med dose/freq errors and the
      admission-meds-conflated-as-discharge failure.
-  3. CITATION RANGE        — every ^[n] must point at a retrieved passage.
+  3. CITATION RANGE        — every ^[n] must point at a retrieved passage;
+     out-of-range markers are stripped, not just flagged (ECC-14).
+  4. RISK-NUMBER GUARD     — every risk-shaped number must match a
+     `predict_readmission` response; a fabricated "risk is 0.14" (or any risk
+     number with no predict call at all) is stripped + flagged (ECC-04).
 
 The guardrail is intentionally CONSERVATIVE: it only drops a token when the
 mismatch is clear, and it never rewrites positive content. The P4 dry-run
@@ -172,22 +177,24 @@ def verify_med_tokens(answer: str, evidence_text: str) -> tuple[str, list[str]]:
     source_freqs = _source_freqs(evidence_text)
     answer_freqs = _answer_freqs(answer)
 
-    cleaned = answer
-    dropped = False
+    spans: list[tuple[int, int]] = []
     for m in _DOSE_RE.finditer(answer):
         if _norm_dose(m) not in source_norm:
-            surface = m.group(0)
-            flags.append(f"med_dose_mismatch:{surface}")
-            cleaned = cleaned.replace(surface, "")
-            dropped = True
+            flags.append(f"med_dose_mismatch:{m.group(0)}")
+            spans.append((m.start(), m.end()))
     # Frequencies are flagged, not auto-edited: a wrong frequency is lower-risk
     # than a wrong dose, and auto-editing risks false positives (e.g. "as
     # needed"). The prompt hardening tells the agent to reproduce frequencies
     # exactly; the flag is surfaced for review.
     for freq in sorted(answer_freqs - source_freqs):
         flags.append(f"med_freq_mismatch:{freq}")
-    if not dropped:
+    if not spans:
         return answer, flags
+    # Remove by match span, never `str.replace`: a plain substring replace
+    # ignores the regex lookarounds, so dropping an unsupported "5 mg" also
+    # destroyed a supported "2.5 mg" (-> "2.") — the guardrail corrupting a
+    # correct dose (ECC-11).
+    cleaned = _remove_spans(answer, spans)
     # Collapse only intra-line space runs — never across newlines. The earlier
     # `re.sub(r"\s{2,}", ...)` also collapsed `\n\n` paragraph breaks and
     # markdown structure, which modified a passing summarize answer after a
@@ -195,10 +202,128 @@ def verify_med_tokens(answer: str, evidence_text: str) -> tuple[str, list[str]]:
     return re.sub(r"[ \t]{2,}", " ", cleaned).strip(), flags
 
 
-def check_citations(answer: str, passages: list[dict]) -> list[str]:
+def check_citations(answer: str, passages: list[dict]) -> tuple[str, list[str]]:
+    """Strip + flag ^[n] markers that point at no retrieved passage (ECC-14).
+
+    Leaving them in rendered as citations to nothing — with zero passages an
+    answer containing ^[1] was served intact.
+    """
     n = len(passages)
-    bad = [c for c in _CITE.findall(answer) if int(c) < 1 or int(c) > n]
-    return [f"citation_out_of_range:^{c}" for c in bad] if bad else []
+    flags: list[str] = []
+    spans: list[tuple[int, int]] = []
+    for m in _CITE.finditer(answer):
+        c = int(m.group(1))
+        if c < 1 or c > n:
+            flags.append(f"citation_out_of_range:^{c}")
+            spans.append((m.start(), m.end()))
+    if not spans:
+        return answer, flags
+    cleaned = _remove_spans(answer, spans)
+    return re.sub(r" +([,.;:])", r"\1", cleaned).strip(), flags
+
+
+# --- Risk-number guard (ECC-04) ----------------------------------------------
+#
+# The failure this closes: Gemini can produce a confident "the risk is 0.14"
+# with zero tool calls, and every other guardrail is inert on empty evidence —
+# a fabricated number served verbatim with HTTP 200. Deterministic backstop:
+# every risk-shaped number in the answer must match (to its own stated
+# precision) a probability or threshold actually returned by a successful
+# `predict_readmission` call, or it is stripped and flagged.
+
+_RISK_DECIMAL = re.compile(r"\b0\.\d{2,6}\b")
+_RISK_PERCENT = re.compile(r"\b(\d{1,2}(?:\.\d{1,2})?)\s*%")
+# `%` gets no trailing \b (a word boundary needs a word char after it, and
+# "%" is followed by a space) — a decimal followed by % is the percent
+# branch's job, not a fabricated probability.
+_UNIT_TAIL = re.compile(r"\s*(?:%|(?:mg|mcg|g|mEq|units?|mL)\b)", re.IGNORECASE)
+
+
+def _predict_values(tool_calls: list[dict]) -> list[float]:
+    values: list[float] = []
+    for tc in tool_calls or []:
+        if tc.get("name") != "predict_readmission":
+            continue
+        resp = tc.get("response") or {}
+        if not isinstance(resp, dict) or resp.get("error"):
+            continue
+        for key in ("probability", "threshold"):
+            v = resp.get(key)
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                values.append(float(v))
+    return values
+
+
+def verify_risk_numbers(
+    answer: str, tool_calls: list[dict], evidence_text: str = ""
+) -> tuple[str, list[str]]:
+    """Strip risk-shaped numbers no `predict_readmission` response supports.
+
+    Tolerance is half a unit in the number's own last stated decimal place, so
+    "0.13" honestly truncates 0.131398 but a fabricated "0.14" fails. Skipped:
+    numbers followed by a dose unit, and numbers quoted verbatim from the
+    retrieved passages (lab values like "creatinine 0.9") — those are med/note
+    facts, owned by the other guardrails.
+    """
+    flags: list[str] = []
+    values = _predict_values(tool_calls)
+    spans: list[tuple[int, int]] = []
+
+    def supported(x: float, tol: float) -> bool:
+        return any(abs(x - v) <= tol for v in values)
+
+    for m in _RISK_DECIMAL.finditer(answer):
+        token = m.group(0)
+        if _UNIT_TAIL.match(answer, m.end()):
+            continue
+        if evidence_text and token in evidence_text:
+            continue
+        decimals = len(token.split(".")[1])
+        if not supported(float(token), 0.5 * 10 ** -decimals):
+            flags.append(f"risk_number_unsupported:{token}")
+            spans.append((m.start(), m.end()))
+    for m in _RISK_PERCENT.finditer(answer):
+        num = m.group(1)
+        # Quoted verbatim from the notes — a med concentration ("0.05% cream")
+        # or an O2 sat — is a note fact, not a risk claim.
+        if evidence_text and (f"{num}%" in evidence_text or f"{num} %" in evidence_text):
+            continue
+        decimals = len(num.split(".")[1]) if "." in num else 0
+        if not supported(float(num) / 100.0, 0.5 * 10 ** -decimals / 100.0):
+            flags.append(f"risk_number_unsupported:{m.group(0)}")
+            spans.append((m.start(), m.end()))
+    if not spans:
+        return answer, flags
+    cleaned = _remove_spans(answer, spans)
+    return re.sub(r" +([,.;:])", r"\1", cleaned).strip(), flags
+
+
+# --- Invented calendar dates (ECC-35) ----------------------------------------
+
+_ANSWER_DATE = re.compile(
+    r"\b(?:January|February|March|April|May|June|July|August|September|"
+    r"October|November|December)\s+\d{1,2}(?:,\s*\d{4})?\b"
+    r"|\b\d{1,2}/\d{1,2}/\d{2,4}\b"
+)
+
+
+def flag_invented_dates(answer: str, passages: list[dict]) -> list[str]:
+    """Flag concrete calendar dates the source cannot have supplied (ECC-35).
+
+    MIMIC redacts dates to `___`; when the retrieved passages carry redactions
+    and the answer states a date that appears in no passage, it was invented.
+    Flag-only (no strip): dates are lower-risk than doses or risk numbers, and
+    synthetic notes may legitimately contain dates — the verbatim check keeps
+    those unflagged.
+    """
+    if not any("___" in (p.get("text") or "") for p in passages):
+        return []
+    source = "\n".join(p.get("text") or "" for p in passages)
+    return [
+        f"redacted_date_filled:{m.group(0)}"
+        for m in _ANSWER_DATE.finditer(answer)
+        if m.group(0) not in source
+    ]
 
 
 # --- Per-med frequency verification (P3.2, 2026-08-18) ----------------------
@@ -395,6 +520,9 @@ def guard_answer(answer: str, tool_calls: list[dict]) -> dict:
     full_text = "\n".join(p.get("text") or "" for p in passages)
     flags: list[str] = []
 
+    # Risk numbers first — the one guard that must act even with zero evidence.
+    answer, f = verify_risk_numbers(answer, tool_calls, full_text)
+    flags += f
     answer, f = redact_invented_age(answer, passages)
     flags += f
     # Verify med claims against the FULL retrieved evidence (see docstring).
@@ -403,6 +531,8 @@ def guard_answer(answer: str, tool_calls: list[dict]) -> dict:
     # Per-med freq verification against the med's OWN discharge entry (P3.2).
     answer, f = verify_med_freqs_per_med(answer, med_source)
     flags += f
-    flags += check_citations(answer, passages)
+    flags += flag_invented_dates(answer, passages)
+    answer, f = check_citations(answer, passages)
+    flags += f
 
     return {"answer": answer, "flags": sorted(set(flags))}

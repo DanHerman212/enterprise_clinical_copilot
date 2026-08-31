@@ -29,6 +29,7 @@ LANGFUSE_* env vars are absent the handler is a no-op, preserving the
 previous `LANGFUSE_ENABLED` gate behavior.
 """
 
+import json
 import operator
 import os
 from typing import Annotated, Any, TypedDict
@@ -51,7 +52,7 @@ from mcp_server.config import (
     PROJECT,
 )
 
-from agent.mcp_client import MCPToolbox
+from agent.mcp_client import MCPToolbox, _clean_schema
 from agent.prompts import SYSTEM_PROMPT
 
 # --- Langfuse observability (optional, no-op without keys) ---
@@ -116,12 +117,6 @@ async def _execute_tool_calls(
     recorded: list[dict[str, Any]] = []
     for index, call in enumerate(calls):
         arguments = dict(call.get("args") or {})
-        # langchain-google-genai (Vertex backend) can nest the real args
-        # under a single "kwargs" key. Flatten it so the first call
-        # succeeds instead of burning a turn on a pydantic validation
-        # error (the model self-corrects, but why waste the call).
-        if len(arguments) == 1 and isinstance(arguments.get("kwargs"), dict):
-            arguments = arguments["kwargs"]
         if index >= MAX_TOOL_CALLS_PER_TURN:
             payload: dict[str, Any] = {
                 "error": "tool_call_limit",
@@ -135,9 +130,18 @@ async def _execute_tool_calls(
         recorded.append(
             {"name": call["name"], "args": arguments, "response": payload}
         )
+        # JSON, not Python repr, so the model reads the exact contract the
+        # prompt describes (ECC-13); the <tool_result> delimiter marks the
+        # content — including retrieved note text — as data, paired with the
+        # DATA VS INSTRUCTIONS system rule (ECC-05).
+        body = payload if isinstance(payload, str) else json.dumps(
+            payload, ensure_ascii=False
+        )
         messages.append(
             ToolMessage(
-                content=payload if isinstance(payload, str) else str(payload),
+                content=(
+                    f'<tool_result name="{call["name"]}">\n{body}\n</tool_result>'
+                ),
                 tool_call_id=call.get("id", ""),
                 name=call["name"],
             )
@@ -183,11 +187,19 @@ def _build_llm(model: str) -> ChatGoogleGenerativeAI:
 
 
 def _tools(toolbox: MCPToolbox) -> list[BaseTool]:
-    """Build one LangChain tool per MCP tool, sharing the toolbox."""
+    """Build one LangChain tool per MCP tool, sharing the toolbox.
+
+    Each MCP `input_schema` is declared to the model as the tool's
+    `args_schema` (Gemini-safe subset), so `bind_tools` advertises the real
+    parameter names and types instead of leaving the model to guess them from
+    prose (ECC-10) — which is also what made the old kwargs-flatten heuristic
+    necessary.
+    """
     return [
         _MCPTool(
             name=name,
             description=(tool.description or "").strip(),
+            args_schema=_clean_schema(tool.input_schema),
             box=toolbox,
         )
         for name, tool in toolbox._tools.items()
@@ -261,16 +273,22 @@ async def ask(
 
 
 def final_text(state: dict) -> str:
-    """The last non-empty assistant text in the transcript."""
-    for content in reversed(state["messages"]):
-        if isinstance(content, AIMessage) and content.content:
-            text = content.content
-            if isinstance(text, list):
-                # A list of content blocks — keep the text parts.
-                text = "".join(
-                    b.get("text", "") if isinstance(b, dict) else str(b)
-                    for b in text
-                )
-            if text.strip():
-                return text
-    return ""
+    """Text of the FINAL assistant message — never an earlier one.
+
+    Falling back to the last NON-EMPTY AI message served a stale pre-tool
+    preamble with HTTP 200 whenever the final turn came back empty (the
+    documented MAX_TOKENS failure that raises nothing). Empty means the answer
+    is unavailable, and the server reports exactly that (ECC-12).
+    """
+    messages = state.get("messages") or []
+    last = messages[-1] if messages else None
+    if not isinstance(last, AIMessage):
+        return ""
+    text = last.content
+    if isinstance(text, list):
+        # A list of content blocks — keep the text parts.
+        text = "".join(
+            b.get("text", "") if isinstance(b, dict) else str(b)
+            for b in text
+        )
+    return text.strip() if isinstance(text, str) else ""

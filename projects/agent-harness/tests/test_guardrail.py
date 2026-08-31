@@ -15,6 +15,127 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent import guardrail as g  # noqa: E402
 
 
+# --- risk-number guard (ECC-04) ----------------------------------------------
+
+_PREDICT_CALL = [{
+    "name": "predict_readmission",
+    "args": {"hadm_id": 90000009},
+    "response": {"probability": 0.131398, "threshold": 0.12, "decision": 1},
+}]
+
+
+def test_supported_risk_numbers_pass_untouched():
+    answer = "The probability is 0.131398 (13.1%), above the 0.12 threshold."
+    cleaned, flags = g.verify_risk_numbers(answer, _PREDICT_CALL)
+    assert cleaned == answer
+    assert flags == []
+
+
+def test_fabricated_probability_is_stripped_and_flagged():
+    answer = "The readmission risk is 0.14, above the 0.12 threshold."
+    cleaned, flags = g.verify_risk_numbers(answer, _PREDICT_CALL)
+    assert "0.14" not in cleaned
+    assert "0.12" in cleaned  # the real threshold survives
+    assert "risk_number_unsupported:0.14" in flags
+
+
+def test_risk_number_with_no_predict_call_is_stripped():
+    """The exact failure the module docstring names: a confident fabricated
+    number with zero tool calls, served with 200 (ECC-04)."""
+    answer = "The 30-day readmission risk is 0.14 (14%)."
+    cleaned, flags = g.verify_risk_numbers(answer, [])
+    assert "0.14" not in cleaned
+    assert "14%" not in cleaned
+    assert any(f.startswith("risk_number_unsupported:") for f in flags)
+
+
+def test_errored_predict_response_supports_nothing():
+    calls = [{"name": "predict_readmission",
+              "response": {"error": "prediction_failed"}}]
+    cleaned, flags = g.verify_risk_numbers("Risk is 0.131398.", calls)
+    assert "0.131398" not in cleaned
+    assert flags
+
+
+def test_truncated_but_honest_decimal_passes():
+    cleaned, flags = g.verify_risk_numbers("About 0.13.", _PREDICT_CALL)
+    assert cleaned == "About 0.13."
+    assert flags == []
+
+
+def test_quoted_lab_value_from_evidence_is_not_a_risk_number():
+    evidence = "Labs: creatinine 0.9, INR 0.95 on discharge."
+    answer = "Discharge creatinine was 0.9 ^[1]."
+    cleaned, flags = g.verify_risk_numbers(answer, _PREDICT_CALL, evidence)
+    assert cleaned == answer
+    assert flags == []
+
+
+def test_dose_decimals_and_concentrations_are_skipped():
+    evidence = "1. Fluticasone 0.05% cream\n2. Digoxin 0.25 mg PO DAILY"
+    answer = "Continue digoxin 0.25 mg daily and fluticasone 0.05% cream."
+    cleaned, flags = g.verify_risk_numbers(answer, _PREDICT_CALL, evidence)
+    assert cleaned == answer
+    assert flags == []
+
+
+def test_guard_answer_strips_fabricated_risk_with_no_tools():
+    out = g.guard_answer("The readmission risk is 0.14.", [])
+    assert "0.14" not in out["answer"]
+    assert any(f.startswith("risk_number_unsupported:") for f in out["flags"])
+
+
+# --- dose removal by span (ECC-11) --------------------------------------------
+
+def test_dropping_a_dose_does_not_corrupt_a_similar_dose():
+    """str.replace on the surface "5 mg" also destroyed "2.5 mg" (ECC-11);
+    span removal must leave the supported dose intact."""
+    evidence = "Discharge Medications:\n1. Warfarin 2.5 mg PO DAILY"
+    answer = "Take warfarin 2.5 mg daily and unknowndrug 5 mg nightly."
+    cleaned, flags = g.verify_med_tokens(answer, evidence)
+    assert "2.5 mg" in cleaned
+    assert "unknowndrug 5 mg" not in cleaned
+    assert "med_dose_mismatch:5 mg" in flags
+
+
+# --- citation stripping (ECC-14) ----------------------------------------------
+
+def test_out_of_range_citation_is_stripped_and_flagged():
+    passages = [{"section": "brief_hospital_course", "text": "recovered"}]
+    cleaned, flags = g.check_citations("Recovered well ^[1]. See also ^[4].", passages)
+    assert "^[1]" in cleaned
+    assert "^[4]" not in cleaned
+    assert flags == ["citation_out_of_range:^4"]
+
+
+def test_citation_with_zero_passages_is_stripped():
+    cleaned, flags = g.check_citations("The notes say so ^[1].", [])
+    assert "^[1]" not in cleaned
+    assert flags == ["citation_out_of_range:^1"]
+
+
+# --- invented dates (ECC-35) ----------------------------------------------------
+
+def test_concrete_date_with_redacted_source_is_flagged():
+    passages = [{"section": "discharge_instructions",
+                 "text": "Follow up on ___ with Dr. ___."}]
+    flags = g.flag_invented_dates("Follow up on March 5, 2024.", passages)
+    assert flags == ["redacted_date_filled:March 5, 2024"]
+
+
+def test_date_present_in_source_is_not_flagged():
+    passages = [{"section": "discharge_instructions",
+                 "text": "Surgery was 3/14/23; other dates are ___."}]
+    flags = g.flag_invented_dates("Surgery was on 3/14/23.", passages)
+    assert flags == []
+
+
+def test_dates_without_source_redactions_are_left_alone():
+    passages = [{"section": "brief_hospital_course",
+                 "text": "Admitted January 2 and recovered."}]
+    assert g.flag_invented_dates("Seen on March 5.", passages) == []
+
+
 # --- freq canonicalization (P3.2) -------------------------------------------
 
 def test_canon_freqs_sees_once_daily():

@@ -127,6 +127,16 @@ async def ask_route(request: Request) -> JSONResponse:
     # The served answer is the guarded one; flags are returned for observability
     # (they surface in Langfuse) and so a client can choose to render a note.
     text = final_text(state)
+    if not text:
+        # Typically MAX_TOKENS spent entirely on thinking — the model returns
+        # empty text and raises nothing. A stale fragment must not ship as the
+        # answer (ECC-12).
+        logger.error("agent produced no final answer text")
+        return JSONResponse(
+            {"error": "answer_unavailable",
+             "message": "The agent did not produce an answer. Please retry."},
+            status_code=502,
+        )
     guarded = guard_answer(text, state["tool_calls"])
 
     return JSONResponse(

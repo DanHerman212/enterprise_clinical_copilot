@@ -5,8 +5,8 @@ One row per finding, merged from `enterprise_clinical_copilot/docs/REVIEW_BACKLO
 remediation detail stays in those files and in `docs/adversarial_code_review/` —
 this register is the working triage view. Sorted severity → cluster → ID.
 
-**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **23 Major** open, 37 Minor
-open, 65 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
+**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **21 Major** open, 36 Minor
+open, 68 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
 
 Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spend/quota/DoS ·
 **D** chunker determinism · **E** fail-loud build pipeline · **F** isolation & retrieval (R1) ·
@@ -72,8 +72,8 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | S7-07 | site | N | correctness | demo_flow.js | Patient-switch race paints the previous patient's thread under the new patient (R1 display bleed) | open |
 | S7-08 | site | N | correctness | demo_flow.js, demo_splitpane.js | Unguarded payload derefs outside try/catch — stuck spinner on any failed tool | open |
 | S7-09 | site | N | correctness | demo_splitpane.js | Custom demo maps `^[n]`→`passages[n-1]` with no intent resolution — wrong source card (A2UI path already fixed) | open |
-| ECC-37 | ECC | Q | security | pipelines/components/chunk_notes.py + scripts | Pipeline params f-string'd into SQL (`split_name`, table refs) — CWE-89 surface | open |
-| ECC-63 | ECC | Q | security | pipelines/components/load_data.py | All SQL inputs interpolated with no query parameters — exfiltration possible via crafted split name | open |
+| ECC-37 | ECC | Q | security | pipelines/components/chunk_notes.py + scripts | Pipeline params f-string'd into SQL (`split_name`, table refs) — CWE-89 surface | **resolved 2026-08-31** |
+| ECC-63 | ECC | Q | security | pipelines/components/load_data.py | All SQL inputs interpolated with no query parameters — exfiltration possible via crafted split name | **resolved 2026-08-31** |
 
 ## Minor (60 open) + resolved
 
@@ -143,7 +143,7 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | S7-15 | site | N | correctness | demo_splitpane.js | Source lookup by query equality — repeated questions surface the wrong turn's passages | open |
 | S7-16 | site | N | correctness | demo_a2ui.js | Stale trace pane leaks the previous patient's envelope JSON (R1 bleed in the trace surface) | open |
 | S7-17 | site | N | correctness | demo_a2ui.js | Missing SourceCard → cite click no-op; failed extraction mislabels the whole note as a section | open |
-| ECC-29 | ECC | Q | security | bigquery_source.py, config.py | Table-name env vars interpolated into SQL with no validation/allowlist | open |
+| ECC-29 | ECC | Q | security | bigquery_source.py, config.py | Table-name env vars interpolated into SQL with no validation/allowlist | **resolved 2026-08-31** |
 | ECC-17 | ECC | Z | ops | agent/graph.py | `handler.last_trace_id` unverified attribute — possible AttributeError after full spend | open |
 | ECC-50 | ECC | Z | ops | .env.lanfuse | Typo'd filename (gitignored, no secret leaked) — future loaders silently miss it | open |
 | S1-17 | site | Z | security | bandit scan | 10 Low findings — verified false positives / low risk; awareness only | open |

@@ -5,8 +5,8 @@ One row per finding, merged from `enterprise_clinical_copilot/docs/REVIEW_BACKLO
 remediation detail stays in those files and in `docs/adversarial_code_review/` —
 this register is the working triage view. Sorted severity → cluster → ID.
 
-**Snapshot (2026-08-31):** 124 findings — **2 Critical**, **34 Major** open, 55 Minor
-open, 33 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
+**Snapshot (2026-08-31):** 124 findings — **1 Critical**, **31 Major** open, 52 Minor
+open, 41 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
 
 Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spend/quota/DoS ·
 **D** chunker determinism · **E** fail-loud build pipeline · **F** isolation & retrieval (R1) ·
@@ -14,12 +14,12 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 **J** XSS/sanitization/CSP · **K** public content & contact form · **L** MLOps gate integrity ·
 **M** deploy/infra ops · **N** front-end correctness · **Q** SQL parameterization · **Z** misc
 
-## Critical (2 open, 3 resolved)
+## Critical (1 open, 4 resolved)
 
 | ID | Repo | Cluster | Category | Location | One-liner | Status |
 |---|---|---|---|---|---|---|
 | ECC-46 | ECC+site | A | ops/security | cloudbuild*.yaml, settings.py | Runtime env unversioned; `ENVIRONMENT` fails open to development — recreating a service yields a public debug site | **resolved 2026-08-31** |
-| ECC-04 | ECC | B | correctness | agent/guardrail.py, graph.py | No guard that a stated risk number matches (or even came from) a predict call — fabricated risk served with 200 | open |
+| ECC-04 | ECC | B | correctness | agent/guardrail.py, graph.py | No guard that a stated risk number matches (or even came from) a predict call — fabricated risk served with 200 | **resolved 2026-08-31** |
 | ECC-20 | ECC | C | ops/spend | mcp_server/tools/rag_search.py | Anchored retry recurses with no depth guard — thousands of billed embed/search/BQ calls from one query | **resolved 2026-08-31** |
 | ECC-32 | ECC | D | correctness | rag_search.py vs chunk pipeline | Index built with `pack_to=700`, serving re-chunks with `None` — silent whole-note fallback leaks metadata into citations | **resolved 2026-08-31** |
 | ECC-64 | ECC | L | correctness | pipelines/components/load_data.py | No train/val/test patient-disjointness assertion — every gate potentially leakage-contaminated | open |
@@ -32,10 +32,10 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | S1-01 | site | A | security/ops | settings.py, cloudbuild.yaml | `ENVIRONMENT` defaults to development and deploy never sets it — prod can run `DEBUG=True` | **resolved 2026-08-31** |
 | S1-02 | site | A | ops | settings.py, demo/views.py | Fixture mode defaults **true** — a prod deploy omitting the var silently serves fixtures as live | **resolved 2026-08-31** |
 | S9-01 | site | A | ops | settings.py | No prod fail-fast on missing env (Cloud SQL host, ALLOWED_HOSTS, CSRF origins) — opaque runtime failures | **resolved 2026-08-31** |
-| ECC-05 | ECC | B | security | agent/prompts.py, graph.py | No data/instruction separation — question + note passages reach the model with zero injection mitigation | open |
-| ECC-10 | ECC | B | correctness | agent/graph.py, mcp_client.py | MCP input schemas never reach the model (no `args_schema`) — model guesses arg names; `kwargs` heuristic fragile | open |
-| ECC-11 | ECC | B | correctness | agent/guardrail.py | Dose removal via `str.replace` — removing an unsupported "5 mg" corrupts a supported "2.5 mg" | open |
-| ECC-12 | ECC | B | correctness | agent/graph.py, server.py | `final_text` falls back to stale earlier AI text when the final turn is empty — served with 200 | open |
+| ECC-05 | ECC | B | security | agent/prompts.py, graph.py | No data/instruction separation — question + note passages reach the model with zero injection mitigation | **resolved 2026-08-31** |
+| ECC-10 | ECC | B | correctness | agent/graph.py, mcp_client.py | MCP input schemas never reach the model (no `args_schema`) — model guesses arg names; `kwargs` heuristic fragile | **resolved 2026-08-31** |
+| ECC-11 | ECC | B | correctness | agent/guardrail.py | Dose removal via `str.replace` — removing an unsupported "5 mg" corrupts a supported "2.5 mg" | **resolved 2026-08-31** |
+| ECC-12 | ECC | B | correctness | agent/graph.py, server.py | `final_text` falls back to stale earlier AI text when the final turn is empty — served with 200 | **resolved 2026-08-31** |
 | ECC-02 | ECC | C | ops/spend | agent/graph.py, server.py | Unbounded per-request spend: no recursion limit, no tool cap, 180s tool timeout exceeds upstream 120s deadline | **resolved 2026-08-31** |
 | ECC-09 | ECC | C | ops | agent/mcp_client.py | Synchronous ID-token fetch inside async path blocks the entire event loop on every request | **resolved 2026-08-31** |
 | ECC-25 | ECC | C | security | mcp_server/server.py | MCP HTTP transport has no app-layer auth/authorization — one `--allow-unauthenticated` exposes data + spend | **resolved 2026-08-31** |
@@ -87,9 +87,9 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | S1-18 | site | A | ops | manage.py check --deploy | 6 warnings, all corroborating S1-01/S1-12 — add as CI gate | open |
 | S9-02 | site | A | ops | config | No documented required-env manifest (`.env.example`) | **resolved 2026-08-31** |
 | S9-03 | site | A | correctness | settings.py | ALLOWED_HOSTS/CSRF origins split without strip/filter — whitespace entries never match | **resolved 2026-08-31** |
-| ECC-13 | ECC | B | correctness | agent/graph.py | Tool results serialized as Python repr (not JSON) into ToolMessage | open |
-| ECC-14 | ECC | B | correctness | agent/guardrail.py | Citation check is range-only + advisory — out-of-range markers served intact | open |
-| ECC-35 | ECC | B | correctness | guardrail.py, chunking.py | Redaction guard covers only age — all other `___` fields rely on the prompt alone | open |
+| ECC-13 | ECC | B | correctness | agent/graph.py | Tool results serialized as Python repr (not JSON) into ToolMessage | **resolved 2026-08-31** |
+| ECC-14 | ECC | B | correctness | agent/guardrail.py | Citation check is range-only + advisory — out-of-range markers served intact | **resolved 2026-08-31** |
+| ECC-35 | ECC | B | correctness | guardrail.py, chunking.py | Redaction guard covers only age — all other `___` fields rely on the prompt alone | **resolved 2026-08-31** |
 | ECC-07 | ECC | C | security | agent/server.py | No app-level auth on `/ask` — relies wholly on Cloud Run IAM | **resolved 2026-08-31** |
 | S1-07 | site | C | correctness | demo/models.py | UTC-midnight quota rollover; refund not tied to the period it debited | **resolved 2026-08-31** |
 | S1-08 | site | C | ops | deployment_strategy.md | No global daily budget / kill switch (per-user quota only) | open |

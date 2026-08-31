@@ -5,8 +5,8 @@ One row per finding, merged from `enterprise_clinical_copilot/docs/REVIEW_BACKLO
 remediation detail stays in those files and in `docs/adversarial_code_review/` —
 this register is the working triage view. Sorted severity → cluster → ID.
 
-**Snapshot (2026-08-31):** 124 findings — **1 Critical**, **31 Major** open, 52 Minor
-open, 41 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
+**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **28 Major** open, 48 Minor
+open, 49 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
 
 Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spend/quota/DoS ·
 **D** chunker determinism · **E** fail-loud build pipeline · **F** isolation & retrieval (R1) ·
@@ -14,7 +14,7 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 **J** XSS/sanitization/CSP · **K** public content & contact form · **L** MLOps gate integrity ·
 **M** deploy/infra ops · **N** front-end correctness · **Q** SQL parameterization · **Z** misc
 
-## Critical (1 open, 4 resolved)
+## Critical (0 open, 5 resolved)
 
 | ID | Repo | Cluster | Category | Location | One-liner | Status |
 |---|---|---|---|---|---|---|
@@ -22,7 +22,7 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | ECC-04 | ECC | B | correctness | agent/guardrail.py, graph.py | No guard that a stated risk number matches (or even came from) a predict call — fabricated risk served with 200 | **resolved 2026-08-31** |
 | ECC-20 | ECC | C | ops/spend | mcp_server/tools/rag_search.py | Anchored retry recurses with no depth guard — thousands of billed embed/search/BQ calls from one query | **resolved 2026-08-31** |
 | ECC-32 | ECC | D | correctness | rag_search.py vs chunk pipeline | Index built with `pack_to=700`, serving re-chunks with `None` — silent whole-note fallback leaks metadata into citations | **resolved 2026-08-31** |
-| ECC-64 | ECC | L | correctness | pipelines/components/load_data.py | No train/val/test patient-disjointness assertion — every gate potentially leakage-contaminated | open |
+| ECC-64 | ECC | L | correctness | pipelines/components/load_data.py | No train/val/test patient-disjointness assertion — every gate potentially leakage-contaminated | **resolved 2026-08-31** |
 
 ## Major (46)
 
@@ -60,9 +60,9 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | S6-02 | site | K | ops | ContactView.post | Public contact form: no rate limiting, unbounded TextField — spam/DB bloat | open |
 | S6-03 | site | K | correctness | ContactView.post | No server-side validation — long inputs raise `DataError` → 500 on prod Postgres | open |
 | S6-07 | site | K | correctness | content/sectioning.py | Drill-down silently drops all content before the first `<h2>` | open |
-| ECC-60 | ECC | L | security | cpr/predictor.py | Zero input validation: typo'd/missing keys become NaN — confident, silently wrong clinical probability | open |
-| ECC-65 | ECC | L | correctness | training_pipeline.py, gates | Gate baseline is a runtime parameter — submit `0.0` and both performance gates are neutralized | open |
-| ECC-66 | ECC | L | correctness | evaluate_test.py, optuna_hpo.py | Val→test stability check is warn-only with a biased reference — an overfit model still registers | open |
+| ECC-60 | ECC | L | security | cpr/predictor.py | Zero input validation: typo'd/missing keys become NaN — confident, silently wrong clinical probability | **resolved 2026-08-31** |
+| ECC-65 | ECC | L | correctness | training_pipeline.py, gates | Gate baseline is a runtime parameter — submit `0.0` and both performance gates are neutralized | **resolved 2026-08-31** |
+| ECC-66 | ECC | L | correctness | evaluate_test.py, optuna_hpo.py | Val→test stability check is warn-only with a biased reference — an overfit model still registers | **resolved 2026-08-31** |
 | ECC-36 | ECC | M | security | deploy_index.py, deploy_rag_endpoint.py | Vector Search endpoint is public (no PSC/VPC) — DUA/data-governance exposure with ECC-53 | open |
 | ECC-47 | ECC | M | ops | mlops/scripts/deploy_cpr.py | Undeploys ALL models before deploying the new one — guaranteed outage window, no rollback | open |
 | ECC-53 | ECC | M | security/ops | deploy_rag_endpoint.py defaults | Defaults deploy the real 555k MIMIC index (~$270/mo) to a public endpoint | open |
@@ -128,10 +128,10 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | S6-04 | site | K | correctness | content/models.py | Duplicate title → slug collision → 500 on admin save | open |
 | S6-08 | site | K | security | content/urls.py | Section slugged `preview` shadowed by the staff preview route | open |
 | S6-12 | site | K | correctness | ContactView.post | Error path loses user input, returns 200, accepts whitespace-only values | open |
-| ECC-67 | ECC | L | correctness | calibrate_threshold.py, train_final.py | Threshold selected from CV OOF but applied to a different refit model — off its F-beta optimum | open |
-| ECC-68 | ECC | L | correctness | cpr/predictor.py | Missing `threshold.json` silently falls back to 0.5 — flips recall-weighted decisions | open |
-| ECC-71 | ECC | L | architecture | training_pipeline.py, register_model.py | Register not gated on shap/fairness; no `parent_model` lineage; gate metrics never persisted | open |
-| ECC-73 | ECC | L | correctness | cpr/predictor.py | SHAP contributions are log-odds but the response/comment imply probability units | open |
+| ECC-67 | ECC | L | correctness | calibrate_threshold.py, train_final.py | Threshold selected from CV OOF but applied to a different refit model — off its F-beta optimum | **resolved 2026-08-31** |
+| ECC-68 | ECC | L | correctness | cpr/predictor.py | Missing `threshold.json` silently falls back to 0.5 — flips recall-weighted decisions | **resolved 2026-08-31** |
+| ECC-71 | ECC | L | architecture | training_pipeline.py, register_model.py | Register not gated on shap/fairness; no `parent_model` lineage; gate metrics never persisted | **resolved 2026-08-31** |
+| ECC-73 | ECC | L | correctness | cpr/predictor.py | SHAP contributions are log-odds but the response/comment imply probability units | **resolved 2026-08-31** |
 | ECC-49 | ECC | M | ops | scripts/teardown.py | Prefix-matched teardown could delete future non-demo endpoints | open |
 | ECC-58 | ECC | M | security | all cloudbuild files | No dedicated build `serviceAccount` — any build runs as an identity that can deploy prod | open |
 | S7-04 | site | N | robustness | demo_splitpane.js, demo_flow.js | Non-numeric probability renders `NaN%` and a wrong band | open |

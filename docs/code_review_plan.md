@@ -88,3 +88,64 @@ be genuinely independent:
 - Repos: `DanHerman212/enterprise_clinical_copilot`, `DanHerman212/danielmherman`
 - Relevant tooling: dependency CVE assessment, CWE-rules scan, adversarial
   subagent pass, Explore agent for mapping.
+
+---
+
+## Decisions & execution shape (locked 2026-08-29)
+
+Resolves the open items so this plan is executable. Tracking lives in the
+per-repo backlogs, not this file.
+
+**Scope:** review-only first — findings go to a severity-ranked backlog; fixes
+are a separate pass. Deferrals recorded with owner + date.
+
+**Definition of done:** all planned sections reviewed; zero Critical/Major open
+in the backlog (fixed or documented deferral); scanners run per repo.
+
+**Pacing:** one section per sitting, methodical. The Understand doc is a
+deliverable Dan reads and confirms *before* the review pass — understanding how
+each section operates is co-equal with finding issues.
+
+**Adversarial model:** Claude Fable 5, launched as a subagent with a model
+override. Primary pass runs on the main assistant (DeepSeek V4 Flash); the
+adversarial pass runs on Claude Fable 5 so it is genuinely independent.
+
+**Artifacts:** one combined tracking doc per repo —
+`enterprise_clinical_copilot/docs/REVIEW_BACKLOG.md` and
+`danielmherman/docs/REVIEW_BACKLOG.md` — section status + per-section
+Understand/Review content + severity-ranked findings table.
+
+**Protocol mapping — protocol = f(risk, confidence in understanding):**
+- **Cross-check** — moderate risk, high confidence. Adversarial pass reads the
+  Understand doc and tries to falsify it against the code (validates
+  understanding, de-duplicated, low noise).
+- **Blind** — high risk, low confidence. Adversarial pass gets raw files only,
+  hostile prompt ("assume everything is broken; find the failure; rank by
+  severity; don't excuse what a normal reviewer would wave through"). Finds
+  unknown-unknowns; more noise to triage.
+- **Both** — high risk, high confidence. Blind + cross-check (independent
+  assurance + understanding check).
+
+| Section | Protocol |
+|---|---|
+| §1 Auth + per-user quota | **Blind** (pilot — validates the mechanism) |
+| §2 Agent harness | **Both** |
+| §3 MCP + cross-patient isolation | **Both** |
+| §4 RAG / citations | Cross-check |
+| §5 IAM / secrets / deployment | **Blind + scanners** |
+| §6 Admin + content | Cross-check |
+| §7 Front-end JS | Cross-check |
+| §8 MLOps | Cross-check |
+| §9 Django config | Cross-check |
+
+**Risk order:** interleave across both repos by risk (not repo-by-repo). §1
+(auth + quota) is first. The **CVE / dependency scan runs up-front** — cheap and
+high-signal, it feeds the backlog early. Scanners (`bandit`,
+`manage.py check --deploy`, CVE/CWE) run per repo as each section is reviewed.
+
+**Cross-cutting findings** (shared utils, logging, error handling) go to the
+"Cross-cutting" bucket in the relevant backlog rather than blocking a section.
+
+**Resume:** open §1 in `danielmherman/docs/REVIEW_BACKLOG.md`; produce the
+Understand doc for auth + quota first, then Dan reads/confirms before any
+findings pass.

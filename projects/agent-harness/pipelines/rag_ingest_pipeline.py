@@ -24,9 +24,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from pipelines.components.build_index import build_index  # noqa: E402
 from pipelines.components.chunk_notes import DEFAULT_SECTIONS, chunk_notes  # noqa: E402
 from pipelines.components.embed_chunks import embed_chunks  # noqa: E402
+from mcp_server.config import PROJECT as PROJECT_ID  # noqa: E402
 
 PIPELINE_NAME = "rag-ingest"
-PROJECT_ID = os.environ.get("PROJECT_ID", "trim-icon-498815-a0")
 LOCATION = "us-east1"
 NOTES_TABLE = f"{PROJECT_ID}.mimiciv_note.discharge"
 SPLIT_TABLE = f"{PROJECT_ID}.readmission.analytics_dataset_encoded"

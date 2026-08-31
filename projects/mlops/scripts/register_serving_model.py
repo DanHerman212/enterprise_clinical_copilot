@@ -12,31 +12,36 @@ Usage (from repo root):
     .venv/bin/python projects/mlops/scripts/register_serving_model.py [BUNDLE_URI]
 
 Environment:
-    BUNDLE_URI     — GCS dir containing model.bst + manifest.json
+    BUNDLE_URI     — GCS dir containing model.bst + manifest.json (required
+                     unless passed as the positional argument)
     SERVING_IMAGE  — override the pre-built container image
 """
 
 import os
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 from google.cloud import aiplatform
 
-PROJECT = "trim-icon-498815-a0"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from src.config import get_project_id  # noqa: E402
+
+PROJECT = get_project_id()
 LOCATION = "us-east1"
 DEFAULT_IMAGE = "us-docker.pkg.dev/vertex-ai/prediction/xgboost-cpu.2-1:latest"
-
-DEFAULT_BUNDLE = (
-    "gs://trim-icon-498815-a0-mlops/pipeline-root/778397675435/"
-    "readmission-training-20260720164335/"
-    "register-model_3063486647661232128/serving_model"
-)
 
 
 def main() -> None:
     bundle_uri = (
-        sys.argv[1] if len(sys.argv) > 1 else os.environ.get("BUNDLE_URI", DEFAULT_BUNDLE)
+        sys.argv[1] if len(sys.argv) > 1 else os.environ.get("BUNDLE_URI", "")
     ).rstrip("/")
+    if not bundle_uri:
+        sys.exit(
+            "BUNDLE_URI is required (positional arg or env): the gs:// dir of a "
+            "completed pipeline's serving bundle (model.bst + manifest.json)."
+        )
     image = os.environ.get("SERVING_IMAGE", DEFAULT_IMAGE)
 
     aiplatform.init(project=PROJECT, location=LOCATION)

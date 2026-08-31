@@ -30,13 +30,12 @@ from typing import NamedTuple
 from kfp import dsl
 from ._image import TRAINING_IMAGE, component
 
-# The Custom Prediction Routine (CPR) serving image. Recorded on the provenance
-# entry so lineage points at the correct serving image; the actual servable
-# model (with the CPR container spec) is built + deployed by
-# scripts/deploy_cpr.py, not by this pipeline component.
-DEFAULT_CPR_SERVING_IMAGE = (
-    "us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/readmission-cpr:latest"
-)
+# The Custom Prediction Routine (CPR) serving image is recorded on the
+# provenance entry so lineage points at the correct serving image; the actual
+# servable model (with the CPR container spec) is built + deployed by
+# scripts/deploy_cpr.py, not by this pipeline component. When no explicit URI
+# is passed, it is derived from the run's own project/location — no project id
+# is baked into the source.
 
 
 def assemble_serving_bundle(
@@ -88,7 +87,9 @@ def run_register_model(
     """Assemble the bundle, record a provenance model entry, return its name."""
     from google.cloud import aiplatform
 
-    serving_image = serving_container_image_uri or DEFAULT_CPR_SERVING_IMAGE
+    serving_image = serving_container_image_uri or (
+        f"{location}-docker.pkg.dev/{project_id}/readmission/readmission-cpr:latest"
+    )
 
     assemble_serving_bundle(
         booster_path=booster_path,

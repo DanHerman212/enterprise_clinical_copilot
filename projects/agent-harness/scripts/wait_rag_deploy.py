@@ -10,12 +10,17 @@ Usage:
 import os
 import sys
 import time
+from pathlib import Path
 
 from google.cloud.aiplatform_v1 import IndexEndpointServiceClient
 
-PROJECT = os.environ.get("PROJECT_ID", "trim-icon-498815-a0")
-LOCATION = os.environ.get("LOCATION", "us-east1")
-DEPLOYED_ID = os.environ.get("DEPLOYED_INDEX_ID", "rag_tree_ah")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from mcp_server.config import (  # noqa: E402
+    DEPLOYED_INDEX_ID as DEPLOYED_ID,
+    LOCATION,
+    PROJECT,
+)
 
 
 def main() -> int:

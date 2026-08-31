@@ -25,7 +25,11 @@ from pathlib import Path
 
 from google.cloud import aiplatform, bigquery, storage
 
-PROJECT = "trim-icon-498815-a0"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from src.config import get_project_id  # noqa: E402
+
+PROJECT = get_project_id()
 LOCATION = "us-east1"
 ENDPOINT_NAME = "readmission-endpoint"
 TABLE = "readmission.analytics_dataset_encoded"

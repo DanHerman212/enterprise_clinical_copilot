@@ -39,11 +39,14 @@ Usage (from repo root):
 import argparse
 import os
 import sys
+from pathlib import Path
 
 from google.cloud import aiplatform
 
-PROJECT = "trim-icon-498815-a0"
-LOCATION = "us-east1"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from mcp_server.config import LOCATION, PROJECT  # noqa: E402
+
 ENDPOINT_NAME = os.environ.get("ENDPOINT_NAME", "readmission-endpoint")
 
 # Matched by prefix so a teardown written now still catches the index endpoint

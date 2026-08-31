@@ -33,11 +33,10 @@ from google.cloud.aiplatform.matching_engine.matching_engine_index_config import
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from mcp_server.config import LOCATION, PROJECT  # noqa: E402
 from rag.notes import CACHE_DIR  # noqa: E402
 
-PROJECT = "trim-icon-498815-a0"
-LOCATION = "us-east1"
-BUCKET = "trim-icon-498815-a0-mlops"
+BUCKET = f"{PROJECT}-mlops"
 DIMENSIONS = 768
 DISTANCE = DistanceMeasureType.DOT_PRODUCT_DISTANCE
 INGEST_URI = f"gs://{BUCKET}/rag/embeddings/ingest/"

@@ -30,7 +30,11 @@ from pathlib import Path
 
 from google.cloud import aiplatform
 
-PROJECT = "trim-icon-498815-a0"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from src.config import get_project_id  # noqa: E402
+
+PROJECT = get_project_id()
 LOCATION = "us-east1"
 REPO = "readmission"
 ENDPOINT_NAME = os.environ.get("ENDPOINT_NAME", "readmission-endpoint")

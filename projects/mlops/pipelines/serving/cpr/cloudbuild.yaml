@@ -4,8 +4,10 @@
 # Cloud Build workers are linux/amd64, so this avoids the Apple-Silicon arm64
 # cross-build trap entirely. The image is tagged with a content hash (_TAG) and
 # also with `latest` for the provenance record in register_model.
+#
+# _IMAGE has no default (no project id is committed); deploy_cpr.py always
+# passes it via --substitutions.
 substitutions:
-  _IMAGE: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/readmission-cpr
   _TAG: latest
 
 steps:

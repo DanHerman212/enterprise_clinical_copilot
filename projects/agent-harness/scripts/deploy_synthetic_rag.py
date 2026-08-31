@@ -19,11 +19,14 @@ import argparse
 import os
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 from google.cloud import aiplatform
 
-PROJECT = "trim-icon-498815-a0"
-LOCATION = "us-east1"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from mcp_server.config import LOCATION, PROJECT  # noqa: E402
+
 # Small-shard machine; the medium-shard e2-standard-16 minimum does not apply.
 MACHINE = os.environ.get("INDEX_MACHINE_TYPE", "e2-standard-2")
 

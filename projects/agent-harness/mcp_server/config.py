@@ -1,10 +1,35 @@
 """Shared constants for the MCP server and its feature sources."""
 
 import os
+from pathlib import Path
 
-# Overridable so the container can be pointed at another project/region without
-# a rebuild. The defaults are the real ones, so local runs need no environment.
-PROJECT = os.environ.get("PROJECT_ID", "trim-icon-498815-a0")
+
+def _resolve_project() -> str:
+    """Resolve the GCP project from PROJECT_ID env or a repo-root .env file.
+
+    Fail-closed: there is no committed default, so nothing here can silently
+    run against (or bill) the production project. Deploys set PROJECT_ID via
+    cloudbuild; local runs export it or keep it in an untracked .env.
+    """
+    if os.environ.get("PROJECT_ID"):
+        return os.environ["PROJECT_ID"]
+
+    for directory in [Path.cwd(), *Path.cwd().resolve().parents]:
+        env_file = directory / ".env"
+        if env_file.exists():
+            for line in env_file.read_text().splitlines():
+                stripped = line.strip()
+                if stripped.startswith("PROJECT_ID="):
+                    return stripped.split("=", 1)[1].strip()
+            break
+
+    raise RuntimeError(
+        "PROJECT_ID is not set. Export it (or put PROJECT_ID=<project> in an "
+        "untracked .env at the repo root). There is deliberately no default."
+    )
+
+
+PROJECT = _resolve_project()
 LOCATION = os.environ.get("LOCATION", "us-east1")
 
 # Vertex serving

@@ -22,9 +22,11 @@ from google.cloud.aiplatform.prediction import LocalModel
 
 CPR_SRC = str(Path(__file__).resolve().parents[1] / "pipelines" / "serving" / "cpr")
 sys.path.insert(0, CPR_SRC)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from predictor import ReadmissionPredictor  # noqa: E402
+from src.config import get_project_id  # noqa: E402
 
-PROJECT = "trim-icon-498815-a0"
+PROJECT = get_project_id()
 LOCATION = "us-east1"
 TABLE = "readmission.analytics_dataset_encoded"
 IMAGE_URI = f"{LOCATION}-docker.pkg.dev/{PROJECT}/readmission/readmission-cpr:latest"

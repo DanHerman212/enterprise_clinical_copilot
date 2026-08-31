@@ -5,8 +5,8 @@ One row per finding, merged from `enterprise_clinical_copilot/docs/REVIEW_BACKLO
 remediation detail stays in those files and in `docs/adversarial_code_review/` —
 this register is the working triage view. Sorted severity → cluster → ID.
 
-**Snapshot (2026-08-31):** 124 findings — **5 Critical**, **45 Major** open, 71 Minor
-open, 3 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
+**Snapshot (2026-08-31):** 124 findings — **4 Critical**, **41 Major** open, 65 Minor
+open, 14 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
 
 Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spend/quota/DoS ·
 **D** chunker determinism · **E** fail-loud build pipeline · **F** isolation & retrieval (R1) ·
@@ -14,11 +14,11 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 **J** XSS/sanitization/CSP · **K** public content & contact form · **L** MLOps gate integrity ·
 **M** deploy/infra ops · **N** front-end correctness · **Q** SQL parameterization · **Z** misc
 
-## Critical (5)
+## Critical (4 open, 1 resolved)
 
 | ID | Repo | Cluster | Category | Location | One-liner | Status |
 |---|---|---|---|---|---|---|
-| ECC-46 | ECC+site | A | ops/security | cloudbuild*.yaml, settings.py | Runtime env unversioned; `ENVIRONMENT` fails open to development — recreating a service yields a public debug site | open |
+| ECC-46 | ECC+site | A | ops/security | cloudbuild*.yaml, settings.py | Runtime env unversioned; `ENVIRONMENT` fails open to development — recreating a service yields a public debug site | **resolved 2026-08-31** |
 | ECC-04 | ECC | B | correctness | agent/guardrail.py, graph.py | No guard that a stated risk number matches (or even came from) a predict call — fabricated risk served with 200 | open |
 | ECC-20 | ECC | C | ops/spend | mcp_server/tools/rag_search.py | Anchored retry recurses with no depth guard — thousands of billed embed/search/BQ calls from one query | open |
 | ECC-32 | ECC | D | correctness | rag_search.py vs chunk pipeline | Index built with `pack_to=700`, serving re-chunks with `None` — silent whole-note fallback leaks metadata into citations | open |
@@ -28,10 +28,10 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 
 | ID | Repo | Cluster | Category | Location | One-liner | Status |
 |---|---|---|---|---|---|---|
-| ECC-15 | ECC | A | security/ops | config.py + deploy scripts | Real project IDs/URLs committed as fail-open defaults — local runs silently hit prod | open |
-| S1-01 | site | A | security/ops | settings.py, cloudbuild.yaml | `ENVIRONMENT` defaults to development and deploy never sets it — prod can run `DEBUG=True` | open |
-| S1-02 | site | A | ops | settings.py, demo/views.py | Fixture mode defaults **true** — a prod deploy omitting the var silently serves fixtures as live | open |
-| S9-01 | site | A | ops | settings.py | No prod fail-fast on missing env (Cloud SQL host, ALLOWED_HOSTS, CSRF origins) — opaque runtime failures | open |
+| ECC-15 | ECC | A | security/ops | config.py + deploy scripts | Real project IDs/URLs committed as fail-open defaults — local runs silently hit prod | **resolved 2026-08-31** |
+| S1-01 | site | A | security/ops | settings.py, cloudbuild.yaml | `ENVIRONMENT` defaults to development and deploy never sets it — prod can run `DEBUG=True` | **resolved 2026-08-31** |
+| S1-02 | site | A | ops | settings.py, demo/views.py | Fixture mode defaults **true** — a prod deploy omitting the var silently serves fixtures as live | **resolved 2026-08-31** |
+| S9-01 | site | A | ops | settings.py | No prod fail-fast on missing env (Cloud SQL host, ALLOWED_HOSTS, CSRF origins) — opaque runtime failures | **resolved 2026-08-31** |
 | ECC-05 | ECC | B | security | agent/prompts.py, graph.py | No data/instruction separation — question + note passages reach the model with zero injection mitigation | open |
 | ECC-10 | ECC | B | correctness | agent/graph.py, mcp_client.py | MCP input schemas never reach the model (no `args_schema`) — model guesses arg names; `kwargs` heuristic fragile | open |
 | ECC-11 | ECC | B | correctness | agent/guardrail.py | Dose removal via `str.replace` — removing an unsupported "5 mg" corrupts a supported "2.5 mg" | open |
@@ -75,18 +75,18 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | ECC-37 | ECC | Q | security | pipelines/components/chunk_notes.py + scripts | Pipeline params f-string'd into SQL (`split_name`, table refs) — CWE-89 surface | open |
 | ECC-63 | ECC | Q | security | pipelines/components/load_data.py | All SQL inputs interpolated with no query parameters — exfiltration possible via crafted split name | open |
 
-## Minor (72 open) + resolved
+## Minor (65 open) + resolved
 
 | ID | Repo | Cluster | Category | Location | One-liner | Status |
 |---|---|---|---|---|---|---|
-| ECC-48 | ECC | A | security | register_serving_model.py | Real bundle URI + project hardcoded as defaults | open |
+| ECC-48 | ECC | A | security | register_serving_model.py | Real bundle URI + project hardcoded as defaults | **resolved 2026-08-31** |
 | ECC-51 | ECC | A | security | settings.py (get_secret) | Secrets pinned to `latest`, no rotation procedure; rotation takes effect only on redeploy | open |
-| ECC-57 | ECC | A | correctness | deploy/teardown scripts | `PROJECT_ID` honored by some scripts, hardcoded in others — teardown can target the wrong project | open |
-| ECC-72 | ECC | A | ops | register_model.py, cpr cloudbuild, rag pipeline | Project ID hardcoded in 3 more files outside `src.config` | open |
-| S1-10 | site | A | security | settings.py | Real private agent URL committed as the env default | open |
+| ECC-57 | ECC | A | correctness | deploy/teardown scripts | `PROJECT_ID` honored by some scripts, hardcoded in others — teardown can target the wrong project | **resolved 2026-08-31** |
+| ECC-72 | ECC | A | ops | register_model.py, cpr cloudbuild, rag pipeline | Project ID hardcoded in 3 more files outside `src.config` | **resolved 2026-08-31** |
+| S1-10 | site | A | security | settings.py | Real private agent URL committed as the env default | **resolved 2026-08-31** |
 | S1-18 | site | A | ops | manage.py check --deploy | 6 warnings, all corroborating S1-01/S1-12 — add as CI gate | open |
-| S9-02 | site | A | ops | config | No documented required-env manifest (`.env.example`) | open |
-| S9-03 | site | A | correctness | settings.py | ALLOWED_HOSTS/CSRF origins split without strip/filter — whitespace entries never match | open |
+| S9-02 | site | A | ops | config | No documented required-env manifest (`.env.example`) | **resolved 2026-08-31** |
+| S9-03 | site | A | correctness | settings.py | ALLOWED_HOSTS/CSRF origins split without strip/filter — whitespace entries never match | **resolved 2026-08-31** |
 | ECC-13 | ECC | B | correctness | agent/graph.py | Tool results serialized as Python repr (not JSON) into ToolMessage | open |
 | ECC-14 | ECC | B | correctness | agent/guardrail.py | Citation check is range-only + advisory — out-of-range markers served intact | open |
 | ECC-35 | ECC | B | correctness | guardrail.py, chunking.py | Redaction guard covers only age — all other `___` fields rely on the prompt alone | open |

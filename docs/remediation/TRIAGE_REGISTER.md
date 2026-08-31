@@ -5,8 +5,8 @@ One row per finding, merged from `enterprise_clinical_copilot/docs/REVIEW_BACKLO
 remediation detail stays in those files and in `docs/adversarial_code_review/` —
 this register is the working triage view. Sorted severity → cluster → ID.
 
-**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **28 Major** open, 48 Minor
-open, 49 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
+**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **27 Major** open, 45 Minor
+open, 53 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
 
 Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spend/quota/DoS ·
 **D** chunker determinism · **E** fail-loud build pipeline · **F** isolation & retrieval (R1) ·
@@ -46,7 +46,7 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | ECC-39 | ECC | E | ops | scripts/embed_chunks.py | Inverted exit codes: failed batches exit 0 (and still upload); a clean run exits nonzero | open |
 | ECC-40 | ECC | E | ops | scripts/deploy_index.py | Count verification asserts hardcoded `555770` — wrong for every rebuild | open |
 | ECC-42 | ECC | E | ops | scripts/prune_rag_datapoints.py | Index-removal failure ignored; BQ rows deleted anyway — stale vectors left with no source text | open |
-| ECC-19 | ECC | F | security | rag_search.py `_fetch_texts` | R1 isolation rests on the index restrict alone — no hadm_id re-check when resolving passage text | open |
+| ECC-19 | ECC | F | security | rag_search.py `_fetch_texts` | R1 isolation rests on the index restrict alone — no hadm_id re-check when resolving passage text | **resolved 2026-08-31** |
 | ECC-24 | ECC | F | correctness | rag_search.py | Retry replaces a non-empty original result with an empty retried one — real hits discarded | **resolved 2026-08-31** |
 | ECC-06 | ECC | G | ops/security | agent/server.py | 502 body + `/health` leak internal topology (MCP_URL, project, IAM detail) to any direct caller | open |
 | S1-03 | site | G | security | demo/views.py | 502 `detail` returns `str(exc)` to the browser — private agent host leaks verbatim | open |
@@ -103,9 +103,9 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | S7-02 | site | D | maintainability | demo_flow.js | Client `SECTION_ALIASES` is a 4th hand-maintained copy of the section vocabulary | open |
 | ECC-45 | ECC | E | ops | rag/notes.py | Chunks cache has no manifest/count check; notes verification only fires on full exhaustion | open |
 | ECC-70 | ECC | E | correctness | rag_ingest_pipeline.py | KFP cache key ignores table contents — re-submission silently reuses stale chunks/embeddings | open |
-| ECC-22 | ECC | F | correctness | predict.py, rag_search.py | No demo-cohort restriction server-side — any hadm_id present in the tables works | open |
-| ECC-27 | ECC | F | correctness | rag_search.py | `LIMIT 1` without `ORDER BY` — nondeterministic note selection for multi-note admissions | open |
-| ECC-28 | ECC | F | correctness | predict.py, rag_search.py | Inconsistent `hadm_id` validation across the three tools (bool passes isinstance int) | open |
+| ECC-22 | ECC | F | correctness | predict.py, rag_search.py | No demo-cohort restriction server-side — any hadm_id present in the tables works | **resolved 2026-08-31** |
+| ECC-27 | ECC | F | correctness | rag_search.py | `LIMIT 1` without `ORDER BY` — nondeterministic note selection for multi-note admissions | **resolved 2026-08-31** |
+| ECC-28 | ECC | F | correctness | predict.py, rag_search.py | Inconsistent `hadm_id` validation across the three tools (bool passes isinstance int) | **resolved 2026-08-31** |
 | ECC-30 | ECC | F | correctness | rag_search.py | Retry trigger reduces to "not rank 1" — broader and costlier than the intended "absent from top-k" | **resolved 2026-08-31** |
 | ECC-08 | ECC | G | architecture | agent/server.py | Full `tool_calls` payloads forwarded to the browser in live mode | open |
 | ECC-21 | ECC | G | security | mcp_server/tools/* | Tool errors embed raw exception text that reaches the model + Langfuse | open |

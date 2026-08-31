@@ -10,6 +10,7 @@ a silently-short index.
 
 import gzip
 import json
+import re
 from collections import Counter
 
 from google.cloud import bigquery
@@ -23,6 +24,19 @@ from ._image import RAG_IMAGE, component
 # rag.chunking, the same tuple the serving-side datapoint-id parser uses,
 # so build and serving can never drift.
 DEFAULT_SECTIONS = INDEX_SECTIONS
+
+# ECC-37: table identifiers cannot be bound as query parameters, so the
+# runtime pipeline params are validated against a strict shape instead —
+# project.dataset.table, plain identifier characters only.
+_TABLE_REF_RE = re.compile(r"[A-Za-z0-9_-]+\.[A-Za-z0-9_]+\.[A-Za-z0-9_]+")
+
+
+def _validated_table_ref(ref: str, name: str) -> str:
+    if not _TABLE_REF_RE.fullmatch(ref):
+        raise ValueError(
+            f"{name} is not a valid project.dataset.table reference: {ref!r}"
+        )
+    return ref
 
 
 def run_chunk_notes(
@@ -39,20 +53,29 @@ def run_chunk_notes(
     from rag.chunking import DEFAULT_MAX_CHARS, chunk_note
 
     whitelist = {s.strip() for s in sections_csv.split(",") if s.strip()}
+    notes_table_ref = _validated_table_ref(notes_table_ref, "notes_table_ref")
+    split_table_ref = _validated_table_ref(split_table_ref, "split_table_ref")
     client = bigquery.Client(project=project_id)
 
+    # split_name is a value, so it is bound as a query parameter (ECC-37) —
+    # never interpolated into the SQL text.
     sql = f"""
         SELECT d.hadm_id, d.note_id, d.text
         FROM `{notes_table_ref}` AS d
         JOIN `{split_table_ref}` AS a ON d.hadm_id = a.hadm_id
-        WHERE a.split_name = '{split_name}'
+        WHERE a.split_name = @split_name
     """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("split_name", "STRING", split_name)
+        ]
+    )
 
     section_counts: Counter[str] = Counter()
     seen: set[str] = set()
     total = 0
     with gzip.open(chunks_path, "wt", encoding="utf-8") as out:
-        for row in client.query(sql).result():
+        for row in client.query(sql, job_config=job_config).result():
             note = {
                 "hadm_id": row["hadm_id"],
                 "note_id": row["note_id"],

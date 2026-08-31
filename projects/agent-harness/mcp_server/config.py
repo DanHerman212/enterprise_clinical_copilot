@@ -1,7 +1,30 @@
 """Shared constants for the MCP server and its feature sources."""
 
 import os
+import re
 from pathlib import Path
+
+
+def _validated_table_ref(ref: str, name: str, parts: tuple[int, ...]) -> str:
+    """Fail at import if a table reference is not a plain dotted identifier.
+
+    ECC-29: FEATURE_TABLE / DISCHARGE_TABLE come from env vars and are
+    interpolated into SQL as identifiers (identifiers cannot be bound as
+    query parameters). A strict shape check — 2 or 3 dot-separated segments
+    of [A-Za-z0-9_-] only — makes an env var carrying SQL (quotes, spaces,
+    semicolons, backticks) a loud boot failure instead of an injection
+    surface, and catches obvious repointing typos early.
+    """
+    segments = ref.split(".")
+    if len(segments) not in parts or not all(
+        re.fullmatch(r"[A-Za-z0-9_-]+", seg) for seg in segments
+    ):
+        raise RuntimeError(
+            f"{name} is not a valid BigQuery table reference: {ref!r}. "
+            f"Expected {' or '.join(str(p) for p in parts)} dot-separated "
+            "segments of letters/digits/underscore/hyphen only."
+        )
+    return ref
 
 
 def _resolve_project() -> str:
@@ -43,7 +66,10 @@ DATASET = "readmission"
 # admissions (90000001+), whose feature rows live in readmission.hybrid_features.
 # The real MIMIC-derived analytics_dataset_encoded table is out of scope for
 # the demo and never carries the synthetic/hybrid admissions.
-TABLE = os.environ.get("FEATURE_TABLE", f"{DATASET}.hybrid_features")
+TABLE = _validated_table_ref(
+    os.environ.get("FEATURE_TABLE", f"{DATASET}.hybrid_features"),
+    "FEATURE_TABLE", parts=(2,),
+)
 TABLE_FQN = f"{PROJECT}.{TABLE}"
 ENTITY_ID_COLUMN = "hadm_id"
 
@@ -71,8 +97,9 @@ RESTRICT_NAMESPACE = "hadm_id"
 # these MT-* notes, so serving must read passage text from the same place.
 # The real MIMIC-derived table is out of scope for the demo and must never
 # resolve passage text from real patient notes.
-DISCHARGE_TABLE = os.environ.get(
-    "DISCHARGE_TABLE", f"{PROJECT}.readmission.hybrid_notes"
+DISCHARGE_TABLE = _validated_table_ref(
+    os.environ.get("DISCHARGE_TABLE", f"{PROJECT}.readmission.hybrid_notes"),
+    "DISCHARGE_TABLE", parts=(3,),
 )
 DEFAULT_TOP_K = int(os.environ.get("RAG_TOP_K", "5"))
 

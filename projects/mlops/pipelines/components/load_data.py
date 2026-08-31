@@ -12,6 +12,7 @@ train/serve skew.
 """
 
 import json
+import re
 
 import pandas as pd
 from google.cloud import bigquery
@@ -19,6 +20,28 @@ from kfp import dsl
 
 from src import encoding
 from ._image import TRAINING_IMAGE, component
+
+# ECC-63: identifiers (table ref, column names) cannot be bound as query
+# parameters, so runtime pipeline params are validated against a strict shape
+# instead; split-name VALUES are bound as query parameters below. Feature
+# columns are not runtime inputs — they come from encoding.feature_order(),
+# the code-owned manifest contract.
+_TABLE_REF_RE = re.compile(r"[A-Za-z0-9_-]+\.[A-Za-z0-9_]+\.[A-Za-z0-9_]+")
+_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _validated_table_ref(ref: str) -> str:
+    if not _TABLE_REF_RE.fullmatch(ref):
+        raise ValueError(
+            f"full_table_ref is not a valid project.dataset.table reference: {ref!r}"
+        )
+    return ref
+
+
+def _validated_ident(name: str, param: str) -> str:
+    if not _IDENT_RE.fullmatch(name):
+        raise ValueError(f"{param} is not a valid column identifier: {name!r}")
+    return name
 
 
 def assert_patient_disjoint(
@@ -85,15 +108,28 @@ def run_load_data(
     across folds.
     """
     feature_order = encoding.feature_order()
+
+    full_table_ref = _validated_table_ref(full_table_ref)
+    id_col = _validated_ident(id_col, "id_col")
+    label_col = _validated_ident(label_col, "label_col")
+    split_col = _validated_ident(split_col, "split_col")
+
     client = bigquery.Client(project=project_id)
 
     cols = ", ".join(feature_order)
     sql = f"""
         SELECT {id_col}, {cols}, {label_col}, {split_col}
         FROM `{full_table_ref}`
-        WHERE {split_col} IN ('{train_split}', '{val_split}', '{test_split}')
+        WHERE {split_col} IN UNNEST(@splits)
     """
-    df = client.query(sql).result().to_dataframe()
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ArrayQueryParameter(
+                "splits", "STRING", [train_split, val_split, test_split]
+            )
+        ]
+    )
+    df = client.query(sql, job_config=job_config).result().to_dataframe()
 
     def _split(name: str) -> pd.DataFrame:
         return df[df[split_col] == name].reset_index(drop=True)

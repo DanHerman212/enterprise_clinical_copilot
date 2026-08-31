@@ -29,15 +29,22 @@ PACK_TO = DEFAULT_PACK_TO  # single-sourced with the ingest pipeline
 
 def main() -> int:
     client = bigquery.Client(project=PROJECT)
+    # Same shape as the chunk_notes component: split value bound as a query
+    # parameter, table refs are code constants (ECC-37).
     sql = (
         f"SELECT d.hadm_id, d.note_id, d.text FROM `{NOTES}` AS d "
         f"JOIN `{SPLIT}` AS a ON d.hadm_id = a.hadm_id "
-        f"WHERE a.split_name = 'test'"
+        f"WHERE a.split_name = @split_name"
+    )
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("split_name", "STRING", "test")
+        ]
     )
     section_counts: Counter[str] = Counter()
     seen: set[str] = set()
     total = 0
-    for row in client.query(sql).result():
+    for row in client.query(sql, job_config=job_config).result():
         note = {"hadm_id": row["hadm_id"], "note_id": row["note_id"],
                 "text": row["text"]}
         for chunk in chunk_note(note, max_chars=DEFAULT_MAX_CHARS, pack_to=PACK_TO):

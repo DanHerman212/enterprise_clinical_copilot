@@ -38,14 +38,20 @@ PACK_TO = DEFAULT_PACK_TO  # single-sourced with the ingest pipeline
 
 def main() -> int:
     hadm_ids = sorted(REMOVE)
-    in_clause = ", ".join(str(h) for h in hadm_ids)
 
     bq = bigquery.Client(project=PROJECT)
+    # hadm_ids bound as an ARRAY<INT64> query parameter (ECC-37) — values are
+    # never interpolated into the SQL text.
+    ids_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ArrayQueryParameter("hadm_ids", "INT64", hadm_ids)
+        ]
+    )
 
     # 1. Chunk the removed patients' notes exactly as the ingest pipeline does.
     sql = (f"SELECT hadm_id, note_id, text FROM `{NOTES}` "
-           f"WHERE hadm_id IN ({in_clause})")
-    rows = list(bq.query(sql).result())
+           f"WHERE hadm_id IN UNNEST(@hadm_ids)")
+    rows = list(bq.query(sql, job_config=ids_config).result())
     print(f"notes in BigQuery for {len(hadm_ids)} removed patients: {len(rows)}")
     dp_ids = set()
     for r in rows:
@@ -73,7 +79,10 @@ def main() -> int:
 
     # 3. Delete the patients from the BigQuery source-of-truth tables.
     for table in (NOTES, SPLIT, FEATURES):
-        d = bq.query(f"DELETE FROM `{table}` WHERE hadm_id IN ({in_clause})")
+        d = bq.query(
+            f"DELETE FROM `{table}` WHERE hadm_id IN UNNEST(@hadm_ids)",
+            job_config=ids_config,
+        )
         d.result()
         print(f"deleted {d.num_dml_affected_rows} rows from "
               f"{table.split('.')[-1]}")

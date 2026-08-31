@@ -22,10 +22,44 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from rag.sections import parse_note, redaction_profile
+from rag.sections import KNOWN_HEADINGS, parse_note, redaction_profile
 
 # D2 default from the build guide; sections under this are single chunks.
 DEFAULT_MAX_CHARS = 1500
+
+# Build-time packing size used by the ingest pipeline. Serving re-chunks notes
+# to resolve a citation's exact text, so it must pack with the SAME value or
+# chunk ids drift and every packed section silently degrades to whole-note
+# text. Change this only together with an index rebuild.
+DEFAULT_PACK_TO = 700
+
+# Narrative/assessment sections worth indexing. Metadata (name, dates, sex) and
+# lab-line noise (pertinent_results) add embedding cost without retrieval
+# value. Single source of truth: the ingest pipeline whitelist, the build
+# scripts, and the serving-side datapoint-id parser all import this tuple.
+INDEX_SECTIONS = (
+    "history_of_present_illness",
+    "past_medical_history",
+    "family_history",
+    "social_history",
+    "physical_exam",
+    "brief_hospital_course",
+    "discharge_condition",
+    "discharge_diagnosis",
+    "discharge_medications",
+    "medications_on_admission",
+    "discharge_disposition",
+    "discharge_instructions",
+    "discharge_summary",
+)
+
+_unknown = set(INDEX_SECTIONS) - set(KNOWN_HEADINGS)
+if _unknown:  # a typo here would silently index nothing for that section
+    raise ValueError(
+        f"INDEX_SECTIONS entries not in rag.sections.KNOWN_HEADINGS: "
+        f"{sorted(_unknown)}"
+    )
+del _unknown
 
 _PARAGRAPH_RE = re.compile(r"\n\s*\n")
 # Sentence boundary: punctuation + whitespace + capital letter. Deliberately
@@ -82,7 +116,7 @@ def _chunk_section(note: dict, section, max_chars: int,
         for text, start, end in _split_long_body(body, max_chars)
         if text.strip() and not redaction_profile(text.strip()).is_placeholder_only
     ]
-    spans = _pack(pieces, pack_to)
+    spans = _pack(pieces, pack_to, body)
 
     chunks: list[Chunk] = []
     for ordinal, (start, end) in enumerate(spans, start=base + 1):
@@ -97,13 +131,16 @@ def _chunk_section(note: dict, section, max_chars: int,
     return chunks
 
 
-def _pack(pieces: list[tuple[str, int, int]],
-          pack_to: int | None) -> list[tuple[int, int]]:
+def _pack(pieces: list[tuple[str, int, int]], pack_to: int | None,
+          body: str) -> list[tuple[int, int]]:
     """Greedily merge adjacent pieces into spans up to `pack_to` chars.
 
-    Pieces are contiguous in the body, so a merged span is just the first
-    piece's start to the last piece's end; the whitespace between them stays in
-    the span, which keeps the invariant body[start:end] == chunk text true.
+    A merged span runs from the first piece's start to the last piece's end;
+    the whitespace between them stays in the span, which keeps the invariant
+    body[start:end] == chunk text true. Pieces merge only when the body
+    between them is pure whitespace: a non-blank gap is a piece the caller
+    filtered out (redaction-only), and spanning it would re-include the very
+    text the filter dropped.
     """
     if pack_to is None:
         return [(start, end) for _, start, end in pieces]
@@ -113,7 +150,7 @@ def _pack(pieces: list[tuple[str, int, int]],
     for _, start, end in pieces:
         if cur_start is None:
             cur_start, cur_end = start, end
-        elif end - cur_start <= pack_to:
+        elif end - cur_start <= pack_to and not body[cur_end:start].strip():
             cur_end = end
         else:
             spans.append((cur_start, cur_end))
@@ -166,7 +203,18 @@ def _emit_fragment(out: list, frag: str, base: int, max_chars: int) -> None:
     if len(frag) <= max_chars:
         out.append((frag, base, base + len(frag)))
         return
-    # Fixed-width fallback for run-ons; keeps every chunk bounded.
-    for start in range(0, len(frag), max_chars):
-        piece = frag[start:start + max_chars]
-        out.append((piece, base + start, base + start + len(piece)))
+    # Fixed-width fallback for run-ons; keeps every chunk bounded. Prefer the
+    # last whitespace in the window so pieces break at word boundaries — a
+    # mid-word cut corrupts the citation text AND its embedding. A window with
+    # no whitespace (one giant token) still hard-cuts at max_chars.
+    start = 0
+    while start < len(frag):
+        if len(frag) - start <= max_chars:
+            out.append((frag[start:], base + start, base + len(frag)))
+            break
+        window = frag[start:start + max_chars]
+        cut = max(window.rfind(" "), window.rfind("\n"), window.rfind("\t"))
+        if cut <= 0:
+            cut = max_chars
+        out.append((frag[start:start + cut], base + start, base + start + cut))
+        start += cut

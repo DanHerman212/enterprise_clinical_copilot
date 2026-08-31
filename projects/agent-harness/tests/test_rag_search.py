@@ -145,6 +145,56 @@ def test_missing_bigquery_text_errors_not_drops():
     assert "99999999-DS-1" in result["message"]
 
 
+def test_unparsed_datapoint_id_is_structured_error():
+    """An index id no section token matches (stale vocabulary, foreign
+    datapoint) must be a structured error, never a citation with no text."""
+    endpoint = _FakeEndpoint([
+        _FakeNeighbor("12345-DS-9_unknown_section_1", 0.25),
+    ])
+    result = _run_search(endpoint, note_texts={}, hadm_id=HADM_A, query="sepsis")
+    assert result["error"] == "unparsed_datapoint"
+    assert "12345-DS-9_unknown_section_1" in result["message"]
+
+
+def test_whole_note_fallback_is_tagged_and_exact_chunk_is_not():
+    """When the chunk id cannot be reproduced (chunker drift) the passage falls
+    back to whole-note text and must SAY so via granularity="note"; a passage
+    whose chunk did reproduce carries no such tag."""
+    # "real note text" has no parseable sections, so the id can't reproduce.
+    endpoint = _FakeEndpoint([
+        _FakeNeighbor("13479418-DS-24_brief_hospital_course_2", 0.27),
+    ])
+    result = _run_search(endpoint, note_texts={"13479418-DS-24": "real note text"},
+                         hadm_id=HADM_A, query="sepsis treatment")
+    passage = result["passages"][0]
+    assert passage["text"] == "real note text"
+    assert passage["granularity"] == "note"
+
+    note = "Brief Hospital Course:\nDiuresed and improved steadily.\n"
+    endpoint = _FakeEndpoint([
+        _FakeNeighbor("13479418-DS-24_brief_hospital_course_1", 0.27),
+    ])
+    result = _run_search(endpoint, note_texts={"13479418-DS-24": note},
+                         hadm_id=HADM_A, query="sepsis treatment")
+    passage = result["passages"][0]
+    assert passage["text"] == "Diuresed and improved steadily."
+    assert "granularity" not in passage
+
+
+def test_sections_tool_marks_passages_deterministic_not_scored():
+    """rag_search_sections passages are re-parsed, not retrieved: they must be
+    marked deterministic instead of carrying a fabricated score of 1.0."""
+    note = "Brief Hospital Course:\nDiuresed.\n\nDischarge Diagnosis:\nCHF.\n"
+    with patch.object(rs, "_fetch_note_row", lambda hadm: ("13479418-DS-24", note)):
+        result = _run(rs.rag_search_sections(HADM_A))
+    assert result["returned"] == 2
+    assert [p["section"] for p in result["passages"]] == [
+        "brief_hospital_course", "discharge_diagnosis"]
+    for passage in result["passages"]:
+        assert passage["retrieval"] == "deterministic"
+        assert "score" not in passage
+
+
 def test_section_parsing_recovers_multiword_section():
     """brief_hospital_course has underscores; parsing must not split it."""
     note_id, section = rs._parse_datapoint_id(

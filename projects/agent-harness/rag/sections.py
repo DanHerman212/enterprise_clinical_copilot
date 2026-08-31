@@ -397,13 +397,20 @@ def parse_note(text: str) -> ParsedNote:
             seen_spans.append((match.start(), match.end()))
 
     # Second pass for the numbered-list format: a full line that is exactly a
-    # known heading (no colon) is a heading. Unknown bare lines stay in the
-    # surrounding body, preserving the allowlist design.
+    # known heading (no colon) is a heading — but only when the line is fully
+    # uppercase, the shape MTSamples actually uses ("DISCHARGE DIAGNOSES").
+    # Mixed-case aliases ("History", "Medications", "Follow Up") occur as
+    # ordinary lines of prose; treating them as headings split sections at
+    # arbitrary body lines. Unknown bare lines stay in the surrounding body,
+    # preserving the allowlist design.
     for match in _BARE_HEADING_RE.finditer(normalised):
         if any(match.start() < end and match.end() > start
                for start, end in seen_spans):
             continue
-        canonical = _HEADING_LOOKUP.get(_normalise_heading(match.group(1).strip()))
+        raw = match.group(1).strip()
+        if raw != raw.upper():
+            continue
+        canonical = _HEADING_LOOKUP.get(_normalise_heading(raw))
         if canonical is None:
             continue
         known.append((match, canonical))

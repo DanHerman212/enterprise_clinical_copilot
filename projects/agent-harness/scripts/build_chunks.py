@@ -25,29 +25,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from rag.chunking import DEFAULT_MAX_CHARS, chunk_note  # noqa: E402
+from rag.chunking import DEFAULT_MAX_CHARS, INDEX_SECTIONS, chunk_note  # noqa: E402
 from rag.notes import CACHE_DIR, iter_notes, read_manifest  # noqa: E402
 
 CHUNKS_PATH = CACHE_DIR / "chunks.jsonl.gz"
 
-# Narrative/assessment sections worth indexing. Metadata (name, dates, sex) and
-# lab-line noise (pertinent_results) add cost without retrieval value; the demo
-# story lives in the sections a clinician writes. Override with --sections.
-DEFAULT_SECTIONS = (
-    "history_of_present_illness",
-    "past_medical_history",
-    "family_history",
-    "social_history",
-    "physical_exam",
-    "brief_hospital_course",
-    "discharge_condition",
-    "discharge_diagnosis",
-    "discharge_medications",
-    "medications_on_admission",
-    "discharge_disposition",
-    "discharge_instructions",
-    "discharge_summary",
-)
+# Narrative/assessment sections worth indexing — single-sourced from
+# rag.chunking. Metadata (name, dates, sex) and lab-line noise
+# (pertinent_results) add cost without retrieval value. Override with --sections.
+DEFAULT_SECTIONS = INDEX_SECTIONS
 
 
 def main() -> int:

@@ -13,7 +13,13 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from rag.chunking import DEFAULT_MAX_CHARS, Chunk, _pack, chunk_note  # noqa: E402
+from rag.chunking import (  # noqa: E402
+    DEFAULT_MAX_CHARS,
+    INDEX_SECTIONS,
+    Chunk,
+    _pack,
+    chunk_note,
+)
 
 # HPI: two paragraphs, each ~950 chars (so with max_chars=1000 they stay whole
 # paragraphs but the total forces a split). BHC: one paragraph ~1050 chars (so
@@ -214,12 +220,51 @@ Pertinent Results:
 
 
 def test_packing_respects_its_cap():
+    body = "b" * 200 + " " + "c" * 200 + " " + "d" * 200
     pieces = [
         ("b" * 200, 0, 200),
         ("c" * 200, 201, 401),
         ("d" * 200, 402, 602),
     ]
-    assert len(_pack(pieces, 500)) == 2  # 200+200 fits, third starts new span
+    assert len(_pack(pieces, 500, body)) == 2  # 200+200 fits, third starts new span
+
+
+def test_packing_does_not_reinclude_filtered_pieces():
+    """A redaction-only paragraph dropped by the chunk filter must not be
+    resurrected by packing the pieces on either side of it into one span."""
+    body = ("Alert and oriented on arrival to the floor today.\n\n"
+            "______\n\n"
+            "Tolerated the diuresis regimen well without derangements.")
+    note = {"hadm_id": 1, "note_id": 3,
+            "text": "Brief Hospital Course:\n" + body}
+    # max_chars below body length forces paragraph splitting; pack_to large
+    # enough to invite merging across the dropped placeholder paragraph.
+    chunks = chunk_note(note, max_chars=80, pack_to=400)
+    assert chunks, "expected chunks for real narrative text"
+    for chunk in chunks:
+        assert "______" not in chunk.text
+
+
+def test_fixed_width_fallback_cuts_at_word_boundaries():
+    """A run-on sentence that defeats the sentence splitter must not be cut
+    mid-word: a truncated token corrupts the citation and its embedding."""
+    words = "lisinopril metoprolol furosemide spironolactone atorvastatin " * 30
+    note = {"hadm_id": 1, "note_id": 4,
+            "text": "Brief Hospital Course:\n" + words.strip() + "\n"}
+    chunks = chunk_note(note, max_chars=100)
+    assert len(chunks) > 1
+    vocabulary = set(words.split())
+    for chunk in chunks:
+        assert len(chunk.text) <= 100
+        for token in chunk.text.split():
+            assert token in vocabulary, f"mid-word cut produced {token!r}"
+
+
+def test_index_sections_are_canonical_section_names():
+    """Every indexed section must be a canonical parser name (ECC-33): a typo
+    here would silently index nothing for that section."""
+    from rag.sections import KNOWN_HEADINGS
+    assert set(INDEX_SECTIONS) <= set(KNOWN_HEADINGS)
 
 
 def test_chunks_are_frozen_and_typed():

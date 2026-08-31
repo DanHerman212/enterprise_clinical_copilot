@@ -25,6 +25,7 @@ from pipelines.components.build_index import build_index  # noqa: E402
 from pipelines.components.chunk_notes import DEFAULT_SECTIONS, chunk_notes  # noqa: E402
 from pipelines.components.embed_chunks import embed_chunks  # noqa: E402
 from mcp_server.config import PROJECT as PROJECT_ID  # noqa: E402
+from rag.chunking import DEFAULT_PACK_TO  # noqa: E402
 
 PIPELINE_NAME = "rag-ingest"
 LOCATION = "us-east1"
@@ -43,7 +44,7 @@ def rag_ingest_pipeline(
     notes_table_ref: str = NOTES_TABLE,
     split_table_ref: str = SPLIT_TABLE,
     split_name: str = "test",
-    pack_to: int = 700,
+    pack_to: int = DEFAULT_PACK_TO,
     sections_csv: str = ",".join(DEFAULT_SECTIONS),
     previous_ingest_uri: str = "",
     dimensions: int = 768,

@@ -21,6 +21,7 @@ from rag import sections  # noqa: E402
 from rag.sections import (  # noqa: E402
     BRIEF_HOSPITAL_COURSE,
     DISCHARGE_CONDITION,
+    DISCHARGE_DIAGNOSIS,
     DISCHARGE_INSTRUCTIONS,
     DISCHARGE_MEDICATIONS,
     FAMILY_HISTORY,
@@ -244,6 +245,38 @@ def test_leading_whitespace_before_a_heading_is_tolerated():
     parsed = parse_note("   Social History:\nLives alone.\n")
 
     assert parsed.body(SOCIAL_HISTORY) == "Lives alone."
+
+
+# --- bare (colon-less) headings ----------------------------------------------
+
+
+def test_uppercase_bare_heading_is_a_boundary():
+    """MTSamples numbered-list format: an all-caps known heading with no colon
+    ("DISCHARGE DIAGNOSES") must start a section."""
+    note = ("Brief Hospital Course:\nDiuresed and improved.\n\n"
+            "DISCHARGE DIAGNOSES\n1. Acute on chronic systolic heart failure\n")
+    parsed = parse_note(note)
+    assert parsed.body(DISCHARGE_DIAGNOSIS).startswith("1. Acute")
+    assert "DISCHARGE DIAGNOSES" not in parsed.body(BRIEF_HOSPITAL_COURSE)
+
+
+def test_mixed_case_bare_alias_lines_stay_in_the_body():
+    """A body line that merely EQUALS a mixed-case alias ("Medications",
+    "History", "Follow Up") is prose, not a heading. Treating it as a boundary
+    split sections at arbitrary lines and mislabeled the text after it."""
+    note = ("Brief Hospital Course:\n"
+            "Patient was diuresed and improved.\n"
+            "Medications\n"
+            "were reviewed with the patient and his daughter.\n"
+            "Follow Up\n"
+            "with cardiology was arranged for next week.\n\n"
+            "Discharge Diagnosis:\nCHF exacerbation\n")
+    parsed = parse_note(note)
+    body = parsed.body(BRIEF_HOSPITAL_COURSE)
+    assert "were reviewed with the patient" in body
+    assert "with cardiology was arranged" in body
+    assert parsed.body(DISCHARGE_MEDICATIONS) == ""
+    assert parsed.body(FOLLOWUP_INSTRUCTIONS) == ""
 
 
 def test_duplicate_alias_is_rejected_at_build_time(monkeypatch):

@@ -15,24 +15,14 @@ from collections import Counter
 from google.cloud import bigquery
 from kfp import dsl
 
+from rag.chunking import INDEX_SECTIONS
+
 from ._image import RAG_IMAGE, component
 
-# Narrative/assessment sections worth indexing (matches scripts/build_chunks.py).
-DEFAULT_SECTIONS = (
-    "history_of_present_illness",
-    "past_medical_history",
-    "family_history",
-    "social_history",
-    "physical_exam",
-    "brief_hospital_course",
-    "discharge_condition",
-    "discharge_diagnosis",
-    "discharge_medications",
-    "medications_on_admission",
-    "discharge_disposition",
-    "discharge_instructions",
-    "discharge_summary",
-)
+# Narrative/assessment sections worth indexing — single-sourced from
+# rag.chunking, the same tuple the serving-side datapoint-id parser uses,
+# so build and serving can never drift.
+DEFAULT_SECTIONS = INDEX_SECTIONS
 
 
 def run_chunk_notes(

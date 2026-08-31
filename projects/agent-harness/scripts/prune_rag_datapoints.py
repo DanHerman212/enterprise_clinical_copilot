@@ -20,7 +20,7 @@ from pathlib import Path
 from google.cloud import aiplatform, bigquery
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from rag.chunking import DEFAULT_MAX_CHARS, chunk_note  # noqa: E402
+from rag.chunking import DEFAULT_MAX_CHARS, DEFAULT_PACK_TO, chunk_note  # noqa: E402
 from rag.embed import datapoint_id  # noqa: E402
 from pipelines.components.chunk_notes import DEFAULT_SECTIONS as WHITELIST  # noqa: E402
 from scripts.prune_inclusion_violations import REMOVE  # noqa: E402
@@ -33,7 +33,7 @@ DATASET = "readmission"
 NOTES = f"{PROJECT}.{DATASET}.hybrid_notes"
 SPLIT = f"{PROJECT}.{DATASET}.hybrid_split"
 FEATURES = f"{PROJECT}.{DATASET}.hybrid_features"
-PACK_TO = 700  # must match pipelines/components/chunk_notes.py default
+PACK_TO = DEFAULT_PACK_TO  # single-sourced with the ingest pipeline
 
 
 def main() -> int:

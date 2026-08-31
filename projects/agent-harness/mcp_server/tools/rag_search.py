@@ -26,6 +26,7 @@ Empty is a real answer: {"passages": [], "returned": 0}. Never fabricate.
 """
 
 import asyncio
+import logging
 import re
 from functools import lru_cache
 from typing import Any
@@ -38,7 +39,12 @@ from google.cloud.aiplatform.matching_engine.matching_engine_index_endpoint impo
 from google.genai import types
 
 from rag.sections import parse_note
-from rag.chunking import chunk_note
+from rag.chunking import (
+    DEFAULT_MAX_CHARS,
+    DEFAULT_PACK_TO,
+    INDEX_SECTIONS,
+    chunk_note,
+)
 
 from ..config import (
     DEPLOYED_INDEX_ID,
@@ -51,26 +57,15 @@ from ..config import (
     RESTRICT_NAMESPACE,
 )
 
-# The narrative sections we index (matches chunk_notes.py DEFAULT_SECTIONS).
+# The narrative sections we index — single-sourced from rag.chunking, the same
+# tuple the ingest pipeline whitelists, so build and serving can never drift.
 # A returned datapoint id is "{note_id}_{section}_{ordinal}" and section names
 # contain underscores (brief_hospital_course), so we match the exact section
 # token to recover both note_id and section instead of blindly splitting on '_'.
-_KNOWN_SECTIONS = (
-    "history_of_present_illness",
-    "past_medical_history",
-    "family_history",
-    "social_history",
-    "physical_exam",
-    "brief_hospital_course",
-    "discharge_condition",
-    "discharge_diagnosis",
-    "discharge_medications",
-    "medications_on_admission",
-    "discharge_disposition",
-    "discharge_instructions",
-    "discharge_summary",
-)
+_KNOWN_SECTIONS = INDEX_SECTIONS
 _SECTION_RE = re.compile(r"_(?P<section>(" + "|".join(_KNOWN_SECTIONS) + r"))_")
+
+_LOG = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=1)
@@ -148,14 +143,16 @@ def _chunk_texts_for(note_id: str, text: str) -> dict[str, str]:
 
     The index stores section-level chunk embeddings (datapoint id =
     "{note_id}_{section}_{ordinal}"). Re-running the same deterministic chunker
-    over the note reproduces each chunk's exact text, so a passage can return
-    the SECTION it cites instead of the whole note — whole-note text is what
-    leaks unrelated sections (allergies, activity) into a citation.
+    over the note — with the SAME parameters the ingest pipeline used, or the
+    ids don't line up — reproduces each chunk's exact text, so a passage can
+    return the SECTION it cites instead of the whole note — whole-note text is
+    what leaks unrelated sections (allergies, activity) into a citation.
     """
     out: dict[str, str] = {}
     if not text:
         return out
-    for chunk in chunk_note({"hadm_id": 0, "note_id": note_id, "text": text}):
+    for chunk in chunk_note({"hadm_id": 0, "note_id": note_id, "text": text},
+                            max_chars=DEFAULT_MAX_CHARS, pack_to=DEFAULT_PACK_TO):
         out[chunk.chunk_id.replace(":", "_")] = chunk.text
     return out
 
@@ -243,23 +240,42 @@ def _search(hadm_id: int, query: str, top_k: int) -> dict[str, Any]:
 
     passages = []
     for nb, (note_id, section) in zip(neighbors, parsed):
-        text = texts.get(note_id or "")
+        # An id that doesn't parse means the index holds a datapoint this
+        # server doesn't understand (stale section vocabulary, foreign
+        # datapoint). Error rather than emit a citation with no text.
+        if note_id is None:
+            return _error(
+                hadm_id, "unparsed_datapoint",
+                f"Index returned id {nb.id!r} that does not match "
+                "'{note_id}_{section}_{ordinal}' for any indexed section",
+            )
+        text = texts.get(note_id)
         # A returned ID with no text in BigQuery must error, not silently drop
         # (a dropped passage looks like a retrieval gap and is hard to debug).
-        if note_id and text is None:
+        if text is None:
             return _error(
                 hadm_id, "missing_text",
                 f"Index returned id {nb.id} but no note {note_id} in {DISCHARGE_TABLE}",
             )
-        # Prefer the exact chunk; fall back to the whole note only if the id
-        # cannot be reproduced (chunker drift) so retrieval never breaks.
-        body = chunk_texts.get(note_id or "", {}).get(nb.id) or text
-        passages.append({
+        # Prefer the exact chunk. A miss means the serving chunker has drifted
+        # from the index build; keep retrieval alive with the whole note, but
+        # say so — in the log and on the passage itself — instead of silently
+        # widening the citation.
+        body = chunk_texts.get(note_id, {}).get(nb.id)
+        passage = {
             "id": nb.id,
             "section": section,
-            "text": body,
+            "text": body if body is not None else text,
             "score": round(float(nb.distance), 4),
-        })
+        }
+        if body is None:
+            _LOG.warning(
+                "rag_search: chunk %s not reproduced by the serving chunker; "
+                "returning whole-note text (chunker drift — rebuild the index "
+                "after chunker changes)", nb.id,
+            )
+            passage["granularity"] = "note"
+        passages.append(passage)
 
     return {"hadm_id": hadm_id, "query": query, "returned": len(passages),
             "passages": passages}
@@ -374,7 +390,11 @@ def _search_sections(hadm_id: int) -> dict[str, Any]:
         if not picks:
             continue  # note lacks this section -> nothing to cite
         cid, ctext = picks[0]
-        merged.append({"id": cid, "section": expected, "text": ctext, "score": 1.0})
+        # These passages are re-parsed from the note, not retrieved by the
+        # index, so an embedding score would be a fabrication. Mark them
+        # honestly instead of the old hardcoded 1.0.
+        merged.append({"id": cid, "section": expected, "text": ctext,
+                       "retrieval": "deterministic"})
 
     if not merged:
         # A real note can lack all discharge-narrative summary sections (e.g. a

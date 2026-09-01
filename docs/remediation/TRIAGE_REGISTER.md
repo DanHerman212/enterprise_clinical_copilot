@@ -5,8 +5,8 @@ One row per finding, merged from `enterprise_clinical_copilot/docs/REVIEW_BACKLO
 remediation detail stays in those files and in `docs/adversarial_code_review/` —
 this register is the working triage view. Sorted severity → cluster → ID.
 
-**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **0 Major** open, 26 Minor
-open, 98 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
+**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **0 Major** open, 20 Minor
+open, 104 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
 
 Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spend/quota/DoS ·
 **D** chunker determinism · **E** fail-loud build pipeline · **F** isolation & retrieval (R1) ·
@@ -144,13 +144,13 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | S7-16 | site | N | correctness | demo_a2ui.js | Stale trace pane leaks the previous patient's envelope JSON (R1 bleed in the trace surface) | open |
 | S7-17 | site | N | correctness | demo_a2ui.js | Missing SourceCard → cite click no-op; failed extraction mislabels the whole note as a section | open |
 | ECC-29 | ECC | Q | security | bigquery_source.py, config.py | Table-name env vars interpolated into SQL with no validation/allowlist | **resolved 2026-08-31** |
-| ECC-17 | ECC | Z | ops | agent/graph.py | `handler.last_trace_id` unverified attribute — possible AttributeError after full spend | open |
-| ECC-50 | ECC | Z | ops | .env.lanfuse | Typo'd filename (gitignored, no secret leaked) — future loaders silently miss it | open |
-| S1-17 | site | Z | security | bandit scan | 10 Low findings — verified false positives / low risk; awareness only | open |
+| ECC-17 | ECC | Z | ops | agent/graph.py | `handler.last_trace_id` unverified attribute — possible AttributeError after full spend | **resolved 2026-08-31** |
+| ECC-50 | ECC | Z | ops | .env.lanfuse | Typo'd filename (gitignored, no secret leaked) — future loaders silently miss it | **resolved 2026-08-31** |
+| S1-17 | site | Z | security | bandit scan | 10 Low findings — verified false positives / low risk; awareness only | **resolved 2026-08-31** |
 | S6-05 | site | K | ops | content/tests.py | No tests for the public content surface (auth gating, publishing filters, contact form) | **resolved 2026-08-31** |
-| S9-04 | site | Z | ops | settings.py | Legacy `publicRead` ACL breaks under UBLA; `MEDIA_URL` disagrees with storage output | open |
-| S9-06 | site | Z | ops | settings.py (LOGGING) | LOGGING omits the `demo` app logger — the surface that most needs telemetry | open |
-| S9-07 | site | Z | correctness | urls.py | DEBUG static served from stale `staticfiles/` instead of WhiteNoise | open |
+| S9-04 | site | Z | ops | settings.py | Legacy `publicRead` ACL breaks under UBLA; `MEDIA_URL` disagrees with storage output | **resolved 2026-08-31** |
+| S9-06 | site | Z | ops | settings.py (LOGGING) | LOGGING omits the `demo` app logger — the surface that most needs telemetry | **resolved 2026-08-31** |
+| S9-07 | site | Z | correctness | urls.py | DEBUG static served from stale `staticfiles/` instead of WhiteNoise | **resolved 2026-08-31** |
 | ECC-01 | ECC | — | security | bandit scan | B608 verified false positive — all user values parameterized | **resolved** |
 
 ## How to work this register

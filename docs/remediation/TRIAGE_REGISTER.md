@@ -5,8 +5,8 @@ One row per finding, merged from `enterprise_clinical_copilot/docs/REVIEW_BACKLO
 remediation detail stays in those files and in `docs/adversarial_code_review/` —
 this register is the working triage view. Sorted severity → cluster → ID.
 
-**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **3 Major** open, 26 Minor
-open, 95 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
+**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **0 Major** open, 26 Minor
+open, 98 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
 
 Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spend/quota/DoS ·
 **D** chunker determinism · **E** fail-loud build pipeline · **F** isolation & retrieval (R1) ·
@@ -53,13 +53,13 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | S1-05 | site | H | security/ops | /accounts/login/, /admin/ | No throttling/lockout on login or admin; admin at the default path | **resolved 2026-08-31** |
 | S6-13 | site | H | security | content/views.py | Inactive projects publicly served — detail/section views never filter `is_active` | **resolved 2026-08-31** |
 | S1-16 | site | I | security | requirements.txt | 72 known CVEs across Django/pillow/sqlparse/bleach pins | **resolved 2026-08-31** |
-| ECC-55 | ECC | I | ops | serving/cpr/Dockerfile, deploy_cpr.py | Content-hash image tag is false — mutable base + unpinned SDK mean same tag, different image | open |
-| ECC-61 | ECC | I | security/ops | predictor.py load, cpr cloudbuild | No bundle checksum, `:latest` provenance, `_TAG` defaults to latest — mutable supply chain end to end | open |
+| ECC-55 | ECC | I | ops | serving/cpr/Dockerfile, deploy_cpr.py | Content-hash image tag is false — mutable base + unpinned SDK mean same tag, different image | **resolved 2026-08-31** |
+| ECC-61 | ECC | I | security/ops | predictor.py load, cpr cloudbuild | No bundle checksum, `:latest` provenance, `_TAG` defaults to latest — mutable supply chain end to end | **resolved 2026-08-31** |
 | S6-01 | site | J | security | content templates, models | Stored XSS: `\|safe` rendering with no server-side sanitization anywhere | **resolved 2026-08-31** |
 | S6-06 | site | J | security | content/sectioning.py | Sectioning round-trip un-escapes entities — author-escaped text becomes live markup | **resolved 2026-08-31** |
 | S6-02 | site | K | ops | ContactView.post | Public contact form: no rate limiting, unbounded TextField — spam/DB bloat | **resolved 2026-08-31** |
 | S6-03 | site | K | correctness | ContactView.post | No server-side validation — long inputs raise `DataError` → 500 on prod Postgres | **resolved 2026-08-31** |
-| S6-07 | site | K | correctness | content/sectioning.py | Drill-down silently drops all content before the first `<h2>` | open |
+| S6-07 | site | K | correctness | content/sectioning.py | Drill-down silently drops all content before the first `<h2>` | **resolved 2026-08-31** |
 | ECC-60 | ECC | L | security | cpr/predictor.py | Zero input validation: typo'd/missing keys become NaN — confident, silently wrong clinical probability | **resolved 2026-08-31** |
 | ECC-65 | ECC | L | correctness | training_pipeline.py, gates | Gate baseline is a runtime parameter — submit `0.0` and both performance gates are neutralized | **resolved 2026-08-31** |
 | ECC-66 | ECC | L | correctness | evaluate_test.py, optuna_hpo.py | Val→test stability check is warn-only with a biased reference — an overfit model still registers | **resolved 2026-08-31** |

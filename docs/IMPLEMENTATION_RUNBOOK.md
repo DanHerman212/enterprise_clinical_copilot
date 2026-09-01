@@ -39,11 +39,11 @@ a fully-resolved adversarial code review (currently 0 Critical / 0 Major).
 - [x] S7-02 — client `SECTION_ALIASES` documented as a copy of the ECC canonical; consolidation sequenced with Step 8.
 
 ### I — deps & supply chain
-- [ ] ECC-16 — `agent/Dockerfile` mutable base tag.
-- [ ] ECC-31 — `joblib.load` with no artifact integrity (CWE-502).
-- [ ] ECC-59 — `register_serving_model` registers against mutable `:latest`.
-- [ ] ECC-69 — unpinned xgboost/optuna/sklearn/pandas in components.
-- [ ] S6-09 — CDN scripts without SRI; mermaid on floating `@10`.
+- [x] ECC-16 — agent/Dockerfile base pinned by digest; requirements exact-pinned.
+- [x] ECC-31 — joblib artifacts hash-verified (dump/load sidecar).
+- [x] ECC-59 — register_serving_model requires SERVING_IMAGE (no :latest).
+- [x] ECC-69 — component deps pinned to major ranges; xgboost parity with CPR.
+- [x] S6-09 — CDN assets SRI-pinned; mermaid pinned @10.9.3.
 
 ### K — content & contact form
 - [ ] S6-08 — section slug `preview` shadowed by the staff preview route.

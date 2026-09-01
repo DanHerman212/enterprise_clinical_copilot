@@ -5,8 +5,8 @@ One row per finding, merged from `enterprise_clinical_copilot/docs/REVIEW_BACKLO
 remediation detail stays in those files and in `docs/adversarial_code_review/` —
 this register is the working triage view. Sorted severity → cluster → ID.
 
-**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **0 Major** open, 16 Minor
-open, 108 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
+**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **0 Major** open, 11 Minor
+open, 113 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
 
 Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spend/quota/DoS ·
 **D** chunker determinism · **E** fail-loud build pipeline · **F** isolation & retrieval (R1) ·
@@ -113,11 +113,11 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | S1-06 | site | H | ops | urls.py | `auth.urls` exposes password-reset routes with no templates — those paths 500 | **resolved 2026-08-31** |
 | S1-12 | site | H | security | settings.py | No HSTS | **resolved 2026-08-31** |
 | S1-14 | site | H | ops | Dockerfile | Container runs as root — no `USER` directive | **resolved 2026-08-31** |
-| ECC-16 | ECC | I | ops | agent/Dockerfile | Mutable base tag; no hash-pinned requirements | open |
-| ECC-31 | ECC | I | security | mlops components | `joblib.load` with no artifact integrity verification (CWE-502) | open |
-| ECC-59 | ECC | I | correctness | register_serving_model.py | Models registered against a mutable `:latest` serving container | open |
-| ECC-69 | ECC | I | ops | _image.py, components | Unpinned xgboost/optuna/sklearn/pandas — irreproducible runs; CPR parity unenforced | open |
-| S6-09 | site | I | security | content/base.html | CDN scripts without SRI; Mermaid on floating `@10` | open |
+| ECC-16 | ECC | I | ops | agent/Dockerfile | Mutable base tag; no hash-pinned requirements | **resolved 2026-08-31** |
+| ECC-31 | ECC | I | security | mlops components | `joblib.load` with no artifact integrity verification (CWE-502) | **resolved 2026-08-31** |
+| ECC-59 | ECC | I | correctness | register_serving_model.py | Models registered against a mutable `:latest` serving container | **resolved 2026-08-31** |
+| ECC-69 | ECC | I | ops | _image.py, components | Unpinned xgboost/optuna/sklearn/pandas — irreproducible runs; CPR parity unenforced | **resolved 2026-08-31** |
+| S6-09 | site | I | security | content/base.html | CDN scripts without SRI; Mermaid on floating `@10` | **resolved 2026-08-31** |
 | S9-05 | site | I | security/ops | requirements.txt | Dead `django-ckeditor` (CKEditor 4, known CVEs) + stale bleach in prod image; Django pinned to bare 6.0 | **resolved 2026-08-31** |
 | S1-13 | site | J | security | settings.py | CKEditor `htmlSupport` allows everything; public upload route; `publicRead` default ACL | **resolved 2026-08-31** |
 | S6-10 | site | J | ops | settings.py | No Content-Security-Policy anywhere (the backstop for `\|safe` + CDN scripts) | **resolved 2026-08-31** |

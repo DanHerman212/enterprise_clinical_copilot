@@ -5,8 +5,8 @@ One row per finding, merged from `enterprise_clinical_copilot/docs/REVIEW_BACKLO
 remediation detail stays in those files and in `docs/adversarial_code_review/` —
 this register is the working triage view. Sorted severity → cluster → ID.
 
-**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **21 Major** open, 36 Minor
-open, 68 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
+**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **19 Major** open, 32 Minor
+open, 74 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
 
 Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spend/quota/DoS ·
 **D** chunker determinism · **E** fail-loud build pipeline · **F** isolation & retrieval (R1) ·
@@ -50,8 +50,8 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | ECC-24 | ECC | F | correctness | rag_search.py | Retry replaces a non-empty original result with an empty retried one — real hits discarded | **resolved 2026-08-31** |
 | ECC-06 | ECC | G | ops/security | agent/server.py | 502 body + `/health` leak internal topology (MCP_URL, project, IAM detail) to any direct caller | **resolved 2026-08-31** |
 | S1-03 | site | G | security | demo/views.py | 502 `detail` returns `str(exc)` to the browser — private agent host leaks verbatim | **resolved 2026-08-31** |
-| S1-05 | site | H | security/ops | /accounts/login/, /admin/ | No throttling/lockout on login or admin; admin at the default path | open |
-| S6-13 | site | H | security | content/views.py | Inactive projects publicly served — detail/section views never filter `is_active` | open |
+| S1-05 | site | H | security/ops | /accounts/login/, /admin/ | No throttling/lockout on login or admin; admin at the default path | **resolved 2026-08-31** |
+| S6-13 | site | H | security | content/views.py | Inactive projects publicly served — detail/section views never filter `is_active` | **resolved 2026-08-31** |
 | S1-16 | site | I | security | requirements.txt | 72 known CVEs across Django/pillow/sqlparse/bleach pins | **resolved 2026-08-31** |
 | ECC-55 | ECC | I | ops | serving/cpr/Dockerfile, deploy_cpr.py | Content-hash image tag is false — mutable base + unpinned SDK mean same tag, different image | open |
 | ECC-61 | ECC | I | security/ops | predictor.py load, cpr cloudbuild | No bundle checksum, `:latest` provenance, `_TAG` defaults to latest — mutable supply chain end to end | open |
@@ -109,10 +109,10 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | ECC-30 | ECC | F | correctness | rag_search.py | Retry trigger reduces to "not rank 1" — broader and costlier than the intended "absent from top-k" | **resolved 2026-08-31** |
 | ECC-08 | ECC | G | architecture | agent/server.py | Full `tool_calls` payloads forwarded to the browser in live mode | **resolved 2026-08-31** |
 | ECC-21 | ECC | G | security | mcp_server/tools/* | Tool errors embed raw exception text that reaches the model + Langfuse | **resolved 2026-08-31** |
-| S1-04 | site | H | security | settings.py | Default 2-week session cookie; survives browser close | open |
-| S1-06 | site | H | ops | urls.py | `auth.urls` exposes password-reset routes with no templates — those paths 500 | open |
-| S1-12 | site | H | security | settings.py | No HSTS | open |
-| S1-14 | site | H | ops | Dockerfile | Container runs as root — no `USER` directive | open |
+| S1-04 | site | H | security | settings.py | Default 2-week session cookie; survives browser close | **resolved 2026-08-31** |
+| S1-06 | site | H | ops | urls.py | `auth.urls` exposes password-reset routes with no templates — those paths 500 | **resolved 2026-08-31** |
+| S1-12 | site | H | security | settings.py | No HSTS | **resolved 2026-08-31** |
+| S1-14 | site | H | ops | Dockerfile | Container runs as root — no `USER` directive | **resolved 2026-08-31** |
 | ECC-16 | ECC | I | ops | agent/Dockerfile | Mutable base tag; no hash-pinned requirements | open |
 | ECC-31 | ECC | I | security | mlops components | `joblib.load` with no artifact integrity verification (CWE-502) | open |
 | ECC-59 | ECC | I | correctness | register_serving_model.py | Models registered against a mutable `:latest` serving container | open |

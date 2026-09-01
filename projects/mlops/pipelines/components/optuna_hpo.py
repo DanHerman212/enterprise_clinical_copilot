@@ -290,8 +290,8 @@ def run_optuna_hpo(
 @component(
     base_image=TRAINING_IMAGE,
     packages_to_install=[
-        "optuna", "xgboost", "scikit-learn", "pandas", "pyarrow",
-        "google-cloud-aiplatform",
+        "optuna>=4,<5", "xgboost>=2.1,<2.2", "scikit-learn>=1.5,<2",
+        "pandas>=2,<3", "pyarrow>=14,<25", "google-cloud-aiplatform",
     ],
 )
 def optuna_hpo(

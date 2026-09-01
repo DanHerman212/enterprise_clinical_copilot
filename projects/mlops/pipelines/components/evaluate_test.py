@@ -27,6 +27,7 @@ from sklearn.metrics import (
 )
 from kfp import dsl
 from ._image import TRAINING_IMAGE, component
+from ._artifact_integrity import load as _model_load
 from .benchmark_gate import MIN_GATE_MARGIN, validate_baseline
 from src.thresholds import (
     net_benefit,
@@ -72,7 +73,7 @@ def run_evaluate_test(
     y_test = pd.read_parquet(y_test_path).iloc[:, 0]
 
     validate_baseline(hospital_aucpr)
-    model = joblib.load(model_artifact_path)
+    model = _model_load(model_artifact_path)
     proba = model.predict_proba(X_test)[:, 1]
 
     test_aucpr = float(average_precision_score(y_test, proba))

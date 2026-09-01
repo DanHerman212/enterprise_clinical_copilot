@@ -15,6 +15,7 @@ import pandas as pd
 import shap
 from kfp import dsl
 from ._image import TRAINING_IMAGE, component
+from ._artifact_integrity import load as _model_load
 
 
 def run_shap_explain(
@@ -30,7 +31,7 @@ def run_shap_explain(
 ) -> dict[str, float]:
     """Compute SHAP values, save plot and parquet.  Returns top-N feature importance."""
     X_test = pd.read_parquet(x_test_path)
-    model = joblib.load(model_artifact_path)
+    model = _model_load(model_artifact_path)
 
     # SHAP needs the underlying booster, not the sklearn wrapper.
     booster = model.get_booster()

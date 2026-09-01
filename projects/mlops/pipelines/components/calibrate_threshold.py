@@ -153,8 +153,8 @@ train predictions. The shaded band marks thresholds whose F{beta:g} is within
 @component(
     base_image=TRAINING_IMAGE,
     packages_to_install=[
-        "xgboost", "scikit-learn", "pandas", "pyarrow",
-        "google-cloud-aiplatform",
+        "xgboost>=2.1,<2.2", "scikit-learn>=1.5,<2", "pandas>=2,<3",
+        "pyarrow>=14,<25", "google-cloud-aiplatform",
     ],
 )
 def calibrate_threshold(

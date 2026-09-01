@@ -171,7 +171,7 @@ def run_load_data(
 
 @component(
     base_image=TRAINING_IMAGE,
-    packages_to_install=["google-cloud-bigquery", "pandas", "pyarrow"],
+    packages_to_install=["google-cloud-bigquery", "pandas>=2,<3", "pyarrow>=14,<25"],
 )
 def load_data(
     project_id: str,

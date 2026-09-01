@@ -69,7 +69,7 @@ def run_validate_data(
 
 @component(
     base_image=TRAINING_IMAGE,
-    packages_to_install=["evidently==0.4.34", "numpy<2", "pandas", "pyarrow"],
+    packages_to_install=["evidently==0.4.34", "numpy<2", "pandas>=2,<3", "pyarrow>=14,<25"],
 )
 def validate_data(
     x_train: dsl.Input[dsl.Dataset],

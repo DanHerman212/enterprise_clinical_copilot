@@ -23,6 +23,7 @@ warnings.filterwarnings("ignore")
 
 from pipelines.components.benchmark_gate import run_benchmark_gate
 from pipelines.components.evaluate_test import run_evaluate_test
+from pipelines.components._artifact_integrity import dump as dump_model, load as load_model
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +79,7 @@ def _trained_model(tmp_path):
     model = XGBClassifier(n_estimators=20, max_depth=3, random_state=42)
     model.fit(X, y)
     model_path = tmp_path / "model.joblib"
-    joblib.dump(model, model_path)
+    dump_model(model, str(model_path))  # writes the ECC-31 .sha256 sidecar
 
     x_path = tmp_path / "x_test.parquet"
     y_path = tmp_path / "y_test.parquet"
@@ -148,3 +149,38 @@ def test_evaluate_hard_fails_on_instability(tmp_path):
             benchmark_aucpr=0.40,
             hospital_aucpr=0.10,
         )
+
+
+# ---------------------------------------------------------------------------
+# ECC-31 — hash-verified artifact I/O
+# ---------------------------------------------------------------------------
+
+def test_model_artifact_round_trips_with_sidecar(tmp_path):
+    model = XGBClassifier(n_estimators=3, random_state=0)
+    X = np.random.RandomState(0).normal(size=(20, 2))
+    y = (X[:, 0] > 0).astype(int)
+    model.fit(X, y)
+    path = str(tmp_path / "m.joblib")
+    dump_model(model, path)
+    assert load_model(path) is not None
+
+
+def test_model_artifact_refuses_tampering(tmp_path):
+    model = XGBClassifier(n_estimators=3, random_state=0)
+    X = np.random.RandomState(0).normal(size=(20, 2))
+    y = (X[:, 0] > 0).astype(int)
+    model.fit(X, y)
+    path = str(tmp_path / "m.joblib")
+    dump_model(model, path)
+    with open(path, "wb") as fh:
+        fh.write(b"tampered")
+    with pytest.raises(RuntimeError, match="checksum mismatch"):
+        load_model(path)
+
+
+def test_model_artifact_refuses_missing_sidecar(tmp_path):
+    path = str(tmp_path / "orphan.joblib")
+    with open(path, "wb") as fh:
+        fh.write(b"no sidecar")
+    with pytest.raises(RuntimeError, match="missing"):
+        load_model(path)

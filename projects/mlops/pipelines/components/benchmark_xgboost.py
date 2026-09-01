@@ -10,6 +10,7 @@ from sklearn.metrics import average_precision_score
 from xgboost import XGBClassifier
 from kfp import dsl
 from ._image import TRAINING_IMAGE, component
+from ._artifact_integrity import dump as _model_dump
 
 
 def run_benchmark_xgboost(
@@ -42,13 +43,16 @@ def run_benchmark_xgboost(
         y_val, model.predict_proba(X_val)[:, 1],
     ))
     print(f"  Benchmark XGBoost AUCPR: {aucpr:.4f}")
-    joblib.dump(model, model_artifact_path)
+    _model_dump(model, model_artifact_path)
     return aucpr
 
 
 @component(
     base_image=TRAINING_IMAGE,
-    packages_to_install=["xgboost", "scikit-learn", "pandas", "pyarrow", "joblib"],
+    packages_to_install=[
+        "xgboost>=2.1,<2.2", "scikit-learn>=1.5,<2", "pandas>=2,<3",
+        "pyarrow>=14,<25", "joblib>=1.3,<2",
+    ],
 )
 def benchmark_xgboost(
     x_train: dsl.Input[dsl.Dataset],

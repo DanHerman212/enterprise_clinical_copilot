@@ -21,6 +21,7 @@ from sklearn.model_selection import GroupShuffleSplit
 from xgboost import XGBClassifier
 from kfp import dsl
 from ._image import TRAINING_IMAGE, component
+from ._artifact_integrity import dump as _model_dump
 
 _MONITOR_VAL_FRAC = 0.8  # use 80% of val for training, 20% for per-round monitor
 
@@ -125,7 +126,7 @@ def run_train_final(
     #     eval/explain/audit components (train time).
     #   * model.bst     — native booster, uploaded with the pre-built XGBoost
     #     serving container (serving time, Sampled Shapley on the endpoint).
-    joblib.dump(model, model_artifact_path)
+    _model_dump(model, model_artifact_path)
     if booster_model_path is not None:
         model.get_booster().save_model(booster_model_path)
     return train_aucpr
@@ -186,7 +187,8 @@ final rounds are memorising noise without improving generalization.</p>
 @component(
     base_image=TRAINING_IMAGE,
     packages_to_install=[
-        "xgboost", "scikit-learn", "pandas", "pyarrow", "joblib",
+        "xgboost>=2.1,<2.2", "scikit-learn>=1.5,<2", "pandas>=2,<3",
+        "pyarrow>=14,<25", "joblib>=1.3,<2",
         "google-cloud-aiplatform",
     ],
 )

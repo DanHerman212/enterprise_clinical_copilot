@@ -14,7 +14,8 @@ Usage (from repo root):
 Environment:
     BUNDLE_URI     — GCS dir containing model.bst + manifest.json (required
                      unless passed as the positional argument)
-    SERVING_IMAGE  — override the pre-built container image
+    SERVING_IMAGE  — the pre-built container image (required: no mutable
+                     `:latest` default — ECC-59)
 """
 
 import os
@@ -30,7 +31,6 @@ from src.config import get_project_id  # noqa: E402
 
 PROJECT = get_project_id()
 LOCATION = "us-east1"
-DEFAULT_IMAGE = "us-docker.pkg.dev/vertex-ai/prediction/xgboost-cpu.2-1:latest"
 
 
 def main() -> None:
@@ -42,7 +42,12 @@ def main() -> None:
             "BUNDLE_URI is required (positional arg or env): the gs:// dir of a "
             "completed pipeline's serving bundle (model.bst + manifest.json)."
         )
-    image = os.environ.get("SERVING_IMAGE", DEFAULT_IMAGE)
+    image = os.environ.get("SERVING_IMAGE")
+    if not image:
+        sys.exit(
+            "SERVING_IMAGE is required (ECC-59): the pre-built xgboost-cpu.2-1:latest "
+            "container is mutable. Pass a versioned/digest-pinned serving image."
+        )
 
     aiplatform.init(project=PROJECT, location=LOCATION)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")

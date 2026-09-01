@@ -42,6 +42,7 @@ import numpy as np
 import pandas as pd
 from kfp import dsl
 from ._image import TRAINING_IMAGE, component
+from ._artifact_integrity import load as _model_load
 
 # Levels smaller than this are skipped (rates too unstable to compare).
 _MIN_SUBGROUP = 50
@@ -196,7 +197,7 @@ def run_fairness_audit(
     """
     X_test = pd.read_parquet(x_test_path)
     y_test = pd.read_parquet(y_test_path).iloc[:, 0].to_numpy().astype(int)
-    model = joblib.load(model_artifact_path)
+    model = _model_load(model_artifact_path)
 
     proba = model.predict_proba(X_test)[:, 1]
     y_pred_bin = (proba >= tuned_threshold).astype(int)

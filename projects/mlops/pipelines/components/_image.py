@@ -16,6 +16,12 @@ from kfp import dsl
 
 _DEFAULT_BASE_IMAGE = "us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest"
 
+# ECC-69: the ML libraries the components install at runtime are pinned to
+# major ranges (see each component's packages_to_install), with xgboost pinned
+# to >=2.1,<2.2 for exact parity with the CPR serving image. For full
+# reproducibility, set TRAINING_IMAGE_URI to the custom pre-built image (see
+# pipelines/Dockerfile) so nothing is installed at step runtime.
+
 TRAINING_IMAGE = os.environ.get("TRAINING_IMAGE_URI", _DEFAULT_BASE_IMAGE)
 
 

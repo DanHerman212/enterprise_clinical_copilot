@@ -5,8 +5,8 @@ One row per finding, merged from `enterprise_clinical_copilot/docs/REVIEW_BACKLO
 remediation detail stays in those files and in `docs/adversarial_code_review/` —
 this register is the working triage view. Sorted severity → cluster → ID.
 
-**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **0 Major** open, 18 Minor
-open, 106 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
+**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **0 Major** open, 17 Minor
+open, 107 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
 
 Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spend/quota/DoS ·
 **D** chunker determinism · **E** fail-loud build pipeline · **F** isolation & retrieval (R1) ·
@@ -92,7 +92,7 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | ECC-35 | ECC | B | correctness | guardrail.py, chunking.py | Redaction guard covers only age — all other `___` fields rely on the prompt alone | **resolved 2026-08-31** |
 | ECC-07 | ECC | C | security | agent/server.py | No app-level auth on `/ask` — relies wholly on Cloud Run IAM | **resolved 2026-08-31** |
 | S1-07 | site | C | correctness | demo/models.py | UTC-midnight quota rollover; refund not tied to the period it debited | **resolved 2026-08-31** |
-| S1-08 | site | C | ops | deployment_strategy.md | No global daily budget / kill switch (per-user quota only) | open |
+| S1-08 | site | C | ops | deployment_strategy.md | No global daily budget / kill switch (per-user quota only) | **resolved 2026-08-31** |
 | S1-11 | site | C | correctness | demo/views.py, agent_client.py | Unvalidated agent response shape — 500 after credit consumed, refund path skipped | **resolved 2026-08-31** |
 | S1-15 | site | C | architecture | agent_client.py, Dockerfile | Blocking 120s `requests.post` in sync views can exhaust the thread pool and stall the whole site | **resolved 2026-08-31** |
 | ECC-26 | ECC | D | correctness | rag_search.py | Chunk-id miss silently falls back to the entire note; `or` also swallows legitimately-empty chunks | **resolved 2026-08-31** |

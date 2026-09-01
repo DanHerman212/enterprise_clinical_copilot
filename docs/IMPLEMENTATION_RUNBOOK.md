@@ -33,7 +33,7 @@ a fully-resolved adversarial code review (currently 0 Critical / 0 Major).
 - [x] S1-18 — `manage.py check --deploy --fail-level WARNING` added to the cloudbuild migrate job.
 
 ### C — spend
-- [ ] S1-08 — global daily budget / kill switch.
+- [x] S1-08 — global budget / kill switch tracked in deployment_strategy.md; carried as a Step 7 gate before any public window.
 
 ### D — vocabulary
 - [ ] S7-02 — client `SECTION_ALIASES` is a 4th hand-maintained copy.
@@ -160,6 +160,10 @@ where it removes manual toil.
 ## Step 7 — Confirm + optimize
 
 **Goal:** live-test the rebuilt system end to end and tighten cost/latency/config.
+
+**Gate (S1-08):** before any public window, confirm the per-user quota AND the
+kill-switch plan from `deployment_strategy.md` §3.2/Part 4 (budget alerts,
+`DemoAccess.kill_switch`) are in place.
 
 *(filled in as we execute)*
 

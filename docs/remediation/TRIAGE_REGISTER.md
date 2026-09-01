@@ -5,8 +5,8 @@ One row per finding, merged from `enterprise_clinical_copilot/docs/REVIEW_BACKLO
 remediation detail stays in those files and in `docs/adversarial_code_review/` —
 this register is the working triage view. Sorted severity → cluster → ID.
 
-**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **5 Major** open, 28 Minor
-open, 91 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
+**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **3 Major** open, 26 Minor
+open, 95 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
 
 Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spend/quota/DoS ·
 **D** chunker determinism · **E** fail-loud build pipeline · **F** isolation & retrieval (R1) ·
@@ -57,8 +57,8 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | ECC-61 | ECC | I | security/ops | predictor.py load, cpr cloudbuild | No bundle checksum, `:latest` provenance, `_TAG` defaults to latest — mutable supply chain end to end | open |
 | S6-01 | site | J | security | content templates, models | Stored XSS: `\|safe` rendering with no server-side sanitization anywhere | **resolved 2026-08-31** |
 | S6-06 | site | J | security | content/sectioning.py | Sectioning round-trip un-escapes entities — author-escaped text becomes live markup | **resolved 2026-08-31** |
-| S6-02 | site | K | ops | ContactView.post | Public contact form: no rate limiting, unbounded TextField — spam/DB bloat | open |
-| S6-03 | site | K | correctness | ContactView.post | No server-side validation — long inputs raise `DataError` → 500 on prod Postgres | open |
+| S6-02 | site | K | ops | ContactView.post | Public contact form: no rate limiting, unbounded TextField — spam/DB bloat | **resolved 2026-08-31** |
+| S6-03 | site | K | correctness | ContactView.post | No server-side validation — long inputs raise `DataError` → 500 on prod Postgres | **resolved 2026-08-31** |
 | S6-07 | site | K | correctness | content/sectioning.py | Drill-down silently drops all content before the first `<h2>` | open |
 | ECC-60 | ECC | L | security | cpr/predictor.py | Zero input validation: typo'd/missing keys become NaN — confident, silently wrong clinical probability | **resolved 2026-08-31** |
 | ECC-65 | ECC | L | correctness | training_pipeline.py, gates | Gate baseline is a runtime parameter — submit `0.0` and both performance gates are neutralized | **resolved 2026-08-31** |
@@ -125,7 +125,7 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | S7-01 | site | J | security | demo_flow.js | `showEmpty` innerHTML sink — safe today, latent XSS for any future dynamic caller | **resolved 2026-08-31** |
 | S7-03 | site | J | ops | demo JS | No CSP backstop for the demo surface (shared with S6-10) | **resolved 2026-08-31** |
 | S7-10 | site | J | security | a2ui vendor + demo_a2ui.js | DOMPurify defaults allow `<a>`/`<img>` — phishing/beacon channel inside the trusted clinical canvas | **resolved 2026-08-31** |
-| S6-04 | site | K | correctness | content/models.py | Duplicate title → slug collision → 500 on admin save | open |
+| S6-04 | site | K | correctness | content/models.py | Duplicate title → slug collision → 500 on admin save | **resolved 2026-08-31** |
 | S6-08 | site | K | security | content/urls.py | Section slugged `preview` shadowed by the staff preview route | open |
 | S6-12 | site | K | correctness | ContactView.post | Error path loses user input, returns 200, accepts whitespace-only values | open |
 | ECC-67 | ECC | L | correctness | calibrate_threshold.py, train_final.py | Threshold selected from CV OOF but applied to a different refit model — off its F-beta optimum | **resolved 2026-08-31** |
@@ -147,7 +147,7 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | ECC-17 | ECC | Z | ops | agent/graph.py | `handler.last_trace_id` unverified attribute — possible AttributeError after full spend | open |
 | ECC-50 | ECC | Z | ops | .env.lanfuse | Typo'd filename (gitignored, no secret leaked) — future loaders silently miss it | open |
 | S1-17 | site | Z | security | bandit scan | 10 Low findings — verified false positives / low risk; awareness only | open |
-| S6-05 | site | Z | ops | content/tests.py | No tests for the public content surface (auth gating, publishing filters, contact form) | open |
+| S6-05 | site | K | ops | content/tests.py | No tests for the public content surface (auth gating, publishing filters, contact form) | **resolved 2026-08-31** |
 | S9-04 | site | Z | ops | settings.py | Legacy `publicRead` ACL breaks under UBLA; `MEDIA_URL` disagrees with storage output | open |
 | S9-06 | site | Z | ops | settings.py (LOGGING) | LOGGING omits the `demo` app logger — the surface that most needs telemetry | open |
 | S9-07 | site | Z | correctness | urls.py | DEBUG static served from stale `staticfiles/` instead of WhiteNoise | open |

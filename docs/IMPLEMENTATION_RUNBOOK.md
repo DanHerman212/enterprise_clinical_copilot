@@ -36,7 +36,7 @@ a fully-resolved adversarial code review (currently 0 Critical / 0 Major).
 - [x] S1-08 — global budget / kill switch tracked in deployment_strategy.md; carried as a Step 7 gate before any public window.
 
 ### D — vocabulary
-- [ ] S7-02 — client `SECTION_ALIASES` is a 4th hand-maintained copy.
+- [x] S7-02 — client `SECTION_ALIASES` documented as a copy of the ECC canonical; consolidation sequenced with Step 8.
 
 ### I — deps & supply chain
 - [ ] ECC-16 — `agent/Dockerfile` mutable base tag.
@@ -173,6 +173,9 @@ kill-switch plan from `deployment_strategy.md` §3.2/Part 4 (budget alerts,
 
 **Goal:** repo hygiene and a coherent semantic layer — consistent naming,
 structure, and docs, with this runbook integrated as the canonical guide.
+
+**Carried items:** S7-02 — consolidate the client `SECTION_ALIASES` with the
+server vocabulary (server-emitted JSON) so the section list lives in one place.
 
 *(filled in as we execute)*
 

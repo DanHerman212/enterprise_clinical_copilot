@@ -5,8 +5,8 @@ One row per finding, merged from `enterprise_clinical_copilot/docs/REVIEW_BACKLO
 remediation detail stays in those files and in `docs/adversarial_code_review/` —
 this register is the working triage view. Sorted severity → cluster → ID.
 
-**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **0 Major** open, 17 Minor
-open, 107 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
+**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **0 Major** open, 16 Minor
+open, 108 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
 
 Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spend/quota/DoS ·
 **D** chunker determinism · **E** fail-loud build pipeline · **F** isolation & retrieval (R1) ·
@@ -100,7 +100,7 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | ECC-34 | ECC | D | correctness | rag/chunking.py | Fixed-width fallback cuts mid-word | **resolved 2026-08-31** |
 | ECC-43 | ECC | D | correctness | rag_search.py (sections) | `rag_search_sections` cites datapoint ids that don't exist in the index, with a fake `score: 1.0` | **resolved 2026-08-31** |
 | ECC-44 | ECC | D | correctness | rag/chunking.py (`_pack`) | Span merging re-includes filtered redaction-only pieces in packed chunks | **resolved 2026-08-31** |
-| S7-02 | site | D | maintainability | demo_flow.js | Client `SECTION_ALIASES` is a 4th hand-maintained copy of the section vocabulary | open |
+| S7-02 | site | D | maintainability | demo_flow.js | Client `SECTION_ALIASES` is a 4th hand-maintained copy of the section vocabulary | **resolved 2026-08-31** |
 | ECC-45 | ECC | E | ops | rag/notes.py | Chunks cache has no manifest/count check; notes verification only fires on full exhaustion | **resolved 2026-08-31** |
 | ECC-70 | ECC | E | correctness | rag_ingest_pipeline.py | KFP cache key ignores table contents — re-submission silently reuses stale chunks/embeddings | **resolved 2026-08-31** |
 | ECC-22 | ECC | F | correctness | predict.py, rag_search.py | No demo-cohort restriction server-side — any hadm_id present in the tables works | **resolved 2026-08-31** |

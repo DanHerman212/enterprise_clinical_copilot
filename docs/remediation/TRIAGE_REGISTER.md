@@ -5,8 +5,8 @@ One row per finding, merged from `enterprise_clinical_copilot/docs/REVIEW_BACKLO
 remediation detail stays in those files and in `docs/adversarial_code_review/` —
 this register is the working triage view. Sorted severity → cluster → ID.
 
-**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **0 Major** open, 9 Minor
-open, 115 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
+**Snapshot (2026-09-01):** 124 findings — **0 Critical**, **0 Major**, **0 Minor**
+open, 124 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
 
 Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spend/quota/DoS ·
 **D** chunker determinism · **E** fail-loud build pipeline · **F** isolation & retrieval (R1) ·
@@ -134,15 +134,15 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | ECC-73 | ECC | L | correctness | cpr/predictor.py | SHAP contributions are log-odds but the response/comment imply probability units | **resolved 2026-08-31** |
 | ECC-49 | ECC | M | ops | scripts/teardown.py | Prefix-matched teardown could delete future non-demo endpoints | **resolved 2026-08-31** |
 | ECC-58 | ECC | M | security | all cloudbuild files | No dedicated build `serviceAccount` — any build runs as an identity that can deploy prod | **resolved 2026-08-31** |
-| S7-04 | site | N | robustness | demo_splitpane.js, demo_flow.js | Non-numeric probability renders `NaN%` and a wrong band | open |
-| S7-05 | site | N | correctness | demo_flow.js | Markdown regexes run on escaped text — entities display literally in code spans | open |
-| S7-11 | site | N | correctness | demo_flow.js | Mixed/reversed citation ranges silently disappear | open |
-| S7-12 | site | N | correctness | demo_flow.js, a2ui_canvas.py | Section start-match not line-anchored — mid-sentence aliases truncate extraction (client + server copies) | open |
-| S7-13 | site | N | ops | templates | Cache-bust version skew — custom demo runs `demo_flow` 5 revisions stale | open |
-| S7-14 | site | N | correctness | console templates, demo_flow.js | Unscored patients render "NaN%" (no `\|default` on data-probability) | open |
-| S7-15 | site | N | correctness | demo_splitpane.js | Source lookup by query equality — repeated questions surface the wrong turn's passages | open |
-| S7-16 | site | N | correctness | demo_a2ui.js | Stale trace pane leaks the previous patient's envelope JSON (R1 bleed in the trace surface) | open |
-| S7-17 | site | N | correctness | demo_a2ui.js | Missing SourceCard → cite click no-op; failed extraction mislabels the whole note as a section | open |
+| S7-04 | site | N | robustness | demo_splitpane.js, demo_flow.js | Non-numeric probability renders `NaN%` and a wrong band | **resolved 2026-09-01** |
+| S7-05 | site | N | correctness | demo_flow.js | Markdown regexes run on escaped text — entities display literally in code spans | **resolved 2026-09-01** |
+| S7-11 | site | N | correctness | demo_flow.js | Mixed/reversed citation ranges silently disappear | **resolved 2026-09-01** |
+| S7-12 | site | N | correctness | demo_flow.js, a2ui_canvas.py | Section start-match not line-anchored — mid-sentence aliases truncate extraction (client + server copies) | **resolved 2026-09-01** |
+| S7-13 | site | N | ops | templates | Cache-bust version skew — custom demo runs `demo_flow` 5 revisions stale | **resolved 2026-09-01** |
+| S7-14 | site | N | correctness | console templates, demo_flow.js | Unscored patients render "NaN%" (no `\|default` on data-probability) | **resolved 2026-09-01** |
+| S7-15 | site | N | correctness | demo_splitpane.js | Source lookup by query equality — repeated questions surface the wrong turn's passages | **resolved 2026-09-01** |
+| S7-16 | site | N | correctness | demo_a2ui.js | Stale trace pane leaks the previous patient's envelope JSON (R1 bleed in the trace surface) | **resolved 2026-09-01** |
+| S7-17 | site | N | correctness | demo_a2ui.js | Missing SourceCard → cite click no-op; failed extraction mislabels the whole note as a section | **resolved 2026-09-01** |
 | ECC-29 | ECC | Q | security | bigquery_source.py, config.py | Table-name env vars interpolated into SQL with no validation/allowlist | **resolved 2026-08-31** |
 | ECC-17 | ECC | Z | ops | agent/graph.py | `handler.last_trace_id` unverified attribute — possible AttributeError after full spend | **resolved 2026-08-31** |
 | ECC-50 | ECC | Z | ops | .env.lanfuse | Typo'd filename (gitignored, no secret leaked) — future loaders silently miss it | **resolved 2026-08-31** |

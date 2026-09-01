@@ -50,15 +50,15 @@ a fully-resolved adversarial code review (currently 0 Critical / 0 Major).
 - [x] S6-12 — contact whitespace/retention pinned by regression tests.
 
 ### N — front-end correctness
-- [ ] S7-04 — non-numeric probability renders `NaN%`.
-- [ ] S7-05 — markdown regexes run on escaped text.
-- [ ] S7-11 — mixed/reversed citation ranges silently disappear.
-- [ ] S7-12 — section start-match not line-anchored (client + server copies).
-- [ ] S7-13 — cache-bust version skew (custom demo 5 revisions stale).
-- [ ] S7-14 — unscored patients render `NaN%`.
-- [ ] S7-15 — source lookup by query equality.
-- [ ] S7-16 — stale trace pane leaks previous patient's envelope.
-- [ ] S7-17 — missing SourceCard → cite click no-op.
+- [x] S7-04 — non-numeric probability renders `NaN%`.
+- [x] S7-05 — markdown regexes run on escaped text.
+- [x] S7-11 — mixed/reversed citation ranges silently disappear.
+- [x] S7-12 — section start-match not line-anchored (client + server copies).
+- [x] S7-13 — cache-bust version skew (custom demo 5 revisions stale).
+- [x] S7-14 — unscored patients render `NaN%`.
+- [x] S7-15 — source lookup by query equality.
+- [x] S7-16 — stale trace pane leaks previous patient's envelope.
+- [x] S7-17 — missing SourceCard → cite click no-op.
 
 **Verify:** ECC `pytest` and site `manage.py test` suites stay green; register
 snapshot shows 0 Critical / 0 Major / 0 Minor open.

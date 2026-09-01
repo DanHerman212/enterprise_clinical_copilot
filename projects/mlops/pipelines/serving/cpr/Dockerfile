@@ -11,9 +11,10 @@
 # Pinned by digest (ECC-55): a mutable base tag would make the content-hash
 # image tag lie — the same hash could build materially different images.
 # Multi-arch manifest-list digest — resolves linux/amd64 on Cloud Build and
-# arm64 locally. NOTE: python:3.10 nears EOL (final release 2026-10) and the
-# base carries CVEs — track the 3.12 bump as a runbook task.
-FROM python:3.10@sha256:70c9cc6756056ca7e438a3198af44b7791a958438594a0b5348603c77763d312
+# arm64 locally. Bumped 3.10 → 3.12-slim (2026-09-01): the 3.10 base carried
+# 3 critical / 25 high CVEs and nears EOL; 3.12-slim (trixie) is 0 critical /
+# 0 high per docker scout.
+FROM python:3.12-slim@sha256:e5c9fa26ffb76e11e0f054f30dc2523a2f9693f0c36c0cf1e39b27e152d899fc
 
 # Keeps Python from generating .pyc files in the container
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -27,10 +28,22 @@ RUN mkdir -m 777 -p /usr/app /home
 WORKDIR /usr/app
 ENV HOME=/home
 
+# libgomp1: xgboost's manylinux wheels link OpenMP at runtime; the slim base
+# omits it (the full python image bundles it via buildpack-deps). Installed
+# against the pinned base digest so the apt state stays deterministic.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
 # CPR prediction-server SDK (separate layer so it caches independently of user
 # code). Pinned to an exact version and NOT --force-reinstall'd (ECC-55): the
 # previous >=1.27.0 floor + force-reinstall made the image drift under a
 # stable content hash. Any version bump is hashed via this Dockerfile.
+# Residual (2026-09-01): this pin caps fastapi<=0.124.4 → starlette<0.51, which
+# leaves 2 HIGH starlette CVEs (SSRF in form parsing + DoS) fixable only in
+# starlette 1.1/1.3.1. The endpoint accepts JSON instances only and sits behind
+# Vertex's managed endpoint, so exploit surface is minimal; a future aiplatform
+# release that lifts the fastapi cap clears them.
 RUN pip install --no-cache-dir 'google-cloud-aiplatform[prediction]==1.161.0'
 
 # CPR handler/predictor wiring (read by the model server at startup).

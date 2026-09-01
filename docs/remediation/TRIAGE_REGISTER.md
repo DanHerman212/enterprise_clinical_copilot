@@ -5,8 +5,8 @@ One row per finding, merged from `enterprise_clinical_copilot/docs/REVIEW_BACKLO
 remediation detail stays in those files and in `docs/adversarial_code_review/` —
 this register is the working triage view. Sorted severity → cluster → ID.
 
-**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **19 Major** open, 32 Minor
-open, 74 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
+**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **13 Major** open, 30 Minor
+open, 81 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
 
 Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spend/quota/DoS ·
 **D** chunker determinism · **E** fail-loud build pipeline · **F** isolation & retrieval (R1) ·
@@ -63,11 +63,11 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | ECC-60 | ECC | L | security | cpr/predictor.py | Zero input validation: typo'd/missing keys become NaN — confident, silently wrong clinical probability | **resolved 2026-08-31** |
 | ECC-65 | ECC | L | correctness | training_pipeline.py, gates | Gate baseline is a runtime parameter — submit `0.0` and both performance gates are neutralized | **resolved 2026-08-31** |
 | ECC-66 | ECC | L | correctness | evaluate_test.py, optuna_hpo.py | Val→test stability check is warn-only with a biased reference — an overfit model still registers | **resolved 2026-08-31** |
-| ECC-36 | ECC | M | security | deploy_index.py, deploy_rag_endpoint.py | Vector Search endpoint is public (no PSC/VPC) — DUA/data-governance exposure with ECC-53 | open |
-| ECC-47 | ECC | M | ops | mlops/scripts/deploy_cpr.py | Undeploys ALL models before deploying the new one — guaranteed outage window, no rollback | open |
-| ECC-53 | ECC | M | security/ops | deploy_rag_endpoint.py defaults | Defaults deploy the real 555k MIMIC index (~$270/mo) to a public endpoint | open |
-| ECC-54 | ECC | M | ops | deploy_endpoint.py, teardown.py | Default path creates an always-billing FeatureOnlineStore that teardown never removes | open |
-| ECC-56 | ECC | M | ops | site cloudbuild.yaml | Migrations + destructive `--prune` run before deploy — failed deploy leaves old revision on new schema | open |
+| ECC-36 | ECC | M | security | deploy_index.py, deploy_rag_endpoint.py | Vector Search endpoint is public (no PSC/VPC) — DUA/data-governance exposure with ECC-53 | **resolved 2026-08-31** |
+| ECC-47 | ECC | M | ops | mlops/scripts/deploy_cpr.py | Undeploys ALL models before deploying the new one — guaranteed outage window, no rollback | **resolved 2026-08-31** |
+| ECC-53 | ECC | M | security/ops | deploy_rag_endpoint.py defaults | Defaults deploy the real 555k MIMIC index (~$270/mo) to a public endpoint | **resolved 2026-08-31** |
+| ECC-54 | ECC | M | ops | deploy_endpoint.py, teardown.py | Default path creates an always-billing FeatureOnlineStore that teardown never removes | **resolved 2026-08-31** |
+| ECC-56 | ECC | M | ops | site cloudbuild.yaml | Migrations + destructive `--prune` run before deploy — failed deploy leaves old revision on new schema | **resolved 2026-08-31** |
 | S7-06 | site | N | correctness | demo_flow.js | Concurrent asks overwrite the last turn — answer A attributed to question B | open |
 | S7-07 | site | N | correctness | demo_flow.js | Patient-switch race paints the previous patient's thread under the new patient (R1 display bleed) | open |
 | S7-08 | site | N | correctness | demo_flow.js, demo_splitpane.js | Unguarded payload derefs outside try/catch — stuck spinner on any failed tool | open |
@@ -75,7 +75,7 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | ECC-37 | ECC | Q | security | pipelines/components/chunk_notes.py + scripts | Pipeline params f-string'd into SQL (`split_name`, table refs) — CWE-89 surface | **resolved 2026-08-31** |
 | ECC-63 | ECC | Q | security | pipelines/components/load_data.py | All SQL inputs interpolated with no query parameters — exfiltration possible via crafted split name | **resolved 2026-08-31** |
 
-## Minor (60 open) + resolved
+## Minor (73)
 
 | ID | Repo | Cluster | Category | Location | One-liner | Status |
 |---|---|---|---|---|---|---|
@@ -132,8 +132,8 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | ECC-68 | ECC | L | correctness | cpr/predictor.py | Missing `threshold.json` silently falls back to 0.5 — flips recall-weighted decisions | **resolved 2026-08-31** |
 | ECC-71 | ECC | L | architecture | training_pipeline.py, register_model.py | Register not gated on shap/fairness; no `parent_model` lineage; gate metrics never persisted | **resolved 2026-08-31** |
 | ECC-73 | ECC | L | correctness | cpr/predictor.py | SHAP contributions are log-odds but the response/comment imply probability units | **resolved 2026-08-31** |
-| ECC-49 | ECC | M | ops | scripts/teardown.py | Prefix-matched teardown could delete future non-demo endpoints | open |
-| ECC-58 | ECC | M | security | all cloudbuild files | No dedicated build `serviceAccount` — any build runs as an identity that can deploy prod | open |
+| ECC-49 | ECC | M | ops | scripts/teardown.py | Prefix-matched teardown could delete future non-demo endpoints | **resolved 2026-08-31** |
+| ECC-58 | ECC | M | security | all cloudbuild files | No dedicated build `serviceAccount` — any build runs as an identity that can deploy prod | **resolved 2026-08-31** |
 | S7-04 | site | N | robustness | demo_splitpane.js, demo_flow.js | Non-numeric probability renders `NaN%` and a wrong band | open |
 | S7-05 | site | N | correctness | demo_flow.js | Markdown regexes run on escaped text — entities display literally in code spans | open |
 | S7-11 | site | N | correctness | demo_flow.js | Mixed/reversed citation ranges silently disappear | open |

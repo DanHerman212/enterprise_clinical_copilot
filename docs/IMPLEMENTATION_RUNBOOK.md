@@ -29,8 +29,8 @@ a fully-resolved adversarial code review (currently 0 Critical / 0 Major).
 - [x] S9-07 — DEBUG static serves the live `static/` sources.
 
 ### A — config/ops
-- [ ] ECC-51 — Secret Manager `latest` → document rotation procedure.
-- [ ] S1-18 — `manage.py check --deploy` as a CI gate.
+- [x] ECC-51 — Secret Manager rotation procedure documented (settings + GCP guide §7a).
+- [x] S1-18 — `manage.py check --deploy --fail-level WARNING` added to the cloudbuild migrate job.
 
 ### C — spend
 - [ ] S1-08 — global daily budget / kill switch.

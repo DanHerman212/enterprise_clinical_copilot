@@ -26,7 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from rag.chunking import DEFAULT_MAX_CHARS, INDEX_SECTIONS, chunk_note  # noqa: E402
-from rag.notes import CACHE_DIR, iter_notes, read_manifest  # noqa: E402
+from rag.notes import CACHE_DIR, CHUNKS_MANIFEST, iter_notes, read_manifest  # noqa: E402
 
 CHUNKS_PATH = CACHE_DIR / "chunks.jsonl.gz"
 
@@ -80,6 +80,14 @@ def main() -> int:
     tmp.rename(CHUNKS_PATH)
 
     total = sum(section_counts.values())
+    # ECC-45: record the count alongside the corpus so iter_chunks() can fail
+    # loudly on a truncated file instead of silently analysing a short corpus.
+    CHUNKS_MANIFEST.write_text(json.dumps({
+        "chunk_count": total,
+        "note_count": note_count,
+        "notes_with_zero_chunks": notes_with_zero_chunks,
+    }, indent=2) + "\n")
+
     print(f"\nWrote {CHUNKS_PATH}")
     print(f"  notes chunked:    {note_count}")
     print(f"  notes w/ 0 chunks:{notes_with_zero_chunks} "

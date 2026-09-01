@@ -71,11 +71,16 @@ def main() -> int:
         print("calling index.remove_datapoints…")
         index.remove_datapoints(datapoint_ids=sorted(dp_ids))
         print("remove_datapoints submitted (async update on the index resource).")
-    except Exception as exc:  # noqa: BLE001 — report and continue
-        print(f"index.remove_datapoints FAILED: {type(exc).__name__}: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        # ECC-42: a failed removal must NOT be followed by the BigQuery
+        # deletes — that would leave the removed patients' vectors queryable
+        # while their source text is gone (later retrieval trips missing_text).
+        print(f"ERROR: index.remove_datapoints FAILED: {type(exc).__name__}: {exc}")
         print("The kept index was not built with StreamUpdate; it cannot be "
-              "incrementally updated. Rebuild it (ideally with "
-              "IndexUpdateMode.STREAM_UPDATE) to enable cheap future prunes.")
+              "incrementally updated. BigQuery rows are KEPT so the index and "
+              "the source stay consistent. Rebuild the index (ideally with "
+              "IndexUpdateMode.STREAM_UPDATE) and re-run this script.")
+        return 1
 
     # 3. Delete the patients from the BigQuery source-of-truth tables.
     for table in (NOTES, SPLIT, FEATURES):

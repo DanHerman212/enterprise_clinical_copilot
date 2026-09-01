@@ -11,6 +11,7 @@ developer machine. `embed_chunks` can reuse embeddings from a previous ingest
 chunks instead of paying for the whole corpus again.
 """
 
+import hashlib
 import os
 import sys
 from datetime import datetime, timezone
@@ -44,6 +45,7 @@ def rag_ingest_pipeline(
     notes_table_ref: str = NOTES_TABLE,
     split_table_ref: str = SPLIT_TABLE,
     split_name: str = "test",
+    data_fingerprint: str = "",
     pack_to: int = DEFAULT_PACK_TO,
     sections_csv: str = ",".join(DEFAULT_SECTIONS),
     previous_ingest_uri: str = "",
@@ -69,6 +71,7 @@ def rag_ingest_pipeline(
         notes_table_ref=notes_table_ref,
         split_table_ref=split_table_ref,
         split_name=split_name,
+        data_fingerprint=data_fingerprint,
         pack_to=pack_to,
         sections_csv=sections_csv,
     )
@@ -110,6 +113,27 @@ def compile_pipeline(package_path: str = "rag_ingest_pipeline.yaml") -> str:
     return package_path
 
 
+def _source_fingerprint() -> str:
+    """Fingerprint the source tables so KFP caching invalidates on data change.
+
+    KFP step caching keys on code + inputs, NOT table contents (ECC-70): without
+    this, a re-submission after the source tables change would silently reuse
+    stale chunks/embeddings and build an index that does not match the data.
+    Folding each table's modified time + row count into the chunk_notes input
+    makes a data change re-run the DAG.
+    """
+    from google.cloud import bigquery
+
+    client = bigquery.Client(project=PROJECT_ID)
+    parts = []
+    for ref in (os.environ.get("NOTES_TABLE_REF", NOTES_TABLE),
+                os.environ.get("SPLIT_TABLE_REF", SPLIT_TABLE)):
+        table = client.get_table(ref)
+        modified = table.modified.timestamp() if table.modified else 0
+        parts.append(f"{ref}:{int(modified)}:{table.num_rows}")
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
+
+
 def submit() -> None:
     """Compile and submit the pipeline to Vertex AI Pipelines.
 
@@ -132,6 +156,7 @@ def submit() -> None:
             "notes_table_ref": os.environ.get("NOTES_TABLE_REF", NOTES_TABLE),
             "split_table_ref": os.environ.get("SPLIT_TABLE_REF", SPLIT_TABLE),
             "split_name": os.environ.get("SPLIT_NAME", "test"),
+            "data_fingerprint": _source_fingerprint(),
             "previous_ingest_uri": os.environ.get(
                 "PREVIOUS_INGEST_URI",
                 f"gs://{PROJECT_ID}-mlops/rag/embeddings/ingest/embed_ingest.jsonl.gz",

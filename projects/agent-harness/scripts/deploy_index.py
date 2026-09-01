@@ -10,7 +10,7 @@ over the 20-patient cohort, which is built later at §10. The sample stands in
 until then.
 
     python scripts/deploy_index.py --mode brute-force [--sample 2000]
-    python scripts/deploy_index.py --mode tree-ah
+    python scripts/deploy_index.py --mode tree-ah --expected <count>
 
 Both build to a CREATED index; the script fails loudly if the final datapoint
 count does not match expectations (silent shortfall = dropped chunks).
@@ -134,7 +134,18 @@ def main() -> int:
     parser.add_argument("--index-id", default=None,
                         help="Index resource name/id to deploy (--mode deploy)")
     parser.add_argument("--sample", type=int, default=DEFAULT_SAMPLE)
+    parser.add_argument("--expected", type=int, default=None,
+                        help="expected final datapoint count (tree-ah; derive it "
+                             "from scripts/count_hybrid_chunks.py)")
     args = parser.parse_args()
+
+    # ECC-40: the old hardcoded 555770 was the real-MIMIC corpus size and is
+    # wrong for the hybrid corpus or any rebuild. tree-ah now requires it.
+    if args.mode == "tree-ah" and args.expected is None:
+        raise SystemExit(
+            "tree-ah requires --expected — derive it from "
+            "scripts/count_hybrid_chunks.py (the corpus size changes per rebuild)."
+        )
 
     aiplatform.init(project=PROJECT, location=LOCATION)
 
@@ -165,7 +176,7 @@ def main() -> int:
             approximate_neighbors_count=APPROXIMATE_NEIGHBORS,
             distance_measure_type=DISTANCE,
         )
-        expected = 555770
+        expected = args.expected
 
     print(f"Created {display}: {index.resource_name}")
     verify(index, expected, display)

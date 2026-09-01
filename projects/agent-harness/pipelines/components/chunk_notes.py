@@ -45,6 +45,7 @@ def run_chunk_notes(
     notes_table_ref: str,
     split_table_ref: str,
     split_name: str,
+    data_fingerprint: str = "",
     pack_to: int,
     sections_csv: str,
     chunks_path: str,
@@ -52,6 +53,10 @@ def run_chunk_notes(
 ) -> None:
     from rag.chunking import DEFAULT_MAX_CHARS, chunk_note
 
+    # data_fingerprint is a cache-key ingredient (ECC-70), not used in SQL:
+    # KFP caches on inputs, and this folds the source tables' modified time +
+    # row count into the step so a data change re-runs chunking.
+    print(f"chunk_notes: data_fingerprint={data_fingerprint}")
     whitelist = {s.strip() for s in sections_csv.split(",") if s.strip()}
     notes_table_ref = _validated_table_ref(notes_table_ref, "notes_table_ref")
     split_table_ref = _validated_table_ref(split_table_ref, "split_table_ref")
@@ -114,6 +119,7 @@ def chunk_notes(
     notes_table_ref: str,
     split_table_ref: str,
     split_name: str,
+    data_fingerprint: str,
     pack_to: int,
     sections_csv: str,
     chunks: dsl.Output[dsl.Artifact],
@@ -127,6 +133,7 @@ def chunk_notes(
         notes_table_ref=notes_table_ref,
         split_table_ref=split_table_ref,
         split_name=split_name,
+        data_fingerprint=data_fingerprint,
         pack_to=pack_to,
         sections_csv=sections_csv,
         chunks_path=chunks.path,

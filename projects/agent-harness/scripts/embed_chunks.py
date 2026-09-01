@@ -83,8 +83,12 @@ def prepare(limit: int | None) -> dict:
     return manifest
 
 
-def run_embedding(limit: int | None, workers: int) -> dict:
-    """Embed all chunks via batchEmbedContents; append-only and resumable."""
+def run_embedding(limit: int | None, workers: int) -> int:
+    """Embed all chunks via batchEmbedContents; append-only and resumable.
+
+    Returns the process exit code: 0 on success, 1 when any batch failed
+    (the ingest is NOT uploaded to GCS on failure — ECC-39).
+    """
     import random
     import threading
     import time
@@ -150,9 +154,14 @@ def run_embedding(limit: int | None, workers: int) -> dict:
                         failed += 1
                     return
                 time.sleep(2 ** attempt + random.uniform(0, 1))
+        if len(resp.embeddings) != len(batch):
+            raise SystemExit(
+                f"embed API returned {len(resp.embeddings)} embeddings for "
+                f"{len(batch)} inputs — refusing to silently drop chunks (ECC-38)"
+            )
         records = [
             vector_search_record(cid, hadm, list(emb.values))
-            for (cid, hadm, _), emb in zip(batch, resp.embeddings)
+            for (cid, hadm, _), emb in zip(batch, resp.embeddings, strict=True)
         ]
         for rec in records:
             if len(rec["embedding"]) != OUTPUT_DIMENSIONALITY:
@@ -208,8 +217,12 @@ def run_embedding(limit: int | None, workers: int) -> dict:
     print(f"  this run: {written} in {elapsed/60:.1f} min; "
           f"failed batches: {failed}; retries: {retries}")
     print(f"  manifest: {INGEST_MANIFEST}")
+    if failed:
+        print(f"ERROR: {failed} batch(es) failed — NOT uploading to GCS. "
+              "The run is resumable; fix and re-run (ECC-39).")
+        return 1
     upload_ingest()
-    return result
+    return 0
 
 
 def upload_ingest() -> None:

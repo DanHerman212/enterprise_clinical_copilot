@@ -196,9 +196,14 @@ def run_embed_chunks(
                 if attempt == 5:
                     raise SystemExit(f"embed batch failed after retries: {exc}")
                 time.sleep(2 ** attempt + random.uniform(0, 1))
+        if len(resp.embeddings) != len(batch):
+            raise SystemExit(
+                f"embed API returned {len(resp.embeddings)} embeddings for "
+                f"{len(batch)} inputs — refusing to silently drop chunks (ECC-38)"
+            )
         records = [
             vector_search_record(c["chunk_id"], c["hadm_id"], list(e.values))
-            for c, e in zip(batch, resp.embeddings)
+            for c, e in zip(batch, resp.embeddings, strict=True)
         ]
         for rec in records:
             if len(rec["embedding"]) != OUTPUT_DIMENSIONALITY:

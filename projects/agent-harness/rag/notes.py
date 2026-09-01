@@ -31,6 +31,7 @@ CACHE_DIR = Path(
 NOTES_PATH = CACHE_DIR / "discharge_test_split.jsonl.gz"
 MANIFEST_PATH = CACHE_DIR / "discharge_test_split.manifest.json"
 CHUNKS_PATH = CACHE_DIR / "chunks.jsonl.gz"
+CHUNKS_MANIFEST = CACHE_DIR / "chunks.manifest.json"
 
 
 def read_manifest() -> dict:
@@ -63,11 +64,28 @@ def iter_notes() -> Iterator[dict]:
 
 
 def iter_chunks() -> Iterator[dict]:
-    """Yield cached chunk records (scripts/build_chunks.py output)."""
+    """Yield cached chunk records (scripts/build_chunks.py output).
+
+    Manifest-verified like the note cache (ECC-45): a truncated chunks file
+    otherwise reads as a short-but-valid corpus, and every datapoint/vector
+    count derived from it would be plausible and wrong.
+    """
     if not CHUNKS_PATH.exists():
         raise FileNotFoundError(
             f"No chunk cache at {CHUNKS_PATH}. Run scripts/build_chunks.py first."
         )
+    if not CHUNKS_MANIFEST.exists():
+        raise FileNotFoundError(
+            f"No chunk manifest at {CHUNKS_MANIFEST}. Run scripts/build_chunks.py first."
+        )
+    expected = json.loads(CHUNKS_MANIFEST.read_text())["chunk_count"]
+    seen = 0
     with gzip.open(CHUNKS_PATH, "rt", encoding="utf-8") as handle:
         for line in handle:
+            seen += 1
             yield json.loads(line)
+    if seen != expected:
+        raise RuntimeError(
+            f"Chunk cache is corrupt: manifest says {expected} chunks, "
+            f"file contains {seen}. Re-run scripts/build_chunks.py."
+        )

@@ -5,8 +5,8 @@ One row per finding, merged from `enterprise_clinical_copilot/docs/REVIEW_BACKLO
 remediation detail stays in those files and in `docs/adversarial_code_review/` —
 this register is the working triage view. Sorted severity → cluster → ID.
 
-**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **13 Major** open, 30 Minor
-open, 81 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
+**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **9 Major** open, 28 Minor
+open, 87 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
 
 Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spend/quota/DoS ·
 **D** chunker determinism · **E** fail-loud build pipeline · **F** isolation & retrieval (R1) ·
@@ -42,10 +42,10 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | S1-09 | site | C | security | demo/views.py, models.py | Refund loop defeats the spend cap: guaranteed-tool-error requests always refunded; `hadm_id` never validated | **resolved 2026-08-31** |
 | ECC-41 | ECC | D | correctness | rag/sections.py | Any bare single-word alias line becomes a section boundary — truncation + corpus-wide chunk-id shifts | **resolved 2026-08-31** |
 | ECC-23 | ECC | D | correctness | rag_search.py | Unknown section id yields a null-text citation; `_KNOWN_SECTIONS` is a stale 13-name copy of a ~29-name vocab | **resolved 2026-08-31** |
-| ECC-38 | ECC | E | correctness | embed_chunks.py (script + component) | `zip()` silently truncates short embed responses — chunks vanish from the ingest with no error | open |
-| ECC-39 | ECC | E | ops | scripts/embed_chunks.py | Inverted exit codes: failed batches exit 0 (and still upload); a clean run exits nonzero | open |
-| ECC-40 | ECC | E | ops | scripts/deploy_index.py | Count verification asserts hardcoded `555770` — wrong for every rebuild | open |
-| ECC-42 | ECC | E | ops | scripts/prune_rag_datapoints.py | Index-removal failure ignored; BQ rows deleted anyway — stale vectors left with no source text | open |
+| ECC-38 | ECC | E | correctness | embed_chunks.py (script + component) | `zip()` silently truncates short embed responses — chunks vanish from the ingest with no error | **resolved 2026-08-31** |
+| ECC-39 | ECC | E | ops | scripts/embed_chunks.py | Inverted exit codes: failed batches exit 0 (and still upload); a clean run exits nonzero | **resolved 2026-08-31** |
+| ECC-40 | ECC | E | ops | scripts/deploy_index.py | Count verification asserts hardcoded `555770` — wrong for every rebuild | **resolved 2026-08-31** |
+| ECC-42 | ECC | E | ops | scripts/prune_rag_datapoints.py | Index-removal failure ignored; BQ rows deleted anyway — stale vectors left with no source text | **resolved 2026-08-31** |
 | ECC-19 | ECC | F | security | rag_search.py `_fetch_texts` | R1 isolation rests on the index restrict alone — no hadm_id re-check when resolving passage text | **resolved 2026-08-31** |
 | ECC-24 | ECC | F | correctness | rag_search.py | Retry replaces a non-empty original result with an empty retried one — real hits discarded | **resolved 2026-08-31** |
 | ECC-06 | ECC | G | ops/security | agent/server.py | 502 body + `/health` leak internal topology (MCP_URL, project, IAM detail) to any direct caller | **resolved 2026-08-31** |
@@ -101,8 +101,8 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | ECC-43 | ECC | D | correctness | rag_search.py (sections) | `rag_search_sections` cites datapoint ids that don't exist in the index, with a fake `score: 1.0` | **resolved 2026-08-31** |
 | ECC-44 | ECC | D | correctness | rag/chunking.py (`_pack`) | Span merging re-includes filtered redaction-only pieces in packed chunks | **resolved 2026-08-31** |
 | S7-02 | site | D | maintainability | demo_flow.js | Client `SECTION_ALIASES` is a 4th hand-maintained copy of the section vocabulary | open |
-| ECC-45 | ECC | E | ops | rag/notes.py | Chunks cache has no manifest/count check; notes verification only fires on full exhaustion | open |
-| ECC-70 | ECC | E | correctness | rag_ingest_pipeline.py | KFP cache key ignores table contents — re-submission silently reuses stale chunks/embeddings | open |
+| ECC-45 | ECC | E | ops | rag/notes.py | Chunks cache has no manifest/count check; notes verification only fires on full exhaustion | **resolved 2026-08-31** |
+| ECC-70 | ECC | E | correctness | rag_ingest_pipeline.py | KFP cache key ignores table contents — re-submission silently reuses stale chunks/embeddings | **resolved 2026-08-31** |
 | ECC-22 | ECC | F | correctness | predict.py, rag_search.py | No demo-cohort restriction server-side — any hadm_id present in the tables works | **resolved 2026-08-31** |
 | ECC-27 | ECC | F | correctness | rag_search.py | `LIMIT 1` without `ORDER BY` — nondeterministic note selection for multi-note admissions | **resolved 2026-08-31** |
 | ECC-28 | ECC | F | correctness | predict.py, rag_search.py | Inconsistent `hadm_id` validation across the three tools (bool passes isinstance int) | **resolved 2026-08-31** |

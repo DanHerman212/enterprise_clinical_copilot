@@ -1,7 +1,9 @@
 # RAG ingest pipeline image. Lean: no training stack — the ingest components
 # only move data between BigQuery, GCS, and the Vertex embeddings API.
 # Build context is projects/agent-harness.
-FROM python:3.12-slim
+# Pinned by digest: reproducible rebuilds (resolves linux/amd64 on Cloud Build,
+# arm64 locally).
+FROM python:3.12-slim@sha256:e5c9fa26ffb76e11e0f054f30dc2523a2f9693f0c36c0cf1e39b27e152d899fc
 
 RUN pip install --no-cache-dir \
     "google-cloud-bigquery>=3.20" \

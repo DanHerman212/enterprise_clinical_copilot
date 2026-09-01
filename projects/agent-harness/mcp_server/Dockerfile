@@ -1,7 +1,9 @@
 # Build context is the harness root, so both the package and the pure-stdlib
 # rag/ section parser (imported by rag_search.py) are available:
 #   gcloud builds submit --tag ... projects/agent-harness
-FROM python:3.12-slim
+# Pinned by digest: reproducible rebuilds (resolves linux/amd64 on Cloud Build,
+# arm64 locally).
+FROM python:3.12-slim@sha256:e5c9fa26ffb76e11e0f054f30dc2523a2f9693f0c36c0cf1e39b27e152d899fc
 
 # No gcc / libpq-dev: nothing here compiles. The website image carried them for
 # months before anyone checked, at ~150 MB of nothing.

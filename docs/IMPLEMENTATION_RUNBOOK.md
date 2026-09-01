@@ -11,64 +11,15 @@ engineer can reproduce the whole system from this document.
 
 ---
 
-## Step 0 — Finish the remediation sweep
-
-**Goal:** close the 26 remaining Minor findings so Step 8 (cleanup) starts from
-a fully-resolved adversarial code review (currently 0 Critical / 0 Major).
-
-**Prerequisites:** clean working trees in both repos; nothing pushed.
-
-**Scope:** clusters A, C, D, I, K, N, Z (26 items, grouped below).
-
-### Z — misc (small)
-- [x] ECC-17 — `agent/graph.py`: `handler.last_trace_id` via `getattr`.
-- [x] ECC-50 — renamed `.env.lanfuse` → `.env.langfuse` (gitignored).
-- [x] S1-17 — `# nosec` on the local-only gcloud subprocess; test passwords documented false positives.
-- [x] S9-04 — UBLA caveat + bucket-IAM command documented (switch sequenced with IaC, Step 6).
-- [x] S9-06 — LOGGING now includes the `demo` logger.
-- [x] S9-07 — DEBUG static serves the live `static/` sources.
-
-### A — config/ops
-- [x] ECC-51 — Secret Manager rotation procedure documented (settings + GCP guide §7a).
-- [x] S1-18 — `manage.py check --deploy --fail-level WARNING` added to the cloudbuild migrate job.
-
-### C — spend
-- [x] S1-08 — global budget / kill switch tracked in deployment_strategy.md; carried as a Step 7 gate before any public window.
-
-### D — vocabulary
-- [x] S7-02 — client `SECTION_ALIASES` documented as a copy of the ECC canonical; consolidation sequenced with Step 8.
-
-### I — deps & supply chain
-- [x] ECC-16 — agent/Dockerfile base pinned by digest; requirements exact-pinned.
-- [x] ECC-31 — joblib artifacts hash-verified (dump/load sidecar).
-- [x] ECC-59 — register_serving_model requires SERVING_IMAGE (no :latest).
-- [x] ECC-69 — component deps pinned to major ranges; xgboost parity with CPR.
-- [x] S6-09 — CDN assets SRI-pinned; mermaid pinned @10.9.3.
-
-### K — content & contact form
-- [x] S6-08 — `section_slug` reserves 'preview' (maps to 'preview-section').
-- [x] S6-12 — contact whitespace/retention pinned by regression tests.
-
-### N — front-end correctness
-- [x] S7-04 — non-numeric probability renders `NaN%`.
-- [x] S7-05 — markdown regexes run on escaped text.
-- [x] S7-11 — mixed/reversed citation ranges silently disappear.
-- [x] S7-12 — section start-match not line-anchored (client + server copies).
-- [x] S7-13 — cache-bust version skew (custom demo 5 revisions stale).
-- [x] S7-14 — unscored patients render `NaN%`.
-- [x] S7-15 — source lookup by query equality.
-- [x] S7-16 — stale trace pane leaks previous patient's envelope.
-- [x] S7-17 — missing SourceCard → cite click no-op.
-
-**Verify:** ECC `pytest` and site `manage.py test` suites stay green; register
-snapshot shows 0 Critical / 0 Major / 0 Minor open.
-
----
-
 ## Step 1 — Rebuild the dataset (data warehouse)
 
 **Goal:** regenerate the encoded analytics dataset and the demo-cohort tables
 (hybrid notes/features/split) that everything downstream reads.
+
+**Note:** the demo dataset is intentionally separate from MIMIC-IV. The MIMIC
+DUA does not permit public consumption with non-credentialed access, so the
+public demo serves a hybrid MTSamples cohort (real note text + story-anchored
+features), while MIMIC-IV feeds training and evaluation only.
 
 **Prerequisites:** BigQuery access as the pipeline/service account.
 

@@ -29,14 +29,14 @@ WITH bucketed AS (
   SELECT
     *,
     CASE
-      WHEN UPPER(race) LIKE '%HISPANIC%' OR UPPER(race) LIKE '%LATINO%' OR UPPER(race) LIKE '%SOUTH AMERICAN%' THEN 'hispanic'
-      WHEN UPPER(race) LIKE '%BLACK%' OR UPPER(race) LIKE '%AFRICAN%' THEN 'black'
-      WHEN UPPER(race) LIKE '%ASIAN%' THEN 'asian'
-      WHEN UPPER(race) LIKE '%AMERICAN INDIAN%' OR UPPER(race) LIKE '%ALASKA NATIVE%' THEN 'amind'
-      WHEN UPPER(race) LIKE '%NATIVE HAWAIIAN%' OR UPPER(race) LIKE '%PACIFIC ISLANDER%' THEN 'nhpi'
-      WHEN UPPER(race) LIKE '%WHITE%' THEN 'white'
-      ELSE 'unknown'
-    END AS race_bucket
+    WHEN UPPER(race) LIKE '%HISPANIC%' OR UPPER(race) LIKE '%LATINO%' OR UPPER(race) LIKE '%SOUTH AMERICAN%' THEN 'hispanic'
+    WHEN UPPER(race) LIKE '%BLACK%' OR UPPER(race) LIKE '%AFRICAN%' THEN 'black'
+    WHEN UPPER(race) LIKE '%ASIAN%' THEN 'asian'
+    WHEN UPPER(race) LIKE '%AMERICAN INDIAN%' OR UPPER(race) LIKE '%ALASKA NATIVE%' THEN 'amind'
+    WHEN UPPER(race) LIKE '%NATIVE HAWAIIAN%' OR UPPER(race) LIKE '%PACIFIC ISLANDER%' THEN 'nhpi'
+    WHEN UPPER(race) LIKE '%WHITE%' THEN 'white'
+    ELSE 'unknown'
+  END AS race_bucket
   FROM ${ref("analytics_dataset")}
 )
 SELECT

@@ -58,6 +58,9 @@ Archive/
 .venv-kfp/
 .venv-nlp/
 
+# --- Node / Dataform -------------------------------------------------------
+node_modules/
+
 # --- Agent eval runtime artifacts (regenerable; durable trace archive is GCP) ---
 projects/agent-harness/eval/results/*.log
 projects/agent-harness/eval/results/*.jsonl

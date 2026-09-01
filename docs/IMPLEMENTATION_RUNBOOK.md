@@ -72,9 +72,24 @@ snapshot shows 0 Critical / 0 Major / 0 Minor open.
 
 **Prerequisites:** BigQuery access as the pipeline/service account.
 
-**Commands:** (filled in as we execute)
+**Commands:**
+```bash
+# Regenerate the encoded view from the single source of truth (committed SQLX).
+cd projects/mlops && ../../.venv/bin/python -m src.encoding --emit-sql
+
+# Install Dataform deps (once; node_modules/ is gitignored) then run the ELT graph.
+cd /Users/danherman/Desktop/enterprise_clinical_copilot
+npx --yes @dataform/cli@3.0.0 install
+npx --yes @dataform/cli@3.0.0 run
+```
 
 **Verify:** row counts match; encoding view regenerated from `src.encoding`.
+- ✅ `cohort` = 352,699 rows (matches the expected count); split 70/14/14/1/1
+  (train/validation/test/prod_test/demo) in `analytics_dataset_encoded`.
+- ✅ all 3 assertions pass (`split_is_disjoint` + the two `rowConditions`).
+- ✅ encoded view byte-identical to `python -m src.encoding --emit-sql` output.
+- Hybrid demo-cohort tables (`readmission.hybrid_notes/split/features`) already
+  in sync (89 rows = the canonical artifact); re-scored after Step 2 retrains.
 
 ---
 

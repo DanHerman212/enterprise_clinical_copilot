@@ -45,13 +45,17 @@ from google.cloud import aiplatform
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from mcp_server.config import LOCATION, PROJECT  # noqa: E402
+from mcp_server.config import (  # noqa: E402
+    INDEX_ENDPOINT_NAME,
+    LOCATION,
+    PROJECT,
+)
 
 ENDPOINT_NAME = os.environ.get("ENDPOINT_NAME", "readmission-endpoint")
 
-# Matched by prefix so a teardown written now still catches the index endpoint
-# whatever it ends up being named.
-VECTOR_ENDPOINT_PREFIX = os.environ.get("VECTOR_ENDPOINT_PREFIX", "readmission")
+# Matched by EXACT display name (ECC-49): a prefix match would undeploy+delete
+# any future non-demo resource whose name merely started with 'readmission'.
+VECTOR_ENDPOINT_NAME = os.environ.get("VECTOR_ENDPOINT_NAME", INDEX_ENDPOINT_NAME)
 
 
 def _find_endpoints() -> list:
@@ -100,15 +104,15 @@ def _teardown_vector_index(dry_run: bool) -> int:
     try:
         endpoints = [
             ep for ep in aiplatform.MatchingEngineIndexEndpoint.list()
-            if ep.display_name.startswith(VECTOR_ENDPOINT_PREFIX)
+            if ep.display_name == VECTOR_ENDPOINT_NAME
         ]
     except Exception as e:  # API disabled, no permission, or none created yet
         print(f"  Vector Search: not queryable ({type(e).__name__}) — skipped")
         return 0
 
     if not endpoints:
-        print(f"  Vector Search: no index endpoint starting with "
-              f"'{VECTOR_ENDPOINT_PREFIX}' — nothing to do")
+        print(f"  Vector Search: no index endpoint named "
+              f"'{VECTOR_ENDPOINT_NAME}' — nothing to do")
         return 0
 
     removed = 0

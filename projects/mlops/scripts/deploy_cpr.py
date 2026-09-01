@@ -150,26 +150,45 @@ def main() -> None:
     )
     print(f"Registered: {model.resource_name}")
 
-    # Reuse or create the endpoint; clear any existing deployments.
+    # Reuse or create the endpoint.
     endpoints = [
         ep for ep in aiplatform.Endpoint.list(order_by="create_time desc")
         if ep.display_name == ENDPOINT_NAME
     ]
     ep = endpoints[0] if endpoints else aiplatform.Endpoint.create(display_name=ENDPOINT_NAME)
     print(f"Endpoint: {ep.resource_name}")
-    for dm in ep.list_models():
-        print(f"  Undeploying stale model {dm.id} …")
-        ep.undeploy(deployed_model_id=dm.id)
 
-    print("Deploying CPR model (5–10 min) …")
-    model.deploy(
-        endpoint=ep,
-        deployed_model_display_name=display_name,
-        machine_type=MACHINE_TYPE,
-        min_replica_count=1,
-        max_replica_count=1,
-        traffic_percentage=100,
-    )
+    stale = list(ep.list_models())
+    if stale:
+        print(f"  Existing deployments: {[dm.id for dm in stale]}")
+
+    # Deploy the new model at 0% traffic FIRST (ECC-47): the old deployment
+    # keeps serving, so there is no outage window, and a failed deploy leaves
+    # the previous model intact — rollback is simply "stop here".
+    print("Deploying CPR model at 0% traffic (5–10 min) …")
+    try:
+        model.deploy(
+            endpoint=ep,
+            deployed_model_display_name=display_name,
+            machine_type=MACHINE_TYPE,
+            min_replica_count=1,
+            max_replica_count=1,
+            traffic_percentage=0,
+        )
+        new_dm_id = next(
+            dm.id for dm in ep.list_models() if dm.display_name == display_name
+        )
+        # Shift all traffic to the new deployment, then retire the stale ones.
+        ep.update(traffic_split={new_dm_id: 100})
+    except Exception:
+        print("Deploy or traffic shift failed — the previous deployment is "
+              "still serving 100% traffic (rollback = no-op).")
+        raise
+
+    for dm in ep.list_models():
+        if dm.id != new_dm_id:
+            print(f"  Undeploying stale model {dm.id} …")
+            ep.undeploy(deployed_model_id=dm.id)
     print(f"Deployed. Endpoint: {ep.resource_name}")
 
 

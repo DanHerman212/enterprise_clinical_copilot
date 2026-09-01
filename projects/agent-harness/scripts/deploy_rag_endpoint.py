@@ -14,7 +14,10 @@ import time
 from pathlib import Path
 
 from google.api_core.exceptions import AlreadyExists
-from google.cloud.aiplatform_v1 import IndexEndpointServiceClient
+from google.cloud.aiplatform_v1 import (
+    IndexEndpointServiceClient,
+    IndexServiceClient,
+)
 from google.cloud.aiplatform_v1.types import (
     DeployedIndex,
     DedicatedResources,
@@ -30,14 +33,28 @@ from mcp_server.config import (  # noqa: E402
     PROJECT,
 )
 
-INDEX_ID = os.environ.get("INDEX_ID", "2371299135438454784")
-MACHINE = os.environ.get("INDEX_MACHINE_TYPE", "e2-standard-16")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _deploy_guard import assert_synthetic_scale  # noqa: E402
+
+# No real-corpus default (ECC-53): the previous default pointed at the 555k
+# vector MIMIC-derived index on e2-standard-16 (~$270/mo). INDEX_ID is now
+# REQUIRED — deploy_synthetic_rag.py supplies the safe synthetic value.
+INDEX_ID = os.environ.get("INDEX_ID")
+MACHINE = os.environ.get("INDEX_MACHINE_TYPE", "e2-standard-2")
 PARENT = f"projects/{PROJECT}/locations/{LOCATION}"
 
 
 def _client() -> IndexEndpointServiceClient:
     return IndexEndpointServiceClient(
         client_options={"api_endpoint": f"{LOCATION}-aiplatform.googleapis.com"})
+
+
+def _index_vector_count(index_name: str) -> int:
+    """Number of vectors in the index, from the low-level index resource."""
+    c = IndexServiceClient(
+        client_options={"api_endpoint": f"{LOCATION}-aiplatform.googleapis.com"})
+    idx = c.get_index(name=index_name)
+    return idx.index_stats.vectors_count if idx.index_stats else 0
 
 
 def _find_endpoint(c: IndexEndpointServiceClient) -> str | None:
@@ -48,8 +65,18 @@ def _find_endpoint(c: IndexEndpointServiceClient) -> str | None:
 
 
 def main() -> int:
+    if not INDEX_ID:
+        raise SystemExit(
+            "INDEX_ID is required (ECC-53): the real-corpus default was "
+            "removed. Use deploy_synthetic_rag.py or set INDEX_ID explicitly."
+        )
     c = _client()
     index_name = f"{PARENT}/indexes/{INDEX_ID}"
+
+    # Refuse to deploy a real-corpus index to a PUBLIC endpoint (ECC-36/53).
+    vectors = _index_vector_count(index_name)
+    print(f"index {INDEX_ID}: {vectors} vectors", flush=True)
+    assert_synthetic_scale(vectors, INDEX_ID)
 
     ep_name = _find_endpoint(c)
     if ep_name is None:
@@ -58,6 +85,8 @@ def main() -> int:
             parent=PARENT,
             index_endpoint={
                 "display_name": ENDPOINT_NAME,
+                # Public, guarded by the synthetic-scale check above (ECC-36);
+                # a private PSC/VPC endpoint would be required for real data.
                 "public_endpoint_enabled": True,
             },
         )

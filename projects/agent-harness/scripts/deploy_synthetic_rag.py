@@ -27,6 +27,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from mcp_server.config import LOCATION, PROJECT  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _deploy_guard import assert_synthetic_scale  # noqa: E402
+
 # Small-shard machine; the medium-shard e2-standard-16 minimum does not apply.
 MACHINE = os.environ.get("INDEX_MACHINE_TYPE", "e2-standard-2")
 
@@ -48,11 +51,7 @@ def newest_synthetic_tree_index() -> tuple[str, str]:
     for created, name, display, vectors in candidates:
         print(f"  {display:32s} vectors={vectors:<8} {name.split('/')[-1]}")
     _, name, display, vectors = candidates[0]
-    if vectors > 100_000:
-        raise SystemExit(
-            f"refusing to deploy {display} ({vectors} vectors): "
-            "looks like the real corpus, not synthetic"
-        )
+    assert_synthetic_scale(vectors, display)
     print(f"→ deploying newest synthetic tree-ah: {display} ({vectors} vectors)")
     return name, display
 

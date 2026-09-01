@@ -1,11 +1,15 @@
 """
-deploy_endpoint.py — Deploy or teardown the readmission model endpoint + FeatureView.
+deploy_endpoint.py — Deploy or teardown the readmission model endpoint.
+
+The FeatureOnlineStore/FeatureView path was removed (2026-08-31, ECC-54): the
+Vertex Feature Store was a dev experiment and is not used in production —
+serving reads features from BigQuery (FEATURE_SOURCE=bigquery).
 
 Usage (from repo root):
     # Deploy
-    .venv/bin/python projects/mlops/scripts/deploy_endpoint.py [--skip-feature-view]
+    .venv/bin/python projects/mlops/scripts/deploy_endpoint.py
 
-    # Teardown everything (endpoints + FeatureStore, keeps models)
+    # Teardown everything (endpoint, keeps models)
     .venv/bin/python projects/mlops/scripts/deploy_endpoint.py --teardown
 
     # Teardown including registered models
@@ -34,18 +38,12 @@ from src.config import get_project_id  # noqa: E402
 
 PROJECT = get_project_id()
 LOCATION = "us-east1"
-PARENT = f"projects/{PROJECT}/locations/{LOCATION}"
 
 ENDPOINT_NAME = os.environ.get("ENDPOINT_NAME", "readmission-endpoint")
 MACHINE_TYPE = os.environ.get("MACHINE_TYPE", "n1-standard-2")
 MIN_REPLICAS = int(os.environ.get("MIN_REPLICAS", "1"))
 MAX_REPLICAS = int(os.environ.get("MAX_REPLICAS", "1"))
 TRAFFIC_SPLIT = int(os.environ.get("TRAFFIC_SPLIT", "100"))
-
-FEATURE_VIEW_SRC = os.environ.get(
-    "FEATURE_VIEW_SRC",
-    f"bq://{PROJECT}.readmission.analytics_dataset_encoded",
-)
 
 # ---------------------------------------------------------------------------
 # Model / Endpoint helpers
@@ -68,81 +66,6 @@ def _endpoint() -> aiplatform.Endpoint:
     ep = aiplatform.Endpoint.create(display_name=ENDPOINT_NAME)
     print(f"Created endpoint: {ep.resource_name}")
     return ep
-
-
-# ---------------------------------------------------------------------------
-# FeatureView (current-gen, BigQuery-backed, via v1beta1 low-level API)
-# ---------------------------------------------------------------------------
-def _setup_feature_view() -> str | None:
-    """Idempotent: create or reuse FeatureOnlineStore + FeatureView.
-
-    Returns the FeatureView resource name or None on failure.
-    """
-    try:
-        from google.cloud.aiplatform_v1beta1 import (
-            FeatureOnlineStoreAdminServiceClient,
-            FeatureOnlineStoreServiceClient,
-            types as fv_types,
-        )
-    except ImportError:
-        print("FeatureView: v1beta1 SDK not available; skipping (non-fatal).")
-        return None
-
-    admin = FeatureOnlineStoreAdminServiceClient(
-        client_options={"api_endpoint": f"{LOCATION}-aiplatform.googleapis.com"}
-    )
-
-    # --- FeatureOnlineStore ---
-    fos_id = "readmission_online_store"
-    fos_name = f"{PARENT}/featureOnlineStores/{fos_id}"
-
-    try:
-        fos = admin.get_feature_online_store(name=fos_name)
-        print(f"FeatureOnlineStore exists: {fos_name}")
-    except Exception:
-        print(f"Creating FeatureOnlineStore: {fos_name} …")
-        op = admin.create_feature_online_store(
-            parent=PARENT,
-            feature_online_store_id=fos_id,
-            feature_online_store=fv_types.FeatureOnlineStore(
-                bigtable=fv_types.FeatureOnlineStoreBigtable(
-                    auto_scaling=fv_types.FeatureOnlineStoreBigtableAutoScaling(
-                        min_node_count=1,
-                        max_node_count=3,
-                        cpu_utilization_target=50,
-                    )
-                )
-            ),
-        )
-        fos = op.result()
-        print(f"FeatureOnlineStore ready: {fos.name}")
-
-    # --- FeatureView ---
-    fv_id = "readmission_features"
-    fv_name = f"{fos_name}/featureViews/{fv_id}"
-
-    try:
-        fv = admin.get_feature_view(name=fv_name)
-        print(f"FeatureView exists: {fv_name}")
-    except Exception:
-        print(f"Creating FeatureView: {fv_name} → {FEATURE_VIEW_SRC} …")
-        op = admin.create_feature_view(
-            parent=fos_name,
-            feature_view_id=fv_id,
-            feature_view=fv_types.FeatureView(
-                big_query_source=fv_types.FeatureViewBigQuerySource(
-                    uri=FEATURE_VIEW_SRC,
-                    entity_id_columns=["hadm_id"],
-                )
-            ),
-        )
-        fv = op.result()
-        print(f"FeatureView ready: {fv.name}")
-
-    print(f"FeatureView: {fv.name}")
-    print(f"  Entity key: hadm_id")
-    print(f"  Source:     {FEATURE_VIEW_SRC}")
-    return fv.name
 
 
 # ---------------------------------------------------------------------------
@@ -176,9 +99,6 @@ def main() -> None:
         )
         print(f"Deployed. Endpoint: {ep.resource_name}")
 
-    if "--skip-feature-view" not in sys.argv:
-        _setup_feature_view()
-
 
 # ---------------------------------------------------------------------------
 # Teardown
@@ -186,7 +106,6 @@ def main() -> None:
 def teardown(*, include_models: bool = False) -> None:
     """Undeploy all models from all matching endpoints and delete them.
 
-    Also tears down FeatureOnlineStore + FeatureView if they exist.
     Set include_models=True to also delete registered models from the registry.
     """
     aiplatform.init(project=PROJECT, location=LOCATION)
@@ -204,23 +123,6 @@ def teardown(*, include_models: bool = False) -> None:
         print(f"Deleting endpoint: {ep.display_name} ({ep.resource_name}) …")
         ep.delete()
         print(f"  Deleted.")
-
-    # --- FeatureOnlineStore + FeatureView ---
-    try:
-        from google.cloud.aiplatform_v1beta1 import (
-            FeatureOnlineStoreAdminServiceClient,
-        )
-        admin = FeatureOnlineStoreAdminServiceClient(
-            client_options={"api_endpoint": f"{LOCATION}-aiplatform.googleapis.com"}
-        )
-        fos_name = f"{PARENT}/featureOnlineStores/readmission_online_store"
-        try:
-            admin.delete_feature_online_store(name=fos_name, force=True)
-            print(f"Deleting FeatureOnlineStore: {fos_name} …")
-        except Exception:
-            print(f"FeatureOnlineStore not found (already deleted): {fos_name}")
-    except ImportError:
-        print("FeatureView teardown skipped (v1beta1 SDK not available).")
 
     # --- Models (optional — keep for reference by default) ---
     if include_models:

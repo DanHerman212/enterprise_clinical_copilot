@@ -15,9 +15,10 @@
 #       ~560 vectors — NOT the 555k real corpus), deploys it to
 #       readmission-rag-index on a cheap e2-standard-2 (~$0.09/hr).
 #
-# NOTE: do NOT call deploy_rag_endpoint.py directly without INDEX_ID /
-# INDEX_MACHINE_TYPE — its defaults are the 555k real index on e2-standard-16
-# (~$270/mo). deploy_synthetic_rag.py sets the safe values for us.
+# NOTE: do NOT call deploy_rag_endpoint.py directly without INDEX_ID — it now
+# REQUIRES INDEX_ID (the 555k-real-corpus default was removed, ECC-53) and
+# defaults to a cheap e2-standard-2. deploy_synthetic_rag.py sets the safe
+# synthetic index + machine for us.
 #
 # Logs: /tmp/deploy_cpr.log and /tmp/deploy_rag.log
 set -u

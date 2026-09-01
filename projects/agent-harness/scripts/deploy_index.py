@@ -36,6 +36,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from mcp_server.config import LOCATION, PROJECT  # noqa: E402
 from rag.notes import CACHE_DIR  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _deploy_guard import assert_synthetic_scale  # noqa: E402
+
 BUCKET = f"{PROJECT}-mlops"
 DIMENSIONS = 768
 DISTANCE = DistanceMeasureType.DOT_PRODUCT_DISTANCE
@@ -43,7 +46,7 @@ INGEST_URI = f"gs://{BUCKET}/rag/embeddings/ingest/"
 VALIDATION_DIR = f"gs://{BUCKET}/rag/embeddings/validation/"
 DEFAULT_SAMPLE = 2000
 APPROXIMATE_NEIGHBORS = 40  # tune against recall at §12
-ENDPOINT_PREFIX = "readmission"          # matches teardown.py VECTOR_ENDPOINT_PREFIX
+ENDPOINT_PREFIX = "readmission"          # display name is 'readmission-rag-index' (teardown matches that exact name)
 # The 555,770-vector tree-ah index is a MEDIUM shard; Vertex only supports
 # machines >= e2-standard-16 for medium shards (e2-standard-2/4 rejected).
 ENDPOINT_MACHINE = "e2-standard-16"      # ~$0.3752/hr → ~$270/mo (user-approved)
@@ -53,8 +56,8 @@ def deploy_endpoint(index_id: str) -> str:
     """§7: create the index endpoint and deploy a tree-ah index to it.
 
     Starts the ~$68/mo hourly meter. Keeps the index itself (so a teardown and
-    re-deploy does not re-pay the index build). The endpoint display name uses
-    the `readmission` prefix so `teardown.py --only vector-index` finds it.
+    re-deploy does not re-pay the index build). The endpoint display name is
+    exactly 'readmission-rag-index' so `teardown.py --only vector-index` finds it.
     """
     aiplatform.init(project=PROJECT, location=LOCATION)
     index = aiplatform.MatchingEngineIndex(index_name=index_id)
@@ -64,6 +67,8 @@ def deploy_endpoint(index_id: str) -> str:
     print(f"index ready: {vectors} vectors")
     if not vectors:
         raise SystemExit(f"index {index_id} has 0 vectors")
+    # ECC-36: this path creates a PUBLIC endpoint — never for the real corpus.
+    assert_synthetic_scale(vectors, index_id)
 
     endpoint = aiplatform.MatchingEngineIndexEndpoint.create(
         display_name=f"{ENDPOINT_PREFIX}-rag-index",

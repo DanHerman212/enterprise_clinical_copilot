@@ -15,6 +15,11 @@
 substitutions:
   _REGION: us-east1
 
+# Dedicated build service account (ECC-58): builds must not run as the project
+# default SA. cicd-deployer needs roles/run.admin, roles/iam.serviceAccountUser
+# on agent-sa, roles/artifactregistry.writer, and roles/logging.logWriter.
+serviceAccount: 'projects/$PROJECT_ID/serviceAccounts/cicd-deployer@$PROJECT_ID.iam.gserviceaccount.com'
+
 steps:
   - name: gcr.io/cloud-builders/docker
     args: ["build", "-f", "agent/Dockerfile", "-t", "${_IMAGE}", "."]

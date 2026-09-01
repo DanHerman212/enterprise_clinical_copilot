@@ -5,8 +5,8 @@ One row per finding, merged from `enterprise_clinical_copilot/docs/REVIEW_BACKLO
 remediation detail stays in those files and in `docs/adversarial_code_review/` —
 this register is the working triage view. Sorted severity → cluster → ID.
 
-**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **9 Major** open, 28 Minor
-open, 87 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
+**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **5 Major** open, 28 Minor
+open, 91 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
 
 Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spend/quota/DoS ·
 **D** chunker determinism · **E** fail-loud build pipeline · **F** isolation & retrieval (R1) ·
@@ -68,10 +68,10 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | ECC-53 | ECC | M | security/ops | deploy_rag_endpoint.py defaults | Defaults deploy the real 555k MIMIC index (~$270/mo) to a public endpoint | **resolved 2026-08-31** |
 | ECC-54 | ECC | M | ops | deploy_endpoint.py, teardown.py | Default path creates an always-billing FeatureOnlineStore that teardown never removes | **resolved 2026-08-31** |
 | ECC-56 | ECC | M | ops | site cloudbuild.yaml | Migrations + destructive `--prune` run before deploy — failed deploy leaves old revision on new schema | **resolved 2026-08-31** |
-| S7-06 | site | N | correctness | demo_flow.js | Concurrent asks overwrite the last turn — answer A attributed to question B | open |
-| S7-07 | site | N | correctness | demo_flow.js | Patient-switch race paints the previous patient's thread under the new patient (R1 display bleed) | open |
-| S7-08 | site | N | correctness | demo_flow.js, demo_splitpane.js | Unguarded payload derefs outside try/catch — stuck spinner on any failed tool | open |
-| S7-09 | site | N | correctness | demo_splitpane.js | Custom demo maps `^[n]`→`passages[n-1]` with no intent resolution — wrong source card (A2UI path already fixed) | open |
+| S7-06 | site | N | correctness | demo_flow.js | Concurrent asks overwrite the last turn — answer A attributed to question B | **resolved 2026-08-31** |
+| S7-07 | site | N | correctness | demo_flow.js | Patient-switch race paints the previous patient's thread under the new patient (R1 display bleed) | **resolved 2026-08-31** |
+| S7-08 | site | N | correctness | demo_flow.js, demo_splitpane.js | Unguarded payload derefs outside try/catch — stuck spinner on any failed tool | **resolved 2026-08-31** |
+| S7-09 | site | N | correctness | demo_splitpane.js | Custom demo maps `^[n]`→`passages[n-1]` with no intent resolution — wrong source card (A2UI path already fixed) | **resolved 2026-08-31** |
 | ECC-37 | ECC | Q | security | pipelines/components/chunk_notes.py + scripts | Pipeline params f-string'd into SQL (`split_name`, table refs) — CWE-89 surface | **resolved 2026-08-31** |
 | ECC-63 | ECC | Q | security | pipelines/components/load_data.py | All SQL inputs interpolated with no query parameters — exfiltration possible via crafted split name | **resolved 2026-08-31** |
 

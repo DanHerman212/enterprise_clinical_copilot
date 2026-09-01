@@ -22,6 +22,7 @@ model consumes a fixed-order numeric vector and returns a calibrated probability
 (objective=binary:logistic).
 """
 
+import hashlib
 import json
 import os
 import shutil
@@ -68,6 +69,19 @@ def assemble_serving_bundle(
                 f,
                 indent=2,
             )
+
+    # ECC-61: write a SHA-256 digest per bundle file so the serving predictor
+    # can verify integrity at load time — a tampered or corrupted artifact
+    # refuses to serve instead of shipping silently.
+    checksums = {}
+    for name in ("model.bst", "manifest.json", "threshold.json",
+                 "gate_metrics.json"):
+        path = os.path.join(bundle_dir, name)
+        if os.path.exists(path):
+            with open(path, "rb") as fh:
+                checksums[name] = hashlib.sha256(fh.read()).hexdigest()
+    with open(os.path.join(bundle_dir, "checksums.json"), "w") as f:
+        json.dump(checksums, f, indent=2)
 
 
 def run_register_model(

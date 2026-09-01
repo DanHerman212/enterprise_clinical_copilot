@@ -10,6 +10,7 @@ Pins:
   * ECC-73: attributions declare their units (log-odds).
 """
 
+import hashlib
 import importlib.util
 import json
 import sys
@@ -121,11 +122,48 @@ def test_load_refuses_a_bundle_without_threshold(tmp_path, monkeypatch):
         cpr.prediction_utils, "download_model_artifacts", lambda uri: None
     )
     monkeypatch.chdir(tmp_path)
+    manifest = json.dumps({"feature_order": _FEATURES, "groups": {}})
+    (tmp_path / "manifest.json").write_text(manifest)
+    # Valid checksums pass the ECC-61 gate, so the ECC-68 threshold check runs.
+    (tmp_path / "checksums.json").write_text(json.dumps({
+        "manifest.json": hashlib.sha256(manifest.encode()).hexdigest(),
+    }))
+    p = cpr.ReadmissionPredictor()
+    with pytest.raises(RuntimeError, match="threshold.json missing"):
+        p.load("gs://unused")
+
+
+def test_load_refuses_a_bundle_without_checksums(tmp_path, monkeypatch):
+    """ECC-61: never serve an artifact whose integrity cannot be verified."""
+    monkeypatch.setattr(
+        cpr.prediction_utils, "download_model_artifacts", lambda uri: None
+    )
+    monkeypatch.chdir(tmp_path)
     (tmp_path / "manifest.json").write_text(
         json.dumps({"feature_order": _FEATURES, "groups": {}})
     )
+    (tmp_path / "threshold.json").write_text(json.dumps({"threshold": 0.2}))
     p = cpr.ReadmissionPredictor()
-    with pytest.raises(RuntimeError, match="threshold.json missing"):
+    with pytest.raises(RuntimeError, match="checksums.json missing"):
+        p.load("gs://unused")
+
+
+def test_load_refuses_a_checksum_mismatch(tmp_path, monkeypatch):
+    """ECC-61: a tampered/corrupted bundle file fails startup loudly."""
+    monkeypatch.setattr(
+        cpr.prediction_utils, "download_model_artifacts", lambda uri: None
+    )
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({"feature_order": _FEATURES, "groups": {}})
+    )
+    (tmp_path / "threshold.json").write_text(json.dumps({"threshold": 0.2}))
+    (tmp_path / "checksums.json").write_text(json.dumps({
+        "manifest.json": "0" * 64,
+        "threshold.json": "0" * 64,
+    }))
+    p = cpr.ReadmissionPredictor()
+    with pytest.raises(RuntimeError, match="checksum mismatch"):
         p.load("gs://unused")
 
 

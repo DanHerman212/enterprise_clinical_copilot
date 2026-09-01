@@ -7,9 +7,11 @@
 #
 # _IMAGE has no default (no project id is committed); deploy_cpr.py always
 # passes it via --substitutions.
-substitutions:
-  _TAG: latest
-
+# _IMAGE and _TAG have NO defaults (ECC-61): a build submitted without
+# --substitutions fails loudly instead of silently tagging the mutable
+# `latest`. deploy_cpr.py always passes the content-hash _TAG. (A
+# `substitutions:` block is deliberately omitted — Cloud Build requires any
+# referenced substitution to carry a value.)
 steps:
   - name: gcr.io/cloud-builders/docker
     args:

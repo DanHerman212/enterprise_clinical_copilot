@@ -20,6 +20,7 @@ Attributions are exact native TreeSHAP contributions (`pred_contribs=True` on a
 probability deltas — declared per prediction as `attribution_units`.
 """
 
+import hashlib
 import json
 import math
 import os
@@ -36,10 +37,38 @@ MAX_BATCH = 100
 ATTRIBUTION_UNITS = "log_odds"
 
 
+def _verify_bundle_checksums() -> None:
+    """ECC-61: refuse to serve a bundle whose files don't match their SHA-256.
+
+    download_model_artifacts writes the bundle files into the working dir. The
+    bundle's checksums.json (written by register_model.assemble_serving_bundle)
+    is the expected digest of each file; a missing manifest OR any mismatch
+    fails startup loudly rather than serving a tampered/corrupted artifact.
+    """
+    if not os.path.exists("checksums.json"):
+        raise RuntimeError(
+            "checksums.json missing from the serving bundle — refusing to serve "
+            "an unverifiable artifact (ECC-61). Re-register the model."
+        )
+    with open("checksums.json") as f:
+        checksums = json.load(f)
+    for name, expected in checksums.items():
+        if not os.path.exists(name):
+            raise RuntimeError(f"serving bundle missing {name!r}")
+        with open(name, "rb") as fh:
+            actual = hashlib.sha256(fh.read()).hexdigest()
+        if actual != expected:
+            raise RuntimeError(
+                f"serving bundle checksum mismatch for {name!r}: "
+                f"expected {expected}, got {actual}"
+            )
+
+
 class ReadmissionPredictor(Predictor):
     def load(self, artifacts_uri: str) -> None:
         """Download the serving bundle (model.bst + manifest.json + threshold.json)."""
         prediction_utils.download_model_artifacts(artifacts_uri)
+        _verify_bundle_checksums()
 
         with open("manifest.json") as f:
             manifest = json.load(f)

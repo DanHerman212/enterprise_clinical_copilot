@@ -10,8 +10,10 @@
 # requirements.txt change (deploy_cpr.py enforces this via a content hash tag).
 # Pinned by digest (ECC-55): a mutable base tag would make the content-hash
 # image tag lie — the same hash could build materially different images.
-# Digest resolved for linux/amd64 python:3.10 (2026-08-31).
-FROM python:3.10@sha256:d47f2f44e7976e19c4097d16a515ad0420e1ed44c02ac0ad6bd1131049afc668
+# Multi-arch manifest-list digest — resolves linux/amd64 on Cloud Build and
+# arm64 locally. NOTE: python:3.10 nears EOL (final release 2026-10) and the
+# base carries CVEs — track the 3.12 bump as a runbook task.
+FROM python:3.10@sha256:70c9cc6756056ca7e438a3198af44b7791a958438594a0b5348603c77763d312
 
 # Keeps Python from generating .pyc files in the container
 ENV PYTHONDONTWRITEBYTECODE=1

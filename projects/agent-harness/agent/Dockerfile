@@ -6,8 +6,10 @@
 #     --substitutions _IMAGE=...  projects/agent-harness
 
 # Pinned by digest (ECC-16): a mutable base tag would make rebuilds
-# non-reproducible. Digest resolved for linux/amd64 python:3.12-slim (2026-09-01).
-FROM python:3.12-slim@sha256:2fe5997d249a808b8eeea52c58a1dbffbba28754dc11699ef5c029f2d818ce79
+# non-reproducible. Multi-arch manifest-list digest — resolves linux/amd64 on
+# Cloud Build and arm64 locally (a single-arch child digest would pin one
+# platform and flag a platform mismatch on Apple Silicon).
+FROM python:3.12-slim@sha256:e5c9fa26ffb76e11e0f054f30dc2523a2f9693f0c36c0cf1e39b27e152d899fc
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1

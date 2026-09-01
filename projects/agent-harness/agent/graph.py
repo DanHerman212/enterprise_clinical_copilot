@@ -268,7 +268,9 @@ async def ask(
     # Publish the Langfuse trace id on the returned state so the eval loop
     # (collect -> judge) can attach rubric scores to the right trace.
     if LANGFUSE_ENABLED:
-        state["langfuse_trace_id"] = handler.last_trace_id
+        # ECC-17: the trace-id attribute is not part of the handler's contract
+        # — read defensively so a missing attribute can't 500 an ask.
+        state["langfuse_trace_id"] = getattr(handler, "last_trace_id", None)
     return state
 
 

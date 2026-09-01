@@ -46,8 +46,8 @@ a fully-resolved adversarial code review (currently 0 Critical / 0 Major).
 - [x] S6-09 — CDN assets SRI-pinned; mermaid pinned @10.9.3.
 
 ### K — content & contact form
-- [ ] S6-08 — section slug `preview` shadowed by the staff preview route.
-- [ ] S6-12 — contact error path loses input; whitespace-only values accepted.
+- [x] S6-08 — `section_slug` reserves 'preview' (maps to 'preview-section').
+- [x] S6-12 — contact whitespace/retention pinned by regression tests.
 
 ### N — front-end correctness
 - [ ] S7-04 — non-numeric probability renders `NaN%`.

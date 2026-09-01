@@ -5,8 +5,8 @@ One row per finding, merged from `enterprise_clinical_copilot/docs/REVIEW_BACKLO
 remediation detail stays in those files and in `docs/adversarial_code_review/` —
 this register is the working triage view. Sorted severity → cluster → ID.
 
-**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **0 Major** open, 11 Minor
-open, 113 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
+**Snapshot (2026-08-31):** 124 findings — **0 Critical**, **0 Major** open, 9 Minor
+open, 115 resolved. Fix clusters are defined in `REMEDIATION_ROADMAP.md`.
 
 Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spend/quota/DoS ·
 **D** chunker determinism · **E** fail-loud build pipeline · **F** isolation & retrieval (R1) ·
@@ -126,8 +126,8 @@ Clusters: **A** config fail-closed · **B** agent answer integrity · **C** spen
 | S7-03 | site | J | ops | demo JS | No CSP backstop for the demo surface (shared with S6-10) | **resolved 2026-08-31** |
 | S7-10 | site | J | security | a2ui vendor + demo_a2ui.js | DOMPurify defaults allow `<a>`/`<img>` — phishing/beacon channel inside the trusted clinical canvas | **resolved 2026-08-31** |
 | S6-04 | site | K | correctness | content/models.py | Duplicate title → slug collision → 500 on admin save | **resolved 2026-08-31** |
-| S6-08 | site | K | security | content/urls.py | Section slugged `preview` shadowed by the staff preview route | open |
-| S6-12 | site | K | correctness | ContactView.post | Error path loses user input, returns 200, accepts whitespace-only values | open |
+| S6-08 | site | K | security | content/urls.py | Section slugged `preview` shadowed by the staff preview route | **resolved 2026-08-31** |
+| S6-12 | site | K | correctness | ContactView.post | Error path loses user input, returns 200, accepts whitespace-only values | **resolved 2026-08-31** |
 | ECC-67 | ECC | L | correctness | calibrate_threshold.py, train_final.py | Threshold selected from CV OOF but applied to a different refit model — off its F-beta optimum | **resolved 2026-08-31** |
 | ECC-68 | ECC | L | correctness | cpr/predictor.py | Missing `threshold.json` silently falls back to 0.5 — flips recall-weighted decisions | **resolved 2026-08-31** |
 | ECC-71 | ECC | L | architecture | training_pipeline.py, register_model.py | Register not gated on shap/fairness; no `parent_model` lineage; gate metrics never persisted | **resolved 2026-08-31** |

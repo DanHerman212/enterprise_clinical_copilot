@@ -1,0 +1,57 @@
+# rag_config.yaml — single source of truth for the RAG pipeline.
+#
+# Corpus, chunking, embedding, index, eval, and deploy settings live here so
+# the corpus switch (MIMIC benchmark vs MTSamples demo) is ONE value, not a
+# scatter of env vars across scripts. Env overrides: PROJECT_ID, RAG_CORPUS.
+#
+# The section whitelist is deliberately NOT duplicated here — it stays
+# single-sourced in rag/chunking.INDEX_SECTIONS (validated against
+# rag/sections.KNOWN_HEADINGS), so build and serving can never drift (ECC-33).
+
+corpus:
+  active: mimic            # "mimic" | "demo"
+  project: "trim-icon-498815-a0"
+  location: "us-east1"
+  mimic:
+    notes_table_ref: "trim-icon-498815-a0.mimiciv_note.discharge"
+    split_table_ref: "trim-icon-498815-a0.readmission.analytics_dataset_encoded"
+    split_name: "test"
+    expected_vectors: 555770
+  demo:
+    notes_table_ref: "trim-icon-498815-a0.readmission.hybrid_notes"
+    split_table_ref: "trim-icon-498815-a0.readmission.hybrid_split"
+    split_name: "test"
+    # Set after the first demo chunk run (the build_index guard reports the
+    # actual count); a placeholder of 0 is rejected loudly, never silently.
+    expected_vectors: 0
+
+chunking:
+  pack_to: 700
+  max_chars: 1500
+
+embedding:
+  model: "gemini-embedding-001"
+  dimensions: 768
+  query_task_type: "RETRIEVAL_QUERY"
+
+index:
+  approximate_neighbors: 40
+  brute_sample: 2000
+  shard_size: "SHARD_SIZE_MEDIUM"
+  chunk_cpu: "2"
+  chunk_mem: "8Gi"
+  embed_cpu: "8"
+  embed_mem: "24Gi"
+  index_cpu: "2"
+  index_mem: "8Gi"
+
+eval:
+  num_queries: 100
+  top_k: 10
+  seed: 42
+  recall_at_10_min: 0.90
+  empty_result_rate_max: 0.05
+
+deploy:
+  endpoint_name: "readmission-rag-index"
+  machine_type: "e2-standard-2"

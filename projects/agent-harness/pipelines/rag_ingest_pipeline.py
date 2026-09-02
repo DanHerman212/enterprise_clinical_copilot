@@ -27,6 +27,7 @@ from pipelines.components.chunk_notes import DEFAULT_SECTIONS, chunk_notes  # no
 from pipelines.components.embed_chunks import embed_chunks  # noqa: E402
 from mcp_server.config import PROJECT as PROJECT_ID  # noqa: E402
 from rag.chunking import DEFAULT_PACK_TO  # noqa: E402
+from rag.config import load as load_rag_config  # noqa: E402
 
 PIPELINE_NAME = "rag-ingest"
 LOCATION = "us-east1"
@@ -113,7 +114,7 @@ def compile_pipeline(package_path: str = "rag_ingest_pipeline.yaml") -> str:
     return package_path
 
 
-def _source_fingerprint() -> str:
+def _source_fingerprint(project_id: str, refs: tuple[str, str]) -> str:
     """Fingerprint the source tables so KFP caching invalidates on data change.
 
     KFP step caching keys on code + inputs, NOT table contents (ECC-70): without
@@ -124,10 +125,9 @@ def _source_fingerprint() -> str:
     """
     from google.cloud import bigquery
 
-    client = bigquery.Client(project=PROJECT_ID)
+    client = bigquery.Client(project=project_id)
     parts = []
-    for ref in (os.environ.get("NOTES_TABLE_REF", NOTES_TABLE),
-                os.environ.get("SPLIT_TABLE_REF", SPLIT_TABLE)):
+    for ref in refs:
         table = client.get_table(ref)
         modified = table.modified.timestamp() if table.modified else 0
         parts.append(f"{ref}:{int(modified)}:{table.num_rows}")
@@ -137,40 +137,49 @@ def _source_fingerprint() -> str:
 def submit() -> None:
     """Compile and submit the pipeline to Vertex AI Pipelines.
 
-    All parameter values can be overridden via env vars so one definition
-    serves both the real ~560k-chunk corpus and small synthetic runs:
-
-      NOTES_TABLE_REF / SPLIT_TABLE_REF / SPLIT_NAME     source tables
-      PREVIOUS_INGEST_URI / EMBED_WORKERS / EXPECTED_VECTORS / BRUTE_SAMPLE
-      SHARD_SIZE / CHUNK_CPU / CHUNK_MEM / EMBED_CPU / EMBED_MEM / INDEX_CPU / INDEX_MEM
+    Reads rag_config.yaml (config-as-code) for the corpus and every knob; the
+    corpus switch (MIMIC vs demo) is ``RAG_CORPUS``, not a scatter of env vars.
+    Per-run knobs that legitimately vary stay env-driven:
+    ``PREVIOUS_INGEST_URI``, ``EMBED_WORKERS``.
     """
+    cfg = load_rag_config()
+
     package_path = compile_pipeline()
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    aiplatform.init(project=PROJECT_ID, location=LOCATION)
+    aiplatform.init(project=cfg.project, location=cfg.location)
     job = aiplatform.PipelineJob(
         display_name=f"{PIPELINE_NAME}-{ts}",
         template_path=package_path,
-        pipeline_root=PIPELINE_ROOT,
+        pipeline_root=os.environ.get(
+            "PIPELINE_ROOT", f"gs://{cfg.project}-mlops/pipeline-root"
+        ),
         parameter_values={
-            "project_id": PROJECT_ID,
-            "notes_table_ref": os.environ.get("NOTES_TABLE_REF", NOTES_TABLE),
-            "split_table_ref": os.environ.get("SPLIT_TABLE_REF", SPLIT_TABLE),
-            "split_name": os.environ.get("SPLIT_NAME", "test"),
-            "data_fingerprint": _source_fingerprint(),
+            "project_id": cfg.project,
+            "notes_table_ref": cfg.corpus.notes_table_ref,
+            "split_table_ref": cfg.corpus.split_table_ref,
+            "split_name": cfg.corpus.split_name,
+            "data_fingerprint": _source_fingerprint(
+                cfg.project,
+                (cfg.corpus.notes_table_ref, cfg.corpus.split_table_ref),
+            ),
             "previous_ingest_uri": os.environ.get(
                 "PREVIOUS_INGEST_URI",
-                f"gs://{PROJECT_ID}-mlops/rag/embeddings/ingest/embed_ingest.jsonl.gz",
+                f"gs://{cfg.project}-mlops/rag/embeddings/ingest/embed_ingest.jsonl.gz",
             ),
             "embed_workers": int(os.environ.get("EMBED_WORKERS", "1")),
-            "expected_vectors": int(os.environ.get("EXPECTED_VECTORS", "555770")),
-            "brute_sample": int(os.environ.get("BRUTE_SAMPLE", "2000")),
-            "shard_size": os.environ.get("SHARD_SIZE", "SHARD_SIZE_MEDIUM"),
-            "chunk_cpu": os.environ.get("CHUNK_CPU", "2"),
-            "chunk_mem": os.environ.get("CHUNK_MEM", "8Gi"),
-            "embed_cpu": os.environ.get("EMBED_CPU", "8"),
-            "embed_mem": os.environ.get("EMBED_MEM", "24Gi"),
-            "index_cpu": os.environ.get("INDEX_CPU", "2"),
-            "index_mem": os.environ.get("INDEX_MEM", "8Gi"),
+            "pack_to": cfg.pack_to,
+            "sections_csv": ",".join(DEFAULT_SECTIONS),
+            "dimensions": cfg.dimensions,
+            "approximate_neighbors": cfg.approximate_neighbors,
+            "expected_vectors": cfg.corpus.expected_vectors,
+            "brute_sample": cfg.brute_sample,
+            "shard_size": cfg.shard_size,
+            "chunk_cpu": cfg.chunk_cpu,
+            "chunk_mem": cfg.chunk_mem,
+            "embed_cpu": cfg.embed_cpu,
+            "embed_mem": cfg.embed_mem,
+            "index_cpu": cfg.index_cpu,
+            "index_mem": cfg.index_mem,
         },
         # Enable KFP step caching: unchanged steps (chunk-notes, embed) are
         # skipped on retry, so a fix to build-index alone no longer re-pays the

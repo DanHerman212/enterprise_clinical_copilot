@@ -47,6 +47,9 @@ class EvalResult:
     primary_metric: str = "recall_at_10"
     examples: list[dict[str, Any]] = field(default_factory=list)
     generated_at_utc: str = field(default_factory=_now_utc)
+    # Metrics that are rates in [0, 1] (render as percentages); everything
+    # else is a raw count/dimension and renders as a plain number.
+    ratio_metrics: tuple[str, ...] = ()
 
     def verdict(self) -> tuple[bool, list[str]]:
         """(passed, failing metrics)."""
@@ -83,6 +86,15 @@ def _pct(value: Any) -> str:
         return "—"
 
 
+def _num(value: Any) -> str:
+    """Format a raw count/dimension (not a rate) as a plain number."""
+    try:
+        f = float(value)
+        return str(int(f)) if f.is_integer() else f"{f:.4g}"
+    except (TypeError, ValueError):
+        return "—"
+
+
 def render_html(result: EvalResult) -> str:
     """Render the self-contained HTML report."""
     passed, failing = result.verdict()
@@ -100,9 +112,11 @@ def render_html(result: EvalResult) -> str:
             op, limit = None, None
         status = ("✅" if name not in failing else "❌") if op else "·"
         cell_cls = ("ok" if name not in failing else "bad") if op else ""
-        thr = f"{op} {_pct(limit)}" if op else "—"
+        is_rate = name in result.ratio_metrics
+        fmt = _pct if is_rate else _num
+        thr = f"{op} {fmt(limit)}" if op else "—"
         rows += (
-            f"<tr><td>{_esc(name)}</td><td>{_pct(result.metrics.get(name))}</td>"
+            f"<tr><td>{_esc(name)}</td><td>{fmt(result.metrics.get(name))}</td>"
             f"<td>{thr}</td><td class=\"{cell_cls}\">{status}</td></tr>"
         )
     failures = result.failures()
@@ -154,22 +168,22 @@ index <code>{_esc(result.index_name)}</code>
 </body></html>"""
 
 
-def write_artifacts(result: EvalResult, out_dir: Path | str) -> dict[str, str]:
-    """Write report.html, results.json, failures.csv. Returns path map."""
-    out = Path(out_dir)
-    out.mkdir(parents=True, exist_ok=True)
+def write_report_files(
+    result: EvalResult,
+    *,
+    html_path: Path | str,
+    results_path: Path | str,
+    failures_path: Path | str,
+) -> None:
+    """Write the three report files to explicit paths (one per artifact)."""
+    Path(html_path).write_text(render_html(result), encoding="utf-8")
 
-    report_path = out / "eval_report.html"
-    report_path.write_text(render_html(result), encoding="utf-8")
-
-    results_path = out / "eval_results.json"
     payload = asdict(result)
     payload["passed"], payload["failing_metrics"] = result.verdict()
-    results_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    Path(results_path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
     failures = result.failures()
-    failures_path = out / "failures.csv"
-    with failures_path.open("w", newline="", encoding="utf-8") as fh:
+    with Path(failures_path).open("w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(
             fh, fieldnames=["query_id", "text", result.primary_metric, "reason"]
         )
@@ -182,8 +196,24 @@ def write_artifacts(result: EvalResult, out_dir: Path | str) -> dict[str, str]:
                 "reason": row.get("reason", ""),
             })
 
-    return {
-        "html": str(report_path),
-        "json": str(results_path),
-        "csv": str(failures_path),
+
+def write_artifacts(result: EvalResult, out_dir: Path | str) -> dict[str, str]:
+    """Write report.html, results.json, failures.csv into a directory.
+
+    Convenience wrapper for local/deploy use; KFP components use
+    :func:`write_report_files` so each file is its own artifact.
+    """
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    paths = {
+        "html": out / "eval_report.html",
+        "json": out / "eval_results.json",
+        "csv": out / "failures.csv",
     }
+    write_report_files(
+        result,
+        html_path=paths["html"],
+        results_path=paths["json"],
+        failures_path=paths["csv"],
+    )
+    return {k: str(v) for k, v in paths.items()}

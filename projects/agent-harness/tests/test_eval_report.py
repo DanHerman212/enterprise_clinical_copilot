@@ -76,3 +76,25 @@ def test_html_escapes_user_text():
     html = render_html(result)
     assert "<script>alert(1)</script>" not in html
     assert "&lt;script&gt;" in html
+
+
+def test_ratio_vs_count_formatting():
+    result = EvalResult(
+        corpus="demo",
+        index_name="ingest",
+        num_queries=454,
+        metrics={
+            "vector_count": 454.0,
+            "embedding_dims": 768.0,
+            "unique_id_ratio": 1.0,
+            "empty_embedding_count": 0.0,
+        },
+        thresholds={"unique_id_ratio": 1.0},
+        max_thresholds={"empty_embedding_count": 0.0},
+        ratio_metrics=("unique_id_ratio",),
+    )
+    html = render_html(result)
+    assert "vector_count</td><td>454</td>" in html
+    assert "embedding_dims</td><td>768</td>" in html
+    assert "unique_id_ratio</td><td>100.0%</td>" in html
+    assert "empty_embedding_count</td><td>0</td>" in html

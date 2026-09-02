@@ -42,11 +42,16 @@ def run_build_index(
     brute_dir = f"{prefix}brute/"
     bucket.blob(f"{full_dir}ingest.json").upload_from_filename(ingest_path)
 
+    # The brute-force ground-truth index samples the corpus; a corpus smaller
+    # than brute_sample (the demo corpus is 454 vectors vs the 2000 default)
+    # must sample what it actually has, or the guard below fires on a phantom
+    # shortfall.
+    brute_n = min(brute_sample, expected)
     sample_path = "/tmp/sample.json"
     with open(ingest_path, encoding="utf-8") as fin, \
             open(sample_path, "w", encoding="utf-8") as fout:
         for index, line in enumerate(fin):
-            if index >= brute_sample:
+            if index >= brute_n:
                 break
             fout.write(line)
     bucket.blob(f"{brute_dir}sample.json").upload_from_filename(sample_path)
@@ -63,8 +68,8 @@ def run_build_index(
     brute.wait()
     brute_vectors = brute.gca_resource.index_stats.vectors_count
     print(f"brute-force: {brute_vectors} vectors → {brute.resource_name}")
-    if brute_vectors != brute_sample:
-        raise SystemExit(f"brute-force expected {brute_sample} vectors, got {brute_vectors}")
+    if brute_vectors != brute_n:
+        raise SystemExit(f"brute-force expected {brute_n} vectors, got {brute_vectors}")
 
     tree = aiplatform.MatchingEngineIndex.create_tree_ah_index(
         display_name=f"rag-tree-ah-{ts}",

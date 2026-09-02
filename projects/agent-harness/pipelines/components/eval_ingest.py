@@ -27,14 +27,14 @@ def run_eval_ingest(
     ingest_path: str,
     expected: int,
     dimensions: int,
-    report_dir: str,
+    report_path: str,
+    results_path: str,
+    failures_path: str,
     corpus: str,
     index_name: str,
 ) -> bool:
     """Validate the ingest and write the report. Returns True if it passes."""
-    from pathlib import Path
-
-    from rag.eval_report import EvalResult, write_artifacts
+    from rag.eval_report import EvalResult, write_report_files
 
     total = 0
     ids: Counter[str] = Counter()
@@ -73,8 +73,14 @@ def run_eval_ingest(
         },
         thresholds={"unique_id_ratio": 1.0},
         max_thresholds={"empty_embedding_count": 0.0},
+        ratio_metrics=("unique_id_ratio",),
     )
-    write_artifacts(result, Path(report_dir))
+    write_report_files(
+        result,
+        html_path=report_path,
+        results_path=results_path,
+        failures_path=failures_path,
+    )
 
     passed, failing = result.verdict()
     if not passed:
@@ -94,15 +100,19 @@ def eval_ingest(
     corpus: str,
     index_name: str,
     report: dsl.Output[dsl.Artifact],
+    results: dsl.Output[dsl.Artifact],
+    failures: dsl.Output[dsl.Artifact],
 ) -> bool:
-    """KFP component: validate the ingest and write the eval report."""
+    """KFP component: validate the ingest and write the eval report artifacts."""
     from pipelines.components.eval_ingest import run_eval_ingest
 
     return run_eval_ingest(
         ingest_path=ingest.path,
         expected=expected,
         dimensions=dimensions,
-        report_dir=report.path,
+        report_path=report.path,
+        results_path=results.path,
+        failures_path=failures.path,
         corpus=corpus,
         index_name=index_name,
     )

@@ -65,4 +65,6 @@ def recall_result(
         max_thresholds=max_thresholds,
         primary_metric="recall_at_10",
         per_query=per_query,
+        # every metric in a recall_k report is a rate in [0, 1]
+        ratio_metrics=tuple(metrics),
     )

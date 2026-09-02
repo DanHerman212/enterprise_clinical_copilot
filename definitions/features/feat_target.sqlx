@@ -1,18 +1,19 @@
 config {
   type: "table",
   schema: "readmission_features",
-  description: "30-day all-cause readmission target label. 1 if the patient had any subsequent inpatient admission within 30 days of discharge; 0 otherwise. Computed against the raw admissions source (not the cohort) to capture all readmissions regardless of whether the subsequent stay would itself qualify for the cohort."
+  description: "30-day readmission target. 1 if the patient had a subsequent INPATIENT, non-elective admission with LOS >= 24h within 30 days of discharge; 0 otherwise. The outcome side applies the exact same inclusion criteria as the cohort so the label is symmetric with the cohort definition."
 }
 
 -- Target: readmission_30d ∈ {0, 1}.
--- For each index admission in the cohort, scan the full admissions table for
--- any subsequent admission for the same subject_id where admittime falls within
--- [dischtime, dischtime + 30 days]. MIN(admittime) captures the earliest.
+-- For each index admission in the cohort, scan the raw admissions table for the
+-- first subsequent admission that satisfies the SAME inclusion criteria as the
+-- cohort — inpatient (not an observation stay), non-elective, and LOS >= 24h —
+-- with admittime in [dischtime, dischtime + 30 days]. MIN(admittime) captures
+-- the earliest.
 --
--- Using the source admissions table (not the cohort) is intentional: we want to
--- flag any return to the hospital, even if that return would not itself meet
--- the cohort inclusion criteria (e.g., it was elective, or LOS < 1 day).
--- This matches the all-cause readmission definition used in clinical ML benchmarks.
+-- Symmetric with cohort.sqlx on purpose: an observation stay, an elective
+-- return, or a sub-24h stay is NOT a readmission — exactly the rule that
+-- governs which index admissions qualify for the cohort in the first place.
 
 WITH next_admission AS (
   SELECT
@@ -23,6 +24,12 @@ WITH next_admission AS (
     ON c.subject_id = a.subject_id
    AND a.admittime > c.dischtime
    AND a.admittime <= TIMESTAMP_ADD(c.dischtime, INTERVAL 30 DAY)
+   AND a.admission_type NOT IN (
+     'ELECTIVE', 'SURGICAL SAME DAY ADMISSION',
+     'OBSERVATION ADMIT', 'EU OBSERVATION',
+     'DIRECT OBSERVATION', 'AMBULATORY OBSERVATION'
+   )
+   AND TIMESTAMP_DIFF(a.dischtime, a.admittime, HOUR) >= 24
   GROUP BY c.hadm_id
 )
 

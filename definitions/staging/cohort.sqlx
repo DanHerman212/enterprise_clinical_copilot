@@ -1,20 +1,24 @@
 config {
   type: "table",
   schema: "readmission_staging",
-  description: "Cohort spine: one row per qualifying admission after Phase 2 inclusion/exclusion filters. Identity + timing only (subject_id, hadm_id, admittime, dischtime); demographics and the 30-day label join on in later layers."
+  description: "Cohort spine: one row per qualifying INPATIENT, non-elective admission with LOS >= 24h. Identity + timing only (subject_id, hadm_id, admittime, dischtime); demographics and the 30-day label join on in later layers."
 }
 
 -- Phase 2 §1 — Cohort Definition (the spine).
 -- Grain: one row per qualifying hadm_id. subject_id carried for the
 -- subject-level split (leakage guard). Skinny by design.
 --
--- Inclusion: adult, discharged alive.
--- Exclusion: died during index admission, LOS < 1 day, planned
---            (ELECTIVE / SURGICAL SAME DAY ADMISSION), and contiguous
---            stays (re-admit within 24h of prior discharge -> keep first).
+-- Inclusion: adult, discharged alive, INPATIENT (not an observation stay),
+--             non-elective, and LOS >= 24h.
+-- Exclusion: died during index admission; LOS < 24h; planned admissions
+--            (ELECTIVE / SURGICAL SAME DAY ADMISSION); observation stays
+--            (OBSERVATION ADMIT / EU OBSERVATION / DIRECT OBSERVATION /
+--            AMBULATORY OBSERVATION); and contiguous stays (re-admit within
+--            24h of prior discharge -> keep first).
 --
 -- Prototyped and validated in notebooks/data_representation.ipynb.
--- Expected output: 352,699 admissions.
+-- The admission_type filter mirrors feat_target.sqlx so the outcome label
+-- uses the same inpatient / non-elective / >= 24h definition as the cohort.
 
 WITH base AS (
   SELECT
@@ -54,5 +58,9 @@ FROM flagged
 WHERE anchor_age >= 18                                              -- adult
   AND hospital_expire_flag = 0 AND deathtime IS NULL                -- discharged alive
   AND los_hours >= 24                                               -- LOS >= 1 day
-  AND admission_type NOT IN ('ELECTIVE', 'SURGICAL SAME DAY ADMISSION')  -- exclude planned
+  AND admission_type NOT IN (                                      -- inpatient, non-elective
+    'ELECTIVE', 'SURGICAL SAME DAY ADMISSION',
+    'OBSERVATION ADMIT', 'EU OBSERVATION',
+    'DIRECT OBSERVATION', 'AMBULATORY OBSERVATION'
+  )
   AND NOT is_continuation                                           -- collapse contiguous stays

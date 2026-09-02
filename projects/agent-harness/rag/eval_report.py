@@ -90,20 +90,21 @@ def render_html(result: EvalResult) -> str:
         '<span class="badge pass">PASS</span>'
         if passed else '<span class="badge fail">FAIL</span>'
     )
-    rows = "".join(
-        f"<tr><td>{_esc(name)}</td><td>{_pct(result.metrics.get(name))}</td>"
-        f"<td>&ge; {_pct(result.thresholds.get(name))}</td>"
-        f"<td class=\"{'ok' if name not in failing else 'bad'}\">"
-        f"{'✅' if name not in failing else '❌'}</td></tr>"
-        for name in result.thresholds
-    )
-    rows += "".join(
-        f"<tr><td>{_esc(name)}</td><td>{_pct(result.metrics.get(name))}</td>"
-        f"<td>&le; {_pct(result.max_thresholds.get(name))}</td>"
-        f"<td class=\"{'ok' if name not in failing else 'bad'}\">"
-        f"{'✅' if name not in failing else '❌'}</td></tr>"
-        for name in result.max_thresholds
-    )
+    rows = ""
+    for name in result.metrics:
+        if name in result.thresholds:
+            op, limit = "&ge;", result.thresholds[name]
+        elif name in result.max_thresholds:
+            op, limit = "&le;", result.max_thresholds[name]
+        else:
+            op, limit = None, None
+        status = ("✅" if name not in failing else "❌") if op else "·"
+        cell_cls = ("ok" if name not in failing else "bad") if op else ""
+        thr = f"{op} {_pct(limit)}" if op else "—"
+        rows += (
+            f"<tr><td>{_esc(name)}</td><td>{_pct(result.metrics.get(name))}</td>"
+            f"<td>{thr}</td><td class=\"{cell_cls}\">{status}</td></tr>"
+        )
     failures = result.failures()
     failure_rows = "".join(
         f"<tr><td>{_esc(row.get('query_id', '?'))}</td>"

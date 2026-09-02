@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from pipelines.components.build_index import build_index  # noqa: E402
 from pipelines.components.chunk_notes import DEFAULT_SECTIONS, chunk_notes  # noqa: E402
 from pipelines.components.embed_chunks import embed_chunks  # noqa: E402
+from pipelines.components.eval_ingest import eval_ingest  # noqa: E402
 from mcp_server.config import PROJECT as PROJECT_ID  # noqa: E402
 from rag.chunking import DEFAULT_PACK_TO  # noqa: E402
 from rag.config import load as load_rag_config  # noqa: E402
@@ -47,6 +48,7 @@ def rag_ingest_pipeline(
     split_table_ref: str = SPLIT_TABLE,
     split_name: str = "test",
     data_fingerprint: str = "",
+    corpus: str = "mimic",
     pack_to: int = DEFAULT_PACK_TO,
     sections_csv: str = ",".join(DEFAULT_SECTIONS),
     previous_ingest_uri: str = "",
@@ -93,6 +95,18 @@ def rag_ingest_pipeline(
     # that and passes e.g. "2"/"4Gi".
     ingest_task.set_cpu_limit(embed_cpu).set_memory_limit(embed_mem)
 
+    # Offline integrity gate: validate the ingest (count, dims, dup ids, empty
+    # embeddings) and emit the eval report BEFORE the index is built, so a
+    # corrupt/short artifact can never become an index.
+    eval_task = eval_ingest(
+        ingest=ingest_task.outputs["ingest"],
+        expected=expected_vectors,
+        dimensions=dimensions,
+        corpus=corpus,
+        index_name="ingest",
+    )
+    eval_task.set_cpu_limit(chunk_cpu).set_memory_limit("4Gi")
+
     index_task = build_index(
         project_id=project_id,
         location=LOCATION,
@@ -102,7 +116,7 @@ def rag_ingest_pipeline(
         approximate_neighbors=approximate_neighbors,
         expected=expected_vectors,
         shard_size=shard_size,
-    )
+    ).after(eval_task)
     index_task.set_cpu_limit(index_cpu).set_memory_limit(index_mem)
 
 
@@ -162,6 +176,7 @@ def submit() -> None:
                 cfg.project,
                 (cfg.corpus.notes_table_ref, cfg.corpus.split_table_ref),
             ),
+            "corpus": cfg.corpus.name,
             "previous_ingest_uri": os.environ.get(
                 "PREVIOUS_INGEST_URI",
                 f"gs://{cfg.project}-mlops/rag/embeddings/ingest/embed_ingest.jsonl.gz",

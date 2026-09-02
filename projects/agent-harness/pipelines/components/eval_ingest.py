@@ -99,11 +99,16 @@ def eval_ingest(
     dimensions: int,
     corpus: str,
     index_name: str,
-    report: dsl.Output[dsl.Artifact],
+    report: dsl.Output[dsl.HTML],
     results: dsl.Output[dsl.Artifact],
     failures: dsl.Output[dsl.Artifact],
 ) -> bool:
-    """KFP component: validate the ingest and write the eval report artifacts."""
+    """KFP component: validate the ingest and write the eval report artifacts.
+
+    ``report`` is typed ``dsl.HTML`` (schema ``system.HTML``) so the Vertex
+    Pipelines UI renders the self-contained report inline from the node,
+    instead of leaving only a GCS URI to chase down.
+    """
     from pipelines.components.eval_ingest import run_eval_ingest
 
     return run_eval_ingest(

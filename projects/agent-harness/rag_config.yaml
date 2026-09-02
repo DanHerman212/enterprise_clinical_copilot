@@ -21,9 +21,9 @@ corpus:
     notes_table_ref: "trim-icon-498815-a0.readmission.hybrid_notes"
     split_table_ref: "trim-icon-498815-a0.readmission.hybrid_split"
     split_name: "test"
-    # Set after the first demo chunk run (the build_index guard reports the
-    # actual count); a placeholder of 0 is rejected loudly, never silently.
-    expected_vectors: 0
+    # 89 MTSamples notes -> 454 section chunks (deterministic, recomputed
+    # locally with the same chunk_note(pack_to=700) path the pipeline runs).
+    expected_vectors: 454
 
 chunking:
   pack_to: 700

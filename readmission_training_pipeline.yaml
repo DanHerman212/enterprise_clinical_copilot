@@ -5,7 +5,7 @@
 #    cat_features: list [Default: []]
 #    fbeta_beta: float [Default: 2.0]
 #    full_table_ref: str
-#    hospital_aucpr: float [Default: 0.33246509478494324]
+#    hospital_aucpr: float [Default: 0.25130295416224474]
 #    hpo_timeout_seconds: int [Default: 2700.0]
 #    label_col: str [Default: 'readmission_30d']
 #    max_drifted_share: float [Default: 0.2]
@@ -18,7 +18,7 @@
 #    test_split: str [Default: 'test']
 #    train_split: str [Default: 'train']
 #    val_split: str [Default: 'validation']
-#    xgb_params: dict [Default: {'random_state': 42.0, 'subsample': 0.8, 'n_estimators': 300.0, 'learning_rate': 0.05, 'max_depth': 6.0, 'colsample_bytree': 0.8}]
+#    xgb_params: dict [Default: {'random_state': 42.0, 'colsample_bytree': 0.8, 'subsample': 0.8, 'max_depth': 6.0, 'learning_rate': 0.05, 'n_estimators': 300.0}]
 components:
   comp-benchmark-gate:
     executorLabel: exec-benchmark-gate
@@ -1492,7 +1492,7 @@ root:
       full_table_ref:
         parameterType: STRING
       hospital_aucpr:
-        defaultValue: 0.33246509478494324
+        defaultValue: 0.25130295416224474
         isOptional: true
         parameterType: NUMBER_DOUBLE
       hpo_timeout_seconds:

@@ -17,7 +17,9 @@ substitutions:
 
 # Dedicated build service account (ECC-58): builds must not run as the project
 # default SA. cicd-deployer needs roles/run.admin, roles/iam.serviceAccountUser
-# on mcp-server-sa, roles/artifactregistry.writer, and roles/logging.logWriter.
+# on mcp-server-sa, roles/artifactregistry.writer, roles/logging.logWriter, and
+# roles/storage.objectViewer on the Cloud Build source bucket (the build SA
+# reads its own uploaded source; missing it fails as INVALID_ARGUMENT/403).
 serviceAccount: 'projects/$PROJECT_ID/serviceAccounts/cicd-deployer@$PROJECT_ID.iam.gserviceaccount.com'
 
 steps:

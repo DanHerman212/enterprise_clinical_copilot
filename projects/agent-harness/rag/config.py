@@ -33,6 +33,8 @@ class Corpus:
     split_table_ref: str
     split_name: str
     expected_vectors: int
+    shard_size: str
+    deploy_machine_type: str
 
 
 @dataclass(frozen=True)
@@ -85,6 +87,8 @@ def load(path: Path | None = None) -> RAGConfig:
             split_table_ref=c["split_table_ref"],
             split_name=c["split_name"],
             expected_vectors=int(c["expected_vectors"]),
+            shard_size=c["shard_size"],
+            deploy_machine_type=c["deploy_machine_type"],
         ),
         pack_to=int(doc["chunking"]["pack_to"]),
         max_chars=int(doc["chunking"]["max_chars"]),
@@ -93,7 +97,7 @@ def load(path: Path | None = None) -> RAGConfig:
         query_task_type=doc["embedding"]["query_task_type"],
         approximate_neighbors=int(doc["index"]["approximate_neighbors"]),
         brute_sample=int(doc["index"]["brute_sample"]),
-        shard_size=doc["index"]["shard_size"],
+        shard_size=c["shard_size"],
         chunk_cpu=doc["index"]["chunk_cpu"],
         chunk_mem=doc["index"]["chunk_mem"],
         embed_cpu=doc["index"]["embed_cpu"],
@@ -106,5 +110,5 @@ def load(path: Path | None = None) -> RAGConfig:
         recall_at_10_min=float(doc["eval"]["recall_at_10_min"]),
         empty_result_rate_max=float(doc["eval"]["empty_result_rate_max"]),
         endpoint_name=doc["deploy"]["endpoint_name"],
-        machine_type=doc["deploy"]["machine_type"],
+        machine_type=c["deploy_machine_type"],
     )

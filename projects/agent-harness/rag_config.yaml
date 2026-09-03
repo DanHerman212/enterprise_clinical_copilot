@@ -17,6 +17,8 @@ corpus:
     split_table_ref: "trim-icon-498815-a0.readmission.analytics_dataset_encoded"
     split_name: "test"
     expected_vectors: 555770
+    shard_size: "SHARD_SIZE_MEDIUM"
+    deploy_machine_type: "e2-standard-16"
   demo:
     notes_table_ref: "trim-icon-498815-a0.readmission.hybrid_notes"
     split_table_ref: "trim-icon-498815-a0.readmission.hybrid_split"
@@ -24,6 +26,8 @@ corpus:
     # 89 MTSamples notes -> 454 section chunks (deterministic, recomputed
     # locally with the same chunk_note(pack_to=700) path the pipeline runs).
     expected_vectors: 454
+    shard_size: "SHARD_SIZE_SMALL"
+    deploy_machine_type: "e2-standard-2"
 
 chunking:
   pack_to: 700
@@ -37,7 +41,6 @@ embedding:
 index:
   approximate_neighbors: 40
   brute_sample: 2000
-  shard_size: "SHARD_SIZE_MEDIUM"
   chunk_cpu: "2"
   chunk_mem: "8Gi"
   embed_cpu: "8"
@@ -54,4 +57,3 @@ eval:
 
 deploy:
   endpoint_name: "readmission-rag-index"
-  machine_type: "e2-standard-2"

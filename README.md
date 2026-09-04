@@ -15,7 +15,7 @@ The engineering goal is the full production path — from warehouse to features 
 
 ## Architecture
 
-<img src="assets/ai-architecture-diagram-2.png" alt="AI project architecture" width="800">
+![AI Architecture](assets/ai-architecture-diagram-2.png) 
 
 ## Projects
 

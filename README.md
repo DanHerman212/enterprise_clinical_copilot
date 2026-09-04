@@ -1,7 +1,8 @@
 <h1 align="center">Enterprise Clinical Copilot</h1>
 
 <p align="center">
-  <img src="assets/ecc-demo.png" alt="Enterprise Clinical Copilot" width="600">
+
+  ![Enterprise Clinical Copilot demo](assets/ecc-demo.png)
 </p>
 
 Predicting 30-day hospital readmission risk at discharge — and giving clinicians an agent that can explain it.

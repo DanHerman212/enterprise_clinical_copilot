@@ -27,19 +27,19 @@ SERVICE_ACCOUNT = os.environ.get(
 STAGING = f"gs://{PROJECT}-mlops/pipeline-root"
 
 CHUNKS = ("gs://trim-icon-498815-a0-mlops/pipeline-root/778397675435/"
-          "rag-ingest-20260806173635/chunk-notes_-7096656101919162368/chunks")
+          "rag-ingest-20260902093532/chunk-notes_-3089083553233764352/chunks")
 INGEST = ("gs://trim-icon-498815-a0-mlops/pipeline-root/778397675435/"
-          "rag-ingest-20260806173635/embed-chunks_6738401953363001344/ingest")
+          "rag-ingest-20260902093532/embed-chunks_3828445474407317504/ingest")
 ENDPOINT = ("projects/778397675435/locations/us-east1/"
-            "indexEndpoints/4397109727197134848")
-OUT_DIR = f"gs://{PROJECT}-mlops/rag/recall"
+            "indexEndpoints/1250289856316178432")
+OUT_DIR = f"gs://{PROJECT}-mlops/rag/recall/demo"
 
 
 def main() -> int:
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     aiplatform.init(project=PROJECT, location=LOCATION, staging_bucket=STAGING)
     job = aiplatform.CustomJob(
-        display_name=f"rag-recall-k-{ts}",
+        display_name=f"rag-recall-k-demo-{ts}",
         worker_pool_specs=[{
             "machine_spec": {"machine_type": "e2-standard-8"},
             "replica_count": 1,

@@ -1,0 +1,548 @@
+# PIPELINE DEFINITION
+# Name: rag-ingest
+# Description: Assemble the RAG ingest DAG: chunk → embed → index.
+# Inputs:
+#    approximate_neighbors: int [Default: 40.0]
+#    brute_sample: int [Default: 2000.0]
+#    chunk_cpu: str [Default: '2']
+#    chunk_mem: str [Default: '8Gi']
+#    corpus: str [Default: 'mimic']
+#    data_fingerprint: str [Default: '']
+#    dimensions: int [Default: 768.0]
+#    embed_cpu: str [Default: '8']
+#    embed_mem: str [Default: '24Gi']
+#    embed_workers: int [Default: 1.0]
+#    expected_vectors: int [Default: 555770.0]
+#    index_cpu: str [Default: '2']
+#    index_mem: str [Default: '8Gi']
+#    notes_table_ref: str [Default: 'trim-icon-498815-a0.mimiciv_note.discharge']
+#    pack_to: int [Default: 700.0]
+#    previous_ingest_uri: str [Default: '']
+#    project_id: str [Default: 'trim-icon-498815-a0']
+#    sections_csv: str [Default: 'history_of_present_illness,past_medical_history,family_history,social_history,physical_exam,brief_hospital_course,discharge_condition,discharge_diagnosis,discharge_medications,medications_on_admission,discharge_disposition,discharge_instructions,discharge_summary']
+#    shard_size: str [Default: 'SHARD_SIZE_MEDIUM']
+#    split_name: str [Default: 'test']
+#    split_table_ref: str [Default: 'trim-icon-498815-a0.readmission.analytics_dataset_encoded']
+components:
+  comp-build-index:
+    executorLabel: exec-build-index
+    inputDefinitions:
+      artifacts:
+        ingest:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+      parameters:
+        approximate_neighbors:
+          parameterType: NUMBER_INTEGER
+        brute_sample:
+          parameterType: NUMBER_INTEGER
+        dimensions:
+          parameterType: NUMBER_INTEGER
+        expected:
+          parameterType: NUMBER_INTEGER
+        location:
+          parameterType: STRING
+        project_id:
+          parameterType: STRING
+        shard_size:
+          defaultValue: SHARD_SIZE_MEDIUM
+          isOptional: true
+          parameterType: STRING
+    outputDefinitions:
+      artifacts:
+        manifest:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+  comp-chunk-notes:
+    executorLabel: exec-chunk-notes
+    inputDefinitions:
+      parameters:
+        data_fingerprint:
+          parameterType: STRING
+        notes_table_ref:
+          parameterType: STRING
+        pack_to:
+          parameterType: NUMBER_INTEGER
+        project_id:
+          parameterType: STRING
+        sections_csv:
+          parameterType: STRING
+        split_name:
+          parameterType: STRING
+        split_table_ref:
+          parameterType: STRING
+    outputDefinitions:
+      artifacts:
+        chunks:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+        manifest:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+  comp-embed-chunks:
+    executorLabel: exec-embed-chunks
+    inputDefinitions:
+      artifacts:
+        chunks:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+      parameters:
+        location:
+          parameterType: STRING
+        previous_ingest_uri:
+          parameterType: STRING
+        project_id:
+          parameterType: STRING
+        workers:
+          parameterType: NUMBER_INTEGER
+    outputDefinitions:
+      artifacts:
+        ingest:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+        manifest:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+  comp-eval-ingest:
+    executorLabel: exec-eval-ingest
+    inputDefinitions:
+      artifacts:
+        ingest:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+      parameters:
+        corpus:
+          parameterType: STRING
+        dimensions:
+          parameterType: NUMBER_INTEGER
+        expected:
+          parameterType: NUMBER_INTEGER
+        index_name:
+          parameterType: STRING
+    outputDefinitions:
+      artifacts:
+        failures:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+        report:
+          artifactType:
+            schemaTitle: system.HTML
+            schemaVersion: 0.0.1
+        results:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+      parameters:
+        Output:
+          parameterType: BOOLEAN
+deploymentSpec:
+  executors:
+    exec-build-index:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - build_index
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'google-cloud-aiplatform'\
+          \ 'google-cloud-storage'  &&  python3 -m pip install --quiet --no-warn-script-location\
+          \ 'kfp==2.16.1' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
+          3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef build_index(\n    project_id: str,\n    location: str,\n    ingest:\
+          \ dsl.Input[dsl.Artifact],\n    dimensions: int,\n    brute_sample: int,\n\
+          \    approximate_neighbors: int,\n    expected: int,\n    manifest: dsl.Output[dsl.Artifact],\n\
+          \    shard_size: str = \"SHARD_SIZE_MEDIUM\",\n) -> None:\n    \"\"\"KFP\
+          \ component: build BRUTE_FORCE + TREE_AH Vector Search indexes.\"\"\"\n\
+          \    from pipelines.components.build_index import run_build_index\n\n  \
+          \  run_build_index(\n        project_id=project_id,\n        location=location,\n\
+          \        ingest_path=ingest.path,\n        dimensions=dimensions,\n    \
+          \    brute_sample=brute_sample,\n        approximate_neighbors=approximate_neighbors,\n\
+          \        expected=expected,\n        shard_size=shard_size,\n        manifest_path=manifest.path,\n\
+          \    )\n\n"
+        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/rag-ingest:latest
+        resources:
+          resourceCpuLimit: '{{$.inputs.parameters[''pipelinechannel--index_cpu'']}}'
+          resourceMemoryLimit: '{{$.inputs.parameters[''pipelinechannel--index_mem'']}}'
+    exec-chunk-notes:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - chunk_notes
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'google-cloud-bigquery'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.1'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef chunk_notes(\n    project_id: str,\n    notes_table_ref: str,\n\
+          \    split_table_ref: str,\n    split_name: str,\n    data_fingerprint:\
+          \ str,\n    pack_to: int,\n    sections_csv: str,\n    chunks: dsl.Output[dsl.Artifact],\n\
+          \    manifest: dsl.Output[dsl.Artifact],\n) -> None:\n    \"\"\"KFP component:\
+          \ chunk the test-split discharge notes in BigQuery.\"\"\"\n    from pipelines.components.chunk_notes\
+          \ import run_chunk_notes\n\n    run_chunk_notes(\n        project_id=project_id,\n\
+          \        notes_table_ref=notes_table_ref,\n        split_table_ref=split_table_ref,\n\
+          \        split_name=split_name,\n        data_fingerprint=data_fingerprint,\n\
+          \        pack_to=pack_to,\n        sections_csv=sections_csv,\n        chunks_path=chunks.path,\n\
+          \        manifest_path=manifest.path,\n    )\n\n"
+        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/rag-ingest:latest
+        resources:
+          resourceCpuLimit: '{{$.inputs.parameters[''pipelinechannel--chunk_cpu'']}}'
+          resourceMemoryLimit: '{{$.inputs.parameters[''pipelinechannel--chunk_mem'']}}'
+    exec-embed-chunks:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - embed_chunks
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'google-genai'\
+          \ 'google-cloud-storage'  &&  python3 -m pip install --quiet --no-warn-script-location\
+          \ 'kfp==2.16.1' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
+          3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef embed_chunks(\n    project_id: str,\n    location: str,\n   \
+          \ chunks: dsl.Input[dsl.Artifact],\n    previous_ingest_uri: str,\n    workers:\
+          \ int,\n    ingest: dsl.Output[dsl.Artifact],\n    manifest: dsl.Output[dsl.Artifact],\n\
+          ) -> None:\n    \"\"\"KFP component: embed chunks and emit the Vector Search\
+          \ ingest artifact.\"\"\"\n    from pipelines.components.embed_chunks import\
+          \ run_embed_chunks\n\n    run_embed_chunks(\n        project_id=project_id,\n\
+          \        location=location,\n        chunks_path=chunks.path,\n        previous_ingest_uri=previous_ingest_uri,\n\
+          \        ingest_path=ingest.path,\n        manifest_path=manifest.path,\n\
+          \        workers=workers,\n    )\n\n"
+        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/rag-ingest:latest
+        resources:
+          resourceCpuLimit: '{{$.inputs.parameters[''pipelinechannel--embed_cpu'']}}'
+          resourceMemoryLimit: '{{$.inputs.parameters[''pipelinechannel--embed_mem'']}}'
+    exec-eval-ingest:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - eval_ingest
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.1'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef eval_ingest(\n    ingest: dsl.Input[dsl.Dataset],\n    expected:\
+          \ int,\n    dimensions: int,\n    corpus: str,\n    index_name: str,\n \
+          \   report: dsl.Output[dsl.HTML],\n    results: dsl.Output[dsl.Artifact],\n\
+          \    failures: dsl.Output[dsl.Artifact],\n) -> bool:\n    \"\"\"KFP component:\
+          \ validate the ingest and write the eval report artifacts.\n\n    ``report``\
+          \ is typed ``dsl.HTML`` (schema ``system.HTML``) so the Vertex\n    Pipelines\
+          \ UI renders the self-contained report inline from the node,\n    instead\
+          \ of leaving only a GCS URI to chase down.\n    \"\"\"\n    from pipelines.components.eval_ingest\
+          \ import run_eval_ingest\n\n    return run_eval_ingest(\n        ingest_path=ingest.path,\n\
+          \        expected=expected,\n        dimensions=dimensions,\n        report_path=report.path,\n\
+          \        results_path=results.path,\n        failures_path=failures.path,\n\
+          \        corpus=corpus,\n        index_name=index_name,\n    )\n\n"
+        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/rag-ingest:latest
+        resources:
+          memoryLimit: 4.294967296
+          resourceCpuLimit: '{{$.inputs.parameters[''pipelinechannel--chunk_cpu'']}}'
+          resourceMemoryLimit: 4Gi
+pipelineInfo:
+  description: "Assemble the RAG ingest DAG: chunk \u2192 embed \u2192 index."
+  name: rag-ingest
+root:
+  dag:
+    tasks:
+      build-index:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-build-index
+        dependentTasks:
+        - embed-chunks
+        - eval-ingest
+        inputs:
+          artifacts:
+            ingest:
+              taskOutputArtifact:
+                outputArtifactKey: ingest
+                producerTask: embed-chunks
+          parameters:
+            approximate_neighbors:
+              componentInputParameter: approximate_neighbors
+            brute_sample:
+              componentInputParameter: brute_sample
+            cpu_limit:
+              runtimeValue:
+                constant: '{{$.inputs.parameters[''pipelinechannel--index_cpu'']}}'
+            dimensions:
+              componentInputParameter: dimensions
+            expected:
+              componentInputParameter: expected_vectors
+            location:
+              runtimeValue:
+                constant: us-east1
+            memory_limit:
+              runtimeValue:
+                constant: '{{$.inputs.parameters[''pipelinechannel--index_mem'']}}'
+            pipelinechannel--index_cpu:
+              componentInputParameter: index_cpu
+            pipelinechannel--index_mem:
+              componentInputParameter: index_mem
+            project_id:
+              componentInputParameter: project_id
+            shard_size:
+              componentInputParameter: shard_size
+        taskInfo:
+          name: build-index
+      chunk-notes:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-chunk-notes
+        inputs:
+          parameters:
+            cpu_limit:
+              runtimeValue:
+                constant: '{{$.inputs.parameters[''pipelinechannel--chunk_cpu'']}}'
+            data_fingerprint:
+              componentInputParameter: data_fingerprint
+            memory_limit:
+              runtimeValue:
+                constant: '{{$.inputs.parameters[''pipelinechannel--chunk_mem'']}}'
+            notes_table_ref:
+              componentInputParameter: notes_table_ref
+            pack_to:
+              componentInputParameter: pack_to
+            pipelinechannel--chunk_cpu:
+              componentInputParameter: chunk_cpu
+            pipelinechannel--chunk_mem:
+              componentInputParameter: chunk_mem
+            project_id:
+              componentInputParameter: project_id
+            sections_csv:
+              componentInputParameter: sections_csv
+            split_name:
+              componentInputParameter: split_name
+            split_table_ref:
+              componentInputParameter: split_table_ref
+        taskInfo:
+          name: chunk-notes
+      embed-chunks:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-embed-chunks
+        dependentTasks:
+        - chunk-notes
+        inputs:
+          artifacts:
+            chunks:
+              taskOutputArtifact:
+                outputArtifactKey: chunks
+                producerTask: chunk-notes
+          parameters:
+            cpu_limit:
+              runtimeValue:
+                constant: '{{$.inputs.parameters[''pipelinechannel--embed_cpu'']}}'
+            location:
+              runtimeValue:
+                constant: us-east1
+            memory_limit:
+              runtimeValue:
+                constant: '{{$.inputs.parameters[''pipelinechannel--embed_mem'']}}'
+            pipelinechannel--embed_cpu:
+              componentInputParameter: embed_cpu
+            pipelinechannel--embed_mem:
+              componentInputParameter: embed_mem
+            previous_ingest_uri:
+              componentInputParameter: previous_ingest_uri
+            project_id:
+              componentInputParameter: project_id
+            workers:
+              componentInputParameter: embed_workers
+        taskInfo:
+          name: embed-chunks
+      eval-ingest:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-eval-ingest
+        dependentTasks:
+        - embed-chunks
+        inputs:
+          artifacts:
+            ingest:
+              taskOutputArtifact:
+                outputArtifactKey: ingest
+                producerTask: embed-chunks
+          parameters:
+            corpus:
+              componentInputParameter: corpus
+            cpu_limit:
+              runtimeValue:
+                constant: '{{$.inputs.parameters[''pipelinechannel--chunk_cpu'']}}'
+            dimensions:
+              componentInputParameter: dimensions
+            expected:
+              componentInputParameter: expected_vectors
+            index_name:
+              runtimeValue:
+                constant: ingest
+            pipelinechannel--chunk_cpu:
+              componentInputParameter: chunk_cpu
+        taskInfo:
+          name: eval-ingest
+  inputDefinitions:
+    parameters:
+      approximate_neighbors:
+        defaultValue: 40.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      brute_sample:
+        defaultValue: 2000.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      chunk_cpu:
+        defaultValue: '2'
+        isOptional: true
+        parameterType: STRING
+      chunk_mem:
+        defaultValue: 8Gi
+        isOptional: true
+        parameterType: STRING
+      corpus:
+        defaultValue: mimic
+        isOptional: true
+        parameterType: STRING
+      data_fingerprint:
+        defaultValue: ''
+        isOptional: true
+        parameterType: STRING
+      dimensions:
+        defaultValue: 768.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      embed_cpu:
+        defaultValue: '8'
+        isOptional: true
+        parameterType: STRING
+      embed_mem:
+        defaultValue: 24Gi
+        isOptional: true
+        parameterType: STRING
+      embed_workers:
+        defaultValue: 1.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      expected_vectors:
+        defaultValue: 555770.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      index_cpu:
+        defaultValue: '2'
+        isOptional: true
+        parameterType: STRING
+      index_mem:
+        defaultValue: 8Gi
+        isOptional: true
+        parameterType: STRING
+      notes_table_ref:
+        defaultValue: trim-icon-498815-a0.mimiciv_note.discharge
+        isOptional: true
+        parameterType: STRING
+      pack_to:
+        defaultValue: 700.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      previous_ingest_uri:
+        defaultValue: ''
+        isOptional: true
+        parameterType: STRING
+      project_id:
+        defaultValue: trim-icon-498815-a0
+        isOptional: true
+        parameterType: STRING
+      sections_csv:
+        defaultValue: history_of_present_illness,past_medical_history,family_history,social_history,physical_exam,brief_hospital_course,discharge_condition,discharge_diagnosis,discharge_medications,medications_on_admission,discharge_disposition,discharge_instructions,discharge_summary
+        isOptional: true
+        parameterType: STRING
+      shard_size:
+        defaultValue: SHARD_SIZE_MEDIUM
+        isOptional: true
+        parameterType: STRING
+      split_name:
+        defaultValue: test
+        isOptional: true
+        parameterType: STRING
+      split_table_ref:
+        defaultValue: trim-icon-498815-a0.readmission.analytics_dataset_encoded
+        isOptional: true
+        parameterType: STRING
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.16.1

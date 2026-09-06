@@ -1,0 +1,296 @@
+"""
+training_pipeline — Vertex AI (KFP v2) readmission training pipeline DAG.
+
+Wiring::
+
+    load_data ─▶ validate_data ─▶ benchmark_xgboost ─▶ benchmark_gate
+                                                            │
+                                                            ▼
+                                                        optuna_hpo
+                                                            │
+                                                            ▼
+                                                       train_final
+                                                            │
+                        ┌───────────────────┬───────────────────┬──────────┘
+                        ▼                   ▼                   ▼
+                  evaluate_test        shap_explain       fairness_audit
+                        │
+                        ▼
+                  register_model
+
+All feature encoding (one-hot categoricals, missingness policy) is now static in
+BigQuery (``analytics_dataset_encoded``, generated from :mod:`src.encoding`), so
+``load_data`` is a plain projection and there is no in-pipeline imputer. The
+model is a pure numeric XGBoost booster. ``register_model`` publishes a versioned
+serving bundle (model.bst + manifest.json + threshold.json) to GCS and records a
+provenance entry; the servable Custom Prediction Routine (probability + native
+TreeSHAP attributions) is built and deployed separately by ``scripts/deploy_cpr.py``.
+"""
+
+import json
+import sys
+from pathlib import Path
+
+from kfp import compiler, dsl
+
+from mlops.training.components.benchmark_gate import benchmark_gate
+from mlops.training.components.benchmark_xgboost import benchmark_xgboost
+from mlops.training.components.calibrate_threshold import calibrate_threshold
+from mlops.training.components.evaluate_test import evaluate_test
+from mlops.training.components.fairness_audit import fairness_audit
+from mlops.training.components.load_data import load_data
+from mlops.training.components.optuna_hpo import optuna_hpo
+from mlops.training.components.register_model import register_model
+from mlops.training.components.shap_explain import shap_explain
+from mlops.training.components.train_final import train_final
+from mlops.training.components.validate_data import validate_data
+
+PIPELINE_NAME = "readmission-training"
+
+# Vertex AI Experiment shared with the HOSPITAL baseline and feature-selection
+# runs, so training runs land alongside them for side-by-side comparison.
+EXPERIMENT_NAME = "readmission-mlops"
+
+# --- Feature contract -------------------------------------------------------
+# All feature encoding is now static in BigQuery (analytics_dataset_encoded),
+# generated from mlops.data.encoding. The model consumes the fixed-order NUMERIC
+# one-hot vector below; there are no native categoricals at train time, so
+# CAT_FEATURES is empty. To change the feature set, edit src.encoding and
+# regenerate the encoded Dataform view.
+from mlops.data.encoding import feature_order as _feature_order
+
+SELECTED_FEATURES = _feature_order()
+
+# No native categoricals: categorical encoding is one-hot in BigQuery. Retained
+# as an (empty) pipeline parameter for component signature stability.
+CAT_FEATURES: list = []
+
+# Benchmark XGBoost defaults (mirror the feature-selection reference model).
+DEFAULT_XGB_PARAMS = {
+    "n_estimators": 300,
+    "max_depth": 6,
+    "learning_rate": 0.05,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "random_state": 42,
+}
+
+
+def _load_hospital_baseline() -> float:
+    """Single source of truth for the HOSPITAL baseline AUCPR (build-time).
+
+    The artifact is versioned in the repo (method, n_patients, prevalence,
+    generated_at_utc — its provenance); the value is validated here and again
+    fail-closed inside each gate (ECC-65).
+    """
+    path = Path(__file__).resolve().parents[1] / "artifacts" / "hospital_baseline.json"
+    record = json.loads(path.read_text())
+    aucpr = float(record["aucpr"])
+    if not (0.0 < aucpr < 1.0):
+        raise ValueError(f"hospital_baseline.json aucpr ({aucpr}) is implausible")
+    return aucpr
+
+
+# Resolved once at build/submit time and baked into the compiled pipeline.
+HOSPITAL_AUCPR = _load_hospital_baseline()
+
+
+@dsl.pipeline(
+    name=PIPELINE_NAME,
+    description="30-day readmission risk: load → validate → benchmark → HPO → "
+    "train → evaluate/explain/audit → register.",
+)
+def training_pipeline(
+    project_id: str,
+    full_table_ref: str,
+    label_col: str = "readmission_30d",
+    split_col: str = "split_name",
+    train_split: str = "train",
+    val_split: str = "validation",
+    test_split: str = "test",
+    selected_features: list = SELECTED_FEATURES,
+    cat_features: list = CAT_FEATURES,
+    xgb_params: dict = DEFAULT_XGB_PARAMS,
+    n_trials: int = 50,
+    hpo_timeout_seconds: int = 2700,
+    fbeta_beta: float = 2.0,
+    max_drifted_share: float = 0.2,
+    hospital_aucpr: float = HOSPITAL_AUCPR,
+    serving_container_image_uri: str = "",
+    parent_model: str = "",
+):
+    """Assemble the readmission training DAG."""
+    data = load_data(
+        project_id=project_id,
+        full_table_ref=full_table_ref,
+        label_col=label_col,
+        split_col=split_col,
+        train_split=train_split,
+        val_split=val_split,
+        test_split=test_split,
+    )
+
+    validate = validate_data(
+        x_train=data.outputs["x_train"],
+        x_val=data.outputs["x_val"],
+        max_drifted_share=max_drifted_share,
+    )
+
+    bench = benchmark_xgboost(
+        x_train=data.outputs["x_train"],
+        y_train=data.outputs["y_train"],
+        x_val=data.outputs["x_val"],
+        y_val=data.outputs["y_val"],
+        xgb_params=xgb_params,
+        cat_features=cat_features,
+    ).after(validate)
+
+    gate = benchmark_gate(
+        benchmark_aucpr=bench.outputs["Output"],
+        hospital_aucpr=hospital_aucpr,
+    )
+
+    hpo = optuna_hpo(
+        x_train=data.outputs["x_train"],
+        y_train=data.outputs["y_train"],
+        groups=data.outputs["groups_train"],
+        cat_features=cat_features,
+        n_trials=n_trials,
+        timeout_seconds=hpo_timeout_seconds,
+        project_id=project_id,
+        experiment_name=EXPERIMENT_NAME,
+        pipeline_job_name=dsl.PIPELINE_JOB_NAME_PLACEHOLDER,
+    ).after(gate)
+
+    final = train_final(
+        x_train=data.outputs["x_train"],
+        y_train=data.outputs["y_train"],
+        x_val=data.outputs["x_val"],
+        y_val=data.outputs["y_val"],
+        best_params=hpo.outputs["best_params"],
+        cat_features=cat_features,
+        groups_val=data.outputs["groups_val"],
+        project_id=project_id,
+        experiment_name=EXPERIMENT_NAME,
+        pipeline_job_name=dsl.PIPELINE_JOB_NAME_PLACEHOLDER,
+    )
+
+    # Operating threshold: F-beta-optimal on out-of-fold (patient-grouped) TRAIN
+    # predictions with the tuned HPO params. Probability-first model; this
+    # threshold is metadata for the decision layer only.
+    calib = calibrate_threshold(
+        x_train=data.outputs["x_train"],
+        y_train=data.outputs["y_train"],
+        groups=data.outputs["groups_train"],
+        best_params=hpo.outputs["best_params"],
+        cat_features=cat_features,
+        beta=fbeta_beta,
+        project_id=project_id,
+        experiment_name=EXPERIMENT_NAME,
+        pipeline_job_name=dsl.PIPELINE_JOB_NAME_PLACEHOLDER,
+    )
+
+    # The honest pre-test generalization estimate is the HPO validation AUCPR,
+    # NOT train_final's combined-fit metric (the final model trained on val).
+    evalt = evaluate_test(
+        x_test=data.outputs["x_test"],
+        y_test=data.outputs["y_test"],
+        model_artifact=final.outputs["model_artifact"],
+        tuned_threshold=calib.outputs["Output"],
+        hpo_val_aucpr=hpo.outputs["Output"],
+        benchmark_aucpr=bench.outputs["Output"],
+        hospital_aucpr=hospital_aucpr,
+        beta=fbeta_beta,
+        project_id=project_id,
+        experiment_name=EXPERIMENT_NAME,
+        pipeline_job_name=dsl.PIPELINE_JOB_NAME_PLACEHOLDER,
+    )
+
+    shap = shap_explain(
+        x_test_path=data.outputs["x_test"],
+        model_artifact_path=final.outputs["model_artifact"],
+    )
+
+    fairness = fairness_audit(
+        x_test=data.outputs["x_test"],
+        y_test=data.outputs["y_test"],
+        model_artifact=final.outputs["model_artifact"],
+        tuned_threshold=calib.outputs["Output"],
+        project_id=project_id,
+        experiment_name=EXPERIMENT_NAME,
+        pipeline_job_name=dsl.PIPELINE_JOB_NAME_PLACEHOLDER,
+    )
+
+    # Registration waits on the eval gate AND both audits (ECC-71): a crash in
+    # shap_explain or fairness_audit must never leave an already-registered
+    # model with no audit artifacts.
+    register_model(
+        project_id=project_id,
+        booster_model=final.outputs["booster_model"],
+        manifest=data.outputs["manifest"],
+        serving_container_image_uri=serving_container_image_uri,
+        test_aucpr=evalt.outputs["test_aucpr"],
+        hpo_val_aucpr=hpo.outputs["Output"],
+        benchmark_aucpr=bench.outputs["Output"],
+        tuned_threshold=calib.outputs["Output"],
+        beta=fbeta_beta,
+        parent_model=parent_model,
+    ).after(evalt).after(shap).after(fairness)
+
+
+def compile_pipeline(package_path: str = "readmission_training_pipeline.yaml") -> str:
+    """Compile the pipeline to a KFP IR YAML and return the path."""
+    compiler.Compiler().compile(
+        pipeline_func=training_pipeline, package_path=package_path
+    )
+    return package_path
+
+
+def submit() -> None:
+    """Compile and submit the pipeline to Vertex AI Pipelines."""
+    import os
+    from datetime import datetime, timezone
+
+    from google.cloud import aiplatform
+
+    from mlops.data.config import FULL_TABLE_REF_ENCODED, PROJECT_ID
+
+    package_path = compile_pipeline()
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    aiplatform.init(project=PROJECT_ID, location="us-east1", experiment=EXPERIMENT_NAME)
+    job = aiplatform.PipelineJob(
+        display_name=f"{PIPELINE_NAME}-{ts}",
+        template_path=package_path,
+        # GCS staging root for pipeline artifacts (required by Vertex).
+        pipeline_root=os.environ.get("PIPELINE_ROOT"),
+        parameter_values={
+            "project_id": PROJECT_ID,
+            "full_table_ref": FULL_TABLE_REF_ENCODED,
+            # HPO trials — set N_TRIALS low (e.g. 5) for a quick wiring check.
+            "n_trials": int(os.environ.get("N_TRIALS", "50")),
+            # Wall-clock backstop for HPO (seconds); stops launching trials past
+            # this budget and returns best-so-far. Default 45 min.
+            "hpo_timeout_seconds": int(os.environ.get("HPO_TIMEOUT", "2700")),
+            # Optional override for the serving image recorded on the provenance
+            # entry; empty -> register_model uses its CPR image default.
+            "serving_container_image_uri": os.environ.get("SERVING_IMAGE_URI", ""),
+        },
+        # Every run logs fresh (no cached step reuse) so the experiment record
+        # reflects the actual execution.
+        enable_caching=False,
+    )
+    # Associate the run with the shared Vertex Experiment: pipeline parameters
+    # and system.Metrics artifacts are auto-logged for comparison against the
+    # baseline and feature-selection runs. Runs as PIPELINE_SA if set.
+    job.submit(
+        experiment=EXPERIMENT_NAME,
+        service_account=os.environ.get("PIPELINE_SA") or None,
+    )
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "submit":
+        submit()
+    else:
+        path = compile_pipeline()
+        print(f"Compiled pipeline -> {path}")

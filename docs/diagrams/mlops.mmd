@@ -1,0 +1,60 @@
+flowchart TB
+    subgraph P2["Phase 2 — Data Representation"]
+        direction LR
+        BQ["BigQuery<br/>MIMIC-IV sources"]
+        DF["Dataform<br/>ELT: cohort → features → mart"]
+        SPLIT["Deterministic Split<br/>FARM_FINGERPRINT(subject_id)"]
+        EV["Evidently AI<br/>data quality + drift gate"]
+        BQ --> DF --> SPLIT --> EV
+    end
+
+    subgraph P3["Phase 3 — Training (Vertex AI Pipelines)"]
+        direction TB
+        LOAD["load-data"]
+        IMPUTE["impute<br/>ColumnTransformer (fit train only)"]
+        subgraph FS["Feature Selection"]
+            TIER1["Tier 1: filter, LASSO, LGBM"]
+            AGG1["aggregate-tier1"]
+            TIER2["Tier 2: RFE, Boruta"]
+            AGG2["aggregate-final (vote)"]
+            TIER1 --> AGG1 --> TIER2 --> AGG2
+        end
+        HOSPITAL["hospital-score<br/>AUCPR baseline"]
+        BENCH["benchmark-xgboost"]
+        HPO["optuna-hpo<br/>maximize AUCPR"]
+        TRAIN["train-final"]
+        SHAP["shap-explain"]
+        FAIRNESS["fairness-audit"]
+        REG["register-model"]
+        LOAD --> IMPUTE
+        IMPUTE --> FS
+        IMPUTE --> HOSPITAL
+        FS --> BENCH
+        BENCH --> HPO --> TRAIN
+        TRAIN --> SHAP
+        TRAIN --> FAIRNESS
+        SHAP --> REG
+        FAIRNESS --> REG
+    end
+
+    subgraph P4["Phase 4 — Deployment"]
+        direction LR
+        ART["Serving Artifact<br/>booster + imputer + feature list"]
+        EP["Vertex Endpoint"]
+        XAI["Explainable AI<br/>TreeSHAP"]
+        ART --> EP --> XAI
+    end
+
+    subgraph P5["Phase 5 — Monitoring"]
+        direction LR
+        MON["Vertex Model Monitoring<br/>input + attribution drift"]
+        EVAL["Scheduled Eval Job<br/>AUCPR on matured labels"]
+        PS["Pub/Sub<br/>retraining signal"]
+        MON --> PS
+        EVAL --> PS
+    end
+
+    P2 --> P3
+    P3 --> P4
+    P4 --> P5
+    P5 -.retraining signal.-> P3

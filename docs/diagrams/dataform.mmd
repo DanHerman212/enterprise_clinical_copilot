@@ -1,0 +1,42 @@
+flowchart LR
+    subgraph SRC["sources"]
+        ADM["admissions"]
+        PAT["patients"]
+        LAB["labevents"]
+        DIA["diagnoses_icd"]
+        PRC["procedures_icd"]
+        RX["prescriptions"]
+        ED["edstays"]
+    end
+
+    subgraph STG["staging"]
+        COH["cohort<br/>inclusion/exclusion"]
+        SPL["cohort_split<br/>deterministic"]
+    end
+
+    subgraph FEA["features"]
+        F1["feat_demographics"]
+        F2["feat_utilization"]
+        F3["feat_codes"]
+        F4["feat_medications"]
+        F5["feat_labs"]
+        F6["feat_oncology"]
+        FEAT["features"]
+        CLEAN["features_clean"]
+    end
+
+    subgraph MAR["marts"]
+        AN["analytics_dataset"]
+        ENC["analytics_dataset_encoded"]
+    end
+
+    SRC --> STG
+    STG --> FEA
+    F1 --> FEAT
+    F2 --> FEAT
+    F3 --> FEAT
+    F4 --> FEAT
+    F5 --> FEAT
+    F6 --> FEAT
+    FEAT --> CLEAN
+    CLEAN --> AN --> ENC

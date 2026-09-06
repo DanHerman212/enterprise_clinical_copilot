@@ -17,7 +17,7 @@ env/
 
 # --- Jupyter ---------------------------------------------------------------
 .ipynb_checkpoints/
-projects/mlops/notebooks/
+mlops/notebooks/
 
 # --- Secrets / credentials -------------------------------------------------
 .env
@@ -27,6 +27,7 @@ projects/mlops/notebooks/
 *.pem
 service-account*.json
 gcp-key*.json
+.df-credentials.json
 
 # --- Data (never commit MIMIC-IV or any PHI-derived artifact) --------------
 data/
@@ -41,6 +42,7 @@ data/
 *.joblib
 *.h5
 *.onnx
+*.bst
 models/
 artifacts/
 
@@ -65,7 +67,12 @@ node_modules/
 projects/agent-harness/eval/results/*.log
 projects/agent-harness/eval/results/*.jsonl
 projects/agent-harness/eval/results/*.txt
+evaluation/agent/results/*.log
+evaluation/agent/results/*.jsonl
+evaluation/agent/results/*.txt
+evaluation/agent/results/
 
 # --- Hybrid cohort: real MTSamples note TEXT stays out of git (raw-text rule).
 # The features-only hybrid_cohort.json IS tracked; the notes artifact is not. ---
 projects/agent-harness/eval/results/hybrid_notes.json
+evaluation/agent/results/hybrid_notes.json

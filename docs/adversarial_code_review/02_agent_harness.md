@@ -2,7 +2,7 @@
 
 ## Scope
 
-This section covers `projects/agent-harness/agent/` — the live agent that turns a clinician's question into a grounded, cited answer by driving Gemini and the MCP tools. It is the core of the system: the service Django proxies to (§1), and the caller of the predict and RAG tools reviewed in §3. The deployed surface is a Starlette app on Cloud Run with a shallow health check and a single `/ask` route that validates the question, opens a fresh MCP session per request, runs the graph, and returns the answer with its guardrail flags, tool-call transcript, and A2UI canvas.
+This section covers `services/agent/` — the live agent that turns a clinician's question into a grounded, cited answer by driving Gemini and the MCP tools. It is the core of the system: the service Django proxies to (§1), and the caller of the predict and RAG tools reviewed in §3. The deployed surface is a Starlette app on Cloud Run with a shallow health check and a single `/ask` route that validates the question, opens a fresh MCP session per request, runs the graph, and returns the answer with its guardrail flags, tool-call transcript, and A2UI canvas.
 
 The graph is an explicit LangGraph, deliberately not `create_react_agent`: the agent turns once to emit tool calls, a tool node executes them, and the agent turns again to narrate — the second turn is where the prompt's behavioral contract applies. The model is Gemini via Vertex at temperature zero; tool wiring is a hand-rolled MCP→Gemini adapter (the upstream adapter library is incompatible with `mcp` 2.0) in which failures become structured error payloads rather than exceptions, so a downstream outage produces a plain-language report instead of a collapsed graph.
 

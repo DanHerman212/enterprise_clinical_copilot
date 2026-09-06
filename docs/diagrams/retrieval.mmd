@@ -1,0 +1,12 @@
+flowchart LR
+    AG["Agent<br/>LangGraph · Cloud Run"] --> MCP["MCP Server"]
+    MCP --> PR["predict_readmission<br/>risk + SHAP factors"]
+    MCP --> RS["rag_search(hadm_id, query, top_k)"]
+    PR --> EP["Vertex Endpoint<br/>XGBoost + TreeSHAP"]
+    RS --> EMB["Embed query<br/>gemini-embedding-001 @ 768"]
+    EMB --> VS["Vertex AI Vector Search<br/>TREE_AH index"]
+    VS --> R1["hadm_id restrict<br/>server-side · always"]
+    R1 --> CH["Original text chunks<br/>BigQuery note_chunks"]
+    CH --> AG
+    EP --> AG
+    AG --> A2["A2UI components<br/>cited, evidence-grounded answer"]

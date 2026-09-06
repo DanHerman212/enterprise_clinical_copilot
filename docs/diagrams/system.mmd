@@ -1,0 +1,46 @@
+flowchart TB
+    subgraph DATA["Data"]
+        BQ["BigQuery<br/>MIMIC-IV v3.1"]
+        DF["Dataform ELT<br/>cohort → split → features → marts"]
+        EV["Evidently AI<br/>quality + drift gate"]
+        BQ --> DF --> EV
+    end
+
+    subgraph MODEL["Model"]
+        PIP["Vertex AI Pipelines<br/>feature selection → HPO → train → SHAP → fairness"]
+        REG["Model Registry<br/>booster + manifest + threshold"]
+        EP["Vertex Endpoint<br/>CPR: XGBoost + TreeSHAP"]
+        PIP --> REG --> EP
+    end
+
+    subgraph AGENT["Agent"]
+        LG["LangGraph agent<br/>Cloud Run (private)"]
+        MCP["MCP server<br/>stdio / HTTP"]
+        GM["Gemini Flash<br/>Vertex"]
+        LG <--> GM
+        LG --> MCP
+    end
+
+    subgraph RAG["Retrieval"]
+        EMB["Embed<br/>gemini-embedding-001 @768"]
+        VS["Vertex Vector Search<br/>TREE_AH"]
+        CH["BigQuery note_chunks<br/>original text"]
+        EMB --> VS --> CH
+    end
+
+    subgraph UI["Interface"]
+        DJ["Django BFF<br/>auth + quota"]
+        A2["A2UI components"]
+        DB["Cloud SQL Postgres"]
+        DJ --> A2
+        DJ --> DB
+    end
+
+    EV --> PIP
+    MCP --> EP
+    MCP --> VS
+    VS --> LG
+    DJ --> LG
+    LG --> A2
+    LG -.trace.-> LF["Langfuse (v4, self-hosted)"]
+    EP -.drift.-> MON["Vertex Model Monitoring"]

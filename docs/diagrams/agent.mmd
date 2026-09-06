@@ -1,0 +1,11 @@
+flowchart LR
+    U["Clinician"] --> DJ["Django BFF<br/>auth + quota"]
+    DJ --> LG["LangGraph Agent<br/>Cloud Run · private"]
+    LG <--> GM["Gemini Flash<br/>Vertex"]
+    LG --> MCP["MCP Server<br/>stdio dev · HTTP prod"]
+    MCP --> T1["predict_readmission"]
+    MCP --> T2["rag_search"]
+    T1 --> EP["Vertex Endpoint"]
+    T1 --> FS["Feature source<br/>BigQuery"]
+    T2 --> VS["Vector Search"]
+    LG --> A2["A2UI components"]

@@ -1,15 +1,15 @@
 """build_golden_sample_108.py — 324-question golden sample over the hybrid 108.
 
-Reads eval/results/hybrid_cohort.json (108 scored patients) and writes the
+Reads evaluation/agent/results/hybrid_cohort.json (108 scored patients) and writes the
 golden sample in the shape collect.py consumes:
 
-  eval/results/golden_sample_hybrid_108.json
+  evaluation/agent/results/golden_sample_hybrid_108.json
     {"seed": 42, "n": 108, "patients": [{hadm_id, probability, band, archetype}]}
 
 collect.py then runs 3 prompts (risk / meds / summarize) per patient =
-108 x 3 = 324 agent runs. See docs/eval_sample_size.md for why 324.
+108 x 3 = 324 agent runs. See evaluation/agent/rubric.md for why 324.
 
-Usage (from projects/agent-harness):
+Usage (from services):
   ../../.venv/bin/python scripts/build_golden_sample_108.py
 """
 
@@ -19,9 +19,9 @@ import json
 import sys
 from pathlib import Path
 
-HARNESS = Path(__file__).resolve().parents[1]
-COHORT_SRC = HARNESS / "eval" / "results" / "hybrid_cohort.json"
-OUT = HARNESS / "eval" / "results" / "golden_sample_hybrid_108.json"
+HARNESS = Path(__file__).resolve().parents[2]
+COHORT_SRC = HARNESS / "evaluation" / "agent" / "results" / "hybrid_cohort.json"
+OUT = HARNESS / "evaluation" / "agent" / "results" / "golden_sample_hybrid_108.json"
 
 
 def main() -> int:

@@ -14,7 +14,7 @@ aggregated to parent groups + top_factors. The output includes, per note, the
 provenance of every feature (parsed vs filled + basis) so the coherence rule
 (note story <-> feature row <-> risk score) can be verified note by note.
 
-Usage (from projects/agent-harness):
+Usage (from services):
   ../../.venv/bin/python scripts/fill_features.py
 Output: data/mtsamples/fill.json  { sample_id: {...} }
 """
@@ -27,9 +27,9 @@ from pathlib import Path
 import numpy as np
 import xgboost as xgb
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-REPO = Path(__file__).resolve().parents[3]  # enterprise_clinical_copilot
+REPO = Path(__file__).resolve().parents[2]  # enterprise_clinical_copilot
 HARNESS = REPO / "projects" / "agent-harness"
 DATA_DIR = HARNESS / "data" / "mtsamples"
 MANIFEST = json.loads((REPO / "manifest.json").read_text())
@@ -238,7 +238,7 @@ def _provisional_row(text: str) -> tuple[dict[str, float], dict]:
     else:
         row["age"] = 60.0; prov["age"] = ("filled", "no signal default", 60.0)
 
-    # gender — model encoding is 1 = male (mirrors mlops/src/encoding.py
+    # gender — model encoding is 1 = male (mirrors mlops/data/encoding.py
     # `CAST(gender = 'M' AS INT64)`), so a male note fills 1.0, female 0.0.
     if gender is not None:
         row["gender"] = 1.0 if gender == "M" else 0.0; prov["gender"] = ("parsed", gender)

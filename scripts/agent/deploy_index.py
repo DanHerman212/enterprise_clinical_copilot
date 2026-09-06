@@ -31,7 +31,7 @@ from google.cloud.aiplatform.matching_engine.matching_engine_index_config import
     DistanceMeasureType,
 )
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from services.mcp.config import LOCATION, PROJECT  # noqa: E402
 from services.mcp.retrieval.notes import CACHE_DIR  # noqa: E402

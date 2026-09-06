@@ -19,11 +19,11 @@ from pathlib import Path
 
 from google.cloud import aiplatform, bigquery
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from services.mcp.retrieval.chunking import DEFAULT_MAX_CHARS, DEFAULT_PACK_TO, chunk_note  # noqa: E402
 from services.mcp.retrieval.embed import datapoint_id  # noqa: E402
-from pipelines.components.chunk_notes import DEFAULT_SECTIONS as WHITELIST  # noqa: E402
-from scripts.prune_inclusion_violations import REMOVE  # noqa: E402
+from services.mcp.pipelines.components.chunk_notes import DEFAULT_SECTIONS as WHITELIST  # noqa: E402
+from scripts.agent.prune_inclusion_violations import REMOVE  # noqa: E402
 
 PROJECT = "trim-icon-498815-a0"
 LOCATION = "us-east1"

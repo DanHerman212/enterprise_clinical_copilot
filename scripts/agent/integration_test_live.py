@@ -15,7 +15,7 @@ never by trusting the restrict filter:
                          with a risk score, so the full demo path is live.
 
 Live tier — needs both endpoints deployed. Usage:
-  .venv/bin/python projects/agent-harness/scripts/integration_test_live.py
+  .venv/bin/python scripts/agent/integration_test_live.py
 """
 
 import asyncio
@@ -26,9 +26,9 @@ from google.cloud import bigquery
 
 sys.path.insert(0, ".")
 
-from mcp_server.config import DISCHARGE_TABLE, PROJECT  # noqa: E402
-from mcp_server.tools.predict import predict_readmission  # noqa: E402
-from mcp_server.tools.rag_search import rag_search  # noqa: E402
+from services.mcp.config import DISCHARGE_TABLE, PROJECT  # noqa: E402
+from services.mcp.tools.prediction import predict_readmission  # noqa: E402
+from services.mcp.tools.retrieval import rag_search  # noqa: E402
 
 DEMO_COHORT = f"{PROJECT}.readmission.demo_cohort"
 
@@ -59,7 +59,7 @@ def _note_id_map() -> dict[str, int]:
 
 def _hadm_of(note_to_hadm: dict[str, int], datapoint_id: str) -> int | None:
     """'{note_id}_{section}_{ordinal}' -> hadm_id by matching known sections."""
-    from pipelines.components.chunk_notes import DEFAULT_SECTIONS
+    from services.mcp.pipelines.components.chunk_notes import DEFAULT_SECTIONS
     for section in DEFAULT_SECTIONS:
         token = f"_{section}_"
         idx = datapoint_id.rfind(token)

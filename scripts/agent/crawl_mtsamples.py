@@ -5,7 +5,7 @@ from MTSamples and stores each as clean text.
 
 MTSamples is behind a Cloudflare challenge that blocks plain requests, so this
 uses Playwright (a real browser) which passes it. Output is stored under the
-gitignored `projects/agent-harness/data/mtsamples/` directory — raw note text is
+gitignored `data/agent/mtsamples/` directory — raw note text is
 NEVER committed (same posture as MIMIC note text).
 
 Provenance is recorded in a manifest. This is a dev/test dataset; the public
@@ -25,7 +25,7 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-HARNESS_ROOT = Path(__file__).resolve().parents[1]
+HARNESS_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUT = HARNESS_ROOT / "data" / "mtsamples"
 
 BROWSE_URL = "https://www.mtsamples.com/site/pages/browse.asp?type=89-Discharge+Summary"

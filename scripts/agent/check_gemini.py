@@ -18,9 +18,9 @@ from pathlib import Path
 from google import genai
 from google.genai import types
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from mcp_server.config import (  # noqa: E402
+from services.mcp.config import (  # noqa: E402
     GEMINI_MAX_OUTPUT_TOKENS,
     GEMINI_MODEL,
     LOCATION,

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import xgboost as xgb
 
-REPO = Path(__file__).resolve().parents[3]  # enterprise_clinical_copilot
+REPO = Path(__file__).resolve().parents[2]  # enterprise_clinical_copilot
 MANIFEST = json.loads((REPO / "manifest.json").read_text())
 FEATURES: list[str] = MANIFEST["feature_order"]
 THRESHOLD = 0.12  # from threshold.json

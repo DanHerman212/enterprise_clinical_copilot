@@ -24,9 +24,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-HARNESS_ROOT = Path(__file__).resolve().parents[1]
-COHORT_SOURCE = HARNESS_ROOT / "eval" / "results" / "synthetic_cohort.json"
-OUT_DIR = Path(__file__).resolve().parents[1] / "data" / "demo_fixtures"
+HARNESS_ROOT = Path(__file__).resolve().parents[2]
+COHORT_SOURCE = HARNESS_ROOT / "evaluation" / "agent" / "results" / "synthetic_cohort.json"
+OUT_DIR = Path(__file__).resolve().parents[2] / "data" / "demo_fixtures"
 SITE_FIXTURES = Path(os.environ.get(
     "SITE_FIXTURES",
     HARNESS_ROOT.parents[1].parent / "danielmherman" / "demo" / "data" / "demo_fixtures",

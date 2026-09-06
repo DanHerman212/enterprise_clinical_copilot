@@ -17,14 +17,14 @@ Anchor strategy (most robust first):
 Target files in place (data/mtsamples/*.txt → *.txt rewritten), so downstream
 steps see clean notes. Raw-text/no-git posture unchanged.
 
-Usage (from projects/agent-harness):
+Usage (from services):
   ../../.venv/bin/python scripts/clean_mtsamples.py
 """
 
 import re
 from pathlib import Path
 
-HARNESS_ROOT = Path(__file__).resolve().parents[1]
+HARNESS_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = HARNESS_ROOT / "data" / "mtsamples"
 
 # Any of these at line start marks the clinical body. Order matters: longer

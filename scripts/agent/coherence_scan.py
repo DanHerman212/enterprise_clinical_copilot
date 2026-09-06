@@ -16,10 +16,10 @@ Checks per patient:
          feature (only flagged when one side dominates ~2:1 or more).
   REDACTION — bare placeholder tokens (Dr./Mr./Mrs./Ms. X, runs of X, etc.).
 
-Reads the hybrid-108 corpus (eval/results/hybrid_notes.json + hybrid_cohort.json).
+Reads the hybrid-108 corpus (evaluation/agent/results/hybrid_notes.json + hybrid_cohort.json).
 Outputs one line per flagged patient + a summary. Exit 0 (a report, not a gate).
 
-Usage (from projects/agent-harness):
+Usage (from services):
   ../../.venv/bin/python scripts/coherence_scan.py
 """
 
@@ -29,9 +29,9 @@ import json
 import re
 from pathlib import Path
 
-HARNESS = Path(__file__).resolve().parents[1]
-NOTES = HARNESS / "eval" / "results" / "hybrid_notes.json"
-COHORT = HARNESS / "eval" / "results" / "hybrid_cohort.json"
+HARNESS = Path(__file__).resolve().parents[2]
+NOTES = HARNESS / "evaluation" / "agent" / "results" / "hybrid_notes.json"
+COHORT = HARNESS / "evaluation" / "agent" / "results" / "hybrid_cohort.json"
 
 # Note-subject markers indicating the note's patient is a neonate / infant /
 # toddler. Deliberately SUBJECT-anchored: generic obstetric-history words

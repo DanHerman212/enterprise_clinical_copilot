@@ -14,12 +14,12 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from google.cloud import bigquery  # noqa: E402
-from rag.chunking import DEFAULT_MAX_CHARS, DEFAULT_PACK_TO, chunk_note  # noqa: E402
+from services.mcp.retrieval.chunking import DEFAULT_MAX_CHARS, DEFAULT_PACK_TO, chunk_note  # noqa: E402
 # Single source of truth for the whitelist (must match the pipeline component).
-from pipelines.components.chunk_notes import DEFAULT_SECTIONS as WHITELIST  # noqa: E402
+from services.mcp.pipelines.components.chunk_notes import DEFAULT_SECTIONS as WHITELIST  # noqa: E402
 
 PROJECT = "trim-icon-498815-a0"
 NOTES = f"{PROJECT}.readmission.hybrid_notes"

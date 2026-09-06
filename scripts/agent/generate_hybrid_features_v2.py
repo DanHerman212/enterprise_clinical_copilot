@@ -15,7 +15,7 @@ script regenerates them the way the demo should have been built:
      thresholding at the operating threshold (0.11).
 
 Writes:
-  eval/results/hybrid_cohort_v2.json        (features + probability + band + label)
+  evaluation/agent/results/hybrid_cohort_v2.json        (features + probability + band + label)
   readmission.hybrid_features_v2             (the table, for validation before swap)
 
 Usage (from repo root):
@@ -37,15 +37,15 @@ from google import genai
 from google.cloud import bigquery, storage
 from google.genai import types
 
-HARNESS = Path(__file__).resolve().parents[1]
+HARNESS = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(HARNESS))
 
 PROJECT = "trim-icon-498815-a0"
 LOCATION = "us-east1"
 MODEL = "gemini-2.5-flash"
 
-NOTES_SRC = HARNESS / "eval" / "results" / "hybrid_notes.json"
-OUT_JSON = HARNESS / "eval" / "results" / "hybrid_cohort_v2.json"
+NOTES_SRC = HARNESS / "evaluation" / "agent" / "results" / "hybrid_notes.json"
+OUT_JSON = HARNESS / "evaluation" / "agent" / "results" / "hybrid_cohort_v2.json"
 OUT_TABLE = f"{PROJECT}.readmission.hybrid_features_v2"
 MIMIC = f"`{PROJECT}.readmission.analytics_dataset_encoded`"
 BUNDLE = (

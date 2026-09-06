@@ -10,8 +10,8 @@ Ties the Step-2 analysis into the artifact the rest of the demo consumes:
     seed / fixtures / name-assignment machinery is unchanged)
 
 Writes (all gitignored data, plus committed eval artifacts):
-  eval/results/hybrid_cohort.json  (features contract, mirrors synthetic_cohort.json)
-  eval/results/hybrid_notes.json   (notes contract, mirrors synthetic_notes.json)
+  evaluation/agent/results/hybrid_cohort.json  (features contract, mirrors synthetic_cohort.json)
+  evaluation/agent/results/hybrid_notes.json   (notes contract, mirrors synthetic_notes.json)
   data/hybrid/provenance.json      (per-feature provenance + top_factors, transparency)
 
 Usage (from services):
@@ -24,21 +24,21 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.fill_features import (  # noqa: E402
+from scripts.agent.fill_features import (  # noqa: E402
     THRESHOLD,
     _provisional_row,
     _score,
     band_of,
 )
 
-HARNESS = Path(__file__).resolve().parents[1]
+HARNESS = Path(__file__).resolve().parents[2]
 DATA_DIR = HARNESS / "data" / "mtsamples"
 HYBRID_DIR = HARNESS / "data" / "hybrid"
 SELECTION = DATA_DIR / "selection_24.json"
-COHORT_OUT = HARNESS / "eval" / "results" / "hybrid_cohort.json"
-NOTES_OUT = HARNESS / "eval" / "results" / "hybrid_notes.json"
+COHORT_OUT = HARNESS / "evaluation" / "agent" / "results" / "hybrid_cohort.json"
+NOTES_OUT = HARNESS / "evaluation" / "agent" / "results" / "hybrid_notes.json"
 
 # Band order for hadm_id assignment (low 90000001-90000008, etc.), mirroring the
 # synthetic cohort's 8/8/8 layout. Within a band, ascending probability.
@@ -125,7 +125,7 @@ def main() -> int:
 
 
 def sel_order() -> list[str]:
-    from scripts.fill_features import FEATURES  # noqa: PLC0415
+    from scripts.agent.fill_features import FEATURES  # noqa: PLC0415
     return FEATURES
 
 

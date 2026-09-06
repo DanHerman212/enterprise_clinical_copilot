@@ -2,7 +2,7 @@
 
 Replaces seed_demo_cohort.py for the synthetic cohort: instead of scoring a
 MIMIC test-split pool against the live endpoint, this reads the already-scored
-synthetic cohort (eval/results/synthetic_cohort.json) and renders the same
+synthetic cohort (evaluation/agent/results/synthetic_cohort.json) and renders the same
 demo_cohort.json contract the Django loader expects.
 
 Only the *data* is synthetic; the name-assignment and summary-building logic
@@ -25,10 +25,10 @@ import json
 import os
 from pathlib import Path
 
-HARNESS_ROOT = Path(__file__).resolve().parents[1]
+HARNESS_ROOT = Path(__file__).resolve().parents[2]
 COHORT_SOURCE = Path(os.environ.get(
     "COHORT_SOURCE",
-    HARNESS_ROOT / "eval" / "results" / "hybrid_cohort.json",
+    HARNESS_ROOT / "evaluation" / "agent" / "results" / "hybrid_cohort.json",
 ))
 OUTPUT_PATH = HARNESS_ROOT / "data" / "demo_cohort.json"
 # The site lives as a sibling workspace folder: Desktop/danielmherman.

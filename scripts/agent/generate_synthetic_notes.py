@@ -1,7 +1,7 @@
 """Synthetic demo cohort — discharge-note generator (Task 3).
 
 Renders a coherent, fully-fictional discharge summary per patient from
-`eval/results/synthetic_cohort.json`, in the app's note format + `___` redaction
+`evaluation/agent/results/synthetic_cohort.json`, in the app's note format + `___` redaction
 style, consistent with each patient's features (age, sex, LOS, meds count,
 procedures, oncology, discharge location, labs) and risk band.
 
@@ -12,7 +12,7 @@ Usage (repo root):
 import json
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[3]
+REPO = Path(__file__).resolve().parents[2]
 COHORT_PATH = REPO / "evaluation/agent/results/synthetic_cohort.json"
 OUT_PATH = REPO / "evaluation/agent/results/synthetic_notes.json"
 

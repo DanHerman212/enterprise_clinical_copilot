@@ -43,7 +43,7 @@ from pathlib import Path
 
 from google.cloud import aiplatform
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from services.mcp.config import (  # noqa: E402
     INDEX_ENDPOINT_NAME,

@@ -35,7 +35,7 @@ from services.mcp.retrieval.embed import (  # noqa: E402
     QUERY_TASK_TYPE,
     RESTRICT_NAMESPACE,
 )
-from pipelines.components.chunk_notes import DEFAULT_SECTIONS  # noqa: E402
+from services.mcp.pipelines.components.chunk_notes import DEFAULT_SECTIONS  # noqa: E402
 
 PROJECT = "trim-icon-498815-a0"
 LOCATION = "us-east1"

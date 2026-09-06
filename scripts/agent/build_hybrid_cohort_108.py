@@ -8,12 +8,12 @@ data/mtsamples/manifest.json with the same story-anchored fill + served model
 90000025-90000108 (band, then probability asc — same scheme as the 24), and
 merges everything back into the artifacts the rest of the pipeline consumes:
 
-  eval/results/hybrid_cohort.json   (108 patients — features contract)
-  eval/results/hybrid_notes.json    (108 patients — notes contract)
+  evaluation/agent/results/hybrid_cohort.json   (108 patients — features contract)
+  evaluation/agent/results/hybrid_notes.json    (108 patients — notes contract)
   data/hybrid/provenance.json       (108 entries — per-feature provenance)
 
 This is the eval corpus for the 324-question revalidation (see
-docs/eval_sample_size.md): every curated note becomes a scoreable patient.
+evaluation/agent/rubric.md): every curated note becomes a scoreable patient.
 
 Usage (from services):
   ../../.venv/bin/python scripts/build_hybrid_cohort_108.py
@@ -26,9 +26,9 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.fill_features import (  # noqa: E402
+from scripts.agent.fill_features import (  # noqa: E402
     FEATURES,
     THRESHOLD,
     _provisional_row,
@@ -36,12 +36,12 @@ from scripts.fill_features import (  # noqa: E402
     band_of,
 )
 
-HARNESS = Path(__file__).resolve().parents[1]
+HARNESS = Path(__file__).resolve().parents[2]
 DATA_DIR = HARNESS / "data" / "mtsamples"
 HYBRID_DIR = HARNESS / "data" / "hybrid"
 MANIFEST = DATA_DIR / "manifest.json"
-COHORT_OUT = HARNESS / "eval" / "results" / "hybrid_cohort.json"
-NOTES_OUT = HARNESS / "eval" / "results" / "hybrid_notes.json"
+COHORT_OUT = HARNESS / "evaluation" / "agent" / "results" / "hybrid_cohort.json"
+NOTES_OUT = HARNESS / "evaluation" / "agent" / "results" / "hybrid_notes.json"
 PROVENANCE_OUT = HYBRID_DIR / "provenance.json"
 
 _BAND_RANK = {"low": 0, "borderline": 1, "high": 2}

@@ -19,7 +19,7 @@ import os
 import sys
 from pathlib import Path
 
-HARNESS_ROOT = Path(__file__).resolve().parents[1]
+HARNESS_ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR = HARNESS_ROOT / "data" / "demo_fixtures"
 SITE_FIXTURES = Path(os.environ.get(
     "SITE_FIXTURES",

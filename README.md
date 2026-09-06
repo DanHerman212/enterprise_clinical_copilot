@@ -63,13 +63,10 @@ cohort; MIMIC-IV is used for training and evaluation under its data use agreemen
 
 ## Documentation
 
-- [Refactoring assessment and plan](docs/refactoring-assessment-and-plan.md)
-- [Phase 0 runtime baseline](docs/refactoring-phase-0-baseline.md)
 - [System overview](docs/system-overview.md)
 - [Runtime contracts](docs/runtime-contracts.md)
 - [Data and model lifecycle](docs/data-and-model.md)
 - [Evaluation](docs/evaluation.md)
-- [System overview](docs/system-overview.md) and [runtime contracts](docs/runtime-contracts.md)
 - [Operations](docs/operations.md)
 - [Security and data use](docs/security-and-compliance.md)
 

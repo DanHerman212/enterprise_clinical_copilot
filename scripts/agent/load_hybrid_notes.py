@@ -10,9 +10,9 @@ Writes (WRITE_TRUNCATE, idempotent):
   readmission.hybrid_features  (hadm_id + 49 model features + bookkeeping cols)
 
 Source:
-  eval/results/hybrid_notes.json       {n, patients:[{hadm_id, archetype, band,
+  evaluation/agent/results/hybrid_notes.json       {n, patients:[{hadm_id, archetype, band,
                                                       variant, note}]}
-  eval/results/hybrid_cohort_v2.json   {seed, n, patients:[{hadm_id, 49 features,
+  evaluation/agent/results/hybrid_cohort_v2.json   {seed, n, patients:[{hadm_id, 49 features,
                                                       probability, readmission_30d}]}
                                        (produced by generate_hybrid_features_v2.py)
 
@@ -33,8 +33,8 @@ DATASET = "readmission"
 NOTES_TABLE = f"{PROJECT}.{DATASET}.hybrid_notes"
 SPLIT_TABLE = f"{PROJECT}.{DATASET}.hybrid_split"
 FEATURES_TABLE = f"{PROJECT}.{DATASET}.hybrid_features"
-NOTES_SRC = Path(__file__).resolve().parents[1] / "eval" / "results" / "hybrid_notes.json"
-COHORT_SRC = Path(__file__).resolve().parents[1] / "eval" / "results" / "hybrid_cohort_v2.json"
+NOTES_SRC = Path(__file__).resolve().parents[2] / "evaluation" / "agent" / "results" / "hybrid_notes.json"
+COHORT_SRC = Path(__file__).resolve().parents[2] / "evaluation" / "agent" / "results" / "hybrid_cohort_v2.json"
 
 # Same feature-name list as the synthetic loader (49 model features).
 _FEATURE_NAMES = [

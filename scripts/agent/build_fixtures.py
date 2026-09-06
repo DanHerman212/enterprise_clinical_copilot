@@ -14,7 +14,7 @@ GENUINE payloads the UI can render against while the endpoints are down:
 Provenance is recorded per fixture in data/demo_fixtures/README.md, so the UI
 is never built against data we cannot defend.
 
-Usage (from projects/agent-harness):
+Usage (from services):
   ../../.venv/bin/python scripts/build_fixtures.py
 """
 
@@ -28,7 +28,7 @@ from google.cloud import aiplatform, bigquery
 
 sys.path.insert(0, ".")
 
-from mcp_server.config import DISCHARGE_TABLE, LOCATION, PROJECT  # noqa: E402
+from services.mcp.config import DISCHARGE_TABLE, LOCATION, PROJECT  # noqa: E402
 
 # The real passages from the 2026-08-11 live integration test. ids/sections/
 # scores are exactly what the deployed index returned.
@@ -63,7 +63,7 @@ CAPTURED_RAG = {
 # rag passages we captured; 20924467 is the known borderline case.
 PREDICT_PATIENTS = [20724182, 20924467, 22489815, 25828809]
 
-OUT_DIR = Path(__file__).resolve().parents[1] / "data" / "demo_fixtures"
+OUT_DIR = Path(__file__).resolve().parents[2] / "data" / "demo_fixtures"
 
 
 # --------------------------------------------------------------------------- #

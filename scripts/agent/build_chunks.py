@@ -23,7 +23,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from services.mcp.retrieval.chunking import DEFAULT_MAX_CHARS, INDEX_SECTIONS, chunk_note  # noqa: E402
 from services.mcp.retrieval.notes import CACHE_DIR, CHUNKS_MANIFEST, iter_notes, read_manifest  # noqa: E402

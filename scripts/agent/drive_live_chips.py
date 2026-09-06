@@ -4,7 +4,7 @@ Calls the real MCP tools (which hit the deployed predict endpoint + Vector
 Search + BigQuery text fetch) for a few hybrid patients and chip intents, so
 the full user journey is confirmed against real note text.
 
-Usage (from projects/agent-harness):
+Usage (from services):
   FEATURE_TABLE=... DISCHARGE_TABLE=... ../../.venv/bin/python scripts/drive_live_chips.py
 """
 
@@ -12,10 +12,10 @@ import asyncio
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from mcp_server.tools.predict import predict_readmission  # noqa: E402
-from mcp_server.tools.rag_search import rag_search  # noqa: E402
+from services.mcp.tools.prediction import predict_readmission  # noqa: E402
+from services.mcp.tools.retrieval import rag_search  # noqa: E402
 
 PATIENTS = (90000001, 90000009, 90000017)  # low / borderline / high
 QUERIES = ("medications", "summarize the hospital course")

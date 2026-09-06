@@ -36,7 +36,7 @@ from pathlib import Path
 
 from google.cloud import bigquery
 
-HARNESS_ROOT = Path(__file__).resolve().parents[1]
+HARNESS_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(HARNESS_ROOT))
 
 from services.mcp.config import COHORT_TABLE_FQN, PROJECT, TABLE_FQN  # noqa: E402

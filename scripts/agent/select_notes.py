@@ -11,7 +11,7 @@ Output: stdout selection + data/mtsamples/selection_24.json
 import json
 from pathlib import Path
 
-HARNESS = Path(__file__).resolve().parents[1]
+HARNESS = Path(__file__).resolve().parents[2]
 DATA_DIR = HARNESS / "data" / "mtsamples"
 
 CHIP_W = {"meds_section": 3, "summarize": 3, "citations": 2, "risk": 2}

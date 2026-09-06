@@ -8,7 +8,7 @@ Writes two tables (WRITE_TRUNCATE, so re-runs are idempotent):
   readmission.synthetic_notes   (hadm_id INT64, note_id STRING, text STRING)
   readmission.synthetic_split   (hadm_id INT64, split_name STRING)  # all 'test'
 
-Source: eval/results/synthetic_notes.json  {n, patients:[{hadm_id, archetype,
+Source: evaluation/agent/results/synthetic_notes.json  {n, patients:[{hadm_id, archetype,
 band, variant, note}]}
 """
 
@@ -23,7 +23,7 @@ from google.cloud import bigquery
 PROJECT = "trim-icon-498815-a0"
 NOTES_TABLE = f"{PROJECT}.readmission.synthetic_notes"
 SPLIT_TABLE = f"{PROJECT}.readmission.synthetic_split"
-RESULTS = Path(__file__).resolve().parents[1] / "eval" / "results" / "synthetic_notes.json"
+RESULTS = Path(__file__).resolve().parents[2] / "evaluation" / "agent" / "results" / "synthetic_notes.json"
 
 
 def main() -> int:

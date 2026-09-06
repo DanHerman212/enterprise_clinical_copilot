@@ -20,7 +20,7 @@ import json
 import shutil
 from pathlib import Path
 
-HARNESS = Path(__file__).resolve().parents[1]
+HARNESS = Path(__file__).resolve().parents[2]
 
 # hadm_ids removed 2026-08-25 (coherence_scan + manual note review):
 #   neonate/infant notes: 90000006 (14mo), 90000007 (10mo), 90000021 (1mo),
@@ -44,8 +44,8 @@ REMOVE = {
 }
 
 FILES = [
-    HARNESS / "eval" / "results" / "hybrid_cohort.json",
-    HARNESS / "eval" / "results" / "hybrid_notes.json",
+    HARNESS / "evaluation" / "agent" / "results" / "hybrid_cohort.json",
+    HARNESS / "evaluation" / "agent" / "results" / "hybrid_notes.json",
     HARNESS / "data" / "hybrid" / "provenance.json",
 ]
 

@@ -7,7 +7,7 @@ scored live. This writes their 49 feature rows to a clearly-synthetic table
 (readmission.synthetic_features) with the SAME schema, so the predict path can
 be pointed at it (or the rows merged) without touching the real dataset.
 
-Source: eval/results/synthetic_cohort.json — each patient has a `features`
+Source: evaluation/agent/results/synthetic_cohort.json — each patient has a `features`
 dict keyed by the manifest feature names (the same names as the encoded table
 columns), plus hadm_id / band / probability / threshold.
 
@@ -28,7 +28,7 @@ from google.cloud import bigquery
 PROJECT = "trim-icon-498815-a0"
 DATASET = "readmission"
 OUTPUT_TABLE = f"{PROJECT}.{DATASET}.synthetic_features"
-RESULTS = Path(__file__).resolve().parents[1] / "eval" / "results" / "synthetic_cohort.json"
+RESULTS = Path(__file__).resolve().parents[2] / "evaluation" / "agent" / "results" / "synthetic_cohort.json"
 
 # Bookkeeping columns the real encoded table carries (subject_id, split_name,
 # readmission_30d) so the synthetic table is shape-compatible if ever joined.

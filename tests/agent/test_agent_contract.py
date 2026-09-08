@@ -39,6 +39,8 @@ def _success_payload():
         "guardrail_flags": [],
         "tool_calls": [{"name": "predict_readmission", "response": {}}],
         "a2ui": None,
+        "citation_map": {"1": 2},
+        "intent_sections": ["discharge_medications"],
         "model": "gemini-2.5-flash",
         "mcp_transport": "http",
     }
@@ -61,6 +63,23 @@ def test_validate_agent_success_rejects_empty_answer():
 def test_validate_agent_success_rejects_malformed_tool_response():
     payload = _success_payload()
     payload["tool_calls"][0]["response"] = "not an object"
+
+    with pytest.raises(AgentResponseError):
+        validate_agent_success(payload)
+
+
+def test_validate_agent_success_rejects_malformed_citation_map():
+    """Keys are strings for JSON; a raw int key breaks the browser contract."""
+    payload = _success_payload()
+    payload["citation_map"] = {1: 2}
+
+    with pytest.raises(AgentResponseError):
+        validate_agent_success(payload)
+
+
+def test_validate_agent_success_rejects_malformed_intent_sections():
+    payload = _success_payload()
+    payload["intent_sections"] = "discharge_medications"
 
     with pytest.raises(AgentResponseError):
         validate_agent_success(payload)

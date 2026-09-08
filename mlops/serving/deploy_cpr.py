@@ -30,7 +30,7 @@ from pathlib import Path
 
 from google.cloud import aiplatform
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from mlops.data.config import get_project_id  # noqa: E402
 
@@ -40,7 +40,7 @@ REPO = "readmission"
 ENDPOINT_NAME = os.environ.get("ENDPOINT_NAME", "readmission-endpoint")
 MACHINE_TYPE = os.environ.get("MACHINE_TYPE", "n1-standard-2")
 
-CPR_SRC = Path(__file__).resolve().parents[1] / "pipelines" / "serving" / "cpr"
+CPR_SRC = Path(__file__).resolve().parents[1] / "serving" / "cpr"
 CLOUDBUILD = CPR_SRC / "cloudbuild.yaml"
 
 # Image repo (no tag). The concrete tag is a content hash of the CPR source, so

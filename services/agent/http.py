@@ -20,7 +20,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from services.agent.a2ui import risk_card_from_tool_calls
+from services.agent.a2ui import compose_presentation
 from services.agent.contracts import (
     AgentRequestError,
     AgentResponseError,
@@ -121,12 +121,6 @@ async def ask_route(request: Request) -> JSONResponse:
             status_code=502,
         )
 
-    # The A2UI envelope is composed here rather than in the browser so the
-    # rendering contract is testable in Python and versioned with the agent.
-    # It is None when the run answered without predicting, which the caller
-    # must treat as "show the prose" rather than "show an empty card".
-    card = risk_card_from_tool_calls(state["tool_calls"])
-
     # Deterministic post-hoc guardrails (P4): the LLM proposes, code disposes.
     # The served answer is the guarded one; flags are returned for observability
     # (they surface in Langfuse) and so a client can choose to render a note.
@@ -151,12 +145,20 @@ async def ask_route(request: Request) -> JSONResponse:
         for tc in state["tool_calls"]
     ]
 
+    # The presentation contract is composed HERE, not in the BFF: citation
+    # renumbering, the citation map, section-intent resolution, and the A2UI
+    # canvas are evidence semantics — they belong to the layer that ran the
+    # guardrails and saw the tool evidence. Django passes them through.
+    presentation = compose_presentation(question, guarded["answer"], trimmed_calls)
+
     payload = {
         "question": question,
-        "answer": guarded["answer"],
+        "answer": presentation["answer"],
         "guardrail_flags": guarded["flags"],
         "tool_calls": trimmed_calls,
-        "a2ui": card,
+        "a2ui": presentation["a2ui"],
+        "citation_map": presentation["citation_map"],
+        "intent_sections": presentation["intent_sections"],
         "model": GEMINI_MODEL,
         "mcp_transport": MCP_TRANSPORT,
     }

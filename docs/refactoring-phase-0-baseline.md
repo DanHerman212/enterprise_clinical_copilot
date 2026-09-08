@@ -125,6 +125,8 @@ The current `services/agent/http.py` response is:
     }
   ],
   "a2ui": {"...": "..."},
+  "citation_map": {"1": 1},
+  "intent_sections": ["discharge_medications"],
   "model": "gemini-2.5-flash",
   "mcp_transport": "http"
 }
@@ -132,7 +134,7 @@ The current `services/agent/http.py` response is:
 
 The agent server deliberately removes tool-call arguments before returning to Django. The response retains only each tool name and its response payload. This is tested in `tests/agent/test_error_disclosure.py`.
 
-`guardrail_flags` and `a2ui` are agent-generated response fields. Django does not blindly pass the response to the browser: it performs additional citation processing and composes its own final canvas payload.
+`guardrail_flags`, `a2ui`, `citation_map`, and `intent_sections` are agent-generated response fields. The citation renumbering, citation map, section-intent resolution, and A2UI canvas composition all happen in the agent (`services/agent/a2ui.py` + `services/agent/citations.py`) because they are evidence semantics — they belong where the answer, the guardrails, and the retrieved evidence meet. Django passes the contract through unchanged and adds only `remaining`. Fixture mode emits the same contract by reusing the agent's own composer through a thin cross-repo adapter in `demo/fixtures.py`.
 
 ### Agent failure responses
 

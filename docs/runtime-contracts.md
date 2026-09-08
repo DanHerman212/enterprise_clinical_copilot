@@ -12,9 +12,17 @@ payload. Detailed implementation remains in the owning package.
 ```
 
 The agent validates a non-empty question and a 2,000-character maximum. Success returns
-`question`, `answer`, `guardrail_flags`, `tool_calls`, `a2ui`, `model`, and
-`mcp_transport`. Failures use stable codes for invalid input, timeout, unavailable answer,
-and internal failure. See `services/agent/contracts.py` and `services/agent/http.py`.
+`question`, `answer`, `guardrail_flags`, `tool_calls`, `a2ui`, `citation_map`,
+`intent_sections`, `model`, and `mcp_transport`. Failures use stable codes for invalid
+input, timeout, unavailable answer, and internal failure. See `services/agent/contracts.py`
+and `services/agent/http.py`.
+
+The presentation contract — renumbered `answer`, `citation_map`, `intent_sections`, and the
+composed `a2ui` canvas — is produced by the agent (`services/agent/a2ui.py` +
+`services/agent/citations.py`), because that is the layer where the answer, the guardrails,
+and the retrieved evidence meet. Django validates the envelope and forwards it unchanged,
+adding only the web-specific `remaining` quota. The browser renders; it does not reinterpret
+citations.
 
 ## Agent internal state
 

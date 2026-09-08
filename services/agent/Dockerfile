@@ -21,10 +21,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY services/agent/ ./services/agent/
 
-# Only the config modules. The rest of services/mcp (features, endpoint, manifest)
-# imports google-cloud-aiplatform and BigQuery, which are deliberately not in
-# this image — the agent reaches all of that through the MCP server.
+# Only the modules the agent actually imports. The rest of services/mcp
+# (features, endpoint, manifest) imports google-cloud-aiplatform and BigQuery,
+# which are deliberately not in this image — the agent reaches all of that
+# through the MCP server. retrieval/sections.py is the canonical discharge-note
+# heading vocabulary used by the citation layer (pure stdlib).
 COPY services/mcp/__init__.py services/mcp/config.py services/mcp/runtime.py ./services/mcp/
+COPY services/mcp/retrieval/__init__.py services/mcp/retrieval/sections.py ./services/mcp/retrieval/
 
 USER 1000
 

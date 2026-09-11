@@ -146,9 +146,9 @@ async def ask_route(request: Request) -> JSONResponse:
     ]
 
     # The presentation contract is composed HERE, not in the BFF: citation
-    # renumbering, the citation map, section-intent resolution, and the A2UI
-    # canvas are evidence semantics — they belong to the layer that ran the
-    # guardrails and saw the tool evidence. Django passes them through.
+    # renumbering, source resolution, and the A2UI canvas are evidence
+    # semantics — they belong to the layer that ran the guardrails and saw the
+    # tool evidence. Django passes them through; the browser renders them.
     presentation = compose_presentation(question, guarded["answer"], trimmed_calls)
 
     payload = {
@@ -157,8 +157,7 @@ async def ask_route(request: Request) -> JSONResponse:
         "guardrail_flags": guarded["flags"],
         "tool_calls": trimmed_calls,
         "a2ui": presentation["a2ui"],
-        "citation_map": presentation["citation_map"],
-        "intent_sections": presentation["intent_sections"],
+        "sources": presentation["sources"],
         "model": GEMINI_MODEL,
         "mcp_transport": MCP_TRANSPORT,
     }

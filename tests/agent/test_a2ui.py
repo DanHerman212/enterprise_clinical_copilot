@@ -324,3 +324,74 @@ class TestPresentationContract:
         assert out["answer"] == "A^[1] and B^[2]"
         assert out["citation_map"] == {"1": 2, "2": 1}
         assert out["intent_sections"] == []
+
+
+class TestResolvedSources:
+    """`sources` is what the browser renders on a footnote click. It must be
+    fully resolved here so the client holds no vocabulary and no heuristics."""
+
+    THREE = {"query": "discharge notes", "passages": [
+        {"id": "n_bhc_1", "section": "brief_hospital_course",
+         "text": "Hospital Course: recovered.", "score": 0.3},
+        {"id": "n_dx_1", "section": "discharge_diagnosis",
+         "text": "Discharge Diagnoses: TKA.", "score": 0.2},
+        {"id": "n_meds_1", "section": "discharge_medications",
+         "text": "Discharge Medications: Celebrex 200 mg daily.", "score": 0.1},
+    ]}
+
+    def test_one_entry_per_citation_keyed_by_renumbered_cite(self):
+        out = compose_presentation(
+            "Summarize the recent discharge notes.",
+            "A^[2] and B^[1]",
+            [{"name": "rag_search", "response": self.THREE}],
+        )
+        assert [s["cite"] for s in out["sources"]] == [1, 2]
+        # Renumbered ^[1] was the model's ^[2] -> the diagnosis passage.
+        assert out["sources"][0]["section"] == "discharge_diagnosis"
+        assert out["sources"][1]["section"] == "brief_hospital_course"
+        assert all(s["query"] == "discharge notes" for s in out["sources"])
+
+    def test_single_citation_resolves_by_section_intent(self):
+        """A meds answer cites ^[1] but the meds passage is third — the
+        resolved source is discharge_medications, not the first passage."""
+        out = compose_presentation(
+            "What medications was the patient discharged on?",
+            "Celebrex^[1].",
+            [{"name": "rag_search", "response": self.THREE}],
+        )
+        assert len(out["sources"]) == 1
+        src = out["sources"][0]
+        assert (src["cite"], src["section"], src["query"]) == (
+            1, "discharge_medications", "discharge notes")
+        assert "Celebrex" in src["text"]
+        assert "Hospital Course" not in src["text"]
+
+    def test_canvas_source_card_is_sources_zero(self):
+        """The canvas and the click-through list can never disagree."""
+        out = compose_presentation(
+            "What medications was the patient discharged on?",
+            "Celebrex^[1].",
+            [{"name": "rag_search", "response": self.THREE}],
+        )
+        card = _by_id(out["a2ui"])["source"]
+        first = out["sources"][0]
+        assert (card["cite"], card["section"], card["text"], card["query"]) == (
+            first["cite"], first["section"], first["text"], first["query"])
+
+    def test_unavailable_section_is_a_deterministic_entry(self):
+        rag = {"query": "discharge notes", "passages": [
+            {"id": "n_bhc_1", "section": "brief_hospital_course",
+             "text": "Hospital Course: given Vicodin.", "score": 0.3}]}
+        out = compose_presentation(
+            "What medications was the patient discharged on?",
+            "None listed^[1].",
+            [{"name": "rag_search", "response": rag}],
+        )
+        assert out["sources"][0]["section"] == "not available"
+        assert "Vicodin" not in out["sources"][0]["text"]
+
+    def test_no_passages_or_no_citations_is_an_empty_list(self):
+        assert compose_presentation("Q", "No cites.", []) ["sources"] == []
+        out = compose_presentation(
+            "Q", "No cites.", [{"name": "rag_search", "response": self.THREE}])
+        assert out["sources"] == []

@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Full-Stack AI Application — Google Cloud Architecture Requirements</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  @page { size: Letter; margin: 0.7in 0.65in; }
+  html { font-size: 10.5pt; }
+  body { font-family: -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif; color: #1a1a1a; line-height: 1.38; max-width: 7.2in; margin: 0 auto; }
+  h1 { font-size: 20pt; margin: 0 0 4px; }
+  .sub { color: #555; margin: 0 0 18px; font-size: 9.5pt; }
+  h2 { font-size: 13.5pt; margin: 22px 0 8px; border-bottom: 1.5px solid #222; padding-bottom: 3px; page-break-after: avoid; }
+  h3 { font-size: 11pt; margin: 16px 0 6px; page-break-after: avoid; }
+  p { margin: 6px 0; }
+  table { border-collapse: collapse; width: 100%; margin: 6px 0 10px; font-size: 9.3pt; page-break-inside: auto; }
+  tr { page-break-inside: avoid; }
+  th, td { border: 1px solid #bbb; padding: 4px 6px; vertical-align: top; text-align: left; }
+  th { background: #efefef; font-weight: 600; }
+  td.id { white-space: nowrap; font-weight: 600; width: 2.2em; }
+  td.lvl { white-space: nowrap; width: 5.5em; }
+  .must { color: #9a1b1b; font-weight: 600; }
+  .should { color: #8a5a00; font-weight: 600; }
+  code { font-family: Menlo, Consolas, monospace; font-size: 0.92em; background: #f3f3f3; padding: 0 3px; border-radius: 2px; }
+  .mermaid { text-align: center; margin: 8px 0 14px; page-break-inside: avoid; }
+  .mermaid svg { max-width: 100%; max-height: 8.6in; height: auto; }
+  .note { background: #f6f8fa; border-left: 3px solid #999; padding: 6px 10px; margin: 8px 0; font-size: 9.5pt; }
+  .legend { font-size: 9.5pt; margin: 4px 0 10px; }
+  .pb { page-break-before: always; }
+</style>
+</head>
+<body>
+
+<h1>Full-Stack AI Application — Architecture Requirements</h1>
+<p class="sub">Derived from Google Cloud Architecture Center guidance · compiled 2026-09-11</p>
+
+<h2>1. Sources</h2>
+<table>
+  <tr><th>Tag</th><th>Document (Google Cloud Architecture Center)</th><th>Last reviewed</th></tr>
+  <tr><td><b>OPS</b></td><td>Deploy and operate generative AI applications</td><td>2024-11-19</td></tr>
+  <tr><td><b>WAF-OE</b></td><td>Well-Architected Framework, AI/ML perspective: Operational excellence</td><td>2025-04-28</td></tr>
+  <tr><td><b>WAF-SEC</b></td><td>Well-Architected Framework, AI/ML perspective: Security</td><td>2025-11-26</td></tr>
+  <tr><td><b>RAG</b></td><td>RAG infrastructure for generative AI (Agent Platform + AlloyDB)</td><td>2026-02-04</td></tr>
+  <tr><td><b>COMP</b></td><td>Choose your agentic AI architecture components</td><td>2026-04-21</td></tr>
+  <tr><td><b>PAT</b></td><td>Choose a design pattern for your agentic AI system</td><td>2026-05-28</td></tr>
+  <tr><td><b>SA</b></td><td>Single-agent AI system using ADK and Cloud Run (reference architecture)</td><td>2025-12-09</td></tr>
+</table>
+
+<h2 class="pb">2. The architecture Google describes</h2>
+<div class="mermaid">
+flowchart TB
+  subgraph SERVE["SERVING SUBSYSTEM  (request path)"]
+    direction TB
+    FE["Frontend  (Cloud Run)"] --> EDGE["Edge<br/>Load Balancer · Cloud Armor · IAP / Identity Platform"]
+    EDGE --> AG["Agent / Chain  (ADK on Cloud Run)<br/>prompt template + orchestration + tool routing<br/>versioned as ONE artifact"]
+    AG --> MODEL["Model runtime<br/>Gemini on Agent Platform<br/>+ Model Armor screening"]
+    AG --> MCP["Tools via MCP<br/>typed schema in / out"]
+    AG --> STATE["Session state<br/>external store · agent is stateless"]
+    MCP --> OWN["Your own model endpoint<br/>Model Registry → Endpoint"]
+    MCP --> VEC["Vector store<br/>same embedding model as ingestion"]
+  end
+
+  subgraph INGEST["DATA INGESTION  (offline, event-driven)"]
+    direction TB
+    GCS["Cloud Storage"] --> PS["Pub/Sub"] --> FN["Cloud Run function<br/>parse → chunk → embed"]
+  end
+  FN --> VEC
+
+  subgraph EVAL["QUALITY EVALUATION SUBSYSTEM"]
+    direction LR
+    EP["Eval prompts<br/>golden set + adversarial"] --> SCORE["Score responses<br/>LLM-as-judge · factuality · relevance"] --> BQ["BigQuery<br/>scores + prompts + responses"]
+  end
+
+  subgraph PLANES["CROSS-CUTTING PLANES"]
+    direction LR
+    OBS["Observability<br/>Logging · Monitoring · Trace<br/>lineage per execution"]
+    SEC["Security<br/>least-privilege SA · inputs untrusted<br/>prompts versioned as code"]
+    CICD["CI/CD<br/>tests on prompts, chain, retrieval<br/>eval gate · canary · rollback"]
+  end
+
+  AG -. "log request / response" .-> BQ
+  AG -. "sample production traffic" .-> SCORE
+  EVAL ~~~ PLANES
+</div>
+
+<h2 class="pb">3. Requirements</h2>
+<p class="legend"><span class="must">MUST</span> = Google states it as required/recommended for any production deployment. &nbsp;
+<span class="should">SHOULD</span> = recommended, with Google noting it depends on scale or risk.</p>
+
+<h3>A. Components <small>(COMP, SA)</small></h3>
+<table>
+  <tr><th>#</th><th>Requirement</th><th>Level</th></tr>
+  <tr><td class="id">A1</td><td>Frontend never calls the model directly; it talks to the agent over an API. Production frontend needs streaming support, a <b>stateless API</b>, and externalized conversation state.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">A2</td><td>Agent built with an agent framework (ADK recommended; others acceptable) and deployed on an agent runtime: Cloud Run, Agent Runtime, or GKE.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">A3</td><td>Agent is <b>stateless</b>; session state lives in an external store (Cloud SQL / Firestore / Memorystore / Agent Platform Sessions) so any instance can serve any request and restarts don't lose context.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">A4</td><td>Tools exposed through <b>MCP</b> (or custom function tools when no MCP server exists), each with typed input and output schemas.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">A5</td><td>Tool definitions kept small: primitive types, <b>&lt; 5 parameters</b>, enums instead of free text. Unbundle monolithic tool servers into focused toolsets.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">A6</td><td>Model served from a managed model runtime (Agent Platform / Vertex) — a dependency, not something you host.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">A7</td><td>Long-term (cross-session) memory in an external store (Memory Bank) — only if the product needs personalization across sessions.</td><td class="lvl should">SHOULD</td></tr>
+</table>
+
+<h3>B. RAG subsystems <small>(RAG, OPS)</small></h3>
+<table>
+  <tr><th>#</th><th>Requirement</th><th>Level</th></tr>
+  <tr><td class="id">B1</td><td><b>Three separate subsystems</b>: data ingestion, serving, quality evaluation. They share the database layer; they do not share code paths.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">B2</td><td>Ingestion is event-driven and offline: upload → Pub/Sub → function → parse → chunk → embed → vector store. Live requests never mutate the index.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">B3</td><td>Serving uses <b>the same embedding model and parameters</b> as ingestion.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">B4</td><td>Serving screens responses through responsible-AI / safety filters before returning to the user.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">B5</td><td>Serving logs request/response to Cloud Logging and loads responses to BigQuery for offline analysis.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">B6</td><td>Index maintenance (rebuild/refresh) is a scheduled operational task, versioned alongside the dataset (BigQuery / AlloyDB / Cloud Storage).</td><td class="lvl must">MUST</td></tr>
+</table>
+
+<h3>C. The chain is the artifact <small>(OPS)</small></h3>
+<table>
+  <tr><th>#</th><th>Requirement</th><th>Level</th></tr>
+  <tr><td class="id">C1</td><td>The <b>prompted model component</b> (prompt template + model version) is the smallest deployable unit. Prompt template, chain definition, tool wiring, and model pin are <b>versioned together as one artifact</b> with its own revision history.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">C2</td><td>Prompt parts classified: <b>prompt-as-code</b> (template, guardrails, instructions → Git, review, tests) vs <b>prompt-as-data</b> (few-shot examples, retrieved context, user query → validation, drift detection).</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">C3</td><td>Every execution logs inputs, outputs, <b>intermediate states of each chain step</b>, and the chain configuration used.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">C4</td><td>Chains are evaluated <b>end-to-end</b>, not component-by-component.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">C5</td><td>Step cap / max iterations on any agent loop (ReAct, review-critique) to prevent runaway cost.</td><td class="lvl must">MUST</td></tr>
+</table>
+
+<h3>D. Evaluation <small>(OPS, WAF-OE, RAG)</small></h3>
+<table>
+  <tr><th>#</th><th>Requirement</th><th>Level</th></tr>
+  <tr><td class="id">D1</td><td>A <b>custom evaluation dataset</b> covering essential, average, and edge cases. Synthetic ground truth is acceptable when real ground truth is missing; refine with human feedback over time.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">D2</td><td>Evaluation is <b>automated</b> (LLM-as-judge or rubric; BLEU/ROUGE are insufficient) and metrics + approach are <b>frozen early</b> so runs are comparable.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">D3</td><td>Eval set includes <b>adversarial prompts</b> (injection, leakage, fuzzing).</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">D4</td><td><b>Continuous evaluation in production</b>: sample outputs, score them, store scores with prompts/responses in BigQuery; collect direct user feedback.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">D5</td><td>Evaluation runs as a <b>gate in CI/CD</b> before deploy.</td><td class="lvl must">MUST</td></tr>
+</table>
+
+<h3>E. Deploy <small>(OPS, WAF-OE)</small></h3>
+<table>
+  <tr><th>#</th><th>Requirement</th><th>Level</th></tr>
+  <tr><td class="id">E1</td><td>Version control for: prompt templates, chain code, external datasets (BigQuery/AlloyDB), adapter weights (Cloud Storage), container images (Artifact Registry).</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">E2</td><td><b>CI</b> runs unit + integration tests on prompts, chain logic, embedded models, and retrieval — not just application code.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">E3</td><td><b>CD</b> tests the API in a prod-like environment including load tests before release.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">E4</td><td><b>Canary / gradual release</b> to a subset of users; documented <b>rollback</b> to last known-good version.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">E5</td><td>Own models (e.g. a classifier) go through a pipeline: train → evaluate → <b>Model Registry</b> → endpoint, with lineage in ML Metadata.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">E6</td><td>Retraining/re-tuning triggered by monitoring, not by hand.</td><td class="lvl should">SHOULD</td></tr>
+</table>
+
+<h3>F. Observability <small>(OPS, WAF-OE, SA)</small></h3>
+<table>
+  <tr><th>#</th><th>Requirement</th><th>Level</th></tr>
+  <tr><td class="id">F1</td><td><b>End-to-end lineage</b>: a bad answer must be traceable to the exact prompt version, model version, index version, and tool results that produced it.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">F2</td><td>Structured logging in the agent: which tools were called, inputs/outputs, latency per step. Distributed tracing (Cloud Trace) across frontend → agent → tools → model.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">F3</td><td>Monitor <b>at the application level first</b>, then per component.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">F4</td><td>Track latency, error rate, <b>429 rate</b>, token usage, request volume; alert on thresholds.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">F5</td><td><b>Skew and drift detection</b> on inputs vs. the eval set: text length, token counts, embedding distance, topic shifts.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">F6</td><td><b>No PII or confidential data in logs</b>; use Sensitive Data Protection with Logging if needed.</td><td class="lvl must">MUST</td></tr>
+</table>
+
+<h3>G. Security <small>(WAF-SEC, SA)</small></h3>
+<table>
+  <tr><th>#</th><th>Requirement</th><th>Level</th></tr>
+  <tr><td class="id">G1</td><td>Treat <b>all inputs as untrusted</b> — user, retrieved documents, tool results. Filter and validate external content <b>before</b> it enters a prompt (indirect injection).</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">G2</td><td><b>Layered defence</b>: screen prompts and responses for injection, jailbreak, harmful content (Model Armor or equivalent).</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">G3</td><td>Prompts treated as code: versioned in Git, centrally stored, reviewed, auditable.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">G4</td><td><b>Least-privilege service accounts</b> per service; service-to-service auth with workload identity, not shared keys.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">G5</td><td>Front door: <b>external Application Load Balancer</b> (disable default <code>run.app</code> URL), <b>Cloud Armor</b> for rate limiting/DDoS, <b>IAP</b> (internal users) or <b>Identity Platform / Firebase Auth</b> (external users).</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">G6</td><td><b>Data minimization</b>: prefer synthetic or de-identified data; don't collect what the product doesn't need.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">G7</td><td>Supply chain: images built by Cloud Build, scanned in Artifact Registry, only approved images deployable (Binary Authorization / SLSA).</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">G8</td><td><b>Red-team against OWASP LLM Top 10</b>; regular audits.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">G9</td><td>AI-aware <b>incident response playbook</b>: rollback model/prompt version, disable endpoint, isolate data source.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">G10</td><td><b>Human-in-the-loop</b> checkpoint for high-stakes or safety-critical decisions.</td><td class="lvl must">MUST (clinical)</td></tr>
+</table>
+
+<h3>H. Reliability, cost, performance <small>(SA, WAF-OE, COMP)</small></h3>
+<table>
+  <tr><th>#</th><th>Requirement</th><th>Level</th></tr>
+  <tr><td class="id">H1</td><td>Retries, timeouts, exception handling, and <b>429 handling</b> on model calls.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">H2</td><td>Baseline <b>QPS and tokens/sec</b> before launch; monitor after.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">H3</td><td>Start with the <b>cheapest model that passes eval</b>, then escalate. Control <b>thinking budget</b>; route simple tasks to smaller models.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">H4</td><td>Concise prompts; use <b>context caching</b> for repeated high-token context.</td><td class="lvl should">SHOULD</td></tr>
+  <tr><td class="id">H5</td><td>Simulate failures / load before production.</td><td class="lvl must">MUST</td></tr>
+</table>
+
+<h3>I. Design pattern <small>(PAT)</small></h3>
+<table>
+  <tr><th>#</th><th>Requirement</th><th>Level</th></tr>
+  <tr><td class="id">I1</td><td>Define requirements before picking a pattern: task shape, latency tolerance, cost budget, need for human judgment.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">I2</td><td><b>Start with a single agent</b> and refine prompt/tools before adding agents. Multi-agent only when one agent measurably fails on tool selection or task completion.</td><td class="lvl must">MUST</td></tr>
+  <tr><td class="id">I3</td><td>Every loop pattern has an explicit exit condition (max iterations, quality threshold).</td><td class="lvl must">MUST</td></tr>
+</table>
+
+<h2>4. What Google explicitly marks as optional / scale-dependent</h2>
+<p>VPC Service Controls perimeter · CMEK · Confidential Computing · Apigee / API Gateway · GKE over Cloud Run · Provisioned Throughput · Memory Bank / long-term memory · multi-agent patterns · fine-tuning / continuous tuning · Terraform-managed infra · multi-region.</p>
+<div class="note">These are things a reviewer might <i>ask about</i>, but Google does not require them for a defensible production system. Deciding which to include is a product decision, not an architecture gap.</div>
+
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: "neutral", flowchart: { htmlLabels: true, useMaxWidth: true } });
+</script>
+</body>
+</html>

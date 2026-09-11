@@ -181,6 +181,12 @@ def renumber_citations(answer: str) -> str:
     return _renumber_citations(answer)[0]
 
 
+def cited_numbers(answer: str) -> list[int]:
+    """Distinct citation numbers in the answer prose, ascending."""
+    return sorted({n for m in _CITATION_RE.finditer(answer or "")
+                   for n in _expand_citations(m.group(1))})
+
+
 def citation_remap(answer: str) -> dict[str, int]:
     """{renumbered citation number: original passage number} for the client.
 

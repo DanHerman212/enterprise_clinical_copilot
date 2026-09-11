@@ -39,6 +39,7 @@ together.
 
 from services.agent.citations import (
     citation_remap,
+    cited_numbers,
     extract_section,
     first_citation,
     intent_sections,
@@ -93,8 +94,92 @@ def _unavailable_text(section: str) -> str:
     return f"No {section.replace('_', ' ')} information is available for this patient."
 
 
+def resolve_source(passages: list[dict], passage_n: int,
+                   sections: tuple[str, ...] = ()) -> dict:
+    """Resolve one citation to the passage and section body it supports.
+
+    `passage_n` is the model's ORIGINAL 1-based passage number (before
+    renumbering). `sections` is the question's section intent; when given, the
+    section is located by label or extracted from any whole-note chunk, and
+    the model's number is ignored — the model mis-numbers citations (a meds
+    answer cites ^[1] while its supporting passage sits elsewhere).
+
+    Returns {"section", "text"}. Callers own the badge number and the query.
+    """
+    cited = None
+    intent_body = None
+    matched_section = None
+    for sec in sections:
+        cited = next((p for p in passages if p.get("section") == sec), None)
+        if cited is not None:
+            matched_section = sec
+            break
+        # The index stores whole-note chunks: a passage labeled with a
+        # different section still CONTAINS the target section, and the
+        # labeled chunk can miss the top-k (near-tied whole-note
+        # embeddings). Pull the section body out of the passage text.
+        for p in passages:
+            body = extract_section(p.get("text", ""), sec)
+            if body:
+                cited = p
+                intent_body = body
+                matched_section = sec
+                break
+        if cited is not None:
+            break
+
+    if cited is None and sections:
+        # The note has NONE of the targeted sections. The deterministic answer
+        # is "not available", not a passage mined from unrelated narrative.
+        return {"section": "not available",
+                "text": _unavailable_text(sections[0])}
+
+    if cited is None:
+        # Clamp to a real passage so an out-of-range number never raises.
+        idx = min(max(passage_n, 1), len(passages)) - 1
+        cited = passages[idx]
+        shown_section = cited.get("section", "discharge note")
+        section_text = extract_section(cited.get("text", ""), shown_section)
+    elif intent_body is not None:
+        shown_section = matched_section
+        section_text = intent_body
+    else:
+        shown_section = matched_section or cited.get("section", "discharge note")
+        section_text = extract_section(cited.get("text", ""), shown_section)
+
+    return {"section": shown_section,
+            "text": section_text or cited.get("text", "")}
+
+
+def resolve_sources(answer: str, citation_map: dict[str, int],
+                    rag: dict | None, sections: tuple[str, ...]) -> list[dict]:
+    """One resolved source per citation number in the (renumbered) answer.
+
+    This is the list the browser renders on a footnote click: it looks up the
+    clicked number and displays the entry — no vocabulary, no heuristics.
+    Section intent is applied only to a single-citation answer; a
+    multi-citation answer cites its passages in array order and maps by
+    number.
+    """
+    passages = (rag or {}).get("passages") or []
+    if not passages:
+        return []
+    query = (rag or {}).get("query") or "discharge note"
+    cites = cited_numbers(answer)
+    if not cites:
+        return []
+    intent = sections if len(cites) == 1 else ()
+    return [
+        {"cite": n,
+         **resolve_source(passages, citation_map.get(str(n), n), intent),
+         "query": query}
+        for n in cites
+    ]
+
+
 def compose_risk_canvas(predict: dict | None, rag: dict | None,
-                        cite: int = 1, sections: tuple[str, ...] = ()) -> dict:
+                        cite: int = 1, sections: tuple[str, ...] = (),
+                        source: dict | None = None) -> dict:
     """Turn one predict (+ rag) payload into the A2UI risk-canvas envelope.
 
     predict is None when the question did not request a readmission estimate
@@ -102,6 +187,11 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
     predict tool errored — the canvas then answers with a plain honest note
     plus the cited source instead of a risk score, so the agent never 500s on
     a non-risk or failed-risk turn.
+
+    `source` is an already-resolved entry from `resolve_sources`; when given
+    it is the SourceCard verbatim, so the canvas and the click-through list
+    can never disagree. Without it the card is resolved here from `cite` and
+    `sections`.
     """
     components: list[dict] = [
         {"id": "root", "component": "Card", "child": "body"},
@@ -177,68 +267,18 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
     passages = (rag or {}).get("passages") or []
     query = (rag or {}).get("query") or "discharge note"
     children.append("source")
-    if passages:
-        # Deterministic resolution: when the question clearly targets note
-        # section(s) (meds / instructions / diagnoses / hospital course), show
-        # THAT section regardless of the number the model attached to it. The
-        # model mis-numbers citations (a meds answer cites ^[1] while its
-        # supporting passage sits elsewhere in the array), so a pure
-        # cite -> passages[cite-1] mapping shows the wrong section.
-        cited = None
-        intent_body = None
-        matched_section = None
-        for sec in sections:
-            cited = next((p for p in passages
-                          if p.get("section") == sec), None)
-            if cited is not None:
-                matched_section = sec
-                break
-            # The index stores whole-note chunks: a passage labeled with a
-            # different section still CONTAINS the target section, and the
-            # labeled chunk can miss the top-k (near-tied whole-note
-            # embeddings). Pull the section body out of the passage text
-            # instead of showing the wrong section — deterministic for every
-            # patient.
-            for p in passages:
-                body = extract_section(p.get("text", ""), sec)
-                if body:
-                    cited = p
-                    intent_body = body
-                    matched_section = sec
-                    break
-            if cited is not None:
-                break
-        if cited is None and sections:
-            # The note has NONE of the targeted sections. The deterministic
-            # answer is "not available", not a passage mined from unrelated
-            # narrative (e.g. meds mentioned inside the hospital course).
-            badge = max(cite, 1)
-            shown_section = "not available"
-            section_text = _unavailable_text(sections[0])
-        elif cited is None:
-            # cite is 1-based from the answer prose; clamp to a real passage.
-            idx = min(max(cite, 1), len(passages)) - 1
-            cited = passages[idx]
-            badge = idx + 1
-            shown_section = cited.get("section", "discharge note")
-            section_text = extract_section(cited.get("text", ""), shown_section)
-        else:
-            # Badge mirrors the thread's citation number (the answer's ^[n]),
-            # not the passage's array position.
-            badge = max(cite, 1)
-            if intent_body is not None:
-                section_text = intent_body
-                shown_section = matched_section
-            elif matched_section is not None:
-                section_text = extract_section(cited.get("text", ""), matched_section)
-                shown_section = matched_section
-            else:
-                shown_section = cited.get("section", "discharge note")
-                section_text = extract_section(cited.get("text", ""), shown_section)
+    if source is not None:
         components.append({"id": "source", "component": "SourceCard",
-                           "cite": badge,
-                           "section": shown_section,
-                           "text": section_text or cited.get("text", ""),
+                           "cite": source["cite"],
+                           "section": source["section"],
+                           "text": source["text"],
+                           "query": source.get("query", query)})
+    elif passages:
+        resolved = resolve_source(passages, cite, sections)
+        components.append({"id": "source", "component": "SourceCard",
+                           "cite": max(cite, 1),
+                           "section": resolved["section"],
+                           "text": resolved["text"],
                            "query": query})
     else:
         components.append({"id": "source", "component": "SourceCard",
@@ -289,30 +329,37 @@ def compose_presentation(question: str, answer: str,
                          tool_calls: list[dict]) -> dict:
     """The full presentation contract for an answered question.
 
-    One call produces the four fields the browser consumes, so the answer's
+    One call produces every field the browser consumes, so the answer's
     evidence semantics are decided in exactly one place (here) and the BFF is
     a pass-through:
 
       - answer: the guarded answer with citations renumbered to
         first-appearance order
-      - citation_map: {renumbered marker: original passage number}, so a
-        clicked footnote resolves to its true passage
-      - intent_sections: the note sections the question clearly targets
-      - a2ui: the composed risk-canvas envelope
+      - sources: one resolved {cite, section, text, query} per citation in
+        the answer — the browser looks a clicked footnote up by number
+      - a2ui: the composed risk-canvas envelope; its SourceCard is sources[0]
+
+    citation_map and intent_sections are inputs to that resolution and are
+    returned for tests and diagnostics; the browser does not need them.
 
     Pure — no I/O, no clock, no randomness — so it is fully testable without
     a browser or a live endpoint.
     """
     renumbered = renumber_citations(answer)
+    remap = citation_remap(answer)
     intent = intent_sections(question)
+    rag = rag_payload(tool_calls)
+    sources = resolve_sources(renumbered, remap, rag, intent)
     return {
         "answer": renumbered,
-        "citation_map": citation_remap(answer),
+        "citation_map": remap,
         "intent_sections": list(intent),
+        "sources": sources,
         "a2ui": compose_risk_canvas(
             predict_payload(tool_calls),
-            rag_payload(tool_calls),
+            rag,
             cite=first_citation(renumbered),
             sections=intent,
+            source=sources[0] if sources else None,
         ),
     }

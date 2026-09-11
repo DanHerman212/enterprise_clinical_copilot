@@ -18,14 +18,20 @@ class RecordedToolCall(TypedDict):
     response: dict[str, Any]
 
 
+class ResolvedSource(TypedDict):
+    cite: int
+    section: str
+    text: str
+    query: str
+
+
 class AgentSuccess(TypedDict):
     question: str
     answer: str
     guardrail_flags: list[str]
     tool_calls: list[AgentToolCall]
     a2ui: dict[str, Any] | None
-    citation_map: dict[str, int]
-    intent_sections: list[str]
+    sources: list[ResolvedSource]
     model: str
     mcp_transport: str
 
@@ -100,18 +106,16 @@ def validate_agent_success(payload: Any) -> AgentSuccess:
     if payload.get("a2ui") is not None and not isinstance(payload["a2ui"], dict):
         raise AgentResponseError("Agent produced malformed A2UI data.")
 
-    citation_map = payload.get("citation_map")
-    if not isinstance(citation_map, dict) or not all(
-        isinstance(key, str) and isinstance(value, int)
-        for key, value in citation_map.items()
-    ):
-        raise AgentResponseError("Agent produced a malformed citation map.")
-
-    intent_sections = payload.get("intent_sections")
-    if not isinstance(intent_sections, list) or not all(
-        isinstance(section, str) for section in intent_sections
-    ):
-        raise AgentResponseError("Agent produced malformed intent sections.")
+    sources = payload.get("sources")
+    if not isinstance(sources, list):
+        raise AgentResponseError("Agent produced malformed sources.")
+    for source in sources:
+        if not isinstance(source, dict):
+            raise AgentResponseError("Agent produced malformed sources.")
+        if not isinstance(source.get("cite"), int) or isinstance(source.get("cite"), bool):
+            raise AgentResponseError("Agent produced malformed sources.")
+        if any(not isinstance(source.get(k), str) for k in ("section", "text", "query")):
+            raise AgentResponseError("Agent produced malformed sources.")
 
     return payload
 

@@ -39,8 +39,8 @@ def _success_payload():
         "guardrail_flags": [],
         "tool_calls": [{"name": "predict_readmission", "response": {}}],
         "a2ui": None,
-        "citation_map": {"1": 2},
-        "intent_sections": ["discharge_medications"],
+        "sources": [{"cite": 1, "section": "discharge_medications",
+                     "text": "warfarin 4 mg QD", "query": "medications"}],
         "model": "gemini-2.5-flash",
         "mcp_transport": "http",
     }
@@ -68,18 +68,23 @@ def test_validate_agent_success_rejects_malformed_tool_response():
         validate_agent_success(payload)
 
 
-def test_validate_agent_success_rejects_malformed_citation_map():
-    """Keys are strings for JSON; a raw int key breaks the browser contract."""
+def test_validate_agent_success_rejects_missing_sources():
     payload = _success_payload()
-    payload["citation_map"] = {1: 2}
+    del payload["sources"]
 
     with pytest.raises(AgentResponseError):
         validate_agent_success(payload)
 
 
-def test_validate_agent_success_rejects_malformed_intent_sections():
+def test_validate_agent_success_rejects_malformed_source_entry():
+    """The browser indexes sources by `cite`; a non-int cite breaks the lookup."""
     payload = _success_payload()
-    payload["intent_sections"] = "discharge_medications"
+    payload["sources"] = [{"cite": "1", "section": "s", "text": "t", "query": "q"}]
+
+    with pytest.raises(AgentResponseError):
+        validate_agent_success(payload)
+
+    payload["sources"] = [{"cite": 1, "section": "s", "text": "t"}]
 
     with pytest.raises(AgentResponseError):
         validate_agent_success(payload)

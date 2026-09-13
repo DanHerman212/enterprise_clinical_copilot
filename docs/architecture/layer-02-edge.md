@@ -1,8 +1,10 @@
 # Layer 2 — Edge (the front door)
 
-Status: audited 2026-09-11; implemented and verified live 2026-09-13. Decision D:
-the reference edge (load balancer + Cloud Armor) is defined in Terraform,
-was brought up, verified, and is torn down between uses. Gaps 2 and 3 closed.
+Status: audited 2026-09-11; implemented, verified live, and torn down 2026-09-13.
+Decision D: the reference edge (load balancer + Cloud Armor) is defined in
+Terraform, was brought up, was verified, and is now off — the certificate, DNS
+zone and domain mapping remain, so `infra/edge/edge.sh up` restores it in
+about ten minutes. Gaps 2 and 3 closed.
 
 Sections 3–5 record the state **as audited**, before any change. Section 7
 records what changed and the evidence.
@@ -228,27 +230,50 @@ to reach every resolver, not ten.
 
 ### 7.2 The edge in Terraform (`infra/edge/`)
 
-Seven files, 417 lines including the script. State is in a versioned, private
-GCS bucket so it survives a laptop (`versions.tf` 14–15).
+Seven files, about 510 lines including the script. State is in a versioned,
+private GCS bucket so it survives a laptop (`versions.tf` 14–15).
+
+Two booleans drive everything, because "the load balancer exists" and "the
+public is being sent to it" are different facts and the interesting moment is
+when they disagree:
+
+| `edge_enabled` | `dns_points_at_edge` | State |
+|---|---|---|
+| `false` | `false` | nothing running; DNS on the Cloud Run domain mapping |
+| `true` | `false` | load balancer built and serving, but no traffic sent to it yet — the drain state, used in both directions |
+| `true` | `true` | live at the load balancer |
+
+`dns_points_at_edge = true` with `edge_enabled = false` is refused at plan
+time by a precondition (`dns.tf` 32): DNS cannot publish an address that does
+not exist. Verified by asking for exactly that combination and getting
+"Resource precondition failed".
 
 | File | What it defines |
 |---|---|
-| `variables.tf` | `edge_enabled` (28), default `false`. Also domain, zone, service names, and the rate-limit numbers. |
+| `variables.tf` | `edge_enabled` (28) and `dns_points_at_edge` (37), both default `false`; domain, zone, service names; the three rate-limit numbers (55, 61, 67). |
 | `certificate.tf` | Certificate Manager: DNS authorization for apex and `www` (10, 15), the `_acme-challenge` CNAMEs those need (22, 30), the managed certificate (38), a certificate map (50) and its two entries (54, 61). **Always present** — this is what lets the edge come up in minutes instead of waiting for a new certificate each time. |
-| `edge.tf` | Everything that costs money, each with `count = edge_enabled ? 1 : 0` (13): static IP (16); serverless NEG pointing at the Cloud Run service (25); Cloud Armor policy (33) whose one rule is `rate_based_ban` per client IP (43, 53), 60 requests per 60 seconds, exceed → `deny(429)` (52), ban 300 seconds (58); backend service in `EXTERNAL_MANAGED` scheme with the policy attached (78, 82–83); HTTPS proxy using the certificate map (106); forwarding rules on 443 and 80; and an HTTP→HTTPS redirect URL map (123). |
-| `dns.tf` | The apex `A` record points at the LB IP when enabled, else at Google's four `ghs` addresses (23). The `AAAA` record exists only when disabled (28) — the LB has no IPv6 address. `www` is a CNAME to the apex when enabled, else to `ghs.googlehosted.com.` (41). All TTL 300 (22, 32, 40). |
-| `outputs.tf` | `edge_enabled`, `edge_ip`, `certificate_state`, the live DNS answers. |
-| `edge.sh` | `up` / `down` / `status`. Needed because the Cloud Run service is owned by `cloudbuild.yaml`, so its ingress setting is changed here with `gcloud`, and the two changes have to happen in the right order. |
+| `edge.tf` | Everything that costs money, each with `count = edge_enabled ? 1 : 0` (13): static IP (16); serverless NEG pointing at the Cloud Run service (21); Cloud Armor policy (33) with two path-scoped limits; backend service in `EXTERNAL_MANAGED` scheme carrying the policy (114); HTTPS proxy using the certificate map (138); forwarding rules on 443 (145) and 80 (171); and an HTTP→HTTPS redirect URL map (155). |
+| `dns.tf` | Driven by `dns_points_at_edge`, not by `edge_enabled`. The apex `A` record publishes the LB address or Google's four `ghs` addresses (29); the `AAAA` record exists only while DNS is on the domain mapping (41), because the load balancer has no IPv6; `www` is a CNAME to the apex or to `ghs.googlehosted.com.` (55). All TTL 300. |
+| `outputs.tf` | `edge_enabled`, `dns_points_at_edge`, `edge_ip`, `certificate_state`, the live DNS answers. |
+| `edge.sh` | `up` (34) / `down` (63) / `status` (78). Needed because the Cloud Run service is owned by `cloudbuild.yaml`, so its ingress setting is changed here with `gcloud`, and that change has to be ordered against the DNS change with a TTL wait between them. |
 
-**Why `up` is two phases.** If DNS moved to the LB and ingress closed at the
-same moment, every resolver still holding the old address would get a 404
-for up to one TTL. So `up` (34) applies with `edge_enabled=true` (38) — LB
-built, DNS flipped, ingress still open — waits for the LB to actually serve
-(51 aborts if it never does), waits 330 seconds (20) for the TTL, and only
-then sets ingress to `internal-and-cloud-load-balancing` (54). `down` (57)
-is the mirror: open ingress first (60), then apply `false` (63). Resolvers
-still holding the LB address are served by the LB until it is gone. There is
-no dark window in either direction.
+**Both directions drain, in three phases.** The first version of `down`
+flipped DNS and destroyed the load balancer in a single apply, which meant a
+resolver still holding the load-balancer address — up to one TTL — was sent to
+an address with no forwarding rule behind it. `up` never had that problem
+because it was already two steps; `down` now uses the same shape, which is why
+the two booleans exist at all:
+
+| | `up` | `down` |
+|---|---|---|
+| 1 | build the load balancer, DNS still on the domain mapping (36–38) | reopen ingress so the domain mapping can serve the moment DNS moves (65–67) |
+| 2 | wait until the LB actually answers, abort if it never does (39–53) | move DNS back to the domain mapping, LB still running (68–70) |
+| 3 | move DNS to the LB (54–57) | wait one TTL (71–72) |
+| 4 | wait one TTL (58) | destroy the load balancer (73–76) |
+| 5 | close ingress to the LB only (59–60) | — |
+
+Neither direction ever leaves a client with an address that does not answer,
+and neither depends on the other being run first.
 
 ### 7.3 Verified live, 2026-09-13
 
@@ -280,21 +305,72 @@ the ten billable resources. What remains: the Cloud DNS zone, the certificate
 and its map, the DNS authorizations, and the `infra/edge` state. Bringing the
 edge back is one command and about ten minutes, most of it the TTL wait.
 
-### 7.4 Gap 3 closed — agent invokers
+### 7.3.1 The drain, measured
+
+The whole point of the two-variable design is the window between "DNS has
+moved" and "the load balancer is gone". That window was open for 330 seconds
+during the teardown, and both paths answered throughout it:
+
+| Path | What a client sees |
+|---|---|
+| A resolver that re-resolved — DNS now publishes the four `ghs` addresses | `https://danielmherman.com/` → **200**, answered over IPv6 (`2001:4860:4802:38::15`), because restoring `dns_points_at_edge = false` brings the `AAAA` record back and the load balancer never had one |
+| A resolver still holding `136.68.137.130` | `https://danielmherman.com/` with that address pinned → **200**, `server: Google Frontend` — the load balancer is still up and still serving |
+| `www`, re-resolved | **200** over IPv6 |
+
+The three DNS changes that produced this were the only thing the drain apply
+touched: apex `A` back to the four `ghs` addresses, `AAAA` recreated, `www`
+back to `ghs.googlehosted.com.` — `Plan: 1 to add, 2 to change, 0 to destroy`,
+with the load balancer untouched. Had the old single-apply `down` been used,
+the second row of that table would have been a connection failure for up to
+five minutes instead of a 200.
+
+Once the TTL had expired, the destroy ran: **0 to add, 0 to change, 10 to
+destroy**, about 2.5 minutes, the backend service (1m2s) and the two
+forwarding rules (22s) being the slow parts. Afterwards, every list is empty —
+forwarding rules, security policies, global addresses, backend services, both
+URL maps, both proxies, and the serverless NEG. Still present: the certificate
+(`ACTIVE`), its map and both DNS authorizations, the Cloud DNS zone, both
+Cloud Run domain mappings, and the Terraform state.
+
+Serving checks immediately after: apex `200` over IPv6, `www` `200` over
+IPv6, authoritative answers back to four `A` and four `AAAA` records. One
+detail worth noticing: `http://danielmherman.com/` now answers `302` from
+Django's `SECURE_SSL_REDIRECT` rather than the `301` the load balancer's
+redirect URL map used to send. The redirect moves from the edge to the
+application when the edge comes down, which is exactly the layering the
+`ALLOWED_HOSTS` and HSTS settings were always there to cover.
+
+### 7.4 Gap 3 closed — agent invokers, and what that does not buy
 
 Removed `roles/run.invoker` on `agent` from the default compute service
-account and from the personal account. The service now has exactly one
-invoker, `website-sa`.
+account and from the personal account. The service's IAM policy now names
+exactly one invoker, `website-sa`.
 
-One honest footnote for the interview: the personal account still gets `200`
-from the agent, because it holds `roles/owner` on the project and Owner
-includes `run.routes.invoke`. The explicit binding was redundant, not the
-thing granting access. The default compute service account holds
-`roles/editor`, which does **not** include invoke, so removing that binding
-did change something. Restricting an Owner is an organisation-policy
-question, not a service-IAM one, and belongs to the security layer.
+That is narrower than it sounds, and the difference matters:
 
-### 7.5 Gap 2 closed — one request id across both services
+| Identity | Holds | Can invoke the agent? |
+|---|---|---|
+| `website-sa` | explicit `roles/run.invoker` | yes, by design |
+| personal account | `roles/owner` | yes — Owner contains `run.routes.invoke` |
+| default compute service account | `roles/editor`, `roles/run.admin` | yes — `roles/run.admin` contains `run.routes.invoke` |
+
+So the binding list and the effective caller list are two different things.
+The removal was still right — it deleted a redundant grant and made the
+intended path visible — but "only the website can call the agent" is a claim
+about the policy, not about reality. Genuine closure belongs to the security
+layer: take `run.admin` and `editor` off the default compute service account,
+and decide whether the agent should also refuse anything that did not arrive
+through the load balancer (an ingress and network design, not an IAM binding).
+
+Related finding, same theme. `cloudbuild.yaml` line 8 declares
+`serviceAccount: cicd-deployer@…` and explains that builds must not run as the
+project default service account. They do anyway: the trigger carries its own
+service account, and build `a17ace19` reports
+`778397675435-compute@developer.gserviceaccount.com`. The declaration in the
+file is inert for triggered builds. One flag on the trigger aligns them, and
+it belongs to the delivery layer.
+
+### 7.5 Gap 2 closed — one request id across both services, verified in production
 
 Cloud Run stamps `X-Cloud-Trace-Context: TRACE_ID/SPAN_ID;o=1` on every
 inbound request. Django now reads it and forwards it; the agent logs it.
@@ -313,12 +389,83 @@ This is plain-text logging, deliberately. Cloud Logging can correlate on a
 structured `logging.googleapis.com/trace` field and show both services in one
 trace view; that is the observability layer's job and will build on this.
 
-Not yet deployed — the Django and agent changes ship with layer 3, as agreed
-for layer 1.
+One thing had to be fixed before any of this was observable. The agent logged
+`INFO` and nothing in the process configured logging, so the root logger sat at
+its default `WARNING` and the per-request line was discarded before it reached
+stdout — a log line nobody can read is not observability.
+`services/agent/http.py` 201–204 now calls `logging.basicConfig(level=
+logging.INFO)` at process start. `uvicorn`'s own logging config leaves the root
+logger alone, so it survives the call below it.
+
+**Deployed and verified in production, 2026-09-13.** Both services were built
+and deployed (Django `danielmherman-00098-88t` from commit `ab77773`, agent
+`agent-00023-9db`), and two real questions were asked through the browser with
+a logged-in user. Each produced one trace id that appears on both sides:
+
+| Time (UTC) | Django request log | Agent log |
+|---|---|---|
+| 18:10:03 | `trace=b2eebc93510038c576f716d3cf5fd05b`, status 502, 43.45 s | `agent /ask ok trace=b2eebc93510038c576f716d3cf5fd05b tools=2 flags=0` |
+| 18:13:43 | `trace=91164950ce9c4f3d0e69c8ff7b8b41d4`, status 502, 3.11 s | `agent /ask ok trace=91164950ce9c4f3d0e69c8ff7b8b41d4 tools=1 flags=0` |
+
+The 502s are expected and unrelated to this change: the MCP tools call live
+prediction and retrieval endpoints that are not running, so the agent returned
+well-formed payloads whose tool results were errors and Django refunded the
+quota credit. The point of the test is the request path, not the answer — the
+id is stamped by Cloud Run, forwarded by Django, and logged by the agent, and
+that is exactly what the two columns show. Verifying the full live answer path
+needs those endpoints up, which belongs to the model-runtime and tools layers.
+
+Cosmetic detail worth knowing: because the service starts as
+`python -m services.agent.http`, the record's logger name is `__main__`, not
+`services.agent.http`. Filtering agent logs by logger name will not match.
 
 Test status: Django `manage.py test` 84 OK. Agent `pytest tests/agent`
 240 passed, 6 skipped, 10 errors — the 10 are the live-Gemini tests, which
 fail identically without this change when no cloud credentials are present.
+
+### 7.6 The rate limit was wrong, and real use found it
+
+The first version applied one Cloud Armor rule to every request: 60 per
+minute per IP, and 300 seconds of ban once exceeded. That is fine arithmetic
+and bad design, and it failed the moment the site was used properly. One load
+of the A2UI console pulls dozens of ES modules out of `/static/vendor/` —
+`lit`, `lit-html`, `zod`, `preact-signals`, `linkify-it` and their transitive
+dependencies — so a single page load is most of the budget, and a refresh
+tripped the ban. The load-balancer log shows it: ~40 module requests at
+`18:03:28`, and by `18:03:38` every path, including `/favicon.ico`, returning
+429 for the full ban.
+
+Two lessons, both worth stating in an interview:
+
+- **A request counter cannot tell a stylesheet from a login attempt.** The
+  match is now scoped to the paths that can actually cost money or be abused —
+  `/accounts/login` at 30/min and `/demo/a2ui/ask` at 60/min, per IP — and
+  everything else is default-allow. Volumetric attacks were never going to be
+  stopped by a per-IP request counter; that is Cloud Armor's always-on L3/L4
+  protection plus Cloud Run's `maxScale`.
+- **A ban is not path-scoped.** `rate_based_ban` bans the client IP for the
+  whole policy, so exceeding a limit on the sign-in path also denies
+  `/favicon.ico` and the homepage to that address. Scoping the *match* removes
+  the false positives; it does not make the ban surgical.
+
+Verified after the change: 120 rapid requests for a vendored module returned
+120 × 200; 60 rapid homepage hits returned 60 × 200; the sign-in path was
+limited when hammered; and immediately afterwards `/`, `/demo/a2ui/` and a
+vendored module returned 200/302/200. Ordinary browsing is no longer counted.
+
+Left as a recorded gap rather than fixed: `throttle` would be the calmer
+action — 429 the excess, keep no ban state — but the Terraform provider cannot
+clear `ban_duration_sec` on an existing policy. The field is
+Optional+Computed, so the previous value is re-sent and the API rejects a ban
+duration on any action that is not `rate_based_ban`. Switching actions means
+recreating the policy object. Worth doing if this edge outlives the demo; one
+30-line change and one apply.
+
+A third lesson, about method rather than money: right after a policy change
+the previous rules keep enforcing for a minute or two, and I read one of those
+stale denials as evidence that a ban always takes down the whole site. It does
+not follow, and the claim did not survive a measurement taken after
+propagation.
 
 ---
 

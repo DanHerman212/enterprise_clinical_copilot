@@ -192,5 +192,16 @@ app = Starlette(
 if __name__ == "__main__":
     import uvicorn
 
+    # Python's root logger defaults to WARNING and nothing else in this process
+    # configures logging, so the per-request INFO line in ask_route would be
+    # discarded — Cloud Run collects stdout and stderr, and nothing was writing
+    # there at INFO. One line per request at INFO, everything else at ERROR, is
+    # the intended volume. uvicorn's own dictConfig leaves the root logger
+    # alone, so this survives the call below.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s %(asctime)s %(name)s %(message)s",
+    )
+
     # Cloud Run injects PORT. Do not hardcode it.
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))

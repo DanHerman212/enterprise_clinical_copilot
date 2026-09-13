@@ -65,6 +65,27 @@ def test_ask_failure_returns_generic_body_with_correlation_id():
     assert "audience" not in text
 
 
+# --- request id in logs (Layer 2, Gap 2) --------------------------------------
+
+def test_ask_logs_the_forwarded_cloud_trace_id(caplog):
+    """Django forwards X-Cloud-Trace-Context; the agent's log line for the
+    request must carry the trace id (the part before the slash) so the two
+    services' entries pair up."""
+    async def boom(box, question):
+        raise RuntimeError("nope")
+
+    with patch.object(srv, "toolbox", _fake_toolbox), \
+         patch.object(srv, "ask", boom), \
+         caplog.at_level("ERROR", logger="services.agent.http"):
+        _client().post(
+            "/ask", json={"question": "risk for 90000009?"},
+            headers={"X-Cloud-Trace-Context": "105445aa7843bc8bf206b12000100000/1;o=1"},
+        )
+
+    assert "trace=105445aa7843bc8bf206b12000100000" in caplog.text
+    assert "/1;o=1" not in caplog.text
+
+
 # --- tool_calls trim (ECC-08) --------------------------------------------------
 
 def test_ask_response_trims_tool_calls_to_name_and_response():

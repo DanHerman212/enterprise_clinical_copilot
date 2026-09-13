@@ -73,6 +73,10 @@ async def ask_route(request: Request) -> JSONResponse:
              "message": "This service requires an identity token."},
             status_code=401,
         )
+    # Django forwards the Cloud Trace id Cloud Run stamped on the user's
+    # request (X-Cloud-Trace-Context: TRACE_ID/SPAN_ID;o=1). Logging it here
+    # pairs this service's lines with Django's for the same user action.
+    trace = request.headers.get("x-cloud-trace-context", "").split("/", 1)[0] or "-"
     try:
         body = await request.json()
     except Exception:
@@ -93,7 +97,7 @@ async def ask_route(request: Request) -> JSONResponse:
             async with toolbox() as box:
                 state = await ask(box, question)
     except TimeoutError:
-        logger.error("agent /ask timed out after %.0fs", ASK_TIMEOUT_SECONDS)
+        logger.error("agent /ask timed out after %.0fs trace=%s", ASK_TIMEOUT_SECONDS, trace)
         return JSONResponse(
             {"error": "timeout",
              "message": f"The agent did not answer within {ASK_TIMEOUT_SECONDS:.0f}s."},
@@ -113,7 +117,7 @@ async def ask_route(request: Request) -> JSONResponse:
         # the private MCP URL, IAM/audience detail and table names. The caller
         # gets a stable code + correlation id that pairs with the log line.
         correlation_id = uuid.uuid4().hex[:12]
-        logger.error("agent /ask failed [%s]", correlation_id, exc_info=cause)
+        logger.error("agent /ask failed [%s] trace=%s", correlation_id, trace, exc_info=cause)
         return JSONResponse(
             {"error": "agent_failed",
              "message": "The agent failed to answer. Please retry.",
@@ -129,7 +133,7 @@ async def ask_route(request: Request) -> JSONResponse:
         # Typically MAX_TOKENS spent entirely on thinking — the model returns
         # empty text and raises nothing. A stale fragment must not ship as the
         # answer (ECC-12).
-        logger.error("agent produced no final answer text")
+        logger.error("agent produced no final answer text trace=%s", trace)
         return JSONResponse(
             {"error": "answer_unavailable",
              "message": "The agent did not produce an answer. Please retry."},
@@ -164,12 +168,16 @@ async def ask_route(request: Request) -> JSONResponse:
     try:
         validate_agent_success(payload)
     except AgentResponseError:
-        logger.error("agent produced a payload outside its success contract")
+        logger.error("agent produced a payload outside its success contract trace=%s", trace)
         return JSONResponse(
             {"error": "answer_unavailable",
              "message": "The agent did not produce an answer. Please retry."},
             status_code=502,
         )
+    logger.info(
+        "agent /ask ok trace=%s tools=%d flags=%d",
+        trace, len(trimmed_calls), len(guarded["flags"]),
+    )
     return JSONResponse(payload)
 
 

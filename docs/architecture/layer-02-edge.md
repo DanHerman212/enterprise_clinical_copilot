@@ -255,7 +255,7 @@ not exist. Verified by asking for exactly that combination and getting
 | `edge.tf` | Everything that costs money, each with `count = edge_enabled ? 1 : 0` (13): static IP (16); serverless NEG pointing at the Cloud Run service (21); Cloud Armor policy (33) with two path-scoped limits; backend service in `EXTERNAL_MANAGED` scheme carrying the policy (114); HTTPS proxy using the certificate map (138); forwarding rules on 443 (145) and 80 (171); and an HTTP→HTTPS redirect URL map (155). |
 | `dns.tf` | Driven by `dns_points_at_edge`, not by `edge_enabled`. The apex `A` record publishes the LB address or Google's four `ghs` addresses (29); the `AAAA` record exists only while DNS is on the domain mapping (41), because the load balancer has no IPv6; `www` is a CNAME to the apex or to `ghs.googlehosted.com.` (55). All TTL 300. |
 | `outputs.tf` | `edge_enabled`, `dns_points_at_edge`, `edge_ip`, `certificate_state`, the live DNS answers. |
-| `edge.sh` | `up` (34) / `down` (63) / `status` (78). Needed because the Cloud Run service is owned by `cloudbuild.yaml`, so its ingress setting is changed here with `gcloud`, and that change has to be ordered against the DNS change with a TTL wait between them. |
+| `edge.sh` | `up` (34) / `down` (79) / `status` (94). Needed because the Cloud Run service is owned by `cloudbuild.yaml`, so its ingress setting is changed here with `gcloud`, and that change has to be ordered against the DNS change with a TTL wait between them. |
 
 **Both directions drain, in three phases.** The first version of `down`
 flipped DNS and destroyed the load balancer in a single apply, which meant a
@@ -266,11 +266,11 @@ the two booleans exist at all:
 
 | | `up` | `down` |
 |---|---|---|
-| 1 | build the load balancer, DNS still on the domain mapping (36–38) | reopen ingress so the domain mapping can serve the moment DNS moves (65–67) |
-| 2 | wait until the LB actually answers, abort if it never does (39–53) | move DNS back to the domain mapping, LB still running (68–70) |
-| 3 | move DNS to the LB (54–57) | wait one TTL (71–72) |
-| 4 | wait one TTL (58) | destroy the load balancer (73–76) |
-| 5 | close ingress to the LB only (59–60) | — |
+| 1 | build the load balancer, DNS still on the domain mapping (39–41) | reopen ingress so the domain mapping can serve the moment DNS moves (83) |
+| 2 | wait until the LB actually answers, abort if it never does (42–69) | move DNS back to the domain mapping, LB still running (86–87) |
+| 3 | move DNS to the LB (72–73) | wait one TTL (88) |
+| 4 | wait one TTL (74) | destroy the load balancer (90–91) |
+| 5 | close ingress to the LB only (76) | — |
 
 Neither direction ever leaves a client with an address that does not answer,
 and neither depends on the other being run first.
@@ -453,19 +453,86 @@ Verified after the change: 120 rapid requests for a vendored module returned
 limited when hammered; and immediately afterwards `/`, `/demo/a2ui/` and a
 vendored module returned 200/302/200. Ordinary browsing is no longer counted.
 
-Left as a recorded gap rather than fixed: `throttle` would be the calmer
-action — 429 the excess, keep no ban state — but the Terraform provider cannot
-clear `ban_duration_sec` on an existing policy. The field is
-Optional+Computed, so the previous value is re-sent and the API rejects a ban
-duration on any action that is not `rate_based_ban`. Switching actions means
-recreating the policy object. Worth doing if this edge outlives the demo; one
-30-line change and one apply.
+**Now applied.** `throttle` is the calmer action: 429 the excess, keep no ban
+state. The Terraform provider could not make that change in place —
+`ban_duration_sec` is Optional+Computed, so the previous value is re-sent, and
+the API rejects a ban duration on any action that is not `rate_based_ban`. The
+policy had to not exist for the new action to be created clean, which was only
+possible because the edge was already down. On the next build it came up as
+`throttle` on the first apply.
+
+Verified against the live policy on 2026-09-14, with the edge up:
+
+| Check | Result |
+|---|---|
+| Rule set read back from the API | priorities `1000` and `1100` both `throttle`, `2147483647` default `allow`; matches `request.path.startsWith('/accounts/login')` at 30/min/IP and `request.path.startsWith('/demo/a2ui/ask')` at 60/min/IP; `banDurationSec` **absent** on every rule |
+| 45 rapid requests to `/accounts/login` | 30 × `301`, then 15 × `429` — the limit fires at the threshold, and the 301s are Django's `APPEND_SLASH` redirects, so all 30 reached the application |
+| Same client, immediately after | `/` → `200`, `/favicon.ico` → `404`, `/robots.txt` → `404` — real Django 404s, not 429s |
+
+That last row is the regression closed. Under `rate_based_ban` every one of
+those paths returned `429` for the full ban; now the excess is refused on the
+matched path and the client is never denied the rest of the site.
 
 A third lesson, about method rather than money: right after a policy change
 the previous rules keep enforcing for a minute or two, and I read one of those
 stale denials as evidence that a ban always takes down the whole site. It does
 not follow, and the claim did not survive a measurement taken after
 propagation.
+
+### 7.7 Bring-up failed on a race the script created
+
+`edge.sh up` aborted on its first run after the throttle change, with "LB not
+serving; DNS untouched, nothing to undo". The load balancer was fine: minutes
+later the same address returned `301` on port 80 and `200` on 443.
+
+The probe was at fault, and it was two faults in one loop:
+
+- **It was too impatient.** 24 attempts at 5-second intervals is about two
+  minutes. A newly created forwarding rule is not reliably programmed at
+  Google's edge inside that window, and the backend service in front of it had
+  taken 2m20s to create in that same apply.
+- **It waited on the slowest thing first.** The probe only spoke HTTPS on 443,
+  which needs the forwarding rule *and* the certificate map to have
+  propagated. Port 80 needs only the URL map's redirect, so it starts
+  answering first, and it proves the whole forwarding path — rule, target
+  proxy, URL map, backend service, NEG — is live without involving TLS at all.
+
+Readiness is now two stages, in the order the pieces actually come up:
+
+| Stage | Probe | Expects | Window |
+|---|---|---|---|
+| Forwarding path | `http://danielmherman.com/` on port 80 | `301` to HTTPS | 60 × 5s |
+| Certificate | `https://danielmherman.com/` on port 443 | `200` | 60 × 5s |
+
+(`edge.sh` 60–64 and 65–69, sharing the `ready_when` helper at 48–58.) Each
+stage aborts on its own with a message naming which half failed, and both
+still leave DNS untouched, so a failure has nothing to undo. `--resolve` is
+used rather than `-H Host` so the SNI matches the managed certificate.
+
+The re-run on 2026-09-14 completed all three phases: `0 added, 2 changed, 1
+destroyed` for the phase-1 apply, which was a no-op because the LB already
+existed; readiness passed immediately; DNS moved; ingress closed to
+`internal-and-cloud-load-balancing`. Confirmed behaviourally rather than
+declaratively — the default `run.app` hostname returned `404` while the domain
+returned `200`, and both `run.googleapis.com/ingress` and its `ingress-status`
+read `internal-and-cloud-load-balancing`.
+
+Teardown was unchanged and symmetric: `0 added, 0 changed, 10 destroyed`,
+ingress back to `all`, no forwarding rules, no security policies, no reserved
+global address. During the TTL window both paths served at once — the domain
+resolved to the four `ghs` addresses and returned `200` while the LB still
+answered `200` at its own address — which is the drain working. The released
+static IP answers `503` until DNS has finished draining.
+
+Two `gcloud` details are worth recording, because they cost time and both read
+as "there is no policy":
+
+- There is no `security-policies rules list` subcommand in this version, and
+  field paths like `--format='value(rules.priority)'` return empty. The rules
+  come back from `gcloud compute security-policies describe <name>`, which
+  returns a **one-element JSON array**, not an object.
+- The Cloud Armor policy is named `danielmherman-edge`. `edge` is the
+  Terraform resource name and resolves to nothing.
 
 ---
 
@@ -493,10 +560,21 @@ the global one does not. With a single-region serverless backend they behave
 the same. The global one also gets me an anycast IP and HTTP/3 for free.
 
 **How do you bring it up without a dark window?**
-Two phases. Build the LB and flip DNS while Cloud Run ingress is still open,
-so old resolvers keep hitting the domain mapping and new ones hit the LB.
-Wait one TTL. Then close ingress. Teardown is the mirror. The script refuses
-to close ingress if the LB is not serving.
+Three phases. Build the LB and probe it while Cloud Run ingress is still open
+and DNS still points at the domain mapping, so no client is affected at all.
+Move DNS to the LB; resolvers holding the old answer keep being served by the
+domain mapping. Wait one TTL, then close ingress so only the LB can reach
+Cloud Run. Teardown is the mirror, and both directions drain for the same
+reason. The script will not move DNS until the LB provably answers, and will
+not close ingress until DNS has moved and one TTL has passed.
+
+**Why probe port 80 before 443?**
+Because they finish at different times and only one is on the critical path
+for the other. Port 80 returns the URL map's redirect to HTTPS, which proves
+the forwarding rule, target proxy, URL map, backend service and NEG are all
+live, and needs no certificate. 443 additionally needs the certificate map to
+have propagated. Probing 443 first means waiting on the slower half before
+learning whether the faster half works at all.
 
 **How is the agent kept private if its ingress is `all`?**
 Two independent checks: Cloud Run's IAM invoker check requires a Google

@@ -362,13 +362,42 @@ layer: take `run.admin` and `editor` off the default compute service account,
 and decide whether the agent should also refuse anything that did not arrive
 through the load balancer (an ingress and network design, not an IAM binding).
 
-Related finding, same theme. `cloudbuild.yaml` line 8 declares
-`serviceAccount: cicd-deployer@…` and explains that builds must not run as the
-project default service account. They do anyway: the trigger carries its own
-service account, and build `a17ace19` reports
+**Related finding, same theme — closed 2026-09-14.** `cloudbuild.yaml` line 8
+declares `serviceAccount: cicd-deployer@…` and explains that builds must not
+run as the project default service account. They did anyway: the trigger
+carries its own service account, and build `a17ace19` reports
 `778397675435-compute@developer.gserviceaccount.com`. The declaration in the
-file is inert for triggered builds. One flag on the trigger aligns them, and
-it belongs to the delivery layer.
+file is inert for triggered builds — the trigger's service account wins.
+
+One flag aligns them:
+
+```
+gcloud builds triggers update github deploy-on-push --region=us-east1 \
+  --service-account='projects/trim-icon-498815-a0/serviceAccounts/cicd-deployer@trim-icon-498815-a0.iam.gserviceaccount.com'
+```
+
+`gcloud builds triggers update` does not take a bare trigger name; it needs the
+trigger-type subcommand (`… update github <name>`), of which there is one per
+source type. Against that, exactly one field changed — confirmed by diffing the
+trigger's JSON before and after. The branch pattern (`^main$`), the repository
+connection and the `cloudbuild.yaml` reference were untouched.
+
+The part that matters: a trigger's service account can only be validated by
+running it. Build `d44123ae` was started with `gcloud builds triggers run
+deploy-on-push --region=us-east1 --branch=main`, ran as
+`cicd-deployer@trim-icon-498815-a0.iam.gserviceaccount.com`, and all eight
+steps succeeded — Docker build, push to Artifact Registry, `gcloud run deploy
+--no-traffic`, the migrations and the cohort seed, and the promote. Revision
+`danielmherman-00102-9w2` took 100% of traffic and the site answered `200`.
+`cicd-deployer` holds four narrow roles (`run.admin`,
+`iam.serviceAccountUser`, `artifactregistry.writer`, `logging.logWriter`), so
+the default compute service account and its `roles/editor` are out of the
+delivery path.
+
+Worth naming the trap. The revision before that one,
+`danielmherman-00101-kpw`, came from a push made *before* the flag was set, so
+it still ran as the old account and succeeded. A passing build is not evidence
+about this change; only a build whose service account was read back is.
 
 ### 7.5 Gap 2 closed — one request id across both services, verified in production
 
@@ -582,6 +611,17 @@ identity token for an authorised service account before the container is even
 invoked, and the agent code refuses requests without an `Authorization` header
 as a second line. The browser never holds such a token. The service has one
 invoker, the website's service account.
+
+**Does your deploy pipeline run with least privilege?**
+It did not, and the config said it should. `cloudbuild.yaml` line 8 asks for a
+dedicated `cicd-deployer` service account so builds do not run as the project
+default; the trigger carried its own, and the trigger's wins, so every
+push-triggered build ran as the default compute service account holding
+`roles/editor`. The declaration in the file was inert. One flag on the trigger
+fixed it, and I verified it by running the trigger and reading the build's
+service account back rather than trusting the config — `cicd-deployer` holds
+four narrow roles and all eight pipeline steps succeeded under it. The build
+that "passed" before the change proved nothing: it predated the flag.
 
 **Why is the quota claimed before the agent call, not after?**
 Because the agent call costs money. Claiming first means a burst of concurrent

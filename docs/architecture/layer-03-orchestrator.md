@@ -1,7 +1,7 @@
 # Layer 3 — Orchestrator (the chain)
 
-Status: audited 2026-09-13. Gap 1 closed 2026-09-15 by decision B (stream
-progress, not prose) and verified against the live stack. Gaps 2–7 open.
+Status: audited 2026-09-13. Gaps 1 and 2 closed 2026-09-15 and verified live.
+Gaps 3–7 open.
 
 ---
 

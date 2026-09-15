@@ -125,8 +125,8 @@ architecture gap. This list exists so the bar does not move mid-review.
 |---|---|---|
 | 1 Client | `layer-01-client.md` | Audited and refactored 2026-09-11. Streaming deferred to layer 3. |
 | 2 Edge | `layer-02-edge.md` | Implemented and verified live 2026-09-13 (decision D: Terraform load balancer + Cloud Armor, torn down between uses). Gaps 2 and 3 closed. |
-| 3 Orchestrator | — | |
-| 4 Model runtime & gateway | — | |
+| 3 Orchestrator | `layer-03-orchestrator.md` | Audited 2026-09-13, all seven gaps closed 2026-09-15 and verified live. |
+| 4 Model runtime & gateway | `layer-04-model-runtime.md` | Audited 2026-09-15 and independently reviewed the same day. Fifteen gaps recorded, none closed. |
 | 5 Tools & grounding | — | |
 | 6 Your own models | — | |
 | 7 Data & indexes | — | |

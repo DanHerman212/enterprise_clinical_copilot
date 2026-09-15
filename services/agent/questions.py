@@ -20,7 +20,6 @@ CHIP_QUESTIONS = {
     "risk": "Assess the 30-day readmission risk for this patient.",
     "meds": "What medications was this patient discharged on?",
     "summarize": "Summarize the recent discharge notes for this patient.",
-    "compare": "Compare this assessment to the previous one for this patient.",
 }
 
 # Appended when a patient is in scope, so the model never has to ask which

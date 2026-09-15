@@ -74,6 +74,22 @@ def test_an_unknown_chip_is_refused_with_its_own_code():
     assert error.value.status_code == 400
 
 
+def test_the_compare_chip_is_gone():
+    """It asked about a previous assessment that a single-turn product has no
+    data for — a leftover from an earlier UX exercise, never offered in the
+    console. Removing it from the table is not enough on its own: the name has
+    to be refused, or a direct request still spends a credit asking the model
+    something the system cannot answer (Gap 4).
+    """
+    with pytest.raises(AgentRequestError) as error:
+        parse_agent_request(
+            {"chip": "compare", "hadm_id": 7}, max_question_chars=2000
+        )
+
+    assert error.value.code == "unknown_chip"
+    assert error.value.status_code == 400
+
+
 @pytest.mark.parametrize("hadm_id", [0, -1, "9", 1.5, True])
 def test_an_invalid_admission_is_refused(hadm_id):
     """True is in this list on purpose: bool is an int, so without an explicit

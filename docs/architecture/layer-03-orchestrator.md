@@ -203,12 +203,13 @@ model is asked exactly what it was asked before. `demo/fixtures.py` 52 still
 holds the chip wording, but only for fixture mode, which answers captured
 payloads with no agent available to call.
 
-One of those templates asks a question the product cannot answer. The chip table
-includes `compare` — "Compare this assessment to the previous one for this
-patient". There is no previous assessment: the product is single-turn (see Gap
-4). The chip is not offered in the console, but the name is in both tables, so a
-direct request with `chip: "compare"` passes validation, spends a quota credit,
-and asks the model about history it does not have.
+The chip table used to include one that asked a question the product cannot
+answer: `compare` — "Compare this assessment to the previous one for this
+patient". There is no previous assessment, because the product is single-turn
+(see Gap 4), and the chip was never offered in the console. It was a leftover
+from an earlier UX exercise and was removed on 2026-09-15. The name is refused
+by both tables (`unknown_chip`) rather than merely hidden, so a direct request
+can no longer spend a credit on a question with no data behind it.
 
 ### 3.4 What happens after the model answers
 
@@ -383,8 +384,10 @@ never sends history. If a follow-up question is ever wanted, this becomes real
 work: a session identifier on the wire, a store, and a retention policy. Worth
 deciding deliberately, because "our agent is stateless" is only half the
 sentence, and an interviewer will ask about the other half. The `compare` chip
-(3.3) is the concrete instance: a question about a previous assessment that
-the system accepts and cannot answer.
+was the concrete instance — a question about a previous assessment that the
+system accepted and could not answer — and it was removed on 2026-09-15 (3.3).
+That removes the symptom, not the gap: the product is still single-turn by
+choice.
 
 **Gap 5 — Live verification of this layer is limited by the tool endpoints.**
 The model is live and the MCP protocol works end to end; the prediction and
@@ -500,14 +503,15 @@ migration is scheduled work rather than a surprise. And `CHAIN_REVISION` is
 maintained by hand, which the module docstring records as a weakness: nothing
 stops a prompt edit shipping without a bump. If that ever causes an
 unattributable answer, derive the revision from a digest of the four inputs.
+
 ### 6.3 Conversation state (Gap 4)
 
-Options: leave the product single-turn and record that finding — in which case
-the `compare` chip should be removed, since it advertises a capability the
-system does not have; or add a session identifier with history in Cloud SQL
-(already in the architecture, so no new dependency) when follow-up questions
-are wanted. Recorded as open, because it is a product decision with an
-architectural consequence, and the demo does not need it yet.
+Options: leave the product single-turn and record that finding — the `compare`
+chip advertised a capability the system does not have and has now been removed
+(3.3), so this option is half-done already; or add a session identifier with
+history in Cloud SQL (already in the architecture, so no new dependency) when
+follow-up questions are wanted. Recorded as open, because it is a product
+decision with an architectural consequence, and the demo does not need it yet.
 
 ### 6.4 Prompt-as-data (Gap 3)
 

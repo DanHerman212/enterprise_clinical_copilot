@@ -123,6 +123,37 @@ def test_an_unknown_tool_falls_back_to_a_true_generic_label():
     assert stages.tool_label("brand_new_tool") == stages.LABEL_UNKNOWN_TOOL
 
 
+def test_every_label_capitalises_every_word():
+    """House style, enforced rather than remembered.
+
+    These are the only strings a waiting user reads, and a set that mixes
+    sentence case with Title Case reads as a mistake rather than as a style.
+    A label added without following the rule should fail here, not in review.
+
+    Every offender is reported at once — a failure that names one word per run
+    turns a five-second fix into five test runs.
+    """
+    labels = sorted({
+        stages.LABEL_PLANNING,
+        stages.LABEL_REVIEWING,
+        stages.LABEL_VERIFYING,
+        stages.LABEL_UNKNOWN_TOOL,
+        *stages.TOOL_LABELS.values(),
+    })
+
+    offenders = [
+        f"{label!r} -> {word!r}"
+        for label in labels
+        for word in label.split()
+        if not word[:1].isupper()
+    ]
+
+    assert not offenders, (
+        "every word of a stage label must start with a capital: "
+        + ", ".join(offenders)
+    )
+
+
 # --- what the chain announces ----------------------------------------------
 
 def test_a_stage_is_announced_for_each_executed_tool_call():

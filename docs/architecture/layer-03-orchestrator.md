@@ -285,8 +285,8 @@ trusted:
 1. **A stage is emitted where the work happens, not before it.** There is no
    timer and no scripted sequence, so a stage cannot outrun the work it
    describes.
-2. **A stage describes an action being taken, never a result.** "Searching the
-   discharge notes" is true whether the search returns passages or fails.
+2. **A stage describes an action being taken, never a result.** "Searching The
+   Discharge Notes" is true whether the search returns passages or fails.
    Whether the answer is good is the terminal frame's business.
 3. **A call that is refused is not announced.** Announcing it would tell the
    user about work that never started, which is the specific dishonesty this
@@ -563,9 +563,9 @@ the streamed path would have raised `SynchronousOnlyOperation`.
 
 **Live verification.** Both tool endpoints were deployed for this
 (`readmission-endpoint`, `readmission-rag-index`). In the browser at
-`/demo/a2ui/`, a risk question showed *Reading the question* at 1.1 s, *Reading
-the risk model* at 2.4 s, *Reviewing the evidence* at 3.3 s, *Searching the
-discharge notes* at 4.3 s, *Reviewing the evidence* at 5.4 s, then the answer at
+`/demo/a2ui/`, a risk question showed *Reading The Question* at 1.1 s, *Reading
+The Risk Model* at 2.4 s, *Reviewing The Evidence* at 3.3 s, *Searching The
+Discharge Notes* at 4.3 s, *Reviewing The Evidence* at 5.4 s, then the answer at
 9.1 s — a real probability of 0.250531 above the 0.11 threshold, five attributed
 factors, and a citation resolving to a real note section. No console errors.
 `/ask` still returns its full eight-field contract live (HTTP 200).

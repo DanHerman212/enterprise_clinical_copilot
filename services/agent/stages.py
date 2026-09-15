@@ -15,8 +15,8 @@ This module exists to make that progress honest. Four rules:
    before it calls the model. There is no timer, no scripted sequence, and no
    stage that is announced ahead of the work it describes.
 
-2. **A stage describes an action being taken, never a result.** "Searching the
-   discharge notes" is true whether the search returns passages or fails, so it
+2. **A stage describes an action being taken, never a result.** "Searching The
+   Discharge Notes" is true whether the search returns passages or fails, so it
    cannot mislead. Whether the answer is good is the terminal event's business —
    a failure is reported there, not by quietly dropping a stage.
 
@@ -58,26 +58,29 @@ STAGES = (
 )
 
 # --- Labels ----------------------------------------------------------------
+# Title Case, every word. A test enforces it (`test_progress_stream.py`), because
+# these are the only strings a waiting user reads and the house style should not
+# depend on whoever typed the last label remembering it.
 
-LABEL_PLANNING = "Reading the question"
-LABEL_REVIEWING = "Reviewing the evidence"
-LABEL_VERIFYING = "Checking the answer against the evidence"
+LABEL_PLANNING = "Reading The Question"
+LABEL_REVIEWING = "Reviewing The Evidence"
+LABEL_VERIFYING = "Checking The Answer Against The Evidence"
 
 # One label per tool the MCP server advertises (`services/mcp/server.py`).
 # Each is phrased as the action the call performs, so it stays true even when
 # the call fails. A test walks the live tool list and fails if a tool is added
 # without a label here, which is what stops this table drifting into fiction.
 TOOL_LABELS = {
-    "predict_readmission": "Reading the risk model",
-    "rag_search": "Searching the discharge notes",
-    "rag_search_sections": "Reading the note sections",
+    "predict_readmission": "Reading The Risk Model",
+    "rag_search": "Searching The Discharge Notes",
+    "rag_search_sections": "Reading The Note Sections",
 }
 
 # Used when the MCP server advertises a tool this table has not been taught.
 # Deliberately vague AND still true: a tool is being consulted. The caller
 # never sees a name it cannot interpret, and the omission is logged (see
 # `graph._emit`) so it is fixed rather than silently rendered.
-LABEL_UNKNOWN_TOOL = "Consulting a tool"
+LABEL_UNKNOWN_TOOL = "Consulting A Tool"
 
 
 def tool_label(name: str) -> str:

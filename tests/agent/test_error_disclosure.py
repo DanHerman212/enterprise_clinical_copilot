@@ -47,7 +47,7 @@ def test_health_does_not_disclose_topology():
 # --- /ask 502 (ECC-06) -------------------------------------------------------
 
 def test_ask_failure_returns_generic_body_with_correlation_id():
-    async def boom(box, question):
+    async def boom(box, question, on_event=None):
         raise RuntimeError("https://secret-mcp-url/ask audience=projects/12345")
 
     with patch.object(srv, "toolbox", _fake_toolbox), \
@@ -71,7 +71,7 @@ def test_ask_logs_the_forwarded_cloud_trace_id(caplog):
     """Django forwards X-Cloud-Trace-Context; the agent's log line for the
     request must carry the trace id (the part before the slash) so the two
     services' entries pair up."""
-    async def boom(box, question):
+    async def boom(box, question, on_event=None):
         raise RuntimeError("nope")
 
     with patch.object(srv, "toolbox", _fake_toolbox), \
@@ -103,7 +103,7 @@ def test_ask_response_trims_tool_calls_to_name_and_response():
         }],
     }
 
-    async def fake_ask(box, question):
+    async def fake_ask(box, question, on_event=None):
         return state
 
     with patch.object(srv, "toolbox", _fake_toolbox), \

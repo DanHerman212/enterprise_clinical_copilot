@@ -30,8 +30,9 @@ previous `LANGFUSE_ENABLED` gate behavior.
 """
 
 import json
+import logging
 import operator
-from typing import Annotated, Any, TypedDict
+from typing import Annotated, Any, Callable, TypedDict
 
 from langchain_core.messages import (
     AIMessage,
@@ -55,6 +56,7 @@ from services.agent.mcp_client import MCPToolbox, _clean_schema
 from services.agent.contracts import RecordedToolCall, validate_recorded_tool_call
 from services.agent.observability import LANGFUSE_ENABLED as _LANGFUSE_ENABLED, make_handler
 from services.agent.prompts import SYSTEM_PROMPT
+from services.agent import stages
 
 # --- Langfuse observability (optional, no-op without keys) ---
 # Enabled only when all three env vars are present, so local/dev runs without
@@ -64,6 +66,8 @@ from services.agent.prompts import SYSTEM_PROMPT
 # per MCP call — so the golden-eval fix-and-retest loop can open a failing
 # case and see exactly which passages went in and what the model said.
 LANGFUSE_ENABLED = _LANGFUSE_ENABLED
+
+logger = logging.getLogger(__name__)
 
 
 def _make_handler():
@@ -97,8 +101,35 @@ MAX_TOOL_CALLS_PER_TURN = 5
 RECURSION_LIMIT = 10
 
 
+def _emit(on_event: Callable[[dict[str, Any]], None] | None, event: dict[str, Any]) -> None:
+    """Announce a stage, if anyone is listening.
+
+    A progress callback is a courtesy to the caller, never a load-bearing part
+    of the answer, so a listener that raises must not take the answer down with
+    it. The event is dropped and the run continues — the worst case is a
+    missing progress line, against the alternative of a 502 caused by the
+    progress reporting itself.
+
+    An unknown tool name is logged here rather than at the call site: this is
+    the only place that sees every stage, so it is the only place that can
+    notice `stages.TOOL_LABELS` has fallen behind the MCP server's tool list.
+    """
+    if on_event is None:
+        return
+    if event.get("stage") == stages.STAGE_TOOL and event.get("tool") not in stages.TOOL_LABELS:
+        logger.warning(
+            "no progress label for tool %r — add it to stages.TOOL_LABELS",
+            event.get("tool"),
+        )
+    try:
+        on_event(event)
+    except Exception:
+        logger.warning("progress callback failed; continuing", exc_info=True)
+
+
 async def _execute_tool_calls(
     toolbox: MCPToolbox, calls: list[dict],
+    on_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[list[BaseMessage], list[RecordedToolCall]]:
     """Run one turn's tool calls, refusing those beyond the per-turn budget."""
     messages: list[BaseMessage] = []
@@ -114,6 +145,11 @@ async def _execute_tool_calls(
                 ),
             }
         else:
+            # Emitted HERE, one line above the call it describes: the stage is
+            # derived from an execution that is about to happen, not from a
+            # script of what should happen. A refused call (the branch above)
+            # announces nothing, because nothing was called.
+            _emit(on_event, stages.tool_event(call["name"]))
             payload = await toolbox.call(call["name"], arguments)
         recorded.append(validate_recorded_tool_call({
             "name": call["name"], "args": arguments, "response": payload,
@@ -190,17 +226,40 @@ def _tools(toolbox: MCPToolbox) -> list[BaseTool]:
     ]
 
 
-def build_graph(toolbox: MCPToolbox, model: str = GEMINI_MODEL):
+def build_graph(
+    toolbox: MCPToolbox,
+    model: str = GEMINI_MODEL,
+    on_event: Callable[[dict[str, Any]], None] | None = None,
+):
+    """Compile the graph. `on_event` receives progress stages; None disables them.
+
+    Progress is opt-in per call, which is what keeps the single-response `/ask`
+    path byte-for-byte what it was: with no listener, `_emit` returns
+    immediately and the graph behaves exactly as before.
+    """
     llm = _build_llm(model).bind_tools(_tools(toolbox))
 
     async def agent_node(state: AgentState) -> dict:
+        # Which turn this is decides the label, and the transcript is the only
+        # honest source for that. No prior AIMessage means the model has not
+        # spoken yet, so the question is what it is reading; any later turn is
+        # looking at evidence that came back from a tool. The label is chosen
+        # before the call, and it stays true either way: this turn may answer
+        # or may ask for another tool.
+        seen_a_model_turn = any(
+            isinstance(m, AIMessage) for m in state["messages"]
+        )
+        _emit(
+            on_event,
+            stages.reviewing_event() if seen_a_model_turn else stages.planning_event(),
+        )
         response: AIMessage = await llm.ainvoke(state["messages"])
         return {"messages": [response], "tool_calls": []}
 
     async def tool_node(state: AgentState) -> dict:
         last = state["messages"][-1]
         calls = last.tool_calls if isinstance(last, AIMessage) else []
-        messages, recorded = await _execute_tool_calls(toolbox, calls)
+        messages, recorded = await _execute_tool_calls(toolbox, calls, on_event)
         return {"messages": messages, "tool_calls": recorded}
 
     def route(state: AgentState) -> str:
@@ -223,13 +282,19 @@ async def ask(
     model: str = GEMINI_MODEL,
     name: str | None = None,
     tags: list[str] | None = None,
+    on_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict:
     """Run one question to completion. Returns the final state.
 
     `name`/`tags` are forwarded to the LangGraph run so the Langfuse trace is
     cleanly identifiable (e.g. eval traces get name=`eval.risk` + tags).
+
+    `on_event` is called with a stage dict as the chain progresses (see
+    `stages.py`). It is a plain synchronous callback — the streaming route
+    hands it a queue's `put_nowait` — and it is optional, so the answer path
+    and the progress path stay one implementation.
     """
-    graph = build_graph(toolbox, model=model)
+    graph = build_graph(toolbox, model=model, on_event=on_event)
     handler = make_handler()
 
     config: dict = {"callbacks": [handler] if LANGFUSE_ENABLED else None,

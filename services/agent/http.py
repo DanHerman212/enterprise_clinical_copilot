@@ -11,15 +11,17 @@ nothing and breaks when an instance is recycled.
 """
 
 import asyncio
+import json
 import logging
 import os
 import uuid
 
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
+from services.agent import stages
 from services.agent.a2ui import compose_presentation
 from services.agent.contracts import (
     AgentRequestError,
@@ -44,101 +46,92 @@ MAX_QUESTION_CHARS = 2000
 # runaway graph cannot keep billing after the caller is gone (ECC-02).
 _, ASK_TIMEOUT_SECONDS = timeout_chain()
 
+# How long the progress stream may stay silent before it sends a comment frame.
+# A tool call is allowed 100s, and an SSE connection with no bytes on it for
+# that long is closed by an idle timeout somewhere in the path (Cloud Run, the
+# load balancer, the caller's own client) before the answer ever arrives. The
+# frame carries no data — it exists to keep the socket alive.
+STREAM_KEEPALIVE_SECONDS = 15
+
 # Defense-in-depth (ECC-07): local and Cloud Run services share this decision.
 REQUIRE_AUTH_HEADER = requires_cloud_run_auth()
 
 
-async def health(request: Request) -> JSONResponse:
-    """Shallow by design: no Vertex, no MCP, no BigQuery.
-
-    A deep check would bill on every probe of a scale-to-zero service and would
-    mark the container unhealthy whenever a dependency blipped.
-
-    No project/region/MCP URL (ECC-06): the route is unauthenticated at the
-    app layer, and internal topology must not leak to a direct caller.
-    """
-    return JSONResponse(
-        {
-            "status": "ok",
-            "model": GEMINI_MODEL,
-            "mcp_transport": MCP_TRANSPORT,
-        }
-    )
+# --- Request handling, shared by both routes -------------------------------
+# /ask and /ask/stream differ only in how the answer is delivered. They must
+# not differ in what they accept, what they refuse, or when the guardrails run,
+# so everything up to and including the validated payload lives here and both
+# routes call it.
 
 
-async def ask_route(request: Request) -> JSONResponse:
+def _auth_error(request: Request) -> JSONResponse | None:
+    """The 401 response, or None when the request may proceed."""
     if REQUIRE_AUTH_HEADER and "authorization" not in request.headers:
         return JSONResponse(
             {"error": "unauthenticated",
              "message": "This service requires an identity token."},
             status_code=401,
         )
-    # Django forwards the Cloud Trace id Cloud Run stamped on the user's
-    # request (X-Cloud-Trace-Context: TRACE_ID/SPAN_ID;o=1). Logging it here
-    # pairs this service's lines with Django's for the same user action.
-    trace = request.headers.get("x-cloud-trace-context", "").split("/", 1)[0] or "-"
+    return None
+
+
+def _trace(request: Request) -> str:
+    """The Cloud Trace id, or '-' when the request did not come via Cloud Run.
+
+    Django forwards the id Cloud Run stamped on the user's request
+    (X-Cloud-Trace-Context: TRACE_ID/SPAN_ID;o=1). Logging it here pairs this
+    service's lines with Django's for the same user action.
+    """
+    return request.headers.get("x-cloud-trace-context", "").split("/", 1)[0] or "-"
+
+
+async def _question_or_error(request: Request) -> tuple[str, JSONResponse | None]:
+    """The validated question, or the response that should be returned instead."""
     try:
         body = await request.json()
     except Exception:
-        return JSONResponse({"error": "invalid_json"}, status_code=400)
+        return "", JSONResponse({"error": "invalid_json"}, status_code=400)
 
     try:
         question = parse_agent_request(
             body, max_question_chars=MAX_QUESTION_CHARS
         )["question"]
     except AgentRequestError as exc:
-        return JSONResponse(
+        return "", JSONResponse(
             {"error": exc.code, "message": exc.message},
             status_code=exc.status_code,
         )
+    return question, None
 
-    try:
-        async with asyncio.timeout(ASK_TIMEOUT_SECONDS):
-            async with toolbox() as box:
-                state = await ask(box, question)
-    except TimeoutError:
-        logger.error("agent /ask timed out after %.0fs trace=%s", ASK_TIMEOUT_SECONDS, trace)
-        return JSONResponse(
-            {"error": "timeout",
-             "message": f"The agent did not answer within {ASK_TIMEOUT_SECONDS:.0f}s."},
-            status_code=504,
-        )
-    except Exception as exc:
-        # Never let an infrastructure failure surface as a plausible answer.
-        # The MCP SDK raises asyncio.ExceptionGroup when a transport task
-        # fails; unwrap it so the real cause is logged instead of hiding
-        # behind "unhandled errors in a TaskGroup".
-        cause = exc
-        if isinstance(exc, BaseExceptionGroup):
-            detail = " | ".join(str(e) for e in exc.exceptions)
-            cause = RuntimeError(f"{type(exc).__name__}: {detail}")
-            cause.__cause__ = exc  # keep the group as the logged root cause
-        # Detail stays server-side (ECC-06): exception text routinely embeds
-        # the private MCP URL, IAM/audience detail and table names. The caller
-        # gets a stable code + correlation id that pairs with the log line.
-        correlation_id = uuid.uuid4().hex[:12]
-        logger.error("agent /ask failed [%s] trace=%s", correlation_id, trace, exc_info=cause)
-        return JSONResponse(
-            {"error": "agent_failed",
-             "message": "The agent failed to answer. Please retry.",
-             "correlation_id": correlation_id},
-            status_code=502,
-        )
 
+class AgentAnswerUnavailable(Exception):
+    """The chain finished but produced nothing shippable.
+
+    Neither route can serve this as an answer: /ask turns it into its
+    `answer_unavailable` 502, and /ask/stream turns it into a terminal error
+    event. It exists as an exception rather than a return value so both routes
+    are forced to handle it.
+    """
+
+
+def _compose_success(question: str, state: dict, trace: str) -> dict:
+    """Guard the answer, compose the presentation, validate the payload.
+
+    The whole post-model pipeline, in one place, shared by both routes: this is
+    what makes a streamed answer and a single-response answer the same object
+    rather than two implementations that agree today.
+    """
     # Deterministic post-hoc guardrails (P4): the LLM proposes, code disposes.
     # The served answer is the guarded one; flags are returned for observability
-    # (they surface in Langfuse) and so a client can choose to render a note.
+    # and so a client can choose to render a note.
     text = final_text(state)
     if not text:
         # Typically MAX_TOKENS spent entirely on thinking — the model returns
         # empty text and raises nothing. A stale fragment must not ship as the
         # answer (ECC-12).
         logger.error("agent produced no final answer text trace=%s", trace)
-        return JSONResponse(
-            {"error": "answer_unavailable",
-             "message": "The agent did not produce an answer. Please retry."},
-            status_code=502,
-        )
+        raise AgentAnswerUnavailable("The agent did not produce an answer. Please retry.")
+
     guarded = guard_answer(text, state["tool_calls"])
 
     # tool_calls are trimmed to what the site's canvas composition reads
@@ -169,22 +162,260 @@ async def ask_route(request: Request) -> JSONResponse:
         validate_agent_success(payload)
     except AgentResponseError:
         logger.error("agent produced a payload outside its success contract trace=%s", trace)
-        return JSONResponse(
-            {"error": "answer_unavailable",
-             "message": "The agent did not produce an answer. Please retry."},
-            status_code=502,
-        )
+        raise AgentAnswerUnavailable("The agent did not produce an answer. Please retry.")
+
     logger.info(
-        "agent /ask ok trace=%s tools=%d flags=%d",
+        "agent answered trace=%s tools=%d flags=%d",
         trace, len(trimmed_calls), len(guarded["flags"]),
     )
+    return payload
+
+
+async def _run_chain(question: str, on_event=None) -> dict:
+    """Run the graph under the wall-clock deadline, inside one MCP session.
+
+    Extracted because both routes need the identical bound: the deadline is a
+    spend control (ECC-02), and a second copy of it is a second place for the
+    two routes to disagree about how long a question may take.
+    """
+    async with asyncio.timeout(ASK_TIMEOUT_SECONDS):
+        async with toolbox() as box:
+            return await ask(box, question, on_event=on_event)
+
+
+async def health(request: Request) -> JSONResponse:
+    """Shallow by design: no Vertex, no MCP, no BigQuery.
+
+    A deep check would bill on every probe of a scale-to-zero service and would
+    mark the container unhealthy whenever a dependency blipped.
+
+    No project/region/MCP URL (ECC-06): the route is unauthenticated at the
+    app layer, and internal topology must not leak to a direct caller.
+    """
+    return JSONResponse(
+        {
+            "status": "ok",
+            "model": GEMINI_MODEL,
+            "mcp_transport": MCP_TRANSPORT,
+        }
+    )
+
+
+async def ask_route(request: Request) -> JSONResponse:
+    error = _auth_error(request)
+    if error is not None:
+        return error
+    trace = _trace(request)
+    question, error = await _question_or_error(request)
+    if error is not None:
+        return error
+
+    try:
+        state = await _run_chain(question)
+    except TimeoutError:
+        logger.error("agent /ask timed out after %.0fs trace=%s", ASK_TIMEOUT_SECONDS, trace)
+        return JSONResponse(
+            {"error": "timeout",
+             "message": f"The agent did not answer within {ASK_TIMEOUT_SECONDS:.0f}s."},
+            status_code=504,
+        )
+    except Exception as exc:
+        # Never let an infrastructure failure surface as a plausible answer.
+        # The MCP SDK raises asyncio.ExceptionGroup when a transport task
+        # fails; unwrap it so the real cause is logged instead of hiding
+        # behind "unhandled errors in a TaskGroup".
+        cause = exc
+        if isinstance(exc, BaseExceptionGroup):
+            detail = " | ".join(str(e) for e in exc.exceptions)
+            cause = RuntimeError(f"{type(exc).__name__}: {detail}")
+            cause.__cause__ = exc  # keep the group as the logged root cause
+        # Detail stays server-side (ECC-06): exception text routinely embeds
+        # the private MCP URL, IAM/audience detail and table names. The caller
+        # gets a stable code + correlation id that pairs with the log line.
+        correlation_id = uuid.uuid4().hex[:12]
+        logger.error("agent /ask failed [%s] trace=%s", correlation_id, trace, exc_info=cause)
+        return JSONResponse(
+            {"error": "agent_failed",
+             "message": "The agent failed to answer. Please retry.",
+             "correlation_id": correlation_id},
+            status_code=502,
+        )
+
+    try:
+        payload = _compose_success(question, state, trace)
+    except AgentAnswerUnavailable as exc:
+        return JSONResponse(
+            {"error": "answer_unavailable", "message": str(exc)},
+            status_code=502,
+        )
     return JSONResponse(payload)
+
+
+# --- Progress streaming -----------------------------------------------------
+# The answer is not streamed, and cannot be: `guard_answer` rewrites the text
+# after the model finishes, so a token stream would show a draft being
+# corrected — and for a clinical answer the corrected part is the part that
+# matters. What streams is which step is running, followed by exactly one
+# terminal frame carrying the same validated object /ask returns.
+
+
+def _sse(event: str, data: dict) -> str:
+    """One server-sent event: a named event, one JSON data line, a blank line."""
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+# Queued when the chain finishes, so the relay loop can tell "the chain is
+# still working but quiet" (send a keepalive) from "the chain is finished"
+# (stop). A sentinel rather than a task-state check, because the check can only
+# be made between `await`s and would therefore always run one keepalive late.
+_CHAIN_DONE = object()
+
+
+def _error_frame(code: str, message: str, correlation_id: str | None = None) -> str:
+    """The terminal frame for a failure that happened after the stream opened.
+
+    Once the first byte is on the wire the status code is spent, so failures
+    that occur mid-stream cannot be a 502. They are reported here instead,
+    carrying the same code, message and correlation id that /ask would have
+    put in its error body, so a caller handles both the same way.
+    """
+    body = {"error": code, "message": message}
+    if correlation_id:
+        body["correlation_id"] = correlation_id
+    return _sse(stages.STAGE_ERROR, body)
+
+
+async def ask_stream_route(request: Request) -> Response:
+    """`/ask`, with the chain's stages streamed ahead of the answer.
+
+    Failures before the stream opens (no identity header, bad JSON, question
+    too long) are returned as ordinary responses with their real status codes —
+    the same ones /ask uses. Failures after it opens arrive as a terminal
+    `error` event, because there is no status code left to send.
+    """
+    error = _auth_error(request)
+    if error is not None:
+        return error
+    trace = _trace(request)
+    question, error = await _question_or_error(request)
+    if error is not None:
+        return error
+
+    return StreamingResponse(
+        _stream_chain(question, trace),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            # A cheap, explicit "do not buffer this" for any proxy in the path.
+            # The classic failure without it is that every frame arrives at
+            # once when the response ends, which looks exactly like no
+            # streaming at all.
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+async def _stream_chain(question: str, trace: str):
+    """Yield stage frames as they happen, then exactly one terminal frame.
+
+    Nothing is composed here. The stages come from the chain (`graph._emit`) at
+    the points where work actually starts, and the answer comes from the same
+    `_compose_success` the single-response route uses, so the two routes cannot
+    drift into serving different answers.
+    """
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def on_event(event: dict) -> None:
+        queue.put_nowait(event)
+
+    task = asyncio.create_task(_run_chain(question, on_event=on_event))
+
+    def _finished(finished: asyncio.Task) -> None:
+        # Reading the exception marks it retrieved: it is logged where it
+        # happened, and without this a chain that failed after the caller
+        # disconnected would surface as "exception was never retrieved".
+        if not finished.cancelled():
+            finished.exception()
+        # The sentinel is what ends the loop the moment the chain does. Waiting
+        # only on the queue would instead stall the answer for up to a whole
+        # keepalive interval after the work had already finished — the progress
+        # stream would make the common case slower than not streaming at all.
+        # Stages were queued before the task completed, so FIFO ordering keeps
+        # the sentinel last.
+        queue.put_nowait(_CHAIN_DONE)
+
+    task.add_done_callback(_finished)
+
+    try:
+        while True:
+            try:
+                event = await asyncio.wait_for(
+                    queue.get(), timeout=STREAM_KEEPALIVE_SECONDS
+                )
+            except asyncio.TimeoutError:
+                # The chain is quiet — typically one slow tool call. Keep the
+                # socket alive without pretending anything happened.
+                yield ": keepalive\n\n"
+                continue
+            if event is _CHAIN_DONE:
+                break
+            yield _sse(event["stage"], event)
+
+        try:
+            state = task.result()
+        except TimeoutError:
+            logger.error(
+                "agent /ask/stream timed out after %.0fs trace=%s",
+                ASK_TIMEOUT_SECONDS, trace,
+            )
+            yield _error_frame(
+                "timeout",
+                f"The agent did not answer within {ASK_TIMEOUT_SECONDS:.0f}s.",
+            )
+            return
+        except Exception as exc:
+            # Same unwrapping and same policy as /ask: the detail stays in the
+            # log (ECC-06), the caller gets a code and a correlation id.
+            cause = exc
+            if isinstance(exc, BaseExceptionGroup):
+                detail = " | ".join(str(e) for e in exc.exceptions)
+                cause = RuntimeError(f"{type(exc).__name__}: {detail}")
+                cause.__cause__ = exc
+            correlation_id = uuid.uuid4().hex[:12]
+            logger.error(
+                "agent /ask/stream failed [%s] trace=%s", correlation_id, trace, exc_info=cause
+            )
+            yield _error_frame(
+                "agent_failed", "The agent failed to answer. Please retry.", correlation_id
+            )
+            return
+
+        # The model has stopped; the guardrails have not run yet. Say so rather
+        # than letting the stream go silent at the point closest to the answer.
+        yield _sse(stages.STAGE_VERIFY, stages.verify_event())
+
+        try:
+            payload = _compose_success(question, state, trace)
+        except AgentAnswerUnavailable as exc:
+            yield _error_frame("answer_unavailable", str(exc))
+            return
+
+        yield _sse(stages.STAGE_ANSWER, payload)
+    finally:
+        # Reached when the caller disconnects (Starlette closes the generator)
+        # as well as on every normal exit. Cancelling the chain stops it before
+        # its next superstep instead of billing to completion for an answer
+        # nobody is waiting for; a model call already in flight is not
+        # interruptible, so this bounds the waste rather than eliminating it.
+        if not task.done():
+            task.cancel()
 
 
 app = Starlette(
     routes=[
         Route("/health", health, methods=["GET"]),
         Route("/ask", ask_route, methods=["POST"]),
+        Route("/ask/stream", ask_stream_route, methods=["POST"]),
     ]
 )
 

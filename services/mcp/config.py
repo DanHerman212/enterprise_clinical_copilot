@@ -84,7 +84,9 @@ DEFAULT_TOP_K = positive_int_env("RAG_TOP_K", 5)
 # PINNED, not read from the environment: an environment default lets a deploy
 # change the model the chain uses with no commit anywhere, which is exactly what
 # makes an answer unreproducible. Changing the model is now a reviewed change,
-# and `services/agent/chain.CHAIN_REVISION` moves with it.
+# and nothing has to be remembered to make it visible: the execution record
+# carries the code revision the deployment set, so a change here moves the
+# identity that an answer is attributed to.
 #
 # `gemini-2.5-flash` is a versioned GA model rather than a moving alias —
 # released 2025-06-17. Per Google's model lifecycle table it RETIRES 2026-10-20,

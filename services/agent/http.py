@@ -232,12 +232,16 @@ async def health(request: Request) -> JSONResponse:
     mark the container unhealthy whenever a dependency blipped.
 
     No project/region/MCP URL (ECC-06): the route is unauthenticated at the
-    app layer, and internal topology must not leak to a direct caller.
+    app layer, and internal topology must not leak to a direct caller. The code
+    revision is the one thing that does appear, because it names the deployed
+    code rather than the infrastructure behind it, and without it the only way to
+    answer "did my deploy land?" is to read a revision list and guess.
     """
     return JSONResponse(
         {
             "status": "ok",
             "model": chain.MODEL_ID,
+            "code_revision": chain.CODE_REVISION,
             "mcp_transport": MCP_TRANSPORT,
         }
     )

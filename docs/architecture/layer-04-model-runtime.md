@@ -145,8 +145,9 @@ figure for it is recorded anywhere (Gap 9).
 rather than an environment read, and the reason is written above it: an
 environment default lets a deploy change the model the chain uses with no commit
 anywhere, which is exactly what makes an answer unreproducible. `chain.MODEL_ID`
-imports it (`chain.py` 33) so the string has one home, `CHAIN_REVISION`
-(`chain.py` 37) is the handle for the prompt-and-model combination, and a test
+imports it (`chain.py` 33) so the string has one home, `chain.CODE_REVISION` is the
+identity of the running code — resolved from the deployment rather than typed by
+hand (`chain.py`, `resolve_code_revision`) — and a test
 asserts the pin ignores a `GEMINI_MODEL` in the environment
 (`tests/agent/test_chain_artifact.py` 71).
 
@@ -155,11 +156,15 @@ released 2025-06-17, and it retires 2026-10-20, with Gemini 3.5 Flash-Lite or
 Gemini 3.1 Flash-Lite named as replacements (`config.py` 89–93). A pin nobody has
 to think about is a pin that breaks on a Tuesday; this one is dated.
 
-What the pin covers is the model *name*. The region is environment-settable
-(`config.py` 31) and so is the token budget (`config.py` 100), and neither is part
-of `CHAIN_REVISION`, so a deploy can still move where the model is served from and
-how much it may generate without a commit anywhere. The claim in 6.2 is therefore
-narrower than it reads, which is Gap 9.
+What the pin covers is the model *name* — and the identity it is reported under
+comes from the deployment, so it is exact for everything that ships in the image.
+The region is environment-settable (`config.py` 31) and so is the token budget
+(`config.py` 100), and neither is pinned in code, so a deploy can move where the
+model is served from and how much it may generate with no commit anywhere. The
+record does distinguish the result, because Cloud Run gives every configuration a
+new revision name and the record carries it — so such a change is visible after the
+fact rather than silent, but it is still outside git, which is where review
+happens. The claim in 6.2 is therefore narrower than it reads, which is Gap 9.
 
 ### 3.4 One allowance covers thinking and the answer
 
@@ -249,7 +254,7 @@ retry options and no timeout of its own (Gap 10).
 | Requirement | State | Detail |
 |---|---|---|
 | A6 — managed runtime | **Met** | Vertex, `vertexai=True`, ADC; nothing hosted by us. There is no quota figure or Provisioned Throughput decision recorded, which is part of Gap 9. |
-| Model pin (this layer's part of C1) | **Partly** | The model *name* is pinned in code, one home, test-enforced, with a dated expiry (3.3). The region and the token budget are environment-settable and outside `CHAIN_REVISION`, and the version actually served is not recorded (Gap 9, Gap 13). |
+| Model pin (this layer's part of C1) | **Partly** | The model *name* is pinned in code, one home, test-enforced, with a dated expiry (3.3), and the record's identity comes from the deployment. The region and the token budget are environment-settable rather than pinned, so they can change without review, and the version actually served is not recorded (Gap 9, Gap 13). |
 | H1 — retries | **Partly** | The SDK's retry policy runs: three attempts in total, 429 and 408 included, with backoff (3.5). Nothing of ours counts, records or distinguishes it (Gap 2). |
 | H1 — timeouts | **Partly** | A request-level deadline exists and the tool leg has its own bound, enforced at startup. The model leg has none, which also makes the SDK's timeout-retry inert (Gap 3). |
 | H1 — exception handling | **Partly** | Transport failures are reported well: 504 for the deadline, 502 with a correlation id, one record per completed exit. Every *model-side* failure collapses into the same "please retry", including a deterministic safety block where retrying cannot help (Gap 8). |
@@ -356,14 +361,16 @@ the question an incident review asks first: did this fail, or was it refused?
 *Evidence:* nothing under `services/agent/` reads `finish_reason`, `safety_ratings`
 or `prompt_feedback`.
 
-**Gap 9 — Region and output budget are environment-settable and outside the chain
-revision.** The argument in 6.2 for pinning the model — that an environment default
-lets a deploy change behaviour with no commit — applies equally to `LOCATION`
-(`config.py` 31) and to `GEMINI_MAX_OUTPUT_TOKENS` (`config.py` 100), neither of
-which is part of `CHAIN_REVISION`. The region also carries a residency question for
-clinical-shaped data, and `global` is the documented fallback. No quota figure or
-Provisioned Throughput decision is recorded either, so "the runtime is Google's, not
-ours" is true of capacity and not of quota.
+**Gap 9 — Region and output budget are environment-settable and outside git.** The
+argument in 6.2 for pinning the model — that an environment default lets a deploy
+change behaviour with no commit — applies equally to `LOCATION` (`config.py` 31)
+and to `GEMINI_MAX_OUTPUT_TOKENS` (`config.py` 100), neither of which is a code
+constant. The record does show which Cloud Run revision served a request and a new
+revision is created for any environment change, so the change cannot pass
+unnoticed — but it is unreviewed, because review happens on commits. The region also
+carries a residency question for clinical-shaped data, and `global` is the
+documented fallback. No quota figure or Provisioned Throughput decision is recorded
+either, so "the runtime is Google's, not ours" is true of capacity and not of quota.
 
 **Gap 10 — A second Vertex model call sits outside the door.** `rag_search` embeds
 the query through its own client (`services/mcp/tools/retrieval.py` 92–93, called
@@ -425,9 +432,10 @@ is that every statement in section 3 has a single line to point at.
 
 Deliberate, and the reasoning is in the config comment: an environment default
 means a deploy can change the model with no commit, and an answer becomes
-unreproducible. Changing the model is now a reviewed change accompanied by a bump
-of `CHAIN_REVISION` (`chain.py` 37). The trade-off is a redeploy to change a
-string, which is the intended cost.
+unreproducible. Changing the model is therefore a reviewed change, and nothing has
+to be remembered to make it visible: the record carries the deployment's own
+identity (`chain.CODE_REVISION`), which moves when this line moves. The trade-off is
+a redeploy to change a string, which is the intended cost.
 
 ### 6.3 The empty-answer check lives at the boundary, not in the door
 

@@ -84,13 +84,40 @@ def test_the_model_is_pinned_and_ignores_the_environment(monkeypatch):
         importlib.reload(config)
 
 
-def test_the_chain_exposes_its_model_and_revision():
+def test_the_chain_exposes_its_model_and_identity():
     assert chain.MODEL_ID == chain.MODEL_ID.strip()
-    assert chain.CHAIN_REVISION.strip()
+    assert chain.CODE_REVISION.strip()
     # The record names the fields; the shape is asserted below against a real
     # record rather than against this tuple alone.
-    assert "chain_revision" in chain.RECORD_FIELDS
+    assert "code_revision" in chain.RECORD_FIELDS
     assert "model" in chain.RECORD_FIELDS
+
+
+def test_the_identity_comes_from_the_deployment():
+    # The deploy's own value wins, and Cloud Run's revision name is the fallback.
+    assert chain.resolve_code_revision({"CODE_REVISION": "abc1234"}) == "abc1234"
+    assert chain.resolve_code_revision(
+        {"K_REVISION": "agent-00032-7cv"}
+    ) == "agent-00032-7cv"
+    assert chain.resolve_code_revision(
+        {"CODE_REVISION": "abc1234", "K_REVISION": "agent-00032-7cv"}
+    ) == "abc1234"
+
+
+def test_a_run_that_is_not_a_deployment_says_so():
+    assert chain.resolve_code_revision({}) == "local"
+    assert chain.resolve_code_revision(
+        {"CODE_REVISION": "   ", "K_REVISION": ""}
+    ) == "local"
+
+
+def test_an_unexpanded_substitution_is_not_an_identity():
+    # A $COMMIT_SHA that a build never substituted must not be reported as the
+    # revision this answer came from — that is the failure this replaced.
+    assert chain.resolve_code_revision({"CODE_REVISION": "$COMMIT_SHA"}) == "local"
+    assert chain.resolve_code_revision(
+        {"CODE_REVISION": "$COMMIT_SHA", "K_REVISION": "agent-00032-7cv"}
+    ) == "agent-00032-7cv"
 
 
 # --- the record -------------------------------------------------------------
@@ -110,7 +137,7 @@ def test_the_record_carries_the_identity_and_the_steps(caplog):
             guardrail_flags=2,
         )
 
-    assert record["chain_revision"] == chain.CHAIN_REVISION
+    assert record["code_revision"] == chain.CODE_REVISION
     assert record["model"] == chain.MODEL_ID
     assert record["trace"] == "abc123"
     assert record["outcome"] == "ok"

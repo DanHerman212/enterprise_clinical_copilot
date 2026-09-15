@@ -44,6 +44,12 @@ def test_health_does_not_disclose_topology():
         assert leaked not in body
 
 
+def test_health_reports_which_code_is_running():
+    # The one field that is deliberately there: without it, "did my deploy land?"
+    # is answered by reading a revision list and guessing.
+    assert _client().get("/health").json()["code_revision"] == srv.chain.CODE_REVISION
+
+
 # --- /ask 502 (ECC-06) -------------------------------------------------------
 
 def test_ask_failure_returns_generic_body_with_correlation_id():

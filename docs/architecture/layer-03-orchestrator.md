@@ -329,7 +329,7 @@ the answer.
 | Prompt, chain, tools and model pin versioned as one artifact | Prompt, question templates, graph, tool wiring and model pin all live in `services/agent/`; the model is a constant in code rather than an environment default. Closed 2026-09-15. | **Yes** — the parts are one artifact with an identity (`chain.py`), and the question templates moved out of the website, so half the prompt can no longer ship without touching the chain |
 | Prompt-as-code classified and tested | The prompt is in version control and reviewed, and the behaviours it depends on are tested — but no test asserts its text | **Partly** |
 | Prompt-as-data classified (examples, retrieved context, drift) | Retrieved passages flow as tool results, but there is no separation of data-side prompt parts and no drift detection | **Partly** |
-| Every execution logs inputs, outputs, intermediate steps and chain config | One structured JSON line per execution, from both routes and on failure as well as success: revision, model, question length, the stages with their timings, tool names, guardrail flags, duration, outcome. Closed 2026-09-15 for what is emitted; where it is stored is the observability layer's decision. | **Partly** — the record exists and is emitted. The question and answer text is deliberately excluded because it is patient-derived, and the storage and query layer is deferred by decision |
+| Every execution logs inputs, outputs, intermediate steps and chain config | One structured JSON line per execution, from both routes and on failure as well as success: the code revision, model, question length, the stages with their timings, tool names, guardrail flags, duration, outcome. Closed 2026-09-15 for what is emitted; where it is stored is the observability layer's decision. | **Partly** — the record exists and is emitted. The question and answer text is deliberately excluded because it is patient-derived, and the storage and query layer is deferred by decision |
 | Step cap on the agent loop | Recursion limit 10 supersteps, 5 tool calls per turn, wall-clock timeout | **Yes** |
 | Single agent before multi-agent | One agent. No multi-agent structure to justify or remove | **Yes** |
 | Explicit exit condition on every loop | The loop exits when the model stops calling tools, and three independent caps bound it | **Yes** |
@@ -507,9 +507,10 @@ Three separable pieces. First, make the artifact one thing: move the question
 templates out of `demo/fixtures.py` and into the agent alongside the system
 prompt (Django would send the chip name and admission id; the agent would own
 the wording), and pin the model to a dated revision in code rather than an
-environment default. Second, give it an identity: a chain revision constant,
-bumped whenever prompt, templates, tool wiring or model change. Third, record
-it: one structured log line per execution carrying the revision, the model,
+environment default. Second, give it an identity: something that names the prompt,
+the templates, the tool wiring and the model together, so an answer can be
+attributed to a combination rather than to a codebase. Third, record
+it: one structured log line per execution carrying the identity, the model,
 the question length, the tool names called, the guardrail flags and the
 timings. That satisfies the intent of the requirement without building an
 observability platform, which belongs to the observability layer; the
@@ -518,7 +519,7 @@ open, because the third piece decides where this data finally lives — but the
 first two do not depend on it.
 Decision (2026-09-15): **all three steps, with storage deferred.** The question
 templates moved into the agent and the website now sends intent; the model is
-pinned in code; `chain.py` holds the revision; and every execution emits one
+pinned in code; `chain.py` holds the identity; and every execution emits one
 structured record.
 
 Deferring the storage is not the same as not recording, and the difference is
@@ -531,10 +532,13 @@ long it is kept.
 Two things the work turned up. The audit's "the model is an alias" was wrong:
 Google's lifecycle table lists `gemini-2.5-flash` as a versioned GA model with a
 release date, and it **retires 2026-10-20** — so the pin has an expiry and the
-migration is scheduled work rather than a surprise. And `CHAIN_REVISION` is
-maintained by hand, which the module docstring records as a weakness: nothing
-stops a prompt edit shipping without a bump. If that ever causes an
-unattributable answer, derive the revision from a digest of the four inputs.
+migration is scheduled work rather than a surprise. And the first version of the
+identity was maintained by hand — a revision constant a person had to remember to
+bump — which the module docstring recorded as a weakness. It was replaced the
+same day (7) with an identity resolved from the deployment, because a typed number
+is a claim about the code rather than a fact derived from it, and when it goes
+stale it does so silently: edit the prompt, forget the bump, and two different
+behaviours report the same revision for ever.
 
 ### 6.3 Conversation state (Gap 4)
 
@@ -615,7 +619,7 @@ closes, and a template-versus-data split is what gives it a boundary again.
 Two things the memory policy should start from, since they fall out of this:
 replay structure rather than text where possible — keep the guarded answer, the
 numbers and the citation references, and re-fetch passage text so it re-enters
-through the same wrapper — and carry `CHAIN_REVISION` (6.2) with each stored turn,
+through the same wrapper — and carry the code revision (6.2) with each stored turn,
 so a turn written under older guardrails is recognisable as such on replay.
 
 ### 6.5 Verification, residue and latency (Gaps 5, 6 and 7)
@@ -813,13 +817,26 @@ underneath the model. The model is a constant in code (`config.py` 94) instead o
 an environment default; an environment-overridable model is what made an answer
 unattributable in the first place.
 
-*An identity.* `chain.py` holds `MODEL_ID` and `CHAIN_REVISION` — the handle for
-one combination of prompt, templates, tool wiring and model. The revision is
-maintained by hand and the module says so; the fix, if it ever bites, is a digest
-over those four inputs.
+*An identity.* `chain.py` holds `MODEL_ID`, the model, and `CODE_REVISION`, the
+identity of the code that is running. The revision is resolved from the deployment
+rather than typed by hand: `CODE_REVISION` when the deploy supplies a commit,
+otherwise Cloud Run's own revision name, which every container carries and which
+maps to an image digest and a build, and otherwise the honest label `local` for a
+run that is not a deployment (`chain.py`, `resolve_code_revision`). An unexpanded
+value is treated as absent, so a `$COMMIT_SHA` a build never substituted cannot be
+reported as an identity.
+
+That replaces a hand-bumped constant, corrected the same day. The first version of
+this was `CHAIN_REVISION = "1"`, incremented by whoever edited the prompt — a claim
+about the code rather than a fact derived from it, and worse than a missing field
+when it goes stale, because it looks healthy: a *null* in a query is visibly
+absent, while a stale `1` silently merges two behaviours into one revision, which
+takes evaluation comparisons, per-version metrics and rollback with it. The
+deployment already produces an exact identifier for the prompt, the tool wiring and
+the model together, so the fix was to report that one instead of inventing one.
 
 *A record.* One structured JSON line per execution, from both routes and on
-failure as well as success, carrying revision, model, question length, the stages
+failure as well as success, carrying the code revision, model, question length, the stages
 with their timings, tool names, guardrail flags, duration and outcome. Verified
 in Cloud Logging on the first live call after deploy. The question and answer text
 are deliberately absent: they are patient-derived, and a log store is a different
@@ -997,11 +1014,11 @@ reported as unavailable instead of falling back to an earlier preamble.
 **Where does the prompt live, and how do you know what version produced a given answer?**
 All of it is in `services/agent/`, and the second half of that question is why it
 moved. The system prompt is in `prompts.py`, the question wording in
-`questions.py`, the wiring in `graph.py`, and the model pin and chain revision in
-`chain.py`. The website sends intent — a chip name and an admission — and never
+`questions.py`, the wiring in `graph.py`, and the model pin and the identity of the
+running code in `chain.py`. The website sends intent — a chip name and an admission — and never
 composes prompt text, because it used to, and a change to half the prompt could
 then ship without touching the chain or its review. As for "what produced this?":
-every execution writes one structured record carrying the revision, the model, the
+every execution writes one structured record carrying the code revision, the model, the
 stages with their timings, the tools called and the guardrail flags. That record is
 the first thing both an evaluation loop and an incident review reach for, which is
 why it was worth doing before the storage question was settled.

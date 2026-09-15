@@ -1,4 +1,4 @@
-"""The chain's identity: which model, which revision, and what each run did.
+"""The chain's identity: which model, which code, and what each run did.
 
 Google's requirement is that the prompt template, the chain definition, the tool
 wiring and the model pin are versioned *together* as one artifact, and that every
@@ -9,20 +9,25 @@ be read from rather than four.
   - `MODEL_ID` is the chain's model. Pinned in code (`services/mcp/config.py`),
     never read from the environment, because an environment default means a
     deploy can change the model with no commit anywhere.
-  - `CHAIN_REVISION` is the human-readable handle for one combination of prompt,
-    question templates, tool wiring and model.
+  - `CODE_REVISION` is the identity of the running code, taken from the
+    deployment rather than maintained by hand.
   - `record_execution()` emits one structured line per execution, success or
     failure.
 
-`CHAIN_REVISION` is maintained by hand, which is a real weakness: nothing stops
-someone editing the prompt and forgetting to bump it. It is what the layer 3
-document specifies, and the workaround is discipline plus review. If a bad answer
-is ever traced to a stale revision, derive the revision from a digest of the four
-inputs instead and the class of mistake disappears.
+The identity is deliberately *not* a version number typed by hand. An earlier
+version of this module carried a `CHAIN_REVISION = "1"` that whoever edited the
+prompt was expected to bump — a claim about the code rather than a fact derived
+from it, and one that fails silently: edit the prompt, forget the bump, and two
+different behaviours report the same revision for ever, so a bad answer can no
+longer be traced to the prompt that produced it. The deployment already produces
+an exact identifier for the prompt, the tool wiring and the model together, so
+that is what is reported here (`resolve_code_revision`).
 """
 
 import json
 import logging
+import os
+from collections.abc import Mapping
 
 from services.mcp.config import GEMINI_MODEL
 
@@ -32,16 +37,39 @@ logger = logging.getLogger(__name__)
 # place the string lives; this name is what the rest of the chain reads.
 MODEL_ID = GEMINI_MODEL
 
-# Bump when the prompt (`prompts.py`), the question templates (`questions.py`),
-# the tool wiring (`graph.py`) or the model changes. One value, one combination.
-CHAIN_REVISION = "1"
+
+def resolve_code_revision(env: Mapping[str, str] | None = None) -> str:
+    """The identifier of the code that is running.
+
+    Taken from the deployment rather than typed by hand, so it cannot go stale:
+
+      1. `CODE_REVISION` — set by whoever deploys, when they can supply the
+         commit they built from.
+      2. `K_REVISION` — Cloud Run's own revision name, which every Cloud Run
+         container carries, so a deploy that sets nothing is still identified.
+         A revision maps to an image digest, and the digest to a build.
+      3. `local` — an honest label for a run that is not a deployment.
+
+    An empty or unexpanded value counts as absent: a `$COMMIT_SHA` that never got
+    substituted is not an identity, and reporting it as one would be the same
+    class of mistake this replaced.
+    """
+    values = os.environ if env is None else env
+    for name in ("CODE_REVISION", "K_REVISION"):
+        value = (values.get(name) or "").strip()
+        if value and not value.startswith("$"):
+            return value
+    return "local"
+
+
+CODE_REVISION = resolve_code_revision()
 
 # The fields the record carries. Named here so a test can assert the shape
 # without duplicating the list.
 RECORD_FIELDS = (
     "event",
     "trace",
-    "chain_revision",
+    "code_revision",
     "model",
     "outcome",
     "question_chars",
@@ -63,7 +91,7 @@ def record_execution(
     guardrail_flags: int = 0,
     error: str | None = None,
     model: str = MODEL_ID,
-    revision: str = CHAIN_REVISION,
+    code_revision: str = CODE_REVISION,
 ) -> dict:
     """Log one execution as a single structured line, and return the record.
 
@@ -85,7 +113,7 @@ def record_execution(
     record = {
         "event": "agent_execution",
         "trace": trace,
-        "chain_revision": revision,
+        "code_revision": code_revision,
         "model": model,
         "outcome": outcome,
         "question_chars": len(question or ""),

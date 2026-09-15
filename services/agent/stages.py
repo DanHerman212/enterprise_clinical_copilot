@@ -16,7 +16,7 @@ This module exists to make that progress honest. Five rules:
    stage that is announced ahead of the work it describes.
 
 2. **A tool stage describes an action being taken, never a result.** "Searching
-   The Discharge Notes" is true whether the search returns passages or fails, so
+   the Discharge Notes" is true whether the search returns passages or fails, so
    it cannot mislead. Whether the answer is good is the terminal event's
    business — a failure is reported there, not by quietly dropping a stage.
    What a call *returned* is a separate stage (rule 5), so the action label
@@ -71,13 +71,23 @@ STAGES = (
 )
 
 # --- Labels ----------------------------------------------------------------
-# Title Case, every word. A test enforces it (`test_progress_stream.py`), because
-# these are the only strings a waiting user reads and the house style should not
-# depend on whoever typed the last label remembering it.
+# Title Case, with the usual exception: an article, a short conjunction or a short
+# preposition stays lowercase unless it opens the label — "Reading the Question",
+# not "Reading The Question". `SMALL_WORDS` is that rule, and a test enforces the
+# labels against it, because these are the only strings a waiting user reads and
+# the house style should not depend on whoever typed the last label remembering
+# it.
 
-LABEL_PLANNING = "Reading The Question"
-LABEL_REVIEWING = "Reviewing The Evidence"
-LABEL_VERIFYING = "Checking The Answer Against The Evidence"
+SMALL_WORDS = frozenset({
+    "a", "an", "the",
+    "and", "but", "or", "nor", "for",
+    "of", "to", "in", "on", "at", "by", "with", "from", "as",
+    "into", "onto", "over", "under", "via", "per",
+})
+
+LABEL_PLANNING = "Reading the Question"
+LABEL_REVIEWING = "Reviewing the Evidence"
+LABEL_VERIFYING = "Checking the Answer Against the Evidence"
 
 # The planning label varies with what was asked, when the caller said. A chip
 # name is not patient data and is not the question's wording, so it can name the
@@ -85,9 +95,9 @@ LABEL_VERIFYING = "Checking The Answer Against The Evidence"
 # no chip: its nature is only knowable by the model, and asking the model would
 # be the narration this decision does not take, so it gets the generic label.
 QUESTION_KIND_LABELS = {
-    "risk": "Reading The Risk Question",
-    "meds": "Reading The Medication Question",
-    "summarize": "Reading The Summary Request",
+    "risk": "Reading the Risk Question",
+    "meds": "Reading the Medication Question",
+    "summarize": "Reading the Summary Request",
 }
 
 # One label per tool the MCP server advertises (`services/mcp/server.py`).
@@ -95,24 +105,24 @@ QUESTION_KIND_LABELS = {
 # the call fails. A test walks the live tool list and fails if a tool is added
 # without a label here, which is what stops this table drifting into fiction.
 TOOL_LABELS = {
-    "predict_readmission": "Reading The Risk Model",
-    "rag_search": "Searching The Discharge Notes",
-    "rag_search_sections": "Reading The Note Sections",
+    "predict_readmission": "Reading the Risk Model",
+    "rag_search": "Searching the Discharge Notes",
+    "rag_search_sections": "Reading the Note Sections",
 }
 
 # Used when the MCP server advertises a tool this table has not been taught.
 # Deliberately vague AND still true: a tool is being consulted. The caller
 # never sees a name it cannot interpret, and the omission is logged (see
 # `graph._emit`) so it is fixed rather than silently rendered.
-LABEL_UNKNOWN_TOOL = "Consulting A Tool"
+LABEL_UNKNOWN_TOOL = "Consulting a Tool"
 
 # Result labels. Each reports the call's own output; the failure wording exists
 # so a tool that did not answer is never rendered as a count of zero, which
 # would say "nothing was found" when the truth is "nothing was asked".
 LABEL_RESULT_FAILED = "The Tool Did Not Respond"
-LABEL_RESULT_RISK = "Read The Risk Score"
-LABEL_RESULT_PASSAGES = "Read The Note Passages"
-LABEL_RESULT_SECTIONS = "Read The Note Sections"
+LABEL_RESULT_RISK = "Read the Risk Score"
+LABEL_RESULT_PASSAGES = "Read the Note Passages"
+LABEL_RESULT_SECTIONS = "Read the Note Sections"
 
 RESULT_LABELS = {
     "predict_readmission": LABEL_RESULT_RISK,

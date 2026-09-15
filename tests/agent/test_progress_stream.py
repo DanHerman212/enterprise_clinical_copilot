@@ -123,12 +123,13 @@ def test_an_unknown_tool_falls_back_to_a_true_generic_label():
     assert stages.tool_label("brand_new_tool") == stages.LABEL_UNKNOWN_TOOL
 
 
-def test_every_label_capitalises_every_word():
+def test_every_label_is_title_case():
     """House style, enforced rather than remembered.
 
-    These are the only strings a waiting user reads, and a set that mixes
-    sentence case with Title Case reads as a mistake rather than as a style.
-    A label added without following the rule should fail here, not in review.
+    Title Case with the usual exception: an article or a short conjunction or
+    preposition stays lowercase unless it opens the label. A set that mixes
+    sentence case with Title Case reads as a mistake rather than as a style, and
+    a label added without following the rule should fail here, not in review.
 
     Every offender is reported at once — a failure that names one word per run
     turns a five-second fix into five test runs.
@@ -150,15 +151,26 @@ def test_every_label_capitalises_every_word():
         stages.result_event("rag_search", {"returned": 3})["label"],
     })
 
+    def breaks_the_rule(index, word):
+        # A numeral has no case, so "Found 3 Note Passages" is the rule applied to
+        # a number rather than an exception to it.
+        if word[:1].isdigit():
+            return False
+        if index == 0:
+            return not word[:1].isupper()
+        if word.lower() in stages.SMALL_WORDS:
+            return word != word.lower()
+        return not word[:1].isupper()
+
     offenders = [
         f"{label!r} -> {word!r}"
         for label in labels
-        for word in label.split()
-        if not (word[:1].isupper() or word[:1].isdigit())
+        for index, word in enumerate(label.split())
+        if breaks_the_rule(index, word)
     ]
 
     assert not offenders, (
-        "every word of a stage label must start with a capital: "
+        "a stage label must be Title Case, with small words lowercase: "
         + ", ".join(offenders)
     )
 
@@ -421,7 +433,7 @@ def test_free_text_gets_the_generic_planning_label():
     asking the model is the narration this design does not take."""
     assert stages.planning_label(None) == stages.LABEL_PLANNING
     assert stages.planning_label("not_a_chip") == stages.LABEL_PLANNING
-    assert stages.planning_event("meds")["label"] == "Reading The Medication Question"
+    assert stages.planning_event("meds")["label"] == "Reading the Medication Question"
 
 
 def test_the_planning_label_follows_the_chip_in_the_request():
@@ -442,5 +454,5 @@ def test_the_planning_label_follows_the_chip_in_the_request():
     assert seen["kind"] == "meds"
     assert _frames(resp.text)[0] == (
         "planning",
-        {"stage": "planning", "label": "Reading The Medication Question"},
+        {"stage": "planning", "label": "Reading the Medication Question"},
     )

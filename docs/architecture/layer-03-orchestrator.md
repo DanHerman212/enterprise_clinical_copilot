@@ -505,94 +505,62 @@ Decision: _pending_.
 **Gap 1 closed 2026-09-15: progress streaming, option B.** The answer is still
 delivered whole; what streams is which step of the chain is running.
 
-*The agent.* `services/agent/stages.py` is new — the display labels and the
-closed set of stage values (`stages.py` 51). A stage is emitted where the work
-happens and nowhere else: `graph._emit` (`graph.py` 104) is called immediately
-before each tool call (`graph.py` 152) and immediately before each model call
-(`graph.py` 252). `ask()` takes an optional `on_event` callback (`graph.py` 279);
-with no listener the graph behaves exactly as it did before, which is what keeps
-`/ask` unchanged. `POST /ask/stream` (`http.py` 288) runs the same chain, relays
-the stages, then emits one terminal frame carrying the same object `/ask`
-returns — composed by the same `_compose_success` (`http.py` 117), so the two
-routes cannot drift into serving different answers. A keepalive comment frame
-goes out every 15 s (`http.py` 54) because a tool call may legitimately take 100 s
-and a silent connection that long is closed by an idle timeout.
+| Where | What changed |
+|---|---|
+| Agent | `services/agent/stages.py` is new: the closed set of stage values (`stages.py` 51) and the display labels. A stage is emitted where the work happens and nowhere else — `_emit` (`graph.py` 104) fires immediately before each tool call (`graph.py` 152) and each model call (`graph.py` 252). `ask()` takes an optional `on_event` (`graph.py` 279); with no listener the graph behaves as before, which is what leaves `/ask` intact. `POST /ask/stream` (`http.py` 288) runs the same chain, relays the stages, then emits one terminal frame carrying the same object `/ask` returns, composed by the same `_compose_success` (`http.py` 117), so the two routes cannot drift. A keepalive goes out every 15 s (`http.py` 54): a tool call may take 100 s, and a connection silent that long is closed by an idle timeout. |
+| Django | `ask_stream` (`agent_client.py` 199) reads the agent's stream and guarantees a terminal frame, so no caller waits for an answer that is not coming. `_stream_frames` (`views.py` 148) relays it as Server-Sent Events, claiming the quota before dispatch and refunding on the blocking path's exact conditions. The first frame is pulled before the response commits to streaming (`views.py` 319), so a failure before any frame is still an ordinary 502 with the blocking path's body. |
+| Browser | `demo_flow.js` reads the stream (`demo_flow.js` 615) and puts the stage label where "working" was (`demo_flow.js` 644). The answer body stays a placeholder until the guarded answer lands, so no path exists by which progress can be mistaken for the answer. The live label gets its own class at 0.82rem — against the 0.7rem small print it shares a slot with, under the 0.88rem answer body — because it is read at a glance by someone waiting. Three cache-bust versions were bumped and a test asserts them, so a stale asset cannot reach a browser. |
 
-*Django.* `demo/agent_client.py` `ask_stream` (`agent_client.py` 199) reads the
-agent's stream and guarantees a terminal frame, so no caller can be left waiting
-for an answer that is not coming. `demo/views.py` relays the frames as
-Server-Sent Events, claiming the quota before dispatch and refunding exactly as
-the blocking path does (`views.py` 148). The first frame is pulled before the
-response commits to being a stream (`views.py` 319), so a failure before any
-frame is still an ordinary 502 with the same body the blocking path returns.
+**Three bugs, and only one was visible offline.**
 
-*The browser.* `static/js/demo_flow.js` reads the stream (`demo_flow.js` 615) and
-puts the stage label where "working" was (`demo_flow.js` 644). The answer body
-stays a dotted placeholder until the guarded answer arrives, so there is no path
-by which progress text can be mistaken for the answer. The live label gets its
-own class (`turn-meta-live`) and a larger size than the small print it shares a
-slot with — 0.82rem against 0.7rem, still under the 0.88rem answer body — because
-it is read at a glance by someone who is waiting rather than skimmed afterwards.
-Changing the stylesheet and the module meant bumping their cache-bust versions
-(`demo_splitpane.css?v=8`, `demo_a2ui.js?v=13`, and the `demo_flow.js` import at
-`?v=19`), which a test asserts exactly so a stale asset cannot reach a browser.
-
-**Two bugs the live test found, both invisible to the offline tests.**
-
-1. **Django buffers a synchronous streaming iterator.** The first version relayed
-   frames with a sync generator. Under ASGI, `StreamingHttpResponse.__aiter__`
-   consumes a sync iterator with `sync_to_async(list)`, which materializes the
-   whole stream and sends it when the response ends. Measured on the live path:
-   every frame arrived at the same millisecond (9.963 s), which is
-   indistinguishable from not streaming at all. Django warns about exactly this
-   in the server log, naming the fix. The relay is now an async generator, which
-   is consumed part by part; the same measurement then showed frames at 1.1 s,
-   2.1 s, 3.3 s, 4.8 s, 6.7 s and 9.3 s.
-
-2. **The relay waited out a keepalive after the chain had finished.** The first
-   loop only noticed a finished chain between keepalives, so every answer was
-   delayed by up to 15 s — a progress stream that made the common case slower
-   than not streaming at all. A sentinel queued when the task completes
-   (`http.py` 271) ends the loop the moment the work does. The offline suite went
-   from 17.7 s to 2.7 s when this was fixed, which is the size of the stall.
-
-A third problem was caught by the test suite rather than by the live run: the
-async relay runs on the event loop, where Django refuses synchronous database
-access, so the quota calls hop to a worker thread (`views.py` 133). Without that
-the streamed path would have raised `SynchronousOnlyOperation`.
+1. **Django buffers a synchronous streaming iterator.** The first relay used a
+   sync generator; under ASGI, `StreamingHttpResponse.__aiter__` consumes one with
+   `sync_to_async(list)`, which materializes the whole stream and sends it when
+   the response ends. Measured live, every frame arrived at the same millisecond
+   (9.963 s) — indistinguishable from not streaming at all. Django logs a warning
+   naming the fix. As an async generator, the same measurement gave frames at
+   1.1, 2.1, 3.3, 4.8, 6.7 and 9.3 s.
+2. **The relay waited out a keepalive after the chain had finished**, delaying
+   every answer by up to 15 s — a progress stream slower than no stream at all. A
+   sentinel queued when the task completes (`http.py` 271) ends the loop with the
+   work. The offline suite went from 17.7 s to 2.7 s, which is the size of the
+   stall.
+3. **The async relay runs on the event loop**, where Django refuses synchronous
+   database access, so the quota calls hop to a worker thread (`views.py` 133).
+   Unfixed, the streamed path would have raised `SynchronousOnlyOperation` in
+   production. Caught by the test suite rather than by the live run.
 
 **Live verification.** Both tool endpoints were deployed for this
 (`readmission-endpoint`, `readmission-rag-index`). In the browser at
 `/demo/a2ui/`, a risk question showed *Reading The Question* at 1.1 s, *Reading
 The Risk Model* at 2.4 s, *Reviewing The Evidence* at 3.3 s, *Searching The
-Discharge Notes* at 4.3 s, *Reviewing The Evidence* at 5.4 s, then the answer at
-9.1 s — a real probability of 0.250531 above the 0.11 threshold, five attributed
-factors, and a citation resolving to a real note section. No console errors.
-`/ask` still returns its full eight-field contract live (HTTP 200).
+Discharge Notes* at 4.3 s, *Reviewing The Evidence* again at 5.4 s (the loop ran
+twice), then the answer at 9.1 s: a real probability of 0.250531 above the 0.11
+threshold, five attributed factors, a citation resolving to a real note section,
+and no console errors. `/ask` still returns its full eight-field contract
+(HTTP 200).
 
-**Latency now has a number, and it is not the model.** A cold streamed call took
-about 22 s to reach its first stage; a warm one reached it in about 1.1 s. The
-22 s is the per-request rebuild the audit flagged as unmeasured — a fresh graph,
-a fresh MCP session and a fresh tool listing on every request, plus container and
-MCP cold starts with `min-instances 0`. A warm blocking call measured 11.3 s end
-to end. So the wait before anything is shown is dominated by per-request setup,
-not by the model or the tools, which is the opposite of where the intuition
-points and the first thing worth attacking.
+**Latency now has a number, and it is not the model.** A cold streamed call
+reached its first stage in about 22 s, a warm one in about 1.1 s, and a warm
+blocking call took 11.3 s end to end. The 22 s is the per-request rebuild the
+audit flagged as unmeasured — a fresh graph, a fresh MCP session and a fresh tool
+listing, plus cold starts at `min-instances 0`. So what dominates the wait before
+anything is shown is that setup, not the model or the tools, which is the
+opposite of where intuition points.
 
-**One setting outside this layer changed.** The load balancer's backend service
-had no `timeout_sec`, so it took the 30 s default — shorter than the 110 s chain
-deadline and the 120 s Django wait, and short enough to truncate a streamed
-answer with no error at all. It is now 300 s, so the load balancer is the last
-layer to give up rather than the first. That is an edge-layer setting
-(`danielmherman/infra/edge/edge.tf`), recorded here because this layer is where
-the symptom would have shown up.
+**One setting outside this layer.** The load balancer's backend service had no
+`timeout_sec`, so it took the 30 s default — shorter than the 110 s chain deadline
+and the 120 s Django wait, and short enough to truncate a streamed answer with no
+error at all. It is now 300 s, making the load balancer the last layer to give up.
+That is an edge-layer setting (`danielmherman/infra/edge/edge.tf`), recorded here
+because this is where the symptom would have appeared.
 
-**Tests.** Agent: 13 new in `tests/agent/test_progress_stream.py`, including a
-regression test for the keepalive stall; 253 pass, with the same 10 pre-existing
-errors from live-model tests that need cloud credentials this machine does not
-have. Django: 10 new in `demo/tests.py`, including one that asserts the response
-is an async iterator, because that is the only offline proof that Django will not
-buffer it; 94 pass.
+**Tests.** Agent: 14 new in `tests/agent/test_progress_stream.py`, including the
+keepalive-stall regression and the label-casing rule; 254 pass, with the same 10
+pre-existing errors from live-model tests that need credentials this machine does
+not have. Django: 10 new in `demo/tests.py`, one of which asserts the response is
+an async iterator — the only offline proof that Django will not buffer it; 94
+pass.
 
 ---
 

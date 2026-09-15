@@ -47,10 +47,11 @@ from langgraph.graph import END, START, StateGraph
 
 from services.mcp.config import (
     GEMINI_MAX_OUTPUT_TOKENS,
-    GEMINI_MODEL,
     LOCATION,
     PROJECT,
 )
+
+from services.agent.chain import MODEL_ID
 
 from services.agent.mcp_client import MCPToolbox, _clean_schema
 from services.agent.contracts import RecordedToolCall, validate_recorded_tool_call
@@ -228,7 +229,7 @@ def _tools(toolbox: MCPToolbox) -> list[BaseTool]:
 
 def build_graph(
     toolbox: MCPToolbox,
-    model: str = GEMINI_MODEL,
+    model: str = MODEL_ID,
     on_event: Callable[[dict[str, Any]], None] | None = None,
 ):
     """Compile the graph. `on_event` receives progress stages; None disables them.
@@ -279,7 +280,7 @@ def build_graph(
 async def ask(
     toolbox: MCPToolbox,
     question: str,
-    model: str = GEMINI_MODEL,
+    model: str = MODEL_ID,
     name: str | None = None,
     tags: list[str] | None = None,
     on_event: Callable[[dict[str, Any]], None] | None = None,

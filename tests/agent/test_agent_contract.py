@@ -9,10 +9,98 @@ from services.agent.contracts import (
 )
 
 
-def test_parse_agent_request_returns_the_validated_question():
+def test_parse_agent_request_canonicalises_the_question():
+    """The question is composed here now, so surrounding whitespace is stripped.
+
+    It used to pass through verbatim because the *caller* composed it and had
+    already stripped it. Now that the agent owns the wording, the agent decides
+    what the canonical question is — otherwise stray whitespace becomes part of
+    the prompt.
+    """
     assert parse_agent_request(
         {"question": " assess risk "}, max_question_chars=20
-    ) == {"question": " assess risk "}
+    ) == {"question": "assess risk"}
+
+
+# The wording moved here from the website (layer 3, chain artifact), so these
+# assert parity with the strings `demo/views.py::_question_for` used to build.
+# If these literals need changing, the prompt changed — which moves answers, and
+# is not something a refactor should do quietly.
+
+def test_a_chip_and_admission_compose_what_the_website_used_to_build():
+    assert parse_agent_request(
+        {"chip": "risk", "hadm_id": 90000009}, max_question_chars=2000
+    ) == {"question": (
+        "Assess the 30-day readmission risk for this patient. "
+        "For admission 90000009."
+    )}
+
+
+def test_free_text_with_an_admission_gets_the_same_suffix_the_website_added():
+    assert parse_agent_request(
+        {"question": "Why was this patient flagged?", "hadm_id": 90000009},
+        max_question_chars=2000,
+    ) == {"question": (
+        "Why was this patient flagged? For admission 90000009."
+    )}
+
+
+def test_an_admission_alone_asks_the_default_question():
+    """A patient selected with no chip and no text is still a question.
+
+    Deliberately a different phrase from the risk chip plus an admission — the
+    website had both, and both are preserved so moving the strings could not
+    change what the model is asked.
+    """
+    assert parse_agent_request(
+        {"hadm_id": 90000009}, max_question_chars=2000
+    ) == {"question": (
+        "Assess the 30-day readmission risk for admission 90000009."
+    )}
+
+
+def test_the_admission_is_not_appended_twice():
+    composed = parse_agent_request(
+        {"chip": "meds", "hadm_id": 7}, max_question_chars=2000
+    )["question"]
+    assert composed.count("For admission 7.") == 1
+
+
+def test_an_unknown_chip_is_refused_with_its_own_code():
+    with pytest.raises(AgentRequestError) as error:
+        parse_agent_request({"chip": "bogus", "hadm_id": 7}, max_question_chars=2000)
+
+    assert error.value.code == "unknown_chip"
+    assert error.value.status_code == 400
+
+
+@pytest.mark.parametrize("hadm_id", [0, -1, "9", 1.5, True])
+def test_an_invalid_admission_is_refused(hadm_id):
+    """True is in this list on purpose: bool is an int, so without an explicit
+    check it would compose a question about admission 1."""
+    with pytest.raises(AgentRequestError) as error:
+        parse_agent_request(
+            {"chip": "risk", "hadm_id": hadm_id}, max_question_chars=2000
+        )
+
+    assert error.value.code == "invalid_request"
+    assert error.value.status_code == 400
+
+
+def test_a_composed_question_over_the_limit_is_refused():
+    """The limit applies to the question the model is asked, not to the parts.
+
+    The suffix is appended before the check, so a free-text question that only
+    fits without it is still refused — which is what the old shape did, since
+    the caller's composed string was what arrived here.
+    """
+    with pytest.raises(AgentRequestError) as error:
+        parse_agent_request(
+            {"question": "x" * 10, "hadm_id": 90000009}, max_question_chars=20
+        )
+
+    assert error.value.code == "question_too_long"
+    assert error.value.status_code == 413
 
 
 @pytest.mark.parametrize("body", [None, [], "question", {"question": ""}])

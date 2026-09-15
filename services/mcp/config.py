@@ -80,7 +80,18 @@ DEFAULT_TOP_K = positive_int_env("RAG_TOP_K", 5)
 
 # Gemini. Verified reachable from us-east1 on 2026-07-30, so the agent stays
 # co-located with the prediction endpoint; "global" is the fallback, not the default.
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+#
+# PINNED, not read from the environment: an environment default lets a deploy
+# change the model the chain uses with no commit anywhere, which is exactly what
+# makes an answer unreproducible. Changing the model is now a reviewed change,
+# and `services/agent/chain.CHAIN_REVISION` moves with it.
+#
+# `gemini-2.5-flash` is a versioned GA model rather than a moving alias —
+# released 2025-06-17. Per Google's model lifecycle table it RETIRES 2026-10-20,
+# with Gemini 3.5 Flash-Lite or Gemini 3.1 Flash-Lite named as the replacements.
+# The pin therefore has an expiry: the migration is scheduled work, not a
+# surprise when calls start failing.
+GEMINI_MODEL = "gemini-2.5-flash"
 
 # 2.5 models are thinking models and this budget covers thinking AND the answer.
 # Too small and the whole budget is spent on thoughts: the call returns 200 with

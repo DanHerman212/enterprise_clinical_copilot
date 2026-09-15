@@ -14,14 +14,16 @@ import asyncio
 import json
 import logging
 import os
+import time
 import uuid
+from typing import Callable
 
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
-from services.agent import stages
+from services.agent import chain, stages
 from services.agent.a2ui import compose_presentation
 from services.agent.contracts import (
     AgentRequestError,
@@ -32,7 +34,6 @@ from services.agent.contracts import (
 from services.agent.graph import ask, final_text
 from services.agent.guardrail import guard_answer
 from services.agent.mcp_client import MCP_TRANSPORT, toolbox
-from services.mcp.config import GEMINI_MODEL
 from services.mcp.runtime import requires_cloud_run_auth, timeout_chain
 
 logger = logging.getLogger(__name__)
@@ -155,7 +156,7 @@ def _compose_success(question: str, state: dict, trace: str) -> dict:
         "tool_calls": trimmed_calls,
         "a2ui": presentation["a2ui"],
         "sources": presentation["sources"],
-        "model": GEMINI_MODEL,
+        "model": chain.MODEL_ID,
         "mcp_transport": MCP_TRANSPORT,
     }
     try:
@@ -164,11 +165,47 @@ def _compose_success(question: str, state: dict, trace: str) -> dict:
         logger.error("agent produced a payload outside its success contract trace=%s", trace)
         raise AgentAnswerUnavailable("The agent did not produce an answer. Please retry.")
 
-    logger.info(
-        "agent answered trace=%s tools=%d flags=%d",
-        trace, len(trimmed_calls), len(guarded["flags"]),
-    )
     return payload
+
+
+class _StageLog:
+    """Collects the stages a chain run emitted, and when each one started.
+
+    Both routes need the same timing data for the execution record, so it is
+    gathered once. `/ask` uses this for the record only; `/ask/stream` passes a
+    sink as well, so the same events are also relayed to the caller. That is what
+    keeps "what the user saw" and "what was recorded" the same list rather than
+    two lists that agree today.
+    """
+
+    def __init__(self, sink: Callable[[dict], None] | None = None):
+        self.stages: list[dict] = []
+        self._sink = sink
+        self._started = time.monotonic()
+
+    def __call__(self, event: dict) -> None:
+        self.stages.append({
+            "stage": event["stage"],
+            "tool": event.get("tool"),
+            "ms": self.duration_ms,
+        })
+        if self._sink is not None:
+            self._sink(event)
+
+    @property
+    def duration_ms(self) -> int:
+        return int((time.monotonic() - self._started) * 1000)
+
+    def record(self, trace: str, question: str, outcome: str, **kwargs) -> dict:
+        """Emit the one record for this execution."""
+        return chain.record_execution(
+            trace=trace,
+            question=question,
+            stages=self.stages,
+            duration_ms=self.duration_ms,
+            outcome=outcome,
+            **kwargs,
+        )
 
 
 async def _run_chain(question: str, on_event=None) -> dict:
@@ -195,7 +232,7 @@ async def health(request: Request) -> JSONResponse:
     return JSONResponse(
         {
             "status": "ok",
-            "model": GEMINI_MODEL,
+            "model": chain.MODEL_ID,
             "mcp_transport": MCP_TRANSPORT,
         }
     )
@@ -210,10 +247,14 @@ async def ask_route(request: Request) -> JSONResponse:
     if error is not None:
         return error
 
+    # Input validation is settled: from here the chain runs, and every exit below
+    # emits exactly one execution record.
+    log = _StageLog()
     try:
-        state = await _run_chain(question)
+        state = await _run_chain(question, on_event=log)
     except TimeoutError:
         logger.error("agent /ask timed out after %.0fs trace=%s", ASK_TIMEOUT_SECONDS, trace)
+        log.record(trace, question, "timeout", error="timeout")
         return JSONResponse(
             {"error": "timeout",
              "message": f"The agent did not answer within {ASK_TIMEOUT_SECONDS:.0f}s."},
@@ -234,6 +275,7 @@ async def ask_route(request: Request) -> JSONResponse:
         # gets a stable code + correlation id that pairs with the log line.
         correlation_id = uuid.uuid4().hex[:12]
         logger.error("agent /ask failed [%s] trace=%s", correlation_id, trace, exc_info=cause)
+        log.record(trace, question, "error", error="agent_failed")
         return JSONResponse(
             {"error": "agent_failed",
              "message": "The agent failed to answer. Please retry.",
@@ -244,10 +286,16 @@ async def ask_route(request: Request) -> JSONResponse:
     try:
         payload = _compose_success(question, state, trace)
     except AgentAnswerUnavailable as exc:
+        log.record(trace, question, "error", error="answer_unavailable")
         return JSONResponse(
             {"error": "answer_unavailable", "message": str(exc)},
             status_code=502,
         )
+    log.record(
+        trace, question, "ok",
+        tool_calls=[call["name"] for call in payload["tool_calls"]],
+        guardrail_flags=len(payload["guardrail_flags"]),
+    )
     return JSONResponse(payload)
 
 
@@ -325,10 +373,10 @@ async def _stream_chain(question: str, trace: str):
     """
     queue: asyncio.Queue = asyncio.Queue()
 
-    def on_event(event: dict) -> None:
-        queue.put_nowait(event)
-
-    task = asyncio.create_task(_run_chain(question, on_event=on_event))
+    # The events the caller sees are also the record of what ran: the sink relays
+    # them, the log timestamps them.
+    log = _StageLog(sink=queue.put_nowait)
+    task = asyncio.create_task(_run_chain(question, on_event=log))
 
     def _finished(finished: asyncio.Task) -> None:
         # Reading the exception marks it retrieved: it is logged where it
@@ -368,6 +416,7 @@ async def _stream_chain(question: str, trace: str):
                 "agent /ask/stream timed out after %.0fs trace=%s",
                 ASK_TIMEOUT_SECONDS, trace,
             )
+            log.record(trace, question, "timeout", error="timeout")
             yield _error_frame(
                 "timeout",
                 f"The agent did not answer within {ASK_TIMEOUT_SECONDS:.0f}s.",
@@ -385,6 +434,7 @@ async def _stream_chain(question: str, trace: str):
             logger.error(
                 "agent /ask/stream failed [%s] trace=%s", correlation_id, trace, exc_info=cause
             )
+            log.record(trace, question, "error", error="agent_failed")
             yield _error_frame(
                 "agent_failed", "The agent failed to answer. Please retry.", correlation_id
             )
@@ -397,9 +447,15 @@ async def _stream_chain(question: str, trace: str):
         try:
             payload = _compose_success(question, state, trace)
         except AgentAnswerUnavailable as exc:
+            log.record(trace, question, "error", error="answer_unavailable")
             yield _error_frame("answer_unavailable", str(exc))
             return
 
+        log.record(
+            trace, question, "ok",
+            tool_calls=[call["name"] for call in payload["tool_calls"]],
+            guardrail_flags=len(payload["guardrail_flags"]),
+        )
         yield _sse(stages.STAGE_ANSWER, payload)
     finally:
         # Reached when the caller disconnects (Starlette closes the generator)

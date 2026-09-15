@@ -15,10 +15,11 @@
 substitutions:
   _REGION: us-east1
   # A default, so a push trigger can run this with no substitutions passed. The
-  # usage above still works: `gcloud builds submit --substitutions _IMAGE=...`
-  # overrides it. `$PROJECT_ID` is a built-in, so the name stays correct if this
-  # is ever run against another project.
-  _IMAGE: us-east1-docker.pkg.dev/$PROJECT_ID/readmission/agent:latest
+  # usage above still works: --substitutions overrides it. It has to be the
+  # literal project id, because Cloud Build does not expand built-ins inside a
+  # user substitution default - `$PROJECT_ID` here becomes the literal string and
+  # the build fails with `invalid image name ".../$PROJECT_ID/..."`. Verified.
+  _IMAGE: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/agent:latest
 
 # Dedicated build service account (ECC-58): builds must not run as the project
 # default SA. cicd-deployer needs roles/run.admin, roles/iam.serviceAccountUser

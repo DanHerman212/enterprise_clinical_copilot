@@ -86,23 +86,21 @@ def _trace(request: Request) -> str:
     return request.headers.get("x-cloud-trace-context", "").split("/", 1)[0] or "-"
 
 
-async def _question_or_error(request: Request) -> tuple[str, JSONResponse | None]:
-    """The validated question, or the response that should be returned instead."""
+async def _question_or_error(request: Request) -> tuple[str, str | None, JSONResponse | None]:
+    """The validated question and its kind, or the response to return instead."""
     try:
         body = await request.json()
     except Exception:
-        return "", JSONResponse({"error": "invalid_json"}, status_code=400)
+        return "", None, JSONResponse({"error": "invalid_json"}, status_code=400)
 
     try:
-        question = parse_agent_request(
-            body, max_question_chars=MAX_QUESTION_CHARS
-        )["question"]
+        parsed = parse_agent_request(body, max_question_chars=MAX_QUESTION_CHARS)
     except AgentRequestError as exc:
-        return "", JSONResponse(
+        return "", None, JSONResponse(
             {"error": exc.code, "message": exc.message},
             status_code=exc.status_code,
         )
-    return question, None
+    return parsed["question"], parsed["kind"], None
 
 
 class AgentAnswerUnavailable(Exception):
@@ -184,6 +182,9 @@ class _StageLog:
         self._started = time.monotonic()
 
     def __call__(self, event: dict) -> None:
+        # Only the stage, its tool and its timing are recorded. A result stage's
+        # payload — a count, a failure — is deliberately not: the wire carries
+        # what a waiting user needs, and the record stays as narrow as it was.
         self.stages.append({
             "stage": event["stage"],
             "tool": event.get("tool"),
@@ -208,7 +209,9 @@ class _StageLog:
         )
 
 
-async def _run_chain(question: str, on_event=None) -> dict:
+async def _run_chain(
+    question: str, question_kind: str | None = None, on_event=None
+) -> dict:
     """Run the graph under the wall-clock deadline, inside one MCP session.
 
     Extracted because both routes need the identical bound: the deadline is a
@@ -217,7 +220,9 @@ async def _run_chain(question: str, on_event=None) -> dict:
     """
     async with asyncio.timeout(ASK_TIMEOUT_SECONDS):
         async with toolbox() as box:
-            return await ask(box, question, on_event=on_event)
+            return await ask(
+                box, question, question_kind=question_kind, on_event=on_event
+            )
 
 
 async def health(request: Request) -> JSONResponse:
@@ -243,7 +248,7 @@ async def ask_route(request: Request) -> JSONResponse:
     if error is not None:
         return error
     trace = _trace(request)
-    question, error = await _question_or_error(request)
+    question, question_kind, error = await _question_or_error(request)
     if error is not None:
         return error
 
@@ -251,7 +256,7 @@ async def ask_route(request: Request) -> JSONResponse:
     # emits exactly one execution record.
     log = _StageLog()
     try:
-        state = await _run_chain(question, on_event=log)
+        state = await _run_chain(question, question_kind, on_event=log)
     except TimeoutError:
         logger.error("agent /ask timed out after %.0fs trace=%s", ASK_TIMEOUT_SECONDS, trace)
         log.record(trace, question, "timeout", error="timeout")
@@ -345,12 +350,12 @@ async def ask_stream_route(request: Request) -> Response:
     if error is not None:
         return error
     trace = _trace(request)
-    question, error = await _question_or_error(request)
+    question, question_kind, error = await _question_or_error(request)
     if error is not None:
         return error
 
     return StreamingResponse(
-        _stream_chain(question, trace),
+        _stream_chain(question, trace, question_kind),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -363,7 +368,7 @@ async def ask_stream_route(request: Request) -> Response:
     )
 
 
-async def _stream_chain(question: str, trace: str):
+async def _stream_chain(question: str, trace: str, question_kind: str | None = None):
     """Yield stage frames as they happen, then exactly one terminal frame.
 
     Nothing is composed here. The stages come from the chain (`graph._emit`) at
@@ -376,7 +381,7 @@ async def _stream_chain(question: str, trace: str):
     # The events the caller sees are also the record of what ran: the sink relays
     # them, the log timestamps them.
     log = _StageLog(sink=queue.put_nowait)
-    task = asyncio.create_task(_run_chain(question, on_event=log))
+    task = asyncio.create_task(_run_chain(question, question_kind, on_event=log))
 
     def _finished(finished: asyncio.Task) -> None:
         # Reading the exception marks it retrieved: it is logged where it

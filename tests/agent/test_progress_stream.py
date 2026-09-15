@@ -94,7 +94,7 @@ def _state():
 def test_the_stage_vocabulary_is_closed():
     """A client switches on these values, so the set is part of the contract."""
     assert set(stages.STAGES) == {
-        "planning", "reviewing", "tool", "verify", "answer", "error",
+        "planning", "reviewing", "tool", "result", "verify", "answer", "error",
     }
 
 
@@ -132,20 +132,29 @@ def test_every_label_capitalises_every_word():
 
     Every offender is reported at once — a failure that names one word per run
     turns a five-second fix into five test runs.
+
+    A numeral has no case, so a word beginning with a digit is accepted: the
+    count labels are built at runtime, and "Found 3 Note Passages" is the rule
+    applied to a number.
     """
     labels = sorted({
         stages.LABEL_PLANNING,
         stages.LABEL_REVIEWING,
         stages.LABEL_VERIFYING,
         stages.LABEL_UNKNOWN_TOOL,
+        stages.LABEL_RESULT_FAILED,
         *stages.TOOL_LABELS.values(),
+        *stages.QUESTION_KIND_LABELS.values(),
+        *stages.RESULT_LABELS.values(),
+        # Built at runtime, so a sample stands in for the form.
+        stages.result_event("rag_search", {"returned": 3})["label"],
     })
 
     offenders = [
         f"{label!r} -> {word!r}"
         for label in labels
         for word in label.split()
-        if not word[:1].isupper()
+        if not (word[:1].isupper() or word[:1].isdigit())
     ]
 
     assert not offenders, (
@@ -166,12 +175,16 @@ def test_a_stage_is_announced_for_each_executed_tool_call():
 
     _run(_execute_tool_calls(box, calls, events.append))
 
-    assert [e["stage"] for e in events] == [stages.STAGE_TOOL, stages.STAGE_TOOL]
-    assert [e["label"] for e in events] == [
+    # A tool stage and then its result, per executed call.
+    assert [e["stage"] for e in events] == [
+        stages.STAGE_TOOL, stages.STAGE_RESULT,
+        stages.STAGE_TOOL, stages.STAGE_RESULT,
+    ]
+    assert [e["label"] for e in events][0::2] == [
         stages.TOOL_LABELS["predict_readmission"],
         stages.TOOL_LABELS["rag_search"],
     ]
-    assert [e["tool"] for e in events] == ["predict_readmission", "rag_search"]
+    assert [e["tool"] for e in events][0::2] == ["predict_readmission", "rag_search"]
 
 
 def test_a_refused_call_announces_nothing():
@@ -186,7 +199,9 @@ def test_a_refused_call_announces_nothing():
 
     _run(_execute_tool_calls(box, calls, events.append))
 
-    assert len(events) == MAX_TOOL_CALLS_PER_TURN
+    # Two events per executed call — the tool stage and its result — and the
+    # refused call contributes none of either.
+    assert len(events) == MAX_TOOL_CALLS_PER_TURN * 2
     assert len(box.calls) == MAX_TOOL_CALLS_PER_TURN
 
 
@@ -224,7 +239,7 @@ def test_a_failing_listener_does_not_take_the_answer_down():
 # --- the streaming route ----------------------------------------------------
 
 def test_stream_sends_stages_then_one_answer_frame():
-    async def fake_ask(box, question, on_event=None):
+    async def fake_ask(box, question, on_event=None, question_kind=None):
         on_event(stages.planning_event())
         on_event(stages.tool_event("rag_search"))
         return _state()
@@ -259,7 +274,7 @@ def test_the_answer_does_not_wait_for_a_keepalive_after_the_chain_finishes():
     streaming at all. The timer here is the test: if the loop regresses, this
     takes a keepalive interval instead of milliseconds.
     """
-    async def fake_ask(box, question, on_event=None):
+    async def fake_ask(box, question, on_event=None, question_kind=None):
         on_event(stages.planning_event())
         return _state()
 
@@ -301,7 +316,7 @@ def test_stream_reports_a_mid_stream_failure_as_a_terminal_event():
     """Once the first byte is out the status code is spent, so a failure that
     happens after that arrives as an error frame carrying the same code and
     correlation id the single-response route would have put in its body."""
-    async def boom(box, question, on_event=None):
+    async def boom(box, question, on_event=None, question_kind=None):
         on_event(stages.tool_event("rag_search"))
         raise RuntimeError("https://secret-mcp-url/ask audience=projects/12345")
 
@@ -325,7 +340,7 @@ def test_stream_refuses_to_ship_an_empty_answer():
     """The MAX_TOKENS failure raises nothing, so it is caught downstream: the
     final turn is empty and the caller gets answer_unavailable, not a blank
     frame that looks like a real answer."""
-    async def empty_final_turn(box, question, on_event=None):
+    async def empty_final_turn(box, question, on_event=None, question_kind=None):
         state = _state()
         state["messages"] = [AIMessage(content="")]
         return state
@@ -338,3 +353,94 @@ def test_stream_refuses_to_ship_an_empty_answer():
     assert [name for name, _ in frames] == ["verify", "error"]
     assert frames[-1][1]["error"] == "answer_unavailable"
     assert not any(name == "answer" for name, _ in frames)
+
+
+# --- result stages and request-derived planning labels -----------------------
+
+class _PayloadToolbox:
+    """Returns one canned payload, so a result label can be asserted."""
+
+    def __init__(self, payload):
+        self.payload = payload
+
+    async def call(self, name, args):
+        return self.payload
+
+
+def _events_after_one_call(name, payload, on_event=None):
+    events = []
+    _run(_execute_tool_calls(
+        _PayloadToolbox(payload), [{"name": name, "args": {}, "id": "1"}],
+        events.append if on_event is None else on_event,
+    ))
+    return events
+
+
+def test_a_result_stage_reports_the_count_the_call_returned():
+    events = _events_after_one_call("rag_search", {"returned": 3, "passages": []})
+    assert [e["stage"] for e in events] == [stages.STAGE_TOOL, stages.STAGE_RESULT]
+    assert events[1]["label"] == "Found 3 Note Passages"
+
+
+def test_a_result_stage_never_carries_a_clinical_value():
+    """What 6.1 declined was showing a number before the guardrails had run.
+
+    The tool's probability is the number the guarded answer will state, so
+    putting it on the progress line ahead of the answer is that disclosure. The
+    count of passages retrieved is not, and is the reason this event exists.
+    """
+    events = _events_after_one_call(
+        "predict_readmission",
+        {"probability": 0.085608, "threshold": 0.11, "top_factors": []},
+    )
+    result = events[1]
+    assert result["label"] == stages.LABEL_RESULT_RISK
+    encoded = json.dumps(result)
+    assert "0.085608" not in encoded
+    assert "threshold" not in encoded
+
+
+def test_a_failed_call_says_so_rather_than_reporting_zero():
+    """A tool that did not answer must not read as "found nothing"."""
+    events = _events_after_one_call("rag_search", {"error": "search_failed"})
+    assert events[1]["label"] == stages.LABEL_RESULT_FAILED
+    assert events[1]["ok"] is False
+
+
+def test_every_chip_has_a_planning_label():
+    """The planning label cannot drift behind the chip set, the way the tool
+    labels cannot drift behind the tool set."""
+    from services.agent.questions import CHIP_QUESTIONS
+
+    missing = [c for c in CHIP_QUESTIONS if c not in stages.QUESTION_KIND_LABELS]
+    assert not missing, f"chips with no planning label: {missing}"
+
+
+def test_free_text_gets_the_generic_planning_label():
+    """What a free-text question is *about* is only knowable by the model, and
+    asking the model is the narration this design does not take."""
+    assert stages.planning_label(None) == stages.LABEL_PLANNING
+    assert stages.planning_label("not_a_chip") == stages.LABEL_PLANNING
+    assert stages.planning_event("meds")["label"] == "Reading The Medication Question"
+
+
+def test_the_planning_label_follows_the_chip_in_the_request():
+    """The chip survives from the request contract to the first progress frame."""
+    seen = {}
+
+    async def capture(box, question, on_event=None, question_kind=None):
+        seen["kind"] = question_kind
+        on_event(stages.planning_event(question_kind))
+        return _state()
+
+    with patch.object(srv, "toolbox", _fake_toolbox), \
+         patch.object(srv, "ask", capture):
+        resp = _client().post(
+            "/ask/stream", json={"chip": "meds", "hadm_id": 90000009}
+        )
+
+    assert seen["kind"] == "meds"
+    assert _frames(resp.text)[0] == (
+        "planning",
+        {"stage": "planning", "label": "Reading The Medication Question"},
+    )

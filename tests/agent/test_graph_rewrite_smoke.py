@@ -1,7 +1,7 @@
 """Verify the rewritten LangChain-native graph.py without calling Vertex.
 
-Checks: llm construction, BaseTool wrapping, tool _arun call-through, and the
-no-op handler path. Run from services with the harness venv.
+Checks: llm construction, BaseTool wrapping, and tool _arun call-through. Run
+from services with the harness venv.
 """
 import asyncio
 import sys
@@ -9,10 +9,8 @@ import sys
 sys.path.insert(0, ".")
 
 from services.agent.graph import (
-    LANGFUSE_ENABLED,
     _MCPTool,
     _build_llm,
-    _make_handler,
     _tools,
     final_text,
 )
@@ -47,13 +45,7 @@ async def main() -> None:
     print("tool _arun result:", res)
     assert res["name"] == "rag_search" and res["args"] == {"hadm_id": 1, "query": "x"}
 
-    # 4. No-op handler when Langfuse disabled
-    print("LANGFUSE_ENABLED:", LANGFUSE_ENABLED)
-    h = _make_handler()
-    print("handler:", type(h).__name__, "| last_trace_id:", h.last_trace_id)
-    assert h.last_trace_id is None
-
-    # 5. final_text handles list-content AI messages
+    # 4. final_text handles list-content AI messages
     from langchain_core.messages import AIMessage
 
     state = {"messages": [AIMessage(content="")]}

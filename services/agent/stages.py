@@ -8,17 +8,19 @@ user watches being corrected, and for a clinical answer the corrected part is
 exactly the part that matters. What *can* be streamed honestly is progress:
 which step of the chain is running.
 
-This module exists to make that progress honest. Four rules:
+This module exists to make that progress honest. Five rules:
 
 1. **A stage is emitted where the work happens, not before it.** The tool node
    emits immediately before it calls the tool; the model node emits immediately
    before it calls the model. There is no timer, no scripted sequence, and no
    stage that is announced ahead of the work it describes.
 
-2. **A stage describes an action being taken, never a result.** "Searching The
-   Discharge Notes" is true whether the search returns passages or fails, so it
-   cannot mislead. Whether the answer is good is the terminal event's business —
-   a failure is reported there, not by quietly dropping a stage.
+2. **A tool stage describes an action being taken, never a result.** "Searching
+   The Discharge Notes" is true whether the search returns passages or fails, so
+   it cannot mislead. Whether the answer is good is the terminal event's
+   business — a failure is reported there, not by quietly dropping a stage.
+   What a call *returned* is a separate stage (rule 5), so the action label
+   never has to be retracted.
 
 3. **A call that is refused is not announced.** The per-turn budget refusal in
    `graph._execute_tool_calls` returns a synthetic error without touching the
@@ -28,6 +30,15 @@ This module exists to make that progress honest. Four rules:
 4. **The vocabulary is closed.** `STAGES` is the complete set of values the
    stream can carry, so a client can switch on them exhaustively and a test can
    assert the set has not grown by accident.
+
+5. **A result stage reports the tool's own output, and nothing else.** It is
+   emitted immediately after a call returns and carries what came back — a
+   count, or the fact of a failure. Clinical values are deliberately absent: a
+   probability on screen before `guard_answer` has run is the disclosure the
+   layer 3 streaming decision refused, and the answer is where that number is
+   stated, guarded. A count is not that, and it is the difference between a
+   progress line that repeats five fixed phrases and one that tells the user
+   something.
 
 The labels are display text: they are what the user reads, so they live here,
 next to the prompt, rather than in the browser. The browser cannot know what
@@ -44,6 +55,7 @@ from typing import Any
 STAGE_PLANNING = "planning"
 STAGE_REVIEWING = "reviewing"
 STAGE_TOOL = "tool"
+STAGE_RESULT = "result"
 STAGE_VERIFY = "verify"
 STAGE_ANSWER = "answer"
 STAGE_ERROR = "error"
@@ -52,6 +64,7 @@ STAGES = (
     STAGE_PLANNING,
     STAGE_REVIEWING,
     STAGE_TOOL,
+    STAGE_RESULT,
     STAGE_VERIFY,
     STAGE_ANSWER,
     STAGE_ERROR,
@@ -65,6 +78,17 @@ STAGES = (
 LABEL_PLANNING = "Reading The Question"
 LABEL_REVIEWING = "Reviewing The Evidence"
 LABEL_VERIFYING = "Checking The Answer Against The Evidence"
+
+# The planning label varies with what was asked, when the caller said. A chip
+# name is not patient data and is not the question's wording, so it can name the
+# progress line without putting anything clinical on screen early. Free text has
+# no chip: its nature is only knowable by the model, and asking the model would
+# be the narration this decision does not take, so it gets the generic label.
+QUESTION_KIND_LABELS = {
+    "risk": "Reading The Risk Question",
+    "meds": "Reading The Medication Question",
+    "summarize": "Reading The Summary Request",
+}
 
 # One label per tool the MCP server advertises (`services/mcp/server.py`).
 # Each is phrased as the action the call performs, so it stays true even when
@@ -82,15 +106,45 @@ TOOL_LABELS = {
 # `graph._emit`) so it is fixed rather than silently rendered.
 LABEL_UNKNOWN_TOOL = "Consulting A Tool"
 
+# Result labels. Each reports the call's own output; the failure wording exists
+# so a tool that did not answer is never rendered as a count of zero, which
+# would say "nothing was found" when the truth is "nothing was asked".
+LABEL_RESULT_FAILED = "The Tool Did Not Respond"
+LABEL_RESULT_RISK = "Read The Risk Score"
+LABEL_RESULT_PASSAGES = "Read The Note Passages"
+LABEL_RESULT_SECTIONS = "Read The Note Sections"
+
+RESULT_LABELS = {
+    "predict_readmission": LABEL_RESULT_RISK,
+    "rag_search": LABEL_RESULT_PASSAGES,
+    "rag_search_sections": LABEL_RESULT_SECTIONS,
+}
+
+
+def _plural(count: int, noun: str) -> str:
+    return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
+
 
 def tool_label(name: str) -> str:
     """Display text for a tool call, or the documented fallback."""
     return TOOL_LABELS.get(name, LABEL_UNKNOWN_TOOL)
 
 
-def planning_event() -> dict[str, Any]:
-    """The first model turn: the question is being read."""
-    return {"stage": STAGE_PLANNING, "label": LABEL_PLANNING}
+def planning_label(kind: str | None) -> str:
+    """Display text for the first model turn, which varies with what was asked."""
+    return QUESTION_KIND_LABELS.get(kind or "", LABEL_PLANNING)
+
+
+def planning_event(kind: str | None = None) -> dict[str, Any]:
+    """The first model turn: the question is being read.
+
+    `kind` is the chip the question came from, when it came from one, so the
+    line can say which question is being read. It is not the question's text and
+    not the patient's identity: the execution record keeps no patient-derived
+    text, and the label is derived from the request rather than from the model,
+    which is why it cannot be wrong.
+    """
+    return {"stage": STAGE_PLANNING, "label": planning_label(kind)}
 
 
 def reviewing_event() -> dict[str, Any]:
@@ -107,6 +161,44 @@ def tool_event(name: str) -> dict[str, Any]:
     tool tells the client nothing the terminal payload would not.
     """
     return {"stage": STAGE_TOOL, "label": tool_label(name), "tool": name}
+
+
+def result_event(name: str, response: Any) -> dict[str, Any]:
+    """What a tool call returned, emitted immediately after it returns.
+
+    Reports the call's own output in the call's own terms: how many passages came
+    back, or that the call failed. A count is a fact about the work; the passages
+    themselves, and any probability, are not put on screen here — the answer is
+    where a guarded clinical value appears (rule 5).
+    """
+    payload = response if isinstance(response, dict) else {}
+    if payload.get("error"):
+        return {
+            "stage": STAGE_RESULT,
+            "label": LABEL_RESULT_FAILED,
+            "tool": name,
+            "ok": False,
+        }
+
+    returned = payload.get("returned")
+    if returned is None and isinstance(payload.get("passages"), list):
+        returned = len(payload["passages"])
+    if isinstance(returned, int):
+        noun = "Note Section" if name == "rag_search_sections" else "Note Passage"
+        return {
+            "stage": STAGE_RESULT,
+            "label": f"Found {_plural(returned, noun)}",
+            "tool": name,
+            "ok": True,
+            "returned": returned,
+        }
+
+    return {
+        "stage": STAGE_RESULT,
+        "label": RESULT_LABELS.get(name, LABEL_RESULT_RISK),
+        "tool": name,
+        "ok": True,
+    }
 
 
 def verify_event() -> dict[str, Any]:

@@ -19,7 +19,72 @@ def test_parse_agent_request_canonicalises_the_question():
     """
     assert parse_agent_request(
         {"question": " assess risk "}, max_question_chars=20
-    ) == {"question": "assess risk"}
+    ) == {"question": "assess risk", "kind": None}
+
+
+# Single-turn is a decision, not an accident (layer 3, gap 4). These pin the
+# refusal, because the failure they prevent is invisible: a dropped field
+# produced a normal-looking answer, and the caller had no way to tell.
+
+def test_a_conversation_field_is_refused_rather_than_ignored():
+    with pytest.raises(AgentRequestError) as caught:
+        parse_agent_request(
+            {"question": "and his medications?", "history": []},
+            max_question_chars=2000,
+        )
+    assert caught.value.code == "unsupported_field"
+    assert caught.value.status_code == 400
+    assert "single-turn" in caught.value.message
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["history", "messages", "session_id", "conversation_id", "context", "turns"],
+)
+def test_every_conversation_field_is_named_in_the_refusal(field):
+    with pytest.raises(AgentRequestError) as caught:
+        parse_agent_request(
+            {"question": "why?", field: []}, max_question_chars=2000
+        )
+    assert caught.value.code == "unsupported_field"
+    assert f"'{field}'" in caught.value.message
+
+
+def test_an_unknown_field_is_refused_and_named():
+    with pytest.raises(AgentRequestError) as caught:
+        parse_agent_request(
+            {"question": "why?", "temperature": 0.2}, max_question_chars=2000
+        )
+    assert caught.value.code == "unsupported_field"
+    assert "'temperature'" in caught.value.message
+
+
+def test_the_chip_name_travels_as_the_question_kind():
+    """The progress stream labels its first stage from this (layer 3, streaming).
+
+    The chip name is not the question's wording and not the patient's identity,
+    so it can name a progress line without putting anything clinical on screen
+    before the guardrails have run.
+    """
+    assert parse_agent_request(
+        {"chip": "meds", "hadm_id": 90000009}, max_question_chars=2000
+    )["kind"] == "meds"
+    assert parse_agent_request(
+        {"question": "why?"}, max_question_chars=2000
+    )["kind"] is None
+
+
+def test_the_closed_contract_still_accepts_the_three_shapes():
+    """Closing the field set must not narrow what already worked."""
+    assert parse_agent_request(
+        {"question": "why?"}, max_question_chars=2000
+    ) == {"question": "why?", "kind": None}
+    assert parse_agent_request(
+        {"chip": "risk", "hadm_id": 90000009}, max_question_chars=2000
+    )
+    assert parse_agent_request(
+        {"hadm_id": 90000009}, max_question_chars=2000
+    )
 
 
 # The wording moved here from the website (layer 3, chain artifact), so these
@@ -30,19 +95,23 @@ def test_parse_agent_request_canonicalises_the_question():
 def test_a_chip_and_admission_compose_what_the_website_used_to_build():
     assert parse_agent_request(
         {"chip": "risk", "hadm_id": 90000009}, max_question_chars=2000
-    ) == {"question": (
-        "Assess the 30-day readmission risk for this patient. "
-        "For admission 90000009."
-    )}
+    ) == {
+        "question": (
+            "Assess the 30-day readmission risk for this patient. "
+            "For admission 90000009."
+        ),
+        "kind": "risk",
+    }
 
 
 def test_free_text_with_an_admission_gets_the_same_suffix_the_website_added():
     assert parse_agent_request(
         {"question": "Why was this patient flagged?", "hadm_id": 90000009},
         max_question_chars=2000,
-    ) == {"question": (
-        "Why was this patient flagged? For admission 90000009."
-    )}
+    ) == {
+        "question": "Why was this patient flagged? For admission 90000009.",
+        "kind": None,
+    }
 
 
 def test_an_admission_alone_asks_the_default_question():
@@ -54,9 +123,10 @@ def test_an_admission_alone_asks_the_default_question():
     """
     assert parse_agent_request(
         {"hadm_id": 90000009}, max_question_chars=2000
-    ) == {"question": (
-        "Assess the 30-day readmission risk for admission 90000009."
-    )}
+    ) == {
+        "question": "Assess the 30-day readmission risk for admission 90000009.",
+        "kind": None,
+    }
 
 
 def test_the_admission_is_not_appended_twice():

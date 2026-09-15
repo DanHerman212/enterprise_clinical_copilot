@@ -1,8 +1,8 @@
 # Runtime dependencies for the agent container.
 # Ground-up LangChain-native stack (2026-08-23): the agent drives Gemini via
 # ChatGoogleGenerativeAI (langchain-google-genai, Vertex backend) and wraps MCP
-# tools as LangChain BaseTools, so Langfuse v4's official CallbackHandler
-# captures everything natively (no hand-rolled @observe tracing).
+# tools as LangChain BaseTools, so a callback handler would capture the whole
+# chain natively once layer 10 adds one (no hand-rolled @observe tracing).
 #
 # NOT langchain-mcp-adapters: declares mcp<2.0.0,>=1.24.0 and imports
 # mcp.server.fastmcp (removed in 2.0) — incompatible with our mcp==2.0.0. We
@@ -17,4 +17,3 @@ langchain-core==1.6.0
 langchain-google-genai==4.3.5
 google-auth==2.50.0
 uvicorn==0.47.0
-langfuse==4.14.4

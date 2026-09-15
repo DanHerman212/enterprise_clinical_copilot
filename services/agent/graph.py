@@ -10,23 +10,19 @@ Messages are LangChain `BaseMessage` objects (`SystemMessage` for the prompt,
 calls, `ToolMessage` for tool results). LangGraph is LangChain-native, so the
 graph consumes these directly with no translation layer.
 
-Observability is a side effect of the architecture, not hand-rolled code:
+Tracing is not implemented here, and that is a decision rather than an omission.
+The Langfuse stack was torn down on 2026-09-12 and its scaffolding removed on
+2026-09-15. Observability is layer 10's deliverable and evaluation is layer 9's,
+both to be rebuilt from a written design (00-reference-architecture.md, 6). What
+this layer contributes in the meantime is the execution record in `chain.py`: one
+structured line per execution carrying the revision, model, stages, tool names
+and timings, which Cloud Logging already collects.
 
-  - The model is `ChatGoogleGenerativeAI` (langchain-google-genai, Vertex
-    backend + ADC), so every model call is a LangChain LLM run — the official
-    Langfuse `CallbackHandler` captures it as a generation span with the full
-    message list, the response, and usage.
-  - MCP tools are wrapped as LangChain `BaseTool` subclasses that call through
-    to `MCPToolbox` — every tool call is a LangChain tool run, captured as a
-    tool span by the same callback.
-  - The graph is invoked with `config={"callbacks": [handler]}`; the handler
-    builds the native LangGraph trace (nodes/edges) and exposes
-    `last_trace_id`, which we publish on the state for the eval loop
-    (collect.py -> judge.py).
-
-No `@observe`, no `langfuse_context`, no manual serialization. When the
-LANGFUSE_* env vars are absent the handler is a no-op, preserving the
-previous `LANGFUSE_ENABLED` gate behavior.
+Two properties of this module make that replacement cheap when it comes, and they
+are worth keeping: the model is `ChatGoogleGenerativeAI`, so every model call is
+a LangChain LLM run; and MCP tools are wrapped as LangChain `BaseTool`
+subclasses, so every tool call is a LangChain tool run. A callback handler would
+therefore see the whole chain without any code here changing.
 """
 
 import json
@@ -55,36 +51,10 @@ from services.agent.chain import MODEL_ID
 
 from services.agent.mcp_client import MCPToolbox, _clean_schema
 from services.agent.contracts import RecordedToolCall, validate_recorded_tool_call
-from services.agent.observability import LANGFUSE_ENABLED as _LANGFUSE_ENABLED, make_handler
 from services.agent.prompts import SYSTEM_PROMPT
 from services.agent import stages
 
-# --- Langfuse observability (optional, no-op without keys) ---
-# Enabled only when all three env vars are present, so local/dev runs without
-# them never create a handler. When enabled, every /ask becomes a native
-# Langfuse trace (built by the official LangGraph CallbackHandler) with the
-# graph nodes/edges, a generation span for the Gemini call, and a tool span
-# per MCP call — so the golden-eval fix-and-retest loop can open a failing
-# case and see exactly which passages went in and what the model said.
-LANGFUSE_ENABLED = _LANGFUSE_ENABLED
-
 logger = logging.getLogger(__name__)
-
-
-def _make_handler():
-    """Return the official Langfuse CallbackHandler, or a no-op stand-in.
-
-    The stand-in mimics `last_trace_id` (starts None) and is inert when
-    LANGFUSE_* is not set, so the graph code is identical in both modes.
-    """
-    return make_handler()
-
-
-class _NoopHandler:
-    """Inert handler for when Langfuse is disabled (matches old gate)."""
-
-    def __init__(self) -> None:
-        self.last_trace_id = None
 
 
 class AgentState(TypedDict):
@@ -152,6 +122,10 @@ async def _execute_tool_calls(
             # announces nothing, because nothing was called.
             _emit(on_event, stages.tool_event(call["name"]))
             payload = await toolbox.call(call["name"], arguments)
+            # What came back, in the call's own terms. Emitted here because this
+            # is where the payload exists, and only for a call that actually
+            # ran: a refused call announces nothing, result included (rule 3).
+            _emit(on_event, stages.result_event(call["name"], payload))
         recorded.append(validate_recorded_tool_call({
             "name": call["name"], "args": arguments, "response": payload,
         }))
@@ -231,6 +205,7 @@ def build_graph(
     toolbox: MCPToolbox,
     model: str = MODEL_ID,
     on_event: Callable[[dict[str, Any]], None] | None = None,
+    question_kind: str | None = None,
 ):
     """Compile the graph. `on_event` receives progress stages; None disables them.
 
@@ -252,7 +227,9 @@ def build_graph(
         )
         _emit(
             on_event,
-            stages.reviewing_event() if seen_a_model_turn else stages.planning_event(),
+            stages.reviewing_event()
+            if seen_a_model_turn
+            else stages.planning_event(question_kind),
         )
         response: AIMessage = await llm.ainvoke(state["messages"])
         return {"messages": [response], "tool_calls": []}
@@ -284,28 +261,30 @@ async def ask(
     name: str | None = None,
     tags: list[str] | None = None,
     on_event: Callable[[dict[str, Any]], None] | None = None,
+    question_kind: str | None = None,
 ) -> dict:
     """Run one question to completion. Returns the final state.
 
-    `name`/`tags` are forwarded to the LangGraph run so the Langfuse trace is
-    cleanly identifiable (e.g. eval traces get name=`eval.risk` + tags).
+    `name`/`tags` are forwarded to the LangGraph run as its `run_name` and tags,
+    so a caller can label a run (the eval loop passes name=`eval.risk`). They
+    label the run; nothing here produces or stores a trace id.
 
     `on_event` is called with a stage dict as the chain progresses (see
     `stages.py`). It is a plain synchronous callback — the streaming route
     hands it a queue's `put_nowait` — and it is optional, so the answer path
     and the progress path stay one implementation.
     """
-    graph = build_graph(toolbox, model=model, on_event=on_event)
-    handler = make_handler()
+    graph = build_graph(
+        toolbox, model=model, on_event=on_event, question_kind=question_kind
+    )
 
-    config: dict = {"callbacks": [handler] if LANGFUSE_ENABLED else None,
-                    "recursion_limit": RECURSION_LIMIT}
+    config: dict = {"recursion_limit": RECURSION_LIMIT}
     if name is not None:
         config["run_name"] = name
     if tags:
         config["tags"] = list(tags)
 
-    state = await graph.ainvoke(
+    return await graph.ainvoke(
         {
             "messages": [
                 SystemMessage(content=SYSTEM_PROMPT),
@@ -315,13 +294,6 @@ async def ask(
         },
         config=config,
     )
-    # Publish the Langfuse trace id on the returned state so the eval loop
-    # (collect -> judge) can attach rubric scores to the right trace.
-    if LANGFUSE_ENABLED:
-        # ECC-17: the trace-id attribute is not part of the handler's contract
-        # — read defensively so a missing attribute can't 500 an ask.
-        state["langfuse_trace_id"] = getattr(handler, "last_trace_id", None)
-    return state
 
 
 def final_text(state: dict) -> str:

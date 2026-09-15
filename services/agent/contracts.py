@@ -52,6 +52,46 @@ class AgentResponseError(ValueError):
     """The agent produced a payload outside its HTTP success contract."""
 
 
+# The complete set of fields this request accepts. Closed deliberately: an
+# unknown field used to be ignored, so a caller that sent `history` received a
+# confident answer that had silently dropped it — a capability gap wearing the
+# costume of a working feature. Refusing is the honest answer, and it is what
+# keeps single-turn a decision rather than an accident (layer 3, gap 4).
+ACCEPTED_REQUEST_FIELDS = frozenset({"question", "hadm_id", "chip"})
+
+# Names a caller reaches for when it expects the agent to remember the
+# conversation. None of them do anything here, and the refusal says so rather
+# than leaving the caller to infer it from an answer that quietly lost its
+# context.
+CONVERSATION_FIELDS = frozenset(
+    {"history", "messages", "session_id", "conversation_id", "context", "turns"}
+)
+
+
+def _unsupported_field_error(unknown: list[str]) -> AgentRequestError:
+    """Refuse fields outside the contract, naming them.
+
+    A conversation field gets its own wording because the refusal is the design
+    decision made visible at the boundary: the product is single-turn, and
+    conversation state belongs to the memory layer.
+    """
+    named = ", ".join(f"'{name}'" for name in unknown)
+    if CONVERSATION_FIELDS.intersection(unknown):
+        return AgentRequestError(
+            "unsupported_field",
+            f"Unsupported field(s): {named}. The agent is single-turn, so a "
+            "conversation field is refused rather than silently ignored; "
+            "conversation state belongs to the memory layer.",
+            400,
+        )
+    return AgentRequestError(
+        "unsupported_field",
+        f"Unsupported field(s): {named}. Send 'question', or a 'chip' with a "
+        "'hadm_id'.",
+        400,
+    )
+
+
 def parse_agent_request(body: Any, *, max_question_chars: int) -> AgentRequest:
     """Validate JSON-decoded input and return the agent request contract.
 
@@ -66,6 +106,16 @@ def parse_agent_request(body: Any, *, max_question_chars: int) -> AgentRequest:
     caller, so half the prompt no longer lives in another repository. The result
     still carries exactly one field — the question the model is asked — so
     everything downstream, including the response contract, is unchanged.
+
+    The field set is closed: anything outside those three is refused with
+    `unsupported_field` rather than ignored, and a field implying conversation
+    state says why. There is no conversation state to send, and the contract is
+    where that stops being implicit.
+
+    The result carries one more field than it used to: `kind`, the chip the
+    question came from, or None for free text. The progress stream labels its
+    first stage from it (`stages.planning_label`). The question the model is
+    asked is still a single string, so no downstream consumer changed.
     """
     if not isinstance(body, dict):
         raise AgentRequestError(
@@ -73,6 +123,10 @@ def parse_agent_request(body: Any, *, max_question_chars: int) -> AgentRequest:
             "Send a 'question', or a 'chip' with a 'hadm_id'",
             400,
         )
+
+    unknown = sorted(set(body) - ACCEPTED_REQUEST_FIELDS)
+    if unknown:
+        raise _unsupported_field_error(unknown)
 
     hadm_id = body.get("hadm_id")
     if hadm_id is not None:
@@ -110,7 +164,7 @@ def parse_agent_request(body: Any, *, max_question_chars: int) -> AgentRequest:
             f"Limit is {max_question_chars} characters.",
             413,
         )
-    return {"question": composed}
+    return {"question": composed, "kind": chip}
 
 
 def validate_agent_success(payload: Any) -> AgentSuccess:

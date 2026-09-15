@@ -112,17 +112,17 @@ prebuilt ReAct helper, so the control flow is readable:
 
 | Element | Where | What it does |
 |---|---|---|
-| Prompt injection | `graph.py` 310–311 | One `SystemMessage` carrying the prompt, then one `HumanMessage` carrying the question. Nothing else goes in. |
-| Model turn | `graph.py` 242 (`agent_node`) | `llm.ainvoke(state["messages"])`, returning the model's message. |
-| Tool turn | `graph.py` 259 (`tool_node`) | Runs whatever the model asked for, one call at a time. |
-| Loop decision | `graph.py` 265 (`route`) | If the model's last message contains tool calls, go to the tool node; otherwise end. |
-| Edges | `graph.py` 271–275 | `START → agent`, `agent → tools` conditionally, `tools → agent`. |
-| Tool wrapper | `graph.py` 172 (`_MCPTool`), 209 (`_tools`) | One LangChain tool per MCP tool, advertising the real parameter names and types from the MCP `input_schema`. |
-| Model | `services/mcp/config.py` 83, 89; `graph.py` 192 (`_build_llm`) | `gemini-2.5-flash` by default, 2048 output tokens, temperature 0, Vertex backend, 3 retries. Two things to be precise about. First, `gemini-2.5-flash` is an **alias**, not a dated revision: what it resolves to is Google's decision, so it is not a pin in the sense this document uses the word. Second, the value is read from the environment (`os.environ.get("GEMINI_MODEL", ...)`), so the effective model is deployment configuration; the agent's `cloudbuild.yaml` happens not to set it, so today the code default applies. |
-| Thinking budget | `config.py` 85–89 | None set explicitly. The 2048-token output budget covers thinking *and* the answer, and the comment records the failure that produces: spend it all on thinking and the call returns 200 with empty text. `final_text` exists to catch that case. There is no separate knob for how much the model may think, which is a real latency and cost lever left at its default. |
-| Loop bound | `graph.py` 101 (`RECURSION_LIMIT = 10`) | LangGraph supersteps. Agent → tools → agent is three, so this allows about four tool rounds before the graph raises. |
-| Per-turn tool bound | `graph.py` 100 (`MAX_TOOL_CALLS_PER_TURN = 5`) | Calls beyond the budget are refused with a structured error rather than executed. |
-| Per-request rebuild | `graph.py` 229; `http.py` 174 (`_run_chain`) | `build_graph()` runs on every request, which rebuilds the model client and re-wraps the tools, and `toolbox()` opens a fresh MCP session and lists the tools each time. This is what makes the service stateless. It is also a fixed cost paid before the first model turn; it has now been measured (section 7). |
+| Prompt injection | `graph.py` 311–312 | One `SystemMessage` carrying the prompt, then one `HumanMessage` carrying the question. Nothing else goes in. |
+| Model turn | `graph.py` 243 (`agent_node`) | `llm.ainvoke(state["messages"])`, returning the model's message. |
+| Tool turn | `graph.py` 260 (`tool_node`) | Runs whatever the model asked for, one call at a time. |
+| Loop decision | `graph.py` 266 (`route`) | If the model's last message contains tool calls, go to the tool node; otherwise end. |
+| Edges | `graph.py` 272–276 | `START → agent`, `agent → tools` conditionally, `tools → agent`. |
+| Tool wrapper | `graph.py` 173 (`_MCPTool`), 210 (`_tools`) | One LangChain tool per MCP tool, advertising the real parameter names and types from the MCP `input_schema`. |
+| Model | `services/mcp/config.py` 94; `graph.py` 193 (`_build_llm`) | `gemini-2.5-flash`, 2048 output tokens, temperature 0, Vertex backend, 3 retries. **Pinned in code as of 2026-09-15, not read from the environment**: an environment default let a deploy change the model with no commit anywhere, which is what made an answer unattributable. The audit called this model an alias and that was wrong — Google's lifecycle table lists it as a versioned GA model, released 2025-06-17 and **retiring 2026-10-20**, so the pin has an expiry and the migration is scheduled work. |
+| Thinking budget | `config.py` 95–100 | None set explicitly. The 2048-token output budget covers thinking *and* the answer, and the comment records the failure that produces: spend it all on thinking and the call returns 200 with empty text. `final_text` exists to catch that case. There is no separate knob for how much the model may think, which is a real latency and cost lever left at its default. |
+| Loop bound | `graph.py` 102 (`RECURSION_LIMIT = 10`) | LangGraph supersteps. Agent → tools → agent is three, so this allows about four tool rounds before the graph raises. |
+| Per-turn tool bound | `graph.py` 101 (`MAX_TOOL_CALLS_PER_TURN = 5`) | Calls beyond the budget are refused with a structured error rather than executed. |
+| Per-request rebuild | `graph.py` 230; `http.py` 211 (`_run_chain`) | `build_graph()` runs on every request, which rebuilds the model client and re-wraps the tools, and `toolbox()` opens a fresh MCP session and lists the tools each time. This is what makes the service stateless. It is also a fixed cost paid before the first model turn, and it is now measured on every execution (section 7). |
 
 The shape is deliberate for this product: one question is one or two tool calls,
 so a graph that loops until the model stops asking is sufficient and cheap. A
@@ -131,13 +131,13 @@ risk score and a notes search, and occasionally needs both.
 
 ### 3.2 The API it exposes
 
-`services/agent/http.py` is a Starlette app with three routes (`http.py` 414–419):
+`services/agent/http.py` is a Starlette app with three routes (`http.py` 470–474):
 
 | Route | Method | Behaviour |
 |---|---|---|
-| `/health` | GET | Status, model name, MCP transport (`http.py` 186). No topology disclosure. |
-| `/ask` | POST | Takes `{"question": "..."}`, returns one JSON object. `http.py` 204. |
-| `/ask/stream` | POST | The same chain, with progress stages streamed ahead of the answer. `http.py` 288. Added 2026-09-15; see 3.7 and 6.1. |
+| `/health` | GET | Status, model name, MCP transport (`http.py` 223). No topology disclosure. |
+| `/ask` | POST | Takes intent — `{"question": "..."}`, or `{"chip": "risk", "hadm_id": 90000009}` — and returns one JSON object. `http.py` 241. |
+| `/ask/stream` | POST | The same chain, with progress stages streamed ahead of the answer. `http.py` 336. Added 2026-09-15; see 3.7 and 6.1. |
 
 `/ask` is unchanged by the streaming work: it takes the same input, returns the
 same object, and fails with the same codes. The stream is a second route rather
@@ -148,30 +148,30 @@ The error contract is part of the API, and the caller depends on it:
 
 | Status | `error` | When | Where |
 |---|---|---|---|
-| 401 | `unauthenticated` | No `Authorization` header on Cloud Run | `http.py` 67, 73 |
-| 400 | `invalid_json` | Body is not JSON | `http.py` 93 |
-| 4xx | `question_too_long` and the shape errors | From `parse_agent_request` | `contracts.py` 53–75 |
-| 504 | `timeout` | The chain exceeded its wall-clock bound | `http.py` 216, 220 |
-| 502 | `agent_failed` | Any infrastructure failure; carries a 12-character `correlation_id` and no exception text | `http.py` 236–240 |
-| 502 | `answer_unavailable` | The final model turn was empty, or the payload failed its own contract | `http.py` 246–249 |
+| 401 | `unauthenticated` | No `Authorization` header on Cloud Run | `http.py` 68, 74 |
+| 400 | `invalid_json` | Body is not JSON | `http.py` 94 |
+| 4xx | `question_too_long`, `unknown_chip` and the shape errors | From `parse_agent_request` | `contracts.py` 55 |
+| 504 | `timeout` | The chain exceeded its wall-clock bound | `http.py` 256, 261 |
+| 502 | `agent_failed` | Any infrastructure failure; carries a 12-character `correlation_id` and no exception text | `http.py` 277–281 |
+| 502 | `answer_unavailable` | The final model turn was empty, or the payload failed its own contract | `http.py` 289–292 |
 
 Everything above the first byte is the same for both routes. The streamed route
 returns those same statuses while nothing has been written; once a frame has
 been sent the status code is spent, and the same failures arrive as a terminal
-`error` frame carrying the same code and correlation id (`http.py` 274).
+`error` frame carrying the same code and correlation id (`http.py` 322).
 
 | Property | Where | Detail |
 |---|---|---|
-| Identity required | `http.py` 57, 67 | Requests must carry an `Authorization` header when running on Cloud Run. Cloud Run's own invoker check runs first; this is a presence check, not a second validation of the token. |
-| Bounded input | `http.py` 42; `contracts.py` 53, 75 | Question must be a non-empty string, ≤ 2000 characters. The parsed request has exactly one field. |
-| Wall-clock bound | `http.py` 47, 174; `services/mcp/runtime.py` 43–44 | `asyncio.timeout(ASK_TIMEOUT_SECONDS)`. The deadlines are nested on purpose: each tool call 100 s, the whole chain 110 s, Django's wait 120 s (`settings.py` 101). Each layer gives up before the one above it, so a timeout is reported by the layer that can say what timed out. |
-| Stateless | `http.py` 174 | A fresh MCP session per request (`async with toolbox()`). No state survives the request. |
-| Post-processing | `http.py` 117 (`_compose_success`) | Final message only → deterministic guardrails → presentation composed → contract validated. One implementation, shared by both routes, so a streamed answer and a single-response answer cannot drift. |
+| Identity required | `http.py` 58, 68 | Requests must carry an `Authorization` header when running on Cloud Run. Cloud Run's own invoker check runs first; this is a presence check, not a second validation of the token. |
+| Bounded input | `http.py` 43; `contracts.py` 55 | The question must be non-empty and ≤ 2000 characters, and an admission must be a positive integer. The parsed request has exactly one field. |
+| Wall-clock bound | `http.py` 48, 211; `services/mcp/runtime.py` 43–44 | `asyncio.timeout(ASK_TIMEOUT_SECONDS)`. The deadlines are nested on purpose: each tool call 100 s, the whole chain 110 s, Django's wait 120 s (`settings.py` 101). Each layer gives up before the one above it, so a timeout is reported by the layer that can say what timed out. |
+| Stateless | `http.py` 211 | A fresh MCP session per request (`async with toolbox()`). No state survives the request. |
+| Post-processing | `http.py` 118 (`_compose_success`) | Final message only → deterministic guardrails → presentation composed → contract validated. One implementation, shared by both routes, so a streamed answer and a single-response answer cannot drift. |
 
 ### 3.3 The prompt
 
 `services/agent/prompts.py` line 9 is a single `SYSTEM_PROMPT` string, imported
-at `graph.py` 57 and sent verbatim. It is prompt-as-code in the plain sense: it
+at `graph.py` 59 and sent verbatim. It is prompt-as-code in the plain sense: it
 lives in the repository, and changes to it go through review like any other
 file. It is worth being precise about the tests, though: no test asserts the
 prompt text. What the tests cover is the behaviour the prompt depends on — that
@@ -191,25 +191,24 @@ Retrieved passages arrive as tool results wrapped in `<tool_result>` delimiters
 by the tool wrapper, so the data path is real but implicit: there is no
 separate prompt-as-data module.
 
-**Half of the prompt lives in the other repository.** The system prompt is
-only one of the two texts the model receives; the other is the question, and
-for the demo's starter chips Django writes it. `demo/views.py` 25
-(`_question_for`) maps a chip to a fixed sentence and appends the admission
-(`views.py` 52–55: `f'{question} For admission {hadm_id}.'`). Those sentences
-are in `demo/fixtures.py` 50–55 — a module whose docstring describes it as
-fixture mode "while the endpoints are down" — and they are imported into the
-live path at `views.py` 17. So the wording the model is asked to act on is
-split across two repositories, and the production half sits in a file named
-for development scaffolding. This is prompt content in every sense that matters
-to the "one artifact" requirement.
+**The prompt is now one artifact, in one repository.** The system prompt is only
+one of the two texts the model receives; the other is the question, and that
+wording used to be written here: `demo/fixtures.py` held the chip sentences and
+the live path imported them, so a change to half the prompt could ship without
+touching the chain, its revision, or its review. Since 2026-09-15 the wording
+lives in `services/agent/questions.py`, beside `prompts.py`. The website sends
+intent — a chip *name* and an admission — and the agent composes the question
+(`contracts.py` 55). Every string is the one the website used to build, so the
+model is asked exactly what it was asked before. `demo/fixtures.py` 52 still
+holds the chip wording, but only for fixture mode, which answers captured
+payloads with no agent available to call.
 
-One of those templates asks a question the product cannot answer. `CHIPS`
+One of those templates asks a question the product cannot answer. The chip table
 includes `compare` — "Compare this assessment to the previous one for this
-patient" (`fixtures.py` 54). There is no previous assessment: the product is
-single-turn (see Gap 4). The chip is not offered in the console, but
-`_question_for` accepts any key in `CHIPS`, so a direct request with
-`chip: "compare"` passes validation, spends a quota credit, and sends the model
-a question about history it does not have.
+patient". There is no previous assessment: the product is single-turn (see Gap
+4). The chip is not offered in the console, but the name is in both tables, so a
+direct request with `chip: "compare"` passes validation, spends a quota credit,
+and asks the model about history it does not have.
 
 ### 3.4 What happens after the model answers
 
@@ -217,7 +216,7 @@ Three deterministic steps, in order, all in code:
 
 | Step | Where | What it does |
 |---|---|---|
-| Answer selection | `graph.py` 261 (`final_text`) | Returns the text of the **final** message only. An empty final turn yields an empty string, and the server reports the answer as unavailable rather than shipping an earlier preamble. |
+| Answer selection | `graph.py` 327 (`final_text`) | Returns the text of the **final** message only. An empty final turn yields an empty string, and the server reports the answer as unavailable rather than shipping an earlier preamble. |
 | Guardrails | `guardrail.py` 517 (`guard_answer`) | Checks the answer against the tool evidence, and **rewrites it** where the evidence does not support it. A risk number that does not match the model's output is removed from the text (`verify_risk_numbers`, 257; `_remove_spans` at 297), an age the source redacts is redacted (`redact_invented_age`, 154), medication tokens and per-medication frequencies not found in the retrieved text are removed (`verify_med_tokens`, 165; `verify_med_freqs_per_med`, 445), and citations must resolve to real passages (`check_citations`, 205). Only `flag_invented_dates` (310) flags without stripping, and its docstring says why. Every guard also appends a flag, so the response carries both the corrected text and the list of what was corrected. |
 | Presentation | `a2ui.py` 328 (`compose_presentation`), 154 (`resolve_sources`) | Builds the canvas payload and resolves citation numbers to sources. This is the agent's job by decision of layer 1: the numbering the user sees is evidence semantics, so it is composed where the evidence is. |
 
@@ -231,18 +230,19 @@ different answer from the one the system stands behind.
 
 ### 3.5 The caller
 
-Django is the only public caller, and it is not quite a pass-through: it
-composes part of the prompt (3.3) and it inspects the chain's output.
+Django is the only public caller. It no longer composes any of the prompt — it
+sends intent and the agent owns the wording (3.3) — and it inspects the chain's
+output.
 
 | Property | Where |
 |---|---|
-| One blocking POST per question, `Authorization: Bearer <identity token>` | `demo/agent_client.py` 110, 140 |
-| Upstream deadline 120 s | `demo/agent_client.py` 144; `danielmherman/settings.py` 101 |
-| At most 4 concurrent agent calls per instance | `demo/agent_client.py` 44, 122; `settings.py` 112 |
-| The view that calls it, and returns the payload plus the remaining quota | `demo/views.py` 109, 150 |
-| Reads the agent's `tool_calls` and turns a 200 with any tool error into a 502 plus a quota refund | `demo/views.py` 93 (`_tools_errored`), 168 |
+| One blocking POST per question, `Authorization: Bearer <identity token>` | `demo/agent_client.py` 111, 146 |
+| Upstream deadline 120 s | `demo/agent_client.py` 150; `danielmherman/settings.py` 101 |
+| At most 4 concurrent agent calls per instance | `demo/agent_client.py` 45, 128; `settings.py` 112 |
+| The view that calls it, and returns the payload plus the remaining quota | `demo/views.py` 237, 291 |
+| Reads the agent's `tool_calls` and turns a 200 with any tool error into a 502 plus a quota refund | `demo/views.py` 114 (`_tools_errored`), used by both the blocking and the streamed path |
 | Served by uvicorn (ASGI), two workers | `Dockerfile` 42–45 |
-| What the browser shows while waiting | a pending turn with `text: '…'`, `meta: 'working'` — `static/js/demo_flow.js` 603 |
+| What the browser shows while waiting | a pending turn with `text: '…'`, `meta: 'working'` — `static/js/demo_flow.js` 661 |
 
 `_tools_errored` matters for this layer because it is a second consumer of the
 chain's internal structure: it depends on tools reporting failure as
@@ -273,11 +273,11 @@ compromise but the only honest option.
 | Element | Where | What it does |
 |---|---|---|
 | The vocabulary | `services/agent/stages.py` 51 (`STAGES`) | The closed set of stage values: `planning`, `reviewing`, `tool`, `verify`, `answer`, `error`. A client can switch on them exhaustively, and a test asserts the set has not grown by accident. |
-| The labels | `stages.py` 70 (`TOOL_LABELS`) | Display text per MCP tool, kept next to the prompt rather than in the browser: the browser cannot know what tools exist, and must not be where wording about the agent's internal steps is invented. A test walks the live tool list and fails if a tool has no label. |
-| Where a stage is emitted | `graph.py` 104 (`_emit`), called at 152 and 252 | Immediately before the tool call and immediately before the model call — derived from an execution about to happen, never from a script of what should happen. |
-| A refused call | `graph.py` 130 (`_execute_tool_calls`) | Announces nothing. The per-turn budget refusal returns a synthetic error without touching the tool, and announcing it would describe work that never started. |
-| The relay | `http.py` 318 (`_stream_chain`) | Drains a queue of stages, emits SSE frames, then exactly one terminal frame. A keepalive every 15 s (`http.py` 54), because a tool call may legitimately take 100 s and a connection silent for that long is closed by an idle timeout before the answer arrives. |
-| The terminal frame | `http.py` 262 (`_sse`), 274 (`_error_frame`) | The `answer` frame carries exactly the object `/ask` returns, validated by the same `_compose_success`; the `error` frame carries the same code, message and correlation id `/ask` would have put in its body. |
+| The labels | `stages.py` 73 (`TOOL_LABELS`) | Display text per MCP tool, kept next to the prompt rather than in the browser: the browser cannot know what tools exist, and must not be where wording about the agent's internal steps is invented. A test walks the live tool list and fails if a tool has no label. |
+| Where a stage is emitted | `graph.py` 105 (`_emit`), called at 153 and 253 | Immediately before the tool call and immediately before the model call — derived from an execution about to happen, never from a script of what should happen. |
+| A refused call | `graph.py` 131 (`_execute_tool_calls`) | Announces nothing. The per-turn budget refusal returns a synthetic error without touching the tool, and announcing it would describe work that never started. |
+| The relay | `http.py` 366 (`_stream_chain`) | Drains a queue of stages, emits SSE frames, then exactly one terminal frame. A keepalive every 15 s (`http.py` 55), because a tool call may legitimately take 100 s and a connection silent for that long is closed by an idle timeout before the answer arrives. |
+| The terminal frame | `http.py` 310 (`_sse`), 322 (`_error_frame`) | The `answer` frame carries exactly the object `/ask` returns, validated by the same `_compose_success`; the `error` frame carries the same code, message and correlation id `/ask` would have put in its body. |
 
 Three rules hold this together, and they are the reason the display can be
 trusted:
@@ -292,7 +292,7 @@ trusted:
    user about work that never started, which is the specific dishonesty this
    design exists to avoid.
 
-Across the proxy, Django relays the frames as they arrive (`demo/views.py` 148,
+Across the proxy, Django relays the frames as they arrive (`demo/views.py` 153,
 `_stream_frames`) and the browser puts the stage label where "working" used to
 be (`static/js/demo_flow.js` 644). The answer body stays a placeholder until the
 guarded answer arrives, so no path exists by which a stage can be mistaken for
@@ -310,10 +310,10 @@ the answer.
 | Conversation state externalised | There is no conversation: the wire contract carries one question and nothing else | **Not applicable yet** — needs a decision, not code |
 | Agent framework on an agent runtime | LangGraph/LangChain on Cloud Run, deployed through a build pipeline | **Yes** |
 | Model from a managed runtime | `gemini-2.5-flash` on Vertex through `langchain-google-genai`, ADC | **Yes** |
-| Prompt, chain, tools and model pin versioned as one artifact | The system prompt, the graph and the tool wiring live in this repository. The model is an alias, not a revision, and is overridable by an environment variable at deploy time. The question templates live in the *other* repository. Nothing records which combination served a given answer | **No** — the pieces are in version control, but not together, not pinned, and not recorded |
+| Prompt, chain, tools and model pin versioned as one artifact | Prompt, question templates, graph, tool wiring and model pin all live in `services/agent/`; the model is a constant in code rather than an environment default. Closed 2026-09-15. | **Yes** — the parts are one artifact with an identity (`chain.py`), and the question templates moved out of the website, so half the prompt can no longer ship without touching the chain |
 | Prompt-as-code classified and tested | The prompt is in version control and reviewed, and the behaviours it depends on are tested — but no test asserts its text | **Partly** |
 | Prompt-as-data classified (examples, retrieved context, drift) | Retrieved passages flow as tool results, but there is no separation of data-side prompt parts and no drift detection | **Partly** |
-| Every execution logs inputs, outputs, intermediate steps and chain config | One line per request: trace id, tool count, guardrail flag count. No question, no answer, no per-step state, no prompt or chain revision | **No** |
+| Every execution logs inputs, outputs, intermediate steps and chain config | One structured JSON line per execution, from both routes and on failure as well as success: revision, model, question length, the stages with their timings, tool names, guardrail flags, duration, outcome. Closed 2026-09-15 for what is emitted; where it is stored is the observability layer's decision. | **Partly** — the record exists and is emitted. The question and answer text is deliberately excluded because it is patient-derived, and the storage and query layer is deferred by decision |
 | Step cap on the agent loop | Recursion limit 10 supersteps, 5 tool calls per turn, wall-clock timeout | **Yes** |
 | Single agent before multi-agent | One agent. No multi-agent structure to justify or remove | **Yes** |
 | Explicit exit condition on every loop | The loop exits when the model stops calling tools, and three independent caps bound it | **Yes** |
@@ -326,8 +326,8 @@ the answer.
 **Gap 1 — No streaming, and the requirement is explicit.** *Closed 2026-09-15 —
 see 6.1 for the decision and 7 for the evidence. The analysis below is the reason
 the decision went the way it did and is kept as it was written.* The front end
-does not support streaming and neither does the API behind it (`http.py` 204
-returns a single `JSONResponse`). The user watches `working` until the whole
+does not support streaming and neither does the API behind it (the route returns
+a single `JSONResponse`). The user watches `working` until the whole
 chain finishes: a model turn, one or two tool calls, a second model turn,
 guardrails, and composition. This is the same gap the client layer recorded and
 deferred, and it lands here because the API that would have to stream is this
@@ -342,16 +342,19 @@ therefore not be the final answer — they would be a draft that is corrected on
 the way out, and for a clinical answer the difference between the draft and the
 corrected text is exactly the part that matters.
 
-**Gap 2 — The chain has no single identity, and none at runtime.** Google
+**Gap 2 — The chain has no single identity, and none at runtime.** *Closed
+2026-09-15 — see 6.2 for the decision and 7 for the evidence. One claim below was
+wrong and the fix is what corrected it: `gemini-2.5-flash` is a versioned GA
+model, not a moving alias. The analysis is otherwise kept as written.* Google
 wants prompt, chain, tool wiring and model pin versioned together. Here the
 four parts are in version control but not as one thing: the system prompt,
 graph and tool wiring are in this repository; the question templates are in
-the website repository (`demo/fixtures.py` 50–55); the model is an alias
-(`gemini-2.5-flash`) rather than a dated revision, and it is read from the
-environment (`config.py` 83), so it can change at deploy time with no commit
+the website repository; the model was an alias
+(`gemini-2.5-flash`) rather than a dated revision, and it was read from the
+environment, so it could change at deploy time with no commit
 anywhere. And nothing *records* what ran: there is no chain or prompt revision
 in the logs, the model name appears only in the response payload and
-`/health`, and the one log line per request (`http.py` 177) carries a trace
+`/health`, and the one log line per request carries a trace
 id, a tool count and a flag count. The requirement asks for inputs, outputs,
 the intermediate state of each step, and the chain configuration; none of
 those four is currently emitted. The practical consequence is that a bad
@@ -362,7 +365,7 @@ and an incident review need.
 **Gap 3 — Prompt-as-data is not separated, and the prompt itself is untested.**
 All prompt content is prompt-as-code. Retrieved context reaches the model only
 as tool results, and the user's question is validated for type and length
-(`contracts.py` 53–75). What does not exist: any few-shot examples, any explicit
+(`contracts.py` 55). What does not exist: any few-shot examples, any explicit
 classification of which parts of the prompt are data, and any drift detection on
 what arrives at runtime. Google's requirement is a classification, and this
 application has effectively classified everything as code — which is defensible
@@ -375,7 +378,7 @@ actually given are the least-covered artifact in this layer.
 The requirement says session state must live in an external store so any
 instance can serve any request. This application satisfies the "stateless"
 half completely — and the state half is moot because the product is single-turn:
-`parse_agent_request` accepts one question (`contracts.py` 53, 75) and the view
+`parse_agent_request` accepts a single request and no history (`contracts.py` 55), and the view
 never sends history. If a follow-up question is ever wanted, this becomes real
 work: a session identifier on the wire, a store, and a retention policy. Worth
 deciding deliberately, because "our agent is stateless" is only half the
@@ -478,7 +481,25 @@ observability platform, which belongs to the observability layer; the
 alternative is to wait for that layer and choose the storage once. Recorded as
 open, because the third piece decides where this data finally lives — but the
 first two do not depend on it.
+Decision (2026-09-15): **all three steps, with storage deferred.** The question
+templates moved into the agent and the website now sends intent; the model is
+pinned in code; `chain.py` holds the revision; and every execution emits one
+structured record.
 
+Deferring the storage is not the same as not recording, and the difference is
+the point: the identity has to be captured at the moment of the answer, or a bad
+answer found next week still cannot be attributed while the storage question is
+open. So the record is emitted now — one JSON line to stdout, which Cloud Logging
+already collects — and the observability layer decides where it lives and how
+long it is kept.
+
+Two things the work turned up. The audit's "the model is an alias" was wrong:
+Google's lifecycle table lists `gemini-2.5-flash` as a versioned GA model with a
+release date, and it **retires 2026-10-20** — so the pin has an expiry and the
+migration is scheduled work rather than a surprise. And `CHAIN_REVISION` is
+maintained by hand, which the module docstring records as a weakness: nothing
+stops a prompt edit shipping without a bump. If that ever causes an
+unattributable answer, derive the revision from a digest of the four inputs.
 ### 6.3 Conversation state (Gap 4)
 
 Options: leave the product single-turn and record that finding — in which case
@@ -507,9 +528,9 @@ delivered whole; what streams is which step of the chain is running.
 
 | Where | What changed |
 |---|---|
-| Agent | `services/agent/stages.py` is new: the closed set of stage values (`stages.py` 51) and the display labels. A stage is emitted where the work happens and nowhere else — `_emit` (`graph.py` 104) fires immediately before each tool call (`graph.py` 152) and each model call (`graph.py` 252). `ask()` takes an optional `on_event` (`graph.py` 279); with no listener the graph behaves as before, which is what leaves `/ask` intact. `POST /ask/stream` (`http.py` 288) runs the same chain, relays the stages, then emits one terminal frame carrying the same object `/ask` returns, composed by the same `_compose_success` (`http.py` 117), so the two routes cannot drift. A keepalive goes out every 15 s (`http.py` 54): a tool call may take 100 s, and a connection silent that long is closed by an idle timeout. |
-| Django | `ask_stream` (`agent_client.py` 199) reads the agent's stream and guarantees a terminal frame, so no caller waits for an answer that is not coming. `_stream_frames` (`views.py` 148) relays it as Server-Sent Events, claiming the quota before dispatch and refunding on the blocking path's exact conditions. The first frame is pulled before the response commits to streaming (`views.py` 319), so a failure before any frame is still an ordinary 502 with the blocking path's body. |
-| Browser | `demo_flow.js` reads the stream (`demo_flow.js` 615) and puts the stage label where "working" was (`demo_flow.js` 644). The answer body stays a placeholder until the guarded answer lands, so no path exists by which progress can be mistaken for the answer. The live label gets its own class at 0.82rem — against the 0.7rem small print it shares a slot with, under the 0.88rem answer body — because it is read at a glance by someone waiting. Three cache-bust versions were bumped and a test asserts them, so a stale asset cannot reach a browser. |
+| Agent | `services/agent/stages.py` is new: the closed set of stage values (`stages.py` 51) and the display labels. A stage is emitted where the work happens and nowhere else — `_emit` (`graph.py` 105) fires immediately before each tool call (`graph.py` 153) and each model call (`graph.py` 253). `ask()` takes an optional `on_event` (`graph.py` 280); with no listener the graph behaves as before, which is what leaves `/ask` intact. `POST /ask/stream` (`http.py` 336) runs the same chain, relays the stages, then emits one terminal frame carrying the same object `/ask` returns, composed by the same `_compose_success` (`http.py` 118), so the two routes cannot drift. A keepalive goes out every 15 s (`http.py` 55): a tool call may take 100 s, and a connection silent that long is closed by an idle timeout. |
+| Django | `ask_stream` (`agent_client.py` 204) reads the agent's stream and guarantees a terminal frame, so no caller waits for an answer that is not coming. `_stream_frames` (`views.py` 153) relays it as Server-Sent Events, claiming the quota before dispatch and refunding on the blocking path's exact conditions. The first frame is pulled before the response commits to streaming (`views.py` 324), so a failure before any frame is still an ordinary 502 with the blocking path's body. |
+| Browser | `demo_flow.js` reads the stream (`demo_flow.js` 615) and puts the stage label where "working" was (`demo_flow.js` 644).The answer body stays a placeholder until the guarded answer lands, so no path exists by which progress can be mistaken for the answer. The live label gets its own class at 0.82rem — against the 0.7rem small print it shares a slot with, under the 0.88rem answer body — because it is read at a glance by someone waiting. Three cache-bust versions were bumped and a test asserts them, so a stale asset cannot reach a browser. |
 
 **Three bugs, and only one was visible offline.**
 
@@ -522,11 +543,11 @@ delivered whole; what streams is which step of the chain is running.
    1.1, 2.1, 3.3, 4.8, 6.7 and 9.3 s.
 2. **The relay waited out a keepalive after the chain had finished**, delaying
    every answer by up to 15 s — a progress stream slower than no stream at all. A
-   sentinel queued when the task completes (`http.py` 271) ends the loop with the
+   sentinel queued when the task completes (`http.py` 319) ends the loop with the
    work. The offline suite went from 17.7 s to 2.7 s, which is the size of the
    stall.
 3. **The async relay runs on the event loop**, where Django refuses synchronous
-   database access, so the quota calls hop to a worker thread (`views.py` 133).
+   database access, so the quota calls hop to a worker thread (`views.py` 138).
    Unfixed, the streamed path would have raised `SynchronousOnlyOperation` in
    production. Caught by the test suite rather than by the live run.
 
@@ -555,12 +576,43 @@ error at all. It is now 300 s, making the load balancer the last layer to give u
 That is an edge-layer setting (`danielmherman/infra/edge/edge.tf`), recorded here
 because this is where the symptom would have appeared.
 
-**Tests.** Agent: 14 new in `tests/agent/test_progress_stream.py`, including the
-keepalive-stall regression and the label-casing rule; 254 pass, with the same 10
-pre-existing errors from live-model tests that need credentials this machine does
-not have. Django: 10 new in `demo/tests.py`, one of which asserts the response is
-an async iterator — the only offline proof that Django will not buffer it; 94
-pass.
+**Gap 2 closed 2026-09-15: one artifact, an identity, and a record.** All three
+pieces of 6.2.
+
+*One artifact.* The question wording moved from the website (`demo/fixtures.py`)
+into `services/agent/questions.py`, beside the system prompt. The website sends
+intent — `{chip, hadm_id}` or `{question, hadm_id}` — and the agent composes the
+question (`contracts.py` 55). Every string is the one the website used to build,
+which the live test confirmed character for character, so the prompt did not move
+underneath the model. The model is a constant in code (`config.py` 94) instead of
+an environment default; an environment-overridable model is what made an answer
+unattributable in the first place.
+
+*An identity.* `chain.py` holds `MODEL_ID` and `CHAIN_REVISION` — the handle for
+one combination of prompt, templates, tool wiring and model. The revision is
+maintained by hand and the module says so; the fix, if it ever bites, is a digest
+over those four inputs.
+
+*A record.* One structured JSON line per execution, from both routes and on
+failure as well as success, carrying revision, model, question length, the stages
+with their timings, tool names, guardrail flags, duration and outcome. Verified
+in Cloud Logging on the first live call after deploy. The question and answer text
+are deliberately absent: they are patient-derived, and a log store is a different
+privacy regime from the repository, so the record carries their shape instead.
+Where it is stored is left to the observability layer.
+
+The record paid for itself on that first call: `duration_ms` 32,560 with the
+first stage at 22,591 ms — the per-request setup, now measured on every execution
+rather than inferred from one experiment.
+
+**Tests.** Agent: 14 new in `tests/agent/test_progress_stream.py` (the
+keepalive-stall regression, the label-casing rule) and 21 across
+`test_chain_artifact.py` and `test_agent_contract.py` (the pin, the record, the
+request shapes); 275 pass, with the same 10 pre-existing errors from live-model
+tests that need credentials this machine does not have. Django: 12 new in
+`demo/tests.py`, including the async-iterator assertion — the only offline proof
+that Django will not buffer it — and one that fails if prompt wording reappears
+in the request; 96 pass.
 
 ---
 
@@ -620,13 +672,16 @@ the answer is selected from the final message only, so an empty final turn is
 reported as unavailable instead of falling back to an earlier preamble.
 
 **Where does the prompt live, and how do you know what version produced a given answer?**
-In two places, which is the honest answer. The system prompt is in
-`services/agent/prompts.py` alongside the chain; the question templates the
-chips use are in the website repository. The model is an alias read from the
-environment, so it is not pinned. And nothing at runtime records which
-combination served a request. None of that is a design decision — it is the
-first thing I would fix in this layer, because the same data is what an
-evaluation loop and an incident review both need.
+All of it is in `services/agent/`, and the second half of that question is why it
+moved. The system prompt is in `prompts.py`, the question wording in
+`questions.py`, the wiring in `graph.py`, and the model pin and chain revision in
+`chain.py`. The website sends intent — a chip name and an admission — and never
+composes prompt text, because it used to, and a change to half the prompt could
+then ship without touching the chain or its review. As for "what produced this?":
+every execution writes one structured record carrying the revision, the model, the
+stages with their timings, the tools called and the guardrail flags. That record is
+the first thing both an evaluation loop and an incident review reach for, which is
+why it was worth doing before the storage question was settled.
 
 **Is the agent stateless?**
 Yes, and completely: a fresh MCP session and a fresh graph per request, and the

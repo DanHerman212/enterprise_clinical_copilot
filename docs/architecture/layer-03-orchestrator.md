@@ -292,7 +292,7 @@ trusted:
    timer and no scripted sequence, so a stage cannot outrun the work it
    describes.
 2. **A tool stage describes an action being taken, never a result.** "Searching
-   The Discharge Notes" is true whether the search returns passages or fails.
+   the Discharge Notes" is true whether the search returns passages or fails.
    What a call returned is a separate stage (rule 4), so the action label never
    has to be retracted. Whether the answer is good is the terminal frame's
    business.
@@ -667,6 +667,68 @@ one of them is settled by a decision already taken:
 - *Token metrics are layer 10's must-have*, so measuring thinking belongs to that
   layer rather than to a hand-rolled metric ahead of its design.
 
+### 6.6 Progress labels that follow the request, and a result per call
+
+**The line was the same sentence for every question.** The vocabulary was closed
+and every stage was true, but the words were generic: a medication question and a
+risk question produced the same lines, so the progress line said that work was
+happening without saying which work. It is the only text a waiting user reads and
+it occupies the position the answer will occupy, so it has to be about *this*
+request.
+
+Two tiers were added, and both are derived rather than guessed.
+
+**Tier 1 — the label follows the request.** Two of the stages now vary:
+
+- The first model turn names the question being read, when the caller said which
+  one it is: the `risk`, `meds` and `summarize` chips each get a label
+  (`stages.py` 97). Free text keeps the generic one, because knowing what a
+  free-text question is about would mean asking the model, and a model-written
+  progress line is the narration this design does not take.
+- A tool stage names the tool being called, from the tool name (`stages.py` 107).
+
+**Tier 2 — a call reports what it returned.** A `result` stage is emitted
+immediately after each executed call (`graph.py` 128), carrying either a count of
+what came back — *Found 3 Note Sections* — or the fact that the call did not
+respond (`stages.py` 122).
+
+A result stage was necessary rather than decorative, for three reasons:
+
+- A tool stage describes an action being taken and, by rule 2 above, must stay
+  true when the call fails, so it cannot also report the outcome.
+- "Nothing was found" and "nothing was asked" are different facts. Without a
+  separate stage the failure would be rendered as a count of zero, which says the
+  opposite of what happened.
+- A count is a fact about the work rather than a clinical value, so it can be put
+  on screen before the guardrails have seen anything.
+
+**What is deliberately not on the line.** No question text, no passage text, no
+probability. The progress line runs before the guardrails, so the only guarded
+clinical value is in the answer; a result event carries a count, the tool name and
+an `ok` flag, and a test asserts a result label carries no clinical value. The
+tool name is not a new disclosure either, because the terminal payload already
+lists every call by name. Streaming the model's tokens remains refused for 6.1's
+reason: the guardrails rewrite the text after the model finishes, so a streamed
+draft would have to be corrected on screen.
+
+**What it cost.** `parse_agent_request` returns `kind` alongside the question
+(`contracts.py` 95); `ask()` and `build_graph()` carry `question_kind` (`graph.py`
+257 and 204); `_execute_tool_calls` emits the result event after each call
+(`graph.py` 128); and the closed stage set grows by one (`stages.py` 63). The
+website needed no change, which was not obvious before reading it: the browser
+renders `frame.label` and ignores the event name, so a new stage kind appears in
+the progress line without a line of JavaScript changing. The bound is five result
+frames in a turn at most (`MAX_TOOL_CALLS_PER_TURN`, `graph.py` 71), because that
+is the per-turn tool budget.
+
+**One style rule, enforced rather than remembered.** The labels are Title Case
+with the usual exception: an article, a short conjunction or a short preposition
+stays lowercase unless it opens the label, so *Reading the Question*, while *The
+Tool Did Not Respond* keeps its capital because it opens the label. `SMALL_WORDS`
+(`stages.py` 81) is that rule, and a test walks every label against it, because
+these strings are the visible voice of the product and that should not depend on
+whoever typed the last label remembering the convention.
+
 ---
 
 ## 7. What changed
@@ -701,9 +763,9 @@ delivered whole; what streams is which step of the chain is running.
 
 **Live verification.** Both tool endpoints were deployed for this
 (`readmission-endpoint`, `readmission-rag-index`). In the browser at
-`/demo/a2ui/`, a risk question showed *Reading The Question* at 1.1 s, *Reading
-The Risk Model* at 2.4 s, *Reviewing The Evidence* at 3.3 s, *Searching The
-Discharge Notes* at 4.3 s, *Reviewing The Evidence* again at 5.4 s (the loop ran
+`/demo/a2ui/`, a risk question showed *Reading the Question* at 1.1 s, *Reading
+the Risk Model* at 2.4 s, *Reviewing the Evidence* at 3.3 s, *Searching the
+Discharge Notes* at 4.3 s, *Reviewing the Evidence* again at 5.4 s (the loop ran
 twice), then the answer at 9.1 s: a real probability of 0.250531 above the 0.11
 threshold, five attributed factors, a citation resolving to a real note section,
 and no console errors. `/ask` still returns its full eight-field contract
@@ -832,6 +894,22 @@ appears in the progress line without a line of JavaScript changing.
 Seven new tests, including one that a result label carries no clinical value and
 one that the chip survives from the request to the first frame; the agent suite is
 at 300.
+
+**The labels were recased the same day, on review.** The first version mixed the
+two conventions: the chip labels read *Reading the Medication Question* while the
+named constants read *Reviewing The Evidence*, which is one sentence in two
+voices. The house style in 6.6 now applies to all of them, and the casing test is
+what holds it rather than memory.
+
+**This repository now deploys from a push.** The build config took its image name
+as a substitution with no default, so it worked from the command line and failed
+under a trigger, which passes no substitutions: `invalid image name ""`. It has a
+default now, and it must be the literal project id, because Cloud Build does not
+expand a built-in inside a substitution default — `$PROJECT_ID` there becomes the
+literal string and the build fails on `invalid image name ".../$PROJECT_ID/..."`.
+Both were observed. With that fixed, a push to `main` builds and deploys the agent
+through the same `cicd-deployer` service account and trigger mechanism the website
+uses, so neither repository is deployed by hand.
 
 **Tests.** Agent: 14 new in `tests/agent/test_progress_stream.py` (the
 keepalive-stall regression, the label-casing rule) and 30 across

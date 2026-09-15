@@ -412,6 +412,10 @@ choice.
 **Gap 5 — Live verification of this layer is limited by the tool endpoints.**
 *Closed 2026-09-15 — both endpoints are deployed (section 7). The analysis below
 is kept as written; it describes the blocker this layer waited on.*
+The endpoints are stood up for a verification run and stood down afterwards
+(`scripts/agent/teardown.py`), because a served model and a deployed index bill by
+the hour whether or not anything is asked of them. While they are down, the
+paragraph below is the accurate description of the system.
 The model is live and the MCP protocol works end to end; the prediction and
 retrieval endpoints behind the tools are not running, so a production request
 today completes the chain with tool errors and Django returns 502 rather than an
@@ -618,11 +622,22 @@ so a turn written under older guardrails is recognisable as such on replay.
 
 These three were not questions of intent, so they are recorded together.
 
-**Gap 5 — the blocker is gone and the verification already happened.** Both tool
-endpoints are deployed in `us-east1` (`readmission-endpoint` and
-`readmission-rag-index`), so the condition this gap described no longer holds. No
-code changed for it. The evidence is section 7's live run against the deployed
-stack.
+**Gap 5 — the blocker was removed for the run, and the standing state is off.**
+Both tool endpoints were deployed in `us-east1` for the verification
+(`readmission-endpoint` and `readmission-rag-index`), and section 7's live run is
+the evidence. No code changed for it. They are torn down again afterwards,
+because these two are the only resources in the project that bill by the hour
+regardless of traffic — about $148 a month together — while Cloud Run and
+everything else here scales to zero. So "the endpoints are up" is a state this
+project enters to verify something and leaves afterwards rather than a standing
+condition, and section 5's gap text is what the system looks like whenever they
+are down. The lever is the repository's own script
+(`scripts/agent/teardown.py`; `--dry-run` to see its scope, `--only` for one
+resource). It keeps the registry entries, the index resource itself, the GCS
+bundles and the BigQuery tables, so standing back up is two commands
+(`mlops/serving/deploy_cpr.py` and `scripts/agent/deploy_index.py`) rather than a
+rebuild. Recorded because it changes how a snapshot should be read: a deployed
+endpoint in this project means someone is verifying right now.
 
 **Gap 6 — remove the residue, hand the rebuild to layers 9 and 10.** The teardown
 was deliberate (2026-09-12) and the replacement is already scheduled: evaluation
@@ -863,8 +878,9 @@ outside `<tool_result>`.
 
 **Gaps 5, 6 and 7 closed 2026-09-15.** The decisions are 6.5's; what changed:
 
-- **Gap 5** needed no code. Both endpoints are deployed, and this layer's live
-  verification is the run already recorded above.
+- **Gap 5** needed no code. Both endpoints were deployed for the run recorded
+  above and torn down after it — the standing state in development, since they
+  are the only resources here that bill while idle.
 - **Gap 6** removed the observability residue: the `observability` module, the
   `LANGFUSE_ENABLED` gate, the no-op handler and the `langfuse_trace_id` publish
   in `graph.py`, `langfuse==4.14.4` in `requirements.txt`, the uncommitted

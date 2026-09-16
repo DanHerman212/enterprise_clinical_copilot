@@ -11,16 +11,23 @@ them.
 
 What it found, 2026-09-16, 31 calls across two endpoints and two models:
 
-  - the real prefix, our system prompt, is 3,087 input tokens — below the documented minimum
+  - the real prefix, our system prompt, is 3,088 input tokens — below the documented minimum
     of 4,096 for the Gemini 3 family (2,048 for Gemini 2, which is the figure the document
-    carried and which stopped being ours when the model pin moved);
-  - prefixes of 5,176 and 8,247 tokens also read zero, so the minimum is not the whole of it;
-  - the count was non-zero exactly once, on the global endpoint at 5,176 tokens, and did not
-    reproduce when the same experiment was repeated eight times.
+    carried and which stopped being ours when the model pin moved). So nothing we currently
+    send can be cached, and that part is settled;
+  - above the minimum it is *not* settled. Prefixes of 5,176 and 8,247 tokens produced no hit
+    in 28 calls, one hit was seen (4,066 cached tokens, global, at a 5,176-token prefix) and
+    did not reproduce across eight repeats, and the platform documents implicit caching as
+    enabled by default from Gemini 2.5 onwards — so the model is supported and the zeros above
+    the minimum are unexplained.
 
-So the discount is not something this application can claim, and nothing here is written to
-depend on it. The count stays on the execution record, which means the position is measurable
-without re-deploying anything.
+Do not settle that second half on a sample this size. An earlier pass did, on three calls per
+endpoint, and concluded that the global endpoint caches while `us` does not; eight repeats
+disproved it.
+
+So nothing here is written to depend on the discount, and the decision that follows is not to
+pad the prompt to reach the minimum. The count stays on the execution record, which means the
+position is measurable without re-deploying anything.
 
 Run this again after a model change, or after any change to the size of the system prompt.
 It bills for what it sends: `--calls 8` with the real system prompt is about 25,000 input

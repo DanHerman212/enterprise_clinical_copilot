@@ -1,6 +1,6 @@
 # Layer 4 — Model runtime & gateway
 
-Status: audited 2026-09-16. Two of ten gaps open; gaps 1 to 8 are closed, and gap
+Status: audited 2026-09-16. One of ten gaps open; gaps 1 to 9 are closed, and gap
 10 was opened by the model swap the same day (section 7). Sections 5 and 6 are paired
 one to one: each gap has exactly one decision, in the same order.
 
@@ -190,7 +190,7 @@ and no exception.
 | H1 — retries, timeouts, exception handling, 429 | **Partly** | Timeouts and exception handling are met: one call is bounded, the bounds nest, and the response's own reason for stopping is recorded and acted on. What is missing is any *observation* of the retries, 429s included. |
 | H2 — QPS and tokens/sec baseline | **Partly** | Every execution now records what it was billed for, so a baseline is derivable from the logs. None has been written down, and the monitoring half belongs to layer 10. |
 | H3 — cheapest model that passes eval, thinking budget | **Partly** | Thinking is bounded by our own choice of level rather than the model's default, and the model is on the record with its reason and a date by which it has to be compared. What is missing is the comparison itself: the pin is the entry tier and its predecessor was never measured against it, which is layer 9's harness to run (gap 10). |
-| H4 — concise prompts, context caching | **Not decided** | Caching is enabled by default on the platform and its effect here is unmeasured. |
+| H4 — concise prompts, context caching | **Partly** | Caching is decided rather than assumed: the count is read on every execution and the measured answer is that the discount is not available to this application, so nothing is built on it. The row's other half is not addressed — the prompt is 3,088 tokens resent on every turn, and nothing has reviewed its size. |
 | H5 — failure and load simulation | **Partly** | Failure is simulated now: a model that raises, stalls, or returns nothing is driven through the route, and each outcome is asserted on the caller's response and on the execution record. Load is not simulated, which is the half that keeps this row short of met. |
 | G2 / B4 — screening | **Partly** | The four configurable categories are pinned to a chosen threshold, and a filtered response records which category flagged it. Injection and jailbreak are still unaddressed at this door, by decision — that policy is layer 11's (gap 5, gap 6). |
 
@@ -273,11 +273,14 @@ unexercised. The deadline had no test of any kind — nothing in the suite sent 
 that ran out of time — so the spend control bounding one question had never been observed
 doing its job.
 
-**9 — Caching is unmeasured (H4, SHOULD).** Implicit caching is on by default,
-discounts the cached portion by 90% and costs nothing to store; the minimum
-cacheable prefix is 2,048 tokens for this model family, and the system prompt is
-12,540 characters — about 3,135 tokens — resent at the start of every turn. Whether
-a hit occurs is reported on every response and never read.
+**9 — Caching was unmeasured (H4, SHOULD).** *Closed 2026-09-16 — see 7. The count was
+read, and the answer is that the discount is not available to us.*
+The document recorded that implicit caching is on by default, discounts the cached portion by
+90% and costs nothing to store, and that the minimum cacheable prefix is 2,048 tokens for the
+model's family — a figure the Gemini 2 family publishes and which stopped being ours when the
+pin moved. Our system prompt is 12,540 characters, which a response reports as 3,088 input
+tokens resent on every turn, and whether any of it was served from a cache was reported on
+every response and never read by anything.
 
 **10 — The pin changed without the comparison that decision 6.4 requires.** *Opened
 2026-09-16, by the swap itself.* The evidence slot that exists to make a model change
@@ -363,7 +366,9 @@ first rather than after. Done 2026-09-16, with one change of level: the fake is 
 
 Read the cached-token count — the same field as 6.3 — and decide on that rather
 than on an assumption about prompt size. SHOULD-level, so it waits behind the
-field rather than competing with the MUSTs.
+field rather than competing with the MUSTs. Done 2026-09-16: the count was read at three
+prefix sizes, and the decision is not to build anything on the discount.
+`scripts/agent/measure_cache_hits.py` is how to read it again.
 
 ### 6.10 — for gap 10: date the comparison, not just the swap
 
@@ -577,6 +582,33 @@ Two limits are stated in the file rather than left implied. The fake stands in a
 SDK's retries have been spent, so the retry policy itself remains unexercised — that is gap
 2's open half — and nothing here simulates load, which is the other half of H5 and is not
 claimed.
+
+---
+
+**Gap 9 closed 2026-09-16: the caching discount is not available to this application, and
+that is now a measurement rather than a hope.** The cached count was read across 31 calls on
+two endpoints (`us` and `global`) and two models, at three prefix sizes.
+
+The real prompt is 3,088 input tokens, and the documented minimum cacheable prefix for the
+Gemini 3 family is 4,096. That minimum is worth recording on its own, because this document
+carried 2,048 — the Gemini 2 family's figure — and a threshold that is wrong in that direction
+is one that looks cleared when it is not. Prefixes of 5,176 and 8,247 tokens also read zero,
+so the minimum is not the whole explanation either, and the honest position is that the
+discount could not be demonstrated rather than that it was ruled out on a technicality.
+
+One hit was seen: 4,066 cached tokens on the global endpoint at a 5,176-token prefix. The same
+experiment repeated eight times produced none, so it is recorded as a single observation that
+did not reproduce — and an earlier attempt to build a rule on it, that the global endpoint
+caches and `us` does not, was wrong. Nothing here is built on the discount: the count stays on
+every execution record, so the position stays measurable without a deploy, and
+`scripts/agent/measure_cache_hits.py` is how to read it again after a model change or a prompt
+change of any size.
+
+What this does not do is shrink the prompt. Sent on every turn, and re-billed with the whole
+conversation on each of the chain's turns, 3,088 input tokens against a few hundred output
+tokens make the prompt the largest thing this layer controls the size of. Trimming it changes
+what the model is told, so it needs the evaluation layer to judge — not something to do
+because a measurement finally made the number visible.
 
 ---
 

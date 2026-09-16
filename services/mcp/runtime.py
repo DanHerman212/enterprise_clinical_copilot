@@ -3,6 +3,7 @@
 import os
 from collections.abc import Mapping
 from pathlib import Path
+from typing import NamedTuple
 
 
 def resolve_project_id(env: Mapping[str, str] | None = None) -> str:
@@ -36,20 +37,43 @@ def requires_cloud_run_auth(env: Mapping[str, str] | None = None) -> bool:
     )
 
 
-def timeout_chain(env: Mapping[str, str] | None = None) -> tuple[float, float]:
-    """Return ``(tool_timeout, agent_timeout)`` and enforce their ordering."""
+class Timeouts(NamedTuple):
+    """The bounded operations, shortest first.
+
+    Named rather than positional because these are three numbers of the same kind
+    and their ordering is the property that matters: an operation that may outlast
+    the one wrapping it can never be seen failing before its caller gives up.
+    """
+
+    model: float
+    tool: float
+    ask: float
+
+
+def timeout_chain(env: Mapping[str, str] | None = None) -> Timeouts:
+    """One model call, one tool call, one question — and the order they nest in.
+
+    The ordering is enforced here rather than documented, because a documented
+    ordering is one nobody checks. Read once at startup, so a bad combination
+    stops the service from serving instead of surfacing later as a stalled
+    request.
+    """
     values = os.environ if env is None else env
     try:
-        tool_timeout = float(values.get("MCP_TOOL_TIMEOUT_SECONDS", "100"))
-        agent_timeout = float(values.get("ASK_TIMEOUT_SECONDS", "110"))
+        model = float(values.get("MODEL_TIMEOUT_SECONDS", "60"))
+        tool = float(values.get("MCP_TOOL_TIMEOUT_SECONDS", "100"))
+        ask = float(values.get("ASK_TIMEOUT_SECONDS", "110"))
     except ValueError as exc:
-        raise RuntimeError("MCP and agent timeouts must be numeric.") from exc
-    if tool_timeout <= 0 or agent_timeout <= 0 or tool_timeout >= agent_timeout:
         raise RuntimeError(
-            "MCP_TOOL_TIMEOUT_SECONDS must be positive and shorter than "
+            "Model, tool and agent timeouts must be numeric."
+        ) from exc
+    if model <= 0 or tool <= 0 or ask <= 0 or not model < tool < ask:
+        raise RuntimeError(
+            "Timeouts must be positive and nest shortest to longest: "
+            "MODEL_TIMEOUT_SECONDS < MCP_TOOL_TIMEOUT_SECONDS < "
             "ASK_TIMEOUT_SECONDS."
         )
-    return tool_timeout, agent_timeout
+    return Timeouts(model=model, tool=tool, ask=ask)
 
 
 def positive_int_env(

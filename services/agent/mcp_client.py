@@ -83,8 +83,9 @@ class MCPToolbox:
 
     session: ClientSession
     # Must stay below the site's 120s upstream deadline and the agent server's
-    # ASK_TIMEOUT_SECONDS — a tool that outlives its caller is pure spend.
-    call_timeout_seconds: float = timeout_chain()[0]
+    # ASK_TIMEOUT_SECONDS — a tool that outlives its caller is pure spend. The
+    # ordering against the model leg is enforced by `timeout_chain`.
+    call_timeout_seconds: float = timeout_chain().tool
     _tools: dict[str, Any] = field(default_factory=dict)
 
     async def load(self) -> "MCPToolbox":

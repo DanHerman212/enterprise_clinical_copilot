@@ -45,7 +45,7 @@ MAX_QUESTION_CHARS = 2000
 # Hard deadline on one question, just under the site's 120s proxy timeout so
 # the caller gets a structured 504 instead of a dropped connection — and a
 # runaway graph cannot keep billing after the caller is gone (ECC-02).
-_, ASK_TIMEOUT_SECONDS = timeout_chain()
+ASK_TIMEOUT_SECONDS = timeout_chain().ask
 
 # How long the progress stream may stay silent before it sends a comment frame.
 # A tool call is allowed 100s, and an SSE connection with no bytes on it for

@@ -10,6 +10,7 @@ import pytest
 import services.agent.mcp_client as mc
 import services.mcp.server as ms
 from services.mcp.runtime import (
+    Timeouts,
     positive_int_env,
     requires_cloud_run_auth,
     resolve_project_id,
@@ -65,6 +66,7 @@ def test_tool_timeout_stays_under_upstream_deadlines():
     """Timeout chain: tool call < agent ask deadline (110) < site proxy (120),
     so the innermost deadline fires first with a structured error."""
     assert MCPToolbox.call_timeout_seconds < 110 < 120
+    assert MCPToolbox.call_timeout_seconds == timeout_chain().tool
 
 
 def test_cloud_run_auth_decision_is_shared_and_explicit():
@@ -77,16 +79,25 @@ def test_cloud_run_auth_decision_is_shared_and_explicit():
 
 def test_timeout_chain_is_ordered():
     assert timeout_chain({
+        "MODEL_TIMEOUT_SECONDS": "9",
         "MCP_TOOL_TIMEOUT_SECONDS": "10",
         "ASK_TIMEOUT_SECONDS": "11",
-    }) == (10.0, 11.0)
+    }) == Timeouts(model=9.0, tool=10.0, ask=11.0)
 
 
 def test_timeout_chain_rejects_inverted_deadlines():
-    with pytest.raises(RuntimeError, match="shorter"):
+    # A tool call that can outlast the question, and a model call that can outlast
+    # the tool call it is made inside.
+    with pytest.raises(RuntimeError, match="nest"):
         timeout_chain({
             "MCP_TOOL_TIMEOUT_SECONDS": "110",
             "ASK_TIMEOUT_SECONDS": "100",
+        })
+    with pytest.raises(RuntimeError, match="nest"):
+        timeout_chain({
+            "MODEL_TIMEOUT_SECONDS": "100",
+            "MCP_TOOL_TIMEOUT_SECONDS": "10",
+            "ASK_TIMEOUT_SECONDS": "110",
         })
 
 

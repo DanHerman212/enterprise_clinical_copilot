@@ -24,7 +24,7 @@ on the call itself.
                       v
   ┌─────────────────────────────────────────────┐
   │  LAYER 4 — the door                         │   owns one door to the model:
-  │  _build_llm, graph.py 167                   │   the model, the budget, the
+  │  _build_llm, graph.py 178                   │   the model, the budget, the
   │  the only place a chat model is built       │   retries, the deadline
   └───────────────────┬─────────────────────────┘
                       │  OUT:  one model call
@@ -45,7 +45,7 @@ Terms used in this document:
 | Gateway | The one place a prompt becomes a model call. Not necessarily a product: on Vertex the runtime supplies transport and quota, and this application's gateway is the single construction point. |
 | Model pin | The exact model id in use, fixed in code rather than read from the environment, so the same question can be reproduced later. |
 | Allowance | The token budget for one call. On a reasoning model it covers thinking and the answer unless the thinking budget is set separately. |
-| Thinking budget | What a reasoning model may spend on internal reasoning before it answers. Unset here. |
+| Thinking budget | What a reasoning model may spend on internal reasoning before it answers. Capped here at a fixed number of tokens, with the answer using what remains of the allowance. |
 | 429 | The provider's rate-limit response. A retry policy and a metric both attach to it. |
 | Screening | Checking the prompt on the way in and the response on the way out for injection, jailbreak or harmful content — distinct from the guardrails in layer 3, which check an answer against its evidence. |
 | Context caching | Reusing a large repeated prefix so it is not re-processed or re-billed. Enabled by default by the provider; a SHOULD in the requirement list. |
@@ -80,7 +80,7 @@ prompt is layers 5 and 11, and per-version metrics are layer 10's.
 
 ### 3.1 One door
 
-`_build_llm` (`services/agent/graph.py` 167) is the only place a chat model is
+`_build_llm` (`services/agent/graph.py` 178) is the only place a chat model is
 constructed, so the model, region, temperature, budget and retry policy are decided
 once and read everywhere.
 
@@ -91,7 +91,7 @@ return ChatGoogleGenerativeAI(
 )
 ```
 
-(`graph.py` 169–181.) Temperature is 0 because a clinical explanation that varies
+(`graph.py` 180–198.) Temperature is 0 because a clinical explanation that varies
 between identical questions is a defect, not variety.
 
 ### 3.2 The runtime is Google's
@@ -104,13 +104,13 @@ is the documented fallback (`config.py` 81–82).
 
 ### 3.3 The pin is in code, and it has an expiry date
 
-`GEMINI_MODEL = "gemini-2.5-flash"` (`config.py` 94) is a literal rather than an
+`GEMINI_MODEL = "gemini-2.5-flash"` (`config.py` 96) is a literal rather than an
 environment read, because an environment default lets a deploy change the model
-with no commit anywhere. `chain.MODEL_ID` imports it (`chain.py` 33) so the string
+with no commit anywhere. `chain.MODEL_ID` imports it (`chain.py` 38) so the string
 has one home, and a test asserts it ignores a `GEMINI_MODEL` in the environment
 (`tests/agent/test_chain_artifact.py` 71). The comment above it records the pin's
 expiry: released 2025-06-17, retires 2026-10-20, with Gemini 3.5 Flash-Lite or 3.1
-Flash-Lite named as replacements (`config.py` 89–93).
+Flash-Lite named as replacements (`config.py` 91–95).
 
 The identity an answer is attributed to comes from the deployment rather than from
 a number anyone types: `chain.CODE_REVISION` resolves `CODE_REVISION` (set by a
@@ -119,20 +119,23 @@ unexpanded placeholder counts as absent.
 
 ### 3.4 What one call is given, and what a failure looks like
 
-Model, temperature 0, `max_output_tokens` 2048 (`config.py` 100), `max_retries` 3.
+Model, temperature 0, `max_output_tokens` 2048 (`config.py` 102), `max_retries` 3,
+a timeout on the call, and a cap on thinking (`config.py` 112) so that reasoning
+takes a fixed share of the allowance instead of as much as it likes.
 
-A deadline of 110 seconds covers the whole question
-(`asyncio.timeout`, `http.py` 221), with the tool leg bounded shorter and the
-ordering checked at startup (`services/mcp/runtime.py` 47). A breach is a 504 that
-names the limit (`http.py` 266); any other exception is a 502 carrying a
-correlation id and no internal detail (`http.py` 288). Every exit writes one
-execution record — code revision, model, stages, tool names, duration, guardrail
-flags — through `chain.record_execution` (`chain.py` 55), and deliberately no
-question or answer text.
+A deadline of 110 seconds covers the whole question (`asyncio.timeout`, `http.py`
+245), and the three legs nest in a chain that startup enforces: one model call
+(60s) < one tool call (100s) < the question (110s) < the site's proxy (120s)
+(`services/mcp/runtime.py` 53). A breach is a 504 that names the limit (`http.py`
+294); any other exception is a 502 carrying a correlation id and no internal detail
+(`http.py` 316). Every exit writes one execution record — code revision, model,
+outcome, finish reason, stages, tool names, duration, guardrail flags — through
+`chain.record_execution` (`chain.py` 84), and deliberately no question or answer
+text.
 
 An empty answer is treated as a failure rather than shipped: `final_text` will not
-fall back to an earlier message (`graph.py` 299) and `_compose_success` raises when
-the final text is empty (`http.py` 127–132). That is needed because a reasoning
+fall back to an earlier message (`graph.py` 328) and `_compose_success` raises when
+the final text is empty (`http.py` 143–153). That is needed because a reasoning
 model can spend the whole allowance on thinking and return HTTP 200 with no text
 and no exception.
 
@@ -143,9 +146,9 @@ and no exception.
 | Requirement | State | Why |
 |---|---|---|
 | A6 — managed runtime | **Met** | Vertex, `vertexai=True`, ADC; nothing hosted by us. |
-| H1 — retries, timeouts, exception handling, 429 | **Partly** | The SDK's retry policy runs and includes 429. The call itself has no timeout, and the response's own reason for stopping is now recorded and acted on rather than inferred. |
+| H1 — retries, timeouts, exception handling, 429 | **Partly** | Timeouts and exception handling are met: one call is bounded, the bounds nest, and the response's own reason for stopping is recorded and acted on. What is missing is any *observation* of the retries, 429s included. |
 | H2 — QPS and tokens/sec baseline | **Not met** | No baseline exists, and the counts the response reports are not read. |
-| H3 — cheapest model that passes eval, thinking budget | **Not met** | The pin is the mid tier with no comparison recorded, and thinking draws on the shared allowance with no cap of its own. |
+| H3 — cheapest model that passes eval, thinking budget | **Partly** | Thinking has a cap of its own now. The model choice is still unevidenced: the pin is the mid tier, a cheaper GA tier was never evaluated, and there is no escalation path. |
 | H4 — concise prompts, context caching | **Not decided** | Caching is enabled by default on the platform and its effect here is unmeasured. |
 | H5 — failure and load simulation | **Not met** | Nothing constructs a failing model. |
 | G2 / B4 — screening | **Not met** | No thresholds are set, and nothing addresses injection or jailbreak. |
@@ -168,10 +171,13 @@ or `prompt_feedback`, and no retry is counted.
 a turn ended rather than how many attempts it took. It becomes observable only if
 the retry policy becomes ours, which is gap 2's ground.
 
-**2 — One call is unbounded.** There is no timeout on the model call, and because
-the HTTP request is made with none, the SDK's retry-on-timeout can never fire.
-Thinking also draws on the same 2048-token allowance as the answer, with no cap of
-its own. The only bound is the 110-second deadline over the whole question.
+**2 — One call was unbounded.** *Closed 2026-09-16 — see 7.*
+There was no timeout on the model call, and because the HTTP request was made with
+none, the SDK's retry-on-timeout could never fire. Thinking drew on the same
+2048-token allowance as the answer, with no cap of its own, and the only bound was
+the 110-second deadline over the whole question.
+*Evidence:* `_build_llm` set five things and none of them bounded a call, and the
+timeout chain validated two legs rather than three.
 
 **3 — The response's own numbers are not recorded.** Every response reports input,
 output, thinking and cached token counts, and the model version that served it. The
@@ -199,7 +205,7 @@ replacements live, so the platform filtering that applies today would stop apply
 without anyone deciding it.
 
 **7 — Region and output budget sit outside review.** Both are environment-settable
-(`config.py` 31 and 100), so a deploy can move where the model runs and how much it
+(`config.py` 31 and 102), so a deploy can move where the model runs and how much it
 may generate with no commit anywhere. The record does distinguish the result,
 because Cloud Run gives every configuration its own revision name and the record
 carries it — but the change is unreviewed, and the region carries a residency
@@ -217,7 +223,7 @@ a hit occurs is reported on every response and never read.
 
 **Recorded, not owned here:** the query embedding is a second Vertex call outside
 this door (`services/mcp/tools/retrieval.py` 92–93) and belongs to layers 5 and 7;
-the client is rebuilt on every request (`graph.py` 204) with no reuse between them,
+the client is rebuilt on every request (`graph.py` 221) with no reuse between them,
 which layer 3's warm-rebuild measurement already covers.
 
 ---
@@ -236,9 +242,10 @@ makes an incident review able to ask "did this fail, or was it refused?".
 ### 6.2 — for gap 2: bound one call
 
 Set a timeout on the model call and an explicit thinking budget. Both are
-constructor arguments. The bound nests where the existing ones already do: model
-call < tool call 100s < request 110s < proxy 120s, checked at startup the way the
-tool and request pair is (`runtime.py` 47).
+constructor arguments, and the bound nests where the existing ones already do — one
+model call < one tool call < the question < the proxy's limit — which
+`timeout_chain` enforces at startup (`runtime.py` 53) now that all three legs are in
+it.
 
 ### 6.3 — for gap 3: record what the response reported
 
@@ -298,28 +305,37 @@ code per class, so a refusal reaches the caller as `answer_refused` in words tha
 do not suggest retrying, a truncation as `answer_truncated` with words that do, and
 a turn with no signal as `answer_unavailable`, exactly as before. The execution
 record gained `finish_reason`, always present as a key so a failure can be queried
-rather than inferred from an empty answer (`chain.py` 41, `RECORD_FIELDS`).
+rather than inferred from an empty answer (`chain.py` 69, `RECORD_FIELDS`).
 
-*Evidence:* ten tests in `tests/agent/test_model_turn.py`, covering the mapping,
-the unblocked-prompt case that must not be read as a refusal, the refusal sentence
-carrying no advice to retry, both routes returning the right code, and the record
-carrying the reason. Agent suite 314 passing, no regressions.
-
-*What this does not cover, stated rather than implied.* The tests drive the
-classifier with the metadata shapes the SDK produces, so a change in how LangChain
-surfaces `prompt_feedback` would not fail them. And a real refusal cannot be
-triggered on demand, so the end-to-end path is unexercised until gap 8 supplies a
-fake model — which is what that gap is for. The retry count remains unobservable
-for the reason in gap 1's residue.
+Ten tests in `tests/agent/test_model_turn.py` cover it. What they cannot show is a
+real refusal, which cannot be triggered on demand: that path stays unexercised
+until gap 8 supplies a fake model.
 
 Nothing else in this layer has changed.
+
+---
+
+**Gap 2 closed 2026-09-16: one model call is bounded.** The client is now built with
+a timeout and with an explicit thinking budget (`graph.py` 195–197), and the timeout
+became the last leg of a chain that `services/mcp/runtime.py` enforces at startup —
+`Timeouts(model, tool, ask)`, validated as `model < tool < ask` (`runtime.py` 40,
+53). The chain returns a named tuple rather than a positional one, because
+`mcp_client` had been reading index `[0]` for the tool timeout and a third leg
+would have silently made it read the model's.
+
+Six tests cover it — four in `tests/agent/test_model_bounds.py` and two updated in
+`tests/agent/test_spend_caps.py` — and the suite is at 318 passing. None of them
+makes a call hang, because that needs a fake model (gap 8), so the timeout is
+present and ordered rather than yet observed firing. The cap of 1024 tokens is a
+starting point, not a tuned value; what would move it is the per-call thinking count
+from gap 3 and layer 9's evaluation.
 
 ---
 
 ## 8. Interview questions this layer answers
 
 **Where is the model called, and how many places could change it?**
-One function, `_build_llm` (`graph.py` 167). That is the whole answer, and it is
+One function, `_build_llm` (`graph.py` 178). That is the whole answer, and it is
 short on purpose: a second construction point is how retry policies diverge.
 
 **What happens when the model returns 429?**
@@ -333,10 +349,12 @@ it stays unobservable while the SDK owns the policy — making it ours is a
 candidate decision under gap 2.
 
 **How do you control cost on a reasoning model?**
-Partly, and not by controlling thinking. The model is pinned, the loop is bounded
-by the per-turn tool budget and the recursion limit (layer 3), and the request
-deadline bounds wall-clock spend. The thinking budget is unset, so thinking draws
-on the same allowance as the answer — gap 2.
+The model is pinned, the loop is bounded by the per-turn tool budget and the
+recursion limit (layer 3), one call is capped at 60 seconds so a stall fails as a
+model failure rather than as a slow answer, and thinking has its own cap instead of
+drawing freely on the answer's allowance. What is still not evidenced is the model
+choice itself — the pin is the mid tier and the comparison against a cheaper tier
+does not exist yet (gap 4).
 
 **How do you know which model produced an answer?**
 The record carries the model from `chain.MODEL_ID` and the deployment's own

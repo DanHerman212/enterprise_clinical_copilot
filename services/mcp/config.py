@@ -101,4 +101,14 @@ GEMINI_MODEL = "gemini-2.5-flash"
 # reproduce that. Keep this generous.
 GEMINI_MAX_OUTPUT_TOKENS = positive_int_env("GEMINI_MAX_OUTPUT_TOKENS", 2048)
 
+# How much of that allowance thinking may spend. Pinned in code rather than read
+# from the environment, for the same reason as the model name: an environment
+# default is a change that nobody reviews. The answer uses what is left.
+#
+# The number is a starting point, not a tuned value. What would justify moving it
+# is the evaluation layer's evidence, and the per-call thinking token count that
+# the response already reports — neither of which exists yet, which is why this is
+# recorded as a declared choice rather than a measured one.
+GEMINI_THINKING_BUDGET = 1024
+
 API_ENDPOINT = f"{LOCATION}-aiplatform.googleapis.com"

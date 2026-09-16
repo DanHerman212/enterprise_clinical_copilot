@@ -43,9 +43,11 @@ from langgraph.graph import END, START, StateGraph
 
 from services.mcp.config import (
     GEMINI_MAX_OUTPUT_TOKENS,
+    GEMINI_THINKING_BUDGET,
     LOCATION,
     PROJECT,
 )
+from services.mcp.runtime import timeout_chain
 
 from services.agent.chain import MODEL_ID
 
@@ -70,6 +72,15 @@ class AgentState(TypedDict):
 # -> agent is 3, so 10 allows ~4 tool rounds before the graph raises.
 MAX_TOOL_CALLS_PER_TURN = 5
 RECURSION_LIMIT = 10
+
+# One model call, bounded. The bound is part of the chain `timeout_chain`
+# enforces at startup — model < tool < ask < the proxy's own limit — and it is set
+# on the client rather than left absent for two reasons: a call that stalls should
+# fail as a model failure rather than spend the whole question's deadline looking
+# like a slow answer, and with no timeout at all the SDK's retry-on-timeout can
+# never fire, so the retry policy would be inert for the one failure it is most
+# needed for.
+MODEL_TIMEOUT_SECONDS = timeout_chain().model
 
 
 def _emit(on_event: Callable[[dict[str, Any]], None] | None, event: dict[str, Any]) -> None:
@@ -172,12 +183,18 @@ def _build_llm(model: str) -> ChatGoogleGenerativeAI:
         location=LOCATION,
         vertexai=True,
         temperature=0,
-        # Budgets thinking AND the answer. Too small and the model spends it all
-        # on thoughts, returns finish_reason=MAX_TOKENS with empty text, and
-        # raises nothing — which in a graph looks like a silently skipped tool
-        # call. See §9.
+        # The allowance covers thinking AND the answer. Too small and the model
+        # spends it all on thoughts, returns finish_reason=MAX_TOKENS with empty
+        # text, and raises nothing — which in a graph looks like a silently
+        # skipped tool call. See §9.
         max_output_tokens=GEMINI_MAX_OUTPUT_TOKENS,
+        # ...so thinking is capped separately rather than left to take what it
+        # likes from that allowance. The answer gets what remains, and the cap is
+        # what makes a runaway reasoning turn a bounded cost instead of a
+        # truncation discovered afterwards (`model_turn` reports which it was).
+        thinking_budget=GEMINI_THINKING_BUDGET,
         max_retries=3,
+        timeout=MODEL_TIMEOUT_SECONDS,
     )
 
 

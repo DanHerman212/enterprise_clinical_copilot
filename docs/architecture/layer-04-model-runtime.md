@@ -1,6 +1,6 @@
 # Layer 4 — Model runtime & gateway
 
-Status: audited 2026-09-16. Three of ten gaps open; gaps 1 to 7 are closed, and gap
+Status: audited 2026-09-16. Two of ten gaps open; gaps 1 to 8 are closed, and gap
 10 was opened by the model swap the same day (section 7). Sections 5 and 6 are paired
 one to one: each gap has exactly one decision, in the same order.
 
@@ -191,7 +191,7 @@ and no exception.
 | H2 — QPS and tokens/sec baseline | **Partly** | Every execution now records what it was billed for, so a baseline is derivable from the logs. None has been written down, and the monitoring half belongs to layer 10. |
 | H3 — cheapest model that passes eval, thinking budget | **Partly** | Thinking is bounded by our own choice of level rather than the model's default, and the model is on the record with its reason and a date by which it has to be compared. What is missing is the comparison itself: the pin is the entry tier and its predecessor was never measured against it, which is layer 9's harness to run (gap 10). |
 | H4 — concise prompts, context caching | **Not decided** | Caching is enabled by default on the platform and its effect here is unmeasured. |
-| H5 — failure and load simulation | **Not met** | Nothing constructs a failing model. |
+| H5 — failure and load simulation | **Partly** | Failure is simulated now: a model that raises, stalls, or returns nothing is driven through the route, and each outcome is asserted on the caller's response and on the execution record. Load is not simulated, which is the half that keeps this row short of met. |
 | G2 / B4 — screening | **Partly** | The four configurable categories are pinned to a chosen threshold, and a filtered response records which category flagged it. Injection and jailbreak are still unaddressed at this door, by decision — that policy is layer 11's (gap 5, gap 6). |
 
 ---
@@ -264,9 +264,14 @@ distinguish the result, because Cloud Run gives every configuration its own revi
 name and the record carries it — but that explains a change after the fact rather than
 reviewing it before.
 
-**8 — No failure simulation (H5).** Nothing injects a 429, a stall, an empty
-candidate or a safety block, and no test constructs a failing model. The behaviour
-described in 3.4 is reasoning about code that nothing exercises.
+**8 — No failure simulation (H5).** *Closed 2026-09-16 — see 7. Failure is exercised;
+load is still not, and is not claimed.*
+Nothing injected a 429, a stall, an empty candidate or a safety block, and no test
+constructed a failing model. Two of those cases were covered, but at the route's seam: they
+replaced `ask`, which tests the route and leaves the chain's own handling of a bad turn
+unexercised. The deadline had no test of any kind — nothing in the suite sent a request
+that ran out of time — so the spend control bounding one question had never been observed
+doing its job.
 
 **9 — Caching is unmeasured (H4, SHOULD).** Implicit caching is on by default,
 discounts the cached portion by 90% and costs nothing to store; the minimum
@@ -351,7 +356,8 @@ the value did not move, because a rule with no test is a comment.
 
 A fake chat model that raises, stalls, returns empty text and returns a safety
 finish; four tests. They are the acceptance criteria for 6.1 and 6.2, so they come
-first rather than after.
+first rather than after. Done 2026-09-16, with one change of level: the fake is injected at
+`_build_llm` rather than at `ask`, so the chain is what runs and not a stand-in for it.
 
 ### 6.9 — for gap 9: decide caching on a number
 
@@ -542,6 +548,38 @@ stale.
 
 ---
 
+**Gap 8 closed 2026-09-16: a failing model is now something the suite does, not something it
+describes.** Four tests in `tests/agent/test_model_failures.py`, each driving one request
+through `/ask` with the model replaced: one where the call raises the SDK's own rate-limit
+error, one where it stalls, one where it returns empty text with
+`finish_reason=MAX_TOKENS`, and one where it returns a safety finish. They inject at
+`_build_llm` rather than at `ask`, and that is the point of them: the tests that already
+existed replaced `ask`, so the tool loop, `final_message`, `final_text` and the
+classification never ran, and the chain's own handling of a bad turn was the part nothing
+had exercised.
+
+The deadline had no coverage of any kind — the suite mentioned it only as configuration, and
+nothing had ever sent a request that ran out of time. A request that outlives its deadline is
+now asserted to come back as a 504 naming the limit, and to come back in about a second
+rather than waiting for the model, because a spend control that does not cut the call off is
+not one. Every response is asserted together with its execution record: the outcome, the
+error code, the finish reason, and the category that refused it, on the failures as well as
+on the successes.
+
+The tests were checked for teeth rather than trusted. Disabling the deadline handler and the
+empty-turn guard in turn made exactly the three tests that depend on them fail while the
+rate-limit test still passed, which is the result that says the assertions are attached to
+the code and not to each other. The stall case also had to be made a model that *answers*,
+only too late: a fake that eventually raised would have proved nothing about which of the two
+things ended the request.
+
+Two limits are stated in the file rather than left implied. The fake stands in after the
+SDK's retries have been spent, so the retry policy itself remains unexercised — that is gap
+2's open half — and nothing here simulates load, which is the other half of H5 and is not
+claimed.
+
+---
+
 ## 8. Interview questions this layer answers
 
 **Where is the model called, and how many places could change it?**
@@ -558,12 +596,16 @@ the syntax tree instead of from memory.
 **What happens when the model returns 429?**
 The SDK retries it — three attempts in total, 429 and 408 included, with backoff —
 and we add nothing: no count, no distinction from any other failure. So a quota
-exhaustion reaches the caller as the generic 502. What is different since gap 1
+exhaustion reaches the caller as the generic 502, which is now asserted rather than
+assumed: a test raises the SDK's own rate-limit error from the model and checks that the
+caller gets the code and a correlation id while the quota line — a project name and a
+region — stays in the log. What is different since gap 1
 closed is that the *other* half is answered: when a turn produces no text, the
 response's own reason is read, recorded and acted on, so a refusal is reported as
 a refusal instead of as something to retry. Counting the retries is still open, and
 it stays unobservable while the SDK owns the policy — making it ours is a
-candidate decision under gap 2.
+candidate decision under gap 2, and the tests above deliberately do not pretend to cover
+it: the fake stands in after the attempts are spent.
 
 **How do you control cost on a reasoning model?**
 The model is pinned, the loop is bounded by the per-turn tool budget and the

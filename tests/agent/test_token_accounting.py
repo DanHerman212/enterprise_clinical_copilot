@@ -21,6 +21,7 @@ from starlette.testclient import TestClient  # noqa: E402
 from services.agent import chain  # noqa: E402
 from services.agent import http as srv  # noqa: E402
 from services.agent import model_turn  # noqa: E402
+from services.mcp import config  # noqa: E402
 
 
 def _usage(input_tokens=0, output_tokens=0, thinking=0, cached=0):
@@ -115,8 +116,9 @@ def test_the_served_model_is_read_rather_than_assumed():
     assert model_turn.served_model(_turn()) == "gemini-2.5-flash-002"
     assert model_turn.served_model(_turn(served=None)) is None
     # The pin is what we asked for; these are not the same question, and only one
-    # of them is evidence.
-    assert chain.MODEL_ID == "gemini-2.5-flash"
+    # of them is evidence. Read from the config rather than restated here, because a
+    # hard-coded pin is the thing this test exists to stop anyone doing.
+    assert chain.MODEL_ID == config.GEMINI_MODEL
 
 
 # --- into the record --------------------------------------------------------

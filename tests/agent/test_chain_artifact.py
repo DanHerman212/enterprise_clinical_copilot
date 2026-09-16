@@ -78,7 +78,7 @@ def test_the_model_is_pinned_and_ignores_the_environment(monkeypatch):
     try:
         importlib.reload(config)
         assert config.GEMINI_MODEL != "gemini-imaginary-1"
-        assert config.GEMINI_MODEL == "gemini-2.5-flash"
+        assert config.GEMINI_MODEL == "gemini-3.1-flash-lite"
     finally:
         monkeypatch.delenv("GEMINI_MODEL", raising=False)
         importlib.reload(config)
@@ -99,21 +99,60 @@ def test_the_pinned_model_is_the_one_on_record():
 
 
 def test_the_record_names_what_a_comparison_would_be_against():
-    # The cheaper tier is named so the next person does not have to rediscover it,
-    # and the evidence slot exists so that filling it in is a deliberate edit.
+    # The cheaper tier is named so the next person does not have to rediscover it, and
+    # the evidence slot exists so that filling it in is a deliberate edit.
     import services.mcp.config as config
 
     assert config.MODEL_CHOICE["cheaper_alternative"] != config.GEMINI_MODEL
+    # Empty is allowed — nothing below this pin has been checked — but then the record
+    # still has to name what the pin moved from, or the comparison it owes has no other
+    # side to be against.
+    assert config.MODEL_CHOICE["previous"] != config.GEMINI_MODEL
     assert "evidence" in config.MODEL_CHOICE
 
 
 def test_the_retirement_is_recorded_with_the_models_that_replace_it():
+    # An empty tuple here is a finding rather than an omission: Google records the
+    # retirement date for this model and names no successor yet, and the record says
+    # so. That is a different state from not having looked.
     import services.mcp.config as config
 
     assert config.MODEL_CHOICE["retires"]
     replacements = config.MODEL_CHOICE["replacements"]
-    assert replacements
+    assert isinstance(replacements, tuple)
     assert config.GEMINI_MODEL not in replacements
+
+
+def test_a_pin_change_cannot_stay_uncompared_until_the_next_retirement():
+    """The retirement guard forces the swap, not the comparison.
+
+    The last swap happened under the deadline with no comparison behind it, and the
+    test that woke us up would have been satisfied by swapping the model and nothing
+    else — which is how the same thing happens twice. So the comparison falls due
+    earlier than the swap does, and `MODEL_CHOICE['evidence']['comparison']` is what
+    settles it. If this is the test that woke you up, the plan is in the layer 4
+    document, sections 6.6 and 6.10.
+    """
+    from datetime import date, timedelta
+
+    import services.mcp.config as config
+
+    retires = date.fromisoformat(config.MODEL_CHOICE["retires"])
+    due = retires - timedelta(days=config.COMPARISON_DUE_DAYS)
+    recorded = config.MODEL_CHOICE["evidence"]["comparison"]
+    assert recorded or date.today() < due, (
+        f"The pin {config.GEMINI_MODEL} has no comparison recorded and the evidence "
+        f"falls due on {due} ({(due - date.today()).days} days away). Run the "
+        f"comparison and record it in MODEL_CHOICE['evidence']['comparison']."
+    )
+
+
+def test_the_comparison_falls_due_before_the_swap_does():
+    # Otherwise the two guards collapse into one and the comparison can always be
+    # deferred to the same last-minute position.
+    import services.mcp.config as config
+
+    assert config.COMPARISON_DUE_DAYS > config.MIGRATION_LEAD_DAYS
 
 
 def test_the_pinned_model_is_not_near_its_retirement():

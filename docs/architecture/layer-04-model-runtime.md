@@ -1,8 +1,8 @@
 # Layer 4 — Model runtime & gateway
 
-Status: audited 2026-09-16. Three of nine gaps open; gaps 1 to 6 are closed
-(section 7). Sections 5 and 6 are paired one to one: each gap has exactly one
-decision, in the same order.
+Status: audited 2026-09-16. Four of ten gaps open; gaps 1 to 6 are closed, and gap
+10 was opened by the model swap the same day (section 7). Sections 5 and 6 are paired
+one to one: each gap has exactly one decision, in the same order.
 
 ---
 
@@ -92,49 +92,71 @@ return ChatGoogleGenerativeAI(
 )
 ```
 
-(`graph.py` 181–205.) Temperature is 0 because a clinical explanation that varies
+(`graph.py` 179–209.) Temperature is 0 because a clinical explanation that varies
 between identical questions is a defect, not variety. The model is a parameter of
 `ask` with the pin as its default, so choosing one per call is already possible;
 nothing routes on it today.
 
 ### 3.2 The runtime is Google's
 
-`vertexai=True`, project and region from configuration (`services/mcp/config.py`
-30–31), authenticated by application default credentials. No key file, no
-self-hosted weights, no open-source serving stack. Region `us-east1`, chosen
-2026-07-30 for reachability and co-location with the prediction endpoint; `global`
-is the documented fallback (`config.py` 81–82).
+`vertexai=True`, project and regions from configuration (`services/mcp/config.py`
+30–31 and 49), authenticated by application default credentials. No key file, no
+self-hosted weights, no open-source serving stack. The project's own resources are in
+`us-east1`, chosen 2026-07-30 for reachability and co-location with the prediction
+endpoint. The chat model is reached somewhere else, which is 3.3's subject.
 
 ### 3.3 The pin is in code, and it has an expiry date
 
-`GEMINI_MODEL = "gemini-2.5-flash"` (`config.py` 96) is a literal rather than an
+`GEMINI_MODEL = "gemini-3.1-flash-lite"` (`config.py` 121) is a literal rather than an
 environment read, because an environment default lets a deploy change the model
 with no commit anywhere. `chain.MODEL_ID` imports it (`chain.py` 38) so the string
 has one home, and a test asserts it ignores a `GEMINI_MODEL` in the environment
-(`tests/agent/test_chain_artifact.py` 71). The comment above it records the pin's
-expiry: released 2025-06-17, retires 2026-10-20, with Gemini 3.5 Flash-Lite or 3.1
-Flash-Lite named as replacements (`config.py` 91–95). The date is data rather than
-prose: `MODEL_CHOICE` carries it with the replacements (`config.py` 127), and a test
-fails fourteen days before it (`MIGRATION_LEAD_DAYS`, `config.py` 141), because a
-retired model does not warn — the calls just stop working.
+(`tests/agent/test_chain_artifact.py` 71). It replaced `gemini-2.5-flash` on
+2026-09-16, while that model still answered — it retires 2026-10-20 — so the two could
+be put side by side and the change reversed.
+
+The pin's endpoint is no longer the project's region. `GEMINI_LOCATION = "us"`
+(`config.py` 49) is Google's multi-region endpoint, and it had to become a constant of
+its own: the replacement has no regional endpoint at all (404 on us-east1, us-central1,
+us-east5, us-east4, us-west1, us-south1 and europe-west4), while `LOCATION`
+(`config.py` 31) is also how the vector index, the prediction endpoint and BigQuery are
+reached, so one shared value would have moved retrieval with the model. `us` rather
+than `global` because Google's locations page says the multi-region endpoint is the one
+that keeps ML processing inside a jurisdiction, and that the global one does not support
+data residency and leaves the processing region unknowable.
+
+Two dates are data rather than prose. `MODEL_CHOICE` carries the retirement
+(`config.py` 173), and a test fails fourteen days before it (`MIGRATION_LEAD_DAYS`,
+`config.py` 214), because a retired model does not warn — the calls just stop working.
+A second date sits in front of that one: `COMPARISON_DUE_DAYS` (`config.py` 221) fails
+ninety days out while the record still holds no comparison, so the evidence is due
+before the swap rather than after it.
 
 The identity an answer is attributed to comes from the deployment rather than from
 a number anyone types: `chain.CODE_REVISION` resolves `CODE_REVISION` (set by a
 deploy) → `K_REVISION` (Cloud Run's own revision name) → `"local"`, and an
 unexpanded placeholder counts as absent.
 
-Why this particular model is written down beside it (`MODEL_CHOICE`, `config.py`
-127), together with the cheaper tier it has not been compared against and an
-empty evidence slot. The pin and that record have to move together — a test
-refuses a pin that disagrees with it — so the next change to the model carries its
-reason with it instead of depending on whoever makes it remembering.
+Why this model rather than the newer one is in the code beside it (`config.py`
+105–120): `gemini-3.5-flash-lite` drops `temperature=0` from the request and only
+warns, and determinism at temperature 0 is what `model_turn.refusal_sentence` and the
+empty-text guard in `http.py` both reason from. `MODEL_CHOICE` (`config.py` 173) then
+records what a comparison would be against — the model this replaced, since nothing
+below the pin has been checked — beside an `evidence` entry that says the comparison is
+owed rather than done, because the swap happened under a date and the harness meant to
+precede it does not exist yet.
 
 ### 3.4 What one call is given, and what a failure looks like
 
-Model, temperature 0, `max_output_tokens` 2048 (`config.py` 102), `max_retries` 3,
-a timeout on the call, a cap on thinking (`config.py` 112) so that reasoning takes
-a fixed share of the allowance instead of as much as it likes, and the four
-configurable content filters pinned to a chosen threshold (`config.py` 160).
+Model, temperature 0, `max_output_tokens` 2048 (`config.py` 135), `max_retries` 3,
+a timeout on the call, a bound on thinking (`GEMINI_REASONING_EFFORT`, `config.py`
+151) so that reasoning does not take as much of the allowance as it likes, and the
+four configurable content filters pinned to a chosen threshold (`config.py` 240).
+That bound is a level rather than a token count, which is a real difference and not a
+renaming: a level bounds effort, so what thinking will spend is known only afterwards
+and the allowance cannot be sized by subtracting a cap from it. 64 tokens was enough
+to return an empty answer on both candidate models while testing the swap, which is
+the failure the paragraph after next describes.
 
 A deadline of 110 seconds covers the whole question (`asyncio.timeout`, `http.py`
 262), and the three legs nest in a chain that startup enforces: one model call
@@ -148,7 +170,7 @@ the guardrail flags — through `chain.record_execution` (`chain.py` 86), and
 deliberately no question or answer text.
 
 An empty answer is treated as a failure rather than shipped: `final_text` will not
-fall back to an earlier message (`graph.py` 328) and `_compose_success` raises when
+fall back to an earlier message (`graph.py` 339) and `_compose_success` raises when
 the final text is empty (`http.py` 160–170). That is needed because a reasoning
 model can spend the whole allowance on thinking and return HTTP 200 with no text
 and no exception.
@@ -217,20 +239,22 @@ filtered. Nothing at this door addressed injection or jailbreak either, and
 `guard_answer` (`guardrail.py` 517) is a faithfulness check rather than screening.
 
 **6 — The pin's expiry was unscheduled, and the migration would have changed
-filtering silently.** *Closed 2026-09-16 — see 7. The swap itself and the evaluation
-it needs are still ahead; what closed is that neither can be forgotten now.*
+filtering silently.** *Closed 2026-09-16 — see 7. The swap was made, and the
+comparison it owes is now gap 10.*
 `gemini-2.5-flash` retires 2026-10-20 and nothing scheduled the move. Google's
 safety-filter page (last updated 2026-09-03) states that `OFF` is the default for
 `gemini-3.5-flash` and subsequent models, which is where the named replacements live,
 so the platform filtering that applied then would have stopped applying without
 anyone deciding it.
 
-**7 — Region and output budget sit outside review.** Both are environment-settable
-(`config.py` 31 and 102), so a deploy can move where the model runs and how much it
-may generate with no commit anywhere. The record does distinguish the result,
+**7 — The project's region and the output budget still sit outside review.** *Half of
+this closed with the swap: the model's endpoint is now a pinned constant, chosen in a
+review recorded in 3.3, rather than the shared environment value.* Both `LOCATION`
+(`config.py` 31) and the allowance (`config.py` 135) remain environment-settable, so a
+deploy can still move where retrieval and the prediction endpoint run, and how much the
+model may generate, with no commit anywhere. The record does distinguish the result,
 because Cloud Run gives every configuration its own revision name and the record
-carries it — but the change is unreviewed, and the region carries a residency
-question for clinical-shaped data.
+carries it — but the change is unreviewed.
 
 **8 — No failure simulation (H5).** Nothing injects a 429, a stall, an empty
 candidate or a safety block, and no test constructs a failing model. The behaviour
@@ -242,9 +266,18 @@ cacheable prefix is 2,048 tokens for this model family, and the system prompt is
 12,540 characters — about 3,135 tokens — resent at the start of every turn. Whether
 a hit occurs is reported on every response and never read.
 
+**10 — The pin changed without the comparison that decision 6.4 requires.** *Opened
+2026-09-16, by the swap itself.* The evidence slot that exists to make a model change
+deliberate (`MODEL_CHOICE["evidence"]`, `config.py` 182) holds a debt rather than a
+result, because the swap was forced by a retirement date and the harness meant to
+precede it does not exist. Four questions put to both pins on the same day show the gap
+is not a formality: three were answered by both, and on the fourth the two refused in
+opposite directions. Nothing in the suite would have noticed that, and nothing in it
+notices now.
+
 **Recorded, not owned here:** the query embedding is a second Vertex call outside
 this door (`services/mcp/tools/retrieval.py` 92–93) and belongs to layers 5 and 7;
-the client is rebuilt on every request (`graph.py` 221) with no reuse between them,
+the client is rebuilt on every request (`graph.py` 244) with no reuse between them,
 which layer 3's warm-rebuild measurement already covers.
 
 ---
@@ -299,7 +332,10 @@ default platform filtering differently.
 
 The argument that pins the model in code applies equally to the region and the
 output budget, so both move there. The record's deploy identity already covers the
-runtime configuration, so this decision is about review, not visibility.
+runtime configuration, so this decision is about review, not visibility. Partly done:
+the model's own endpoint is a pinned constant (`GEMINI_LOCATION`, `config.py` 49) and
+the swap is what forced the split, because model and project no longer live in the same
+region. The project's region and the output allowance are still environment reads.
 
 ### 6.8 — for gap 8: write the failure tests before changing the behaviour
 
@@ -312,6 +348,15 @@ first rather than after.
 Read the cached-token count — the same field as 6.3 — and decide on that rather
 than on an assumption about prompt size. SHOULD-level, so it waits behind the
 field rather than competing with the MUSTs.
+
+### 6.10 — for gap 10: date the comparison, not just the swap
+
+The retirement guard forces the swap and would have been satisfied by the swap alone,
+which is how the same thing happens twice. So the comparison gets a date of its own,
+set further out than the swap's: `COMPARISON_DUE_DAYS` (`config.py` 221) fails while
+`MODEL_CHOICE["evidence"]["comparison"]` is empty, and a test refuses a due date that
+is not earlier than the swap's. The comparison itself still needs layer 9, so what this
+fixes is not the absence of evidence but the absence of anything that would notice it.
 
 ---
 
@@ -337,7 +382,8 @@ Nothing else in this layer has changed.
 ---
 
 **Gap 2 closed 2026-09-16: one model call is bounded.** The client is now built with
-a timeout and with an explicit thinking budget (`graph.py` 196–198), and the timeout
+a timeout and with an explicit thinking level rather than an inherited default
+(`graph.py` 201–203), and the timeout
 became the last leg of a chain that `services/mcp/runtime.py` enforces at startup —
 `Timeouts(model, tool, ask)`, validated as `model < tool < ask` (`runtime.py` 40,
 53). The chain returns a named tuple rather than a positional one, because
@@ -368,21 +414,23 @@ which is where a token metric is most interesting. Seven tests in
 ---
 
 **Gap 4 closed 2026-09-16: the model choice is on the record, and cannot move
-quietly.** The pin is the mid tier, no comparison against a cheaper one has been
-run, and nothing routes to a smaller model. That is now written down rather than
-implied: `MODEL_CHOICE` (`config.py` 127) names the model, the date, the tier, the
-cheaper alternative, and an empty evidence slot, and two tests refuse a pin that
+quietly.** The pin was the mid tier at the time, no comparison against a cheaper one
+had been run, and nothing routed to a smaller model. That is now written down rather
+than implied: `MODEL_CHOICE` (`config.py` 173) names the model, the date, the tier,
+what a comparison would be against, and the evidence, and two tests refuse a pin that
 disagrees with it. So changing the model means editing the record, and the record is
 where the reason and the justification live. Escalation stays unbuilt on purpose:
 `ask` already takes a model per call, so routing is a chain-level decision to make
-when a second task shape exists rather than machinery to add now.
+when a second task shape exists rather than machinery to add now. The swap below is
+what tested this: the slot moved with the model, and it recorded a debt rather than a
+pass.
 
 ---
 
 **Gap 5 closed 2026-09-16: the content filters are ours, and a filtered response says
 so.** All four configurable categories are pinned to `BLOCK_MEDIUM_AND_ABOVE`
-(`GEMINI_SAFETY_THRESHOLDS`, `config.py` 160) and handed to the client explicitly
-(`graph.py` 203), so the filtering that applies today is a decision on the record
+(`GEMINI_SAFETY_THRESHOLDS`, `config.py` 240) and handed to the client explicitly
+(`graph.py` 208), so the filtering that applies today is a decision on the record
 rather than an inherited default that differs between models — and `OFF` on the ones
 this pin is due to move to. The threshold is a trade, not a preference: stricter and
 legitimate clinical content gets refused, looser and the control is nominal; moving a
@@ -397,15 +445,52 @@ as layer 11's.
 ---
 
 **Gap 6 closed 2026-09-16: the retirement is an input the suite enforces.** The date
-and the models that replace it are data in `MODEL_CHOICE` (`config.py` 127) rather
+and the models that replace it are data in `MODEL_CHOICE` (`config.py` 173) rather
 than a sentence in a comment, and a test fails `MIGRATION_LEAD_DAYS` before the date
-(`config.py` 141) — in practice from 2026-10-06. A retired model does not warn, the
+(`config.py` 214) — in practice from 2026-10-06. A retired model does not warn, the
 calls simply stop, so acting on the day leaves no room to run a comparison and
 schedule a swap. Three tests guard it, one of which refuses a lead time under a week,
 because a guard that can be switched off quietly is not a guard. The thresholds half
-of the migration plan was already in place from gap 5, and that is what stops the
-swap changing screening behaviour; the swap itself and the comparison it needs are
-still ahead, and the failing test is what will force them.
+of the migration plan was already in place from gap 5, and that is what stops the swap
+changing screening behaviour. The swap was then made on 2026-09-16 — below — and the
+comparison it owes is now gap 10.
+
+---
+
+**The model pin moved on 2026-09-16, ahead of the retirement rather than on it.**
+`gemini-2.5-flash` → `gemini-3.1-flash-lite` (`config.py` 121), chosen over the newer
+`gemini-3.5-flash-lite` because that one drops `temperature=0` from the request and
+only warns. Measured, eight repeats of one question each: the 3.1 runs at temperature 0
+returned identical reasoning-token counts and scattered ones at temperature 2, while the
+3.5 runs scattered at temperature 0 exactly as they did at 2. Determinism at temperature
+0 is what `model_turn.refusal_sentence` and the empty-text guard in `http.py` both
+reason from, so a model that cannot honour it would have left two recorded explanations
+false.
+
+The thinking control had to move with the model, because the families reject each
+other's: a level on 2.5 is a 400 and the budget is deprecated on 3.x, so no value suits
+both. The level chosen is `medium` (`config.py` 151) — 269 thinking tokens on a probe
+shaped like the chain's last turn, against 231 from the old pin at `thinking_budget=1024`
+— which keeps the model the only thing that changed. `low` measured 117 and `minimal`
+none at all, which is a different regime rather than a cheaper one. `low` is the lever to
+pull once the evaluation can show quality holds.
+
+The swap also split a value that had been doing two jobs. The model is reached on the
+`us` multi-region endpoint (`config.py` 49) because it has no regional endpoint in any
+of seven regions checked, while `LOCATION` (`config.py` 31) goes on naming where the
+vector index, the prediction endpoint and BigQuery live. Pinning them separately is what
+stops a model migration from moving retrieval, and `us` rather than `global` is what
+keeps the processing in a jurisdiction.
+
+What was not done is the comparison decision 6.4 asks for, and it is recorded as owed
+rather than skipped (`MODEL_CHOICE["evidence"]`, `config.py` 182). What was done is four
+questions put to both models, one run each — three answered by both, and one refusal each
+way: the new pin refuses a paracetamol-overdose question the old pin answered, and the
+old pin refused the suicidal-ideation question the new one answers. One run each is a
+signal and not a rate, and it is enough to say the two models do not draw the same line
+on legitimate clinical content, which turns the thresholds from 6.5 into a measured
+question rather than a theoretical one. The old pin also hit `MAX_TOKENS` on a long
+answer at the allowance the new pin answered within.
 
 ---
 
@@ -428,10 +513,15 @@ candidate decision under gap 2.
 **How do you control cost on a reasoning model?**
 The model is pinned, the loop is bounded by the per-turn tool budget and the
 recursion limit (layer 3), one call is capped at 60 seconds so a stall fails as a
-model failure rather than as a slow answer, and thinking has its own cap instead of
-drawing freely on the answer's allowance. The choice of model is on the record with
-the alternative it has not been compared against, so the next change to it has to
-say what justified the change.
+model failure rather than as a slow answer, and thinking is bounded separately
+instead of drawing freely on the answer's allowance. That bound was chosen against a
+measurement rather than a preference: 231 thinking tokens on the old pin at
+`thinking_budget=1024`, against 269 at `medium`, 117 at `low` and none at all at
+`minimal` on the same probe, with the levels that were not chosen recorded next to
+the one that was. The model is on the record with what a comparison would be against,
+and the comparison itself is dated — `COMPARISON_DUE_DAYS` fails ninety days before
+the next retirement while the evidence slot is still empty — so the next change to it
+cannot repeat the last one's silence.
 
 **How do you know which model produced an answer?**
 The record carries the model we asked for, the version that actually served the

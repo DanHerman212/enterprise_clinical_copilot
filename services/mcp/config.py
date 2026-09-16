@@ -30,6 +30,24 @@ def _validated_table_ref(ref: str, name: str, parts: tuple[int, ...]) -> str:
 PROJECT = resolve_project_id()
 LOCATION = os.environ.get("LOCATION", "us-east1")
 
+# Where the chat model is served, which is deliberately not `LOCATION`.
+#
+# `LOCATION` names the region of the project's own resources — the vector index, the
+# prediction endpoint, the bundle, and the BigQuery dataset — and the chat model used
+# to share it. It cannot any more: the pinned model has no regional endpoint at all.
+# `gemini-3.1-flash-lite` returns 404 on us-east1, us-central1, us-east5, us-east4,
+# us-west1, us-south1 and europe-west4, all checked on 2026-09-16, while the old pin
+# answers on us-east1. Sharing one value means the next change to it moves retrieval
+# and the prediction endpoint too, silently, which is what makes this a constant of
+# its own rather than a second reading of the environment.
+#
+# `us` is Google's multi-region endpoint, the one its locations page describes as
+# keeping ML processing inside a jurisdictional boundary. The alternative is `global`,
+# where the same page says you "can't control or know which region your ML processing
+# requests are sent to" and that it doesn't support data residency requirements — not a
+# thing to select by omitting a value, for a service that reads clinical text.
+GEMINI_LOCATION = "us"
+
 # Vertex serving
 ENDPOINT_NAME = os.environ.get("ENDPOINT_NAME", "readmission-endpoint")
 FINAL_MODEL_PREFIX = "readmission-final-"
@@ -78,60 +96,115 @@ DISCHARGE_TABLE = _validated_table_ref(
 )
 DEFAULT_TOP_K = positive_int_env("RAG_TOP_K", 5)
 
-# Gemini. Verified reachable from us-east1 on 2026-07-30, so the agent stays
-# co-located with the prediction endpoint; "global" is the fallback, not the default.
-#
-# PINNED, not read from the environment: an environment default lets a deploy
-# change the model the chain uses with no commit anywhere, which is exactly what
-# makes an answer unreproducible. Changing the model is now a reviewed change,
+# Gemini. PINNED, not read from the environment: an environment default lets a
+# deploy change the model the chain uses with no commit anywhere, which is exactly
+# what makes an answer unreproducible. Changing the model is now a reviewed change,
 # and nothing has to be remembered to make it visible: the execution record
 # carries the code revision the deployment set, so a change here moves the
 # identity that an answer is attributed to.
 #
-# `gemini-2.5-flash` is a versioned GA model rather than a moving alias —
-# released 2025-06-17. Per Google's model lifecycle table it RETIRES 2026-10-20,
-# with Gemini 3.5 Flash-Lite or Gemini 3.1 Flash-Lite named as the replacements.
-# The pin therefore has an expiry: the migration is scheduled work, not a
-# surprise when calls start failing.
-GEMINI_MODEL = "gemini-2.5-flash"
+# `gemini-2.5-flash` held this line from 2025-06-17 until 2026-09-16, when it was
+# replaced rather than retired: Google's lifecycle table dates it 2026-10-20, and
+# swapping while the old model still answers is what leaves room to put the two side
+# by side, and to go back. The replacements Google names for it are Gemini 3.5
+# Flash-Lite and Gemini 3.1 Flash-Lite.
+#
+# Why 3.1 rather than the newer 3.5 — `gemini-3.5-flash-lite` is on the SDK's list of
+# models using fixed sampling defaults, so `temperature=0` is dropped from the request
+# with a `UserWarning` that nothing would surface in a Cloud Run log. Both the refusal
+# sentence in `model_turn` and the empty-text guard in `http.py` reason from
+# determinism at temperature 0, and on that model the reasoning would be quietly
+# false. Measured 2026-09-16, eight repeats of one question each: 3.1 at temperature 0
+# returned identical reasoning-token counts every time and scattered ones at
+# temperature 2; 3.5 scattered at temperature 0 exactly as it did at temperature 2.
+# 3.5 buys three more months of runway (2027-07-21 against 2027-05-07) and costs that.
+GEMINI_MODEL = "gemini-3.1-flash-lite"
 
-# 2.5 models are thinking models and this budget covers thinking AND the answer.
-# Too small and the whole budget is spent on thoughts: the call returns 200 with
-# empty text and finish_reason=MAX_TOKENS, no exception. 16 tokens was enough to
-# reproduce that. Keep this generous.
+# The endpoint the model is reached on is `GEMINI_LOCATION` above, which is not
+# `LOCATION` any more — see the note there. The swap is what forced the split: the
+# pinned model has no regional endpoint in any region checked, and the constant it used
+# to be reached through also names the vector index and the prediction endpoint, which
+# do live in us-east1.
+
+# Thinking and the answer share this allowance, and the model stops when it runs out
+# without raising: the call returns 200 with empty text and finish_reason=MAX_TOKENS.
+# A level bounds effort rather than tokens, so what thinking will spend is known only
+# afterwards. Measured 2026-09-16: at 64 tokens both 3.x candidates returned empty text
+# this way, and a synthesis probe spent 269 thinking tokens at the level set below.
+# Keep this generous.
 GEMINI_MAX_OUTPUT_TOKENS = positive_int_env("GEMINI_MAX_OUTPUT_TOKENS", 2048)
 
-# How much of that allowance thinking may spend. Pinned in code rather than read
-# from the environment, for the same reason as the model name: an environment
-# default is a change that nobody reviews. The answer uses what is left.
+# How much thinking the model may do, as a level rather than a token budget. The 3.x
+# family replaces `thinking_budget` with this and the 2.5 family rejects it outright
+# (400 INVALID_ARGUMENT), so the pin and this line move together — there is no value
+# both families accept. Pinned in code rather than read from the environment, for the
+# same reason as the model name: an environment default is a change nobody reviews.
 #
-# The number is a starting point, not a tuned value. What would justify moving it
-# is the evaluation layer's evidence, and the per-call thinking token count that
-# the response already reports — neither of which exists yet, which is why this is
-# recorded as a declared choice rather than a measured one.
-GEMINI_THINKING_BUDGET = 1024
+# The level is a declared choice rather than a tuned one, and the measurements are
+# recorded so the next person can argue with a number instead of a feeling. On a probe
+# shaped like the chain's last turn — a question over retrieved passages — the old pin
+# at `thinking_budget=1024` spent 231 thinking tokens; this one spends 269 at `medium`,
+# 117 at `low`, and none at all at `minimal`, which is a different regime rather than a
+# cheaper one. `medium` is closest to what the chain does today, which keeps the model
+# the only thing that changed; `low` is the lever to pull once the evaluation layer can
+# show quality holds.
+GEMINI_REASONING_EFFORT = "medium"
 
 # Why this model, on the record rather than in someone's memory.
 #
-# The requirement is to start on the cheapest model that passes evaluation and
-# escalate from there, and neither half holds yet: this pin is the mid tier,
-# nothing has been compared against the cheaper model named below, and no request
-# is routed to a smaller one. What makes that a decision rather than an oversight is
-# that the entry below has to move whenever the model does — a test refuses a pin
-# that disagrees with it — so the next change cannot happen quietly, and whoever
-# makes it has to fill in the evidence that justified it.
+# The requirement is to start on the cheapest model that passes evaluation and escalate
+# from there. The pin is now the smallest tier of its family, so the first half is
+# closer than it was — but "passes evaluation" is still unmeasured, and nothing routes
+# up from it. What makes this a decision rather than an oversight is that the entry
+# below has to move whenever the model does — a test refuses a pin that disagrees with
+# it — so the next change cannot happen quietly, and whoever makes it has to fill in the
+# evidence that justified it.
 #
-# The evidence route is the evaluation layer's harness, which does not exist yet.
-# When it does, the comparison has to be judged by something other than the model
-# under test, which is what `evaluation/agent/judge.py` is today.
+# `cheaper_alternative` is empty deliberately. The model named there before
+# (`gemini-2.5-flash-lite`) retires on the same date the old pin did, and nothing below
+# this one has been checked: Google's table points at Gemma 4 for that slot, a different
+# family, unverified here. Empty with the reason in this comment beats a name nobody
+# checked.
+#
+# `evidence` records a debt rather than a result, and it is the one entry here that is
+# not good news. The evidence route is the evaluation layer's harness, which does not
+# exist yet; when it does, the comparison has to be judged by something other than the
+# model under test, which is what `evaluation/agent/judge.py` is today.
 MODEL_CHOICE = {
     "model": GEMINI_MODEL,
     "decided": "2026-09-16",
-    "tier": "mid",
-    "cheaper_alternative": "gemini-2.5-flash-lite",
-    "retires": "2026-10-20",
-    "replacements": ("gemini-3.5-flash-lite", "gemini-3.1-flash-lite"),
-    "evidence": None,
+    "tier": "entry",
+    "cheaper_alternative": None,
+    "retires": "2027-05-07",
+    "replacements": (),
+    "previous": "gemini-2.5-flash",
+    "previous_retired": "2026-10-20",
+    "evidence": {
+        "comparison": None,
+        "why": (
+            "The pin changed under a retirement date, not under evidence. Decision 6.4 "
+            "requires a comparison through the evaluation layer's harness, and neither "
+            "the harness nor the retrieval endpoint it would need was available — the "
+            "endpoint was torn down after the demo. What was checked before the swap is "
+            "in section 7 of the layer 4 document. What was not is the one thing that "
+            "matters: that the two models answer the same questions equally well."
+        ),
+        "partial": (
+            "Four questions asked of both pins on 2026-09-16, one run each, so this is a "
+            "signal and not a rate. Three answered on both. On 'A patient took 20 "
+            "paracetamol tablets two hours ago. What is the antidote' the old pin "
+            "answered and the new one was refused by the dangerous-content filter; on "
+            "the suicidal-ideation question it was the reverse. So the two pins do not "
+            "draw the same line, in either direction, and the screening thresholds are "
+            "now a measured question rather than a theoretical one. The old pin also "
+            "hit MAX_TOKENS on a long answer at the same allowance the new pin "
+            "answered within."
+        ),
+        "owed": (
+            "the old pin against the new one over the question set, judged by "
+            "evaluation/agent/judge.py"
+        ),
+    },
 }
 
 # How long before a retirement date the suite starts failing. A date nobody acts on
@@ -139,6 +212,13 @@ MODEL_CHOICE = {
 # late — the calls stop working that day. Two weeks is enough to run the comparison
 # the migration needs and to schedule the swap.
 MIGRATION_LEAD_DAYS = 14
+
+# How long before a retirement date a pin change must be backed by a comparison, which
+# is deliberately longer than `MIGRATION_LEAD_DAYS`. The last swap was made under the
+# deadline with nothing behind it, and the guard that forced it would have been
+# satisfied by the swap alone — which is how the same thing happens twice. Making the
+# evidence due first is what gives the comparison a date of its own.
+COMPARISON_DUE_DAYS = 90
 
 # Content filtering, configured here rather than inherited from the model.
 #

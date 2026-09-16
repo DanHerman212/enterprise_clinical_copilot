@@ -42,10 +42,10 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, START, StateGraph
 
 from services.mcp.config import (
+    GEMINI_LOCATION,
     GEMINI_MAX_OUTPUT_TOKENS,
+    GEMINI_REASONING_EFFORT,
     GEMINI_SAFETY_THRESHOLDS,
-    GEMINI_THINKING_BUDGET,
-    LOCATION,
     PROJECT,
 )
 from services.mcp.runtime import timeout_chain
@@ -181,7 +181,10 @@ def _build_llm(model: str) -> ChatGoogleGenerativeAI:
     return ChatGoogleGenerativeAI(
         model=model,
         project=PROJECT,
-        location=LOCATION,
+        # The model's endpoint, not the project's region: the pinned model has no
+        # regional endpoint, and `LOCATION` also names the vector index and the
+        # prediction endpoint, which do. See the note on `GEMINI_LOCATION`.
+        location=GEMINI_LOCATION,
         vertexai=True,
         temperature=0,
         # The allowance covers thinking AND the answer. Too small and the model
@@ -189,11 +192,13 @@ def _build_llm(model: str) -> ChatGoogleGenerativeAI:
         # text, and raises nothing — which in a graph looks like a silently
         # skipped tool call. See §9.
         max_output_tokens=GEMINI_MAX_OUTPUT_TOKENS,
-        # ...so thinking is capped separately rather than left to take what it
-        # likes from that allowance. The answer gets what remains, and the cap is
-        # what makes a runaway reasoning turn a bounded cost instead of a
-        # truncation discovered afterwards (`model_turn` reports which it was).
-        thinking_budget=GEMINI_THINKING_BUDGET,
+        # ...so thinking is bounded separately rather than left to take what it
+        # likes from that allowance. A level bounds effort rather than tokens, so
+        # what it will spend is only known afterwards; `GEMINI_REASONING_EFFORT`
+        # carries the measurements. The pin and this parameter move together: the
+        # 2.5 family rejects a level outright, and the 3.x family deprecates the
+        # budget, so there is no value both accept.
+        reasoning_effort=GEMINI_REASONING_EFFORT,
         max_retries=3,
         timeout=MODEL_TIMEOUT_SECONDS,
         # The content filters are set explicitly, per category, rather than left to

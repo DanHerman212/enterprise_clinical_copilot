@@ -154,35 +154,30 @@ and no exception.
 
 ## 5. Gaps
 
+Each entry states the defect and the evidence for it. The decision that closes it is
+the entry of the same number in section 6.
+
 **1 — Failure visibility.** The SDK retries three attempts, 429 and 408 among
 them, and nothing observes it. The finish reason is discarded, so a `MAX_TOKENS`
 finish, a safety block and a blocked prompt all reach the caller as the same 502
 telling them to retry — which is wrong advice for a deterministic block.
 *Evidence:* nothing under `services/agent/` reads `finish_reason`, `safety_ratings`
 or `prompt_feedback`, and no retry is counted.
-*Closed by:* recording the call's outcome — finish reason, attempt count, error
-class — and branching on it.
 
 **2 — One call is unbounded.** There is no timeout on the model call, and because
 the HTTP request is made with none, the SDK's retry-on-timeout can never fire.
 Thinking also draws on the same 2048-token allowance as the answer, with no cap of
 its own. The only bound is the 110-second deadline over the whole question.
-*Closed by:* a per-call timeout and an explicit thinking budget, both constructor
-arguments on the client (`graph.py` 169).
 
 **3 — The response's own numbers are not recorded.** Every response reports input,
 output, thinking and cached token counts, and the model version that served it. The
 record carries none of them, and carries the requested model rather than the served
-one.
-*Closed by:* adding those fields to the record (`chain.py` 41) — which is also what
-layer 10 needs for token metrics (F4).
+one. They are also what layer 10 needs before it can have a token metric (F4).
 
 **4 — The model choice is unevidenced, with no escalation.** The pin is the mid
 tier. A cheaper GA tier exists on the same lifecycle table and was never evaluated,
 there is no escalation or routing path, and the judge that would compare them is
 the same model (`evaluation/agent/judge.py` 149).
-*Closed by:* a recorded comparison against at least one alternative, using layer
-9's harness, and a decision on escalation.
 
 **5 — Screening is unconfigured and unspecified.** The non-configurable filters
 (CSAM on the prompt; CSAM and personal data on the response) always apply. The four
@@ -191,8 +186,6 @@ content — block at a default threshold, because nothing here passes
 `safety_settings`; nothing records that a response was filtered; and nothing at this
 door addresses injection or jailbreak. `guard_answer` (`guardrail.py` 517) is a
 faithfulness check, not screening.
-*Closed by:* setting the thresholds explicitly, and a decision on injection and
-jailbreak — Model Armor or an equivalent — which is layer 11's to make.
 
 **6 — The pin's expiry is unscheduled, and the migration would change filtering
 silently.** `gemini-2.5-flash` retires 2026-10-20 and nothing schedules the move.
@@ -200,8 +193,6 @@ Google's safety-filter page (last updated 2026-09-03) states that `OFF` is the
 default for `gemini-3.5-flash` and subsequent models, which is where the named
 replacements live, so the platform filtering that applies today would stop applying
 without anyone deciding it.
-*Closed by:* a dated migration plan covering the model, the eval evidence and the
-safety thresholds.
 
 **7 — Region and output budget sit outside review.** Both are environment-settable
 (`config.py` 31 and 100), so a deploy can move where the model runs and how much it
@@ -209,21 +200,16 @@ may generate with no commit anywhere. The record does distinguish the result,
 because Cloud Run gives every configuration its own revision name and the record
 carries it — but the change is unreviewed, and the region carries a residency
 question for clinical-shaped data.
-*Closed by:* moving both into code, or declaring them deploy-time inputs and
-reviewing them as such.
 
 **8 — No failure simulation (H5).** Nothing injects a 429, a stall, an empty
 candidate or a safety block, and no test constructs a failing model. The behaviour
 described in 3.4 is reasoning about code that nothing exercises.
-*Closed by:* a fake chat model and four tests.
 
 **9 — Caching is unmeasured (H4, SHOULD).** Implicit caching is on by default,
 discounts the cached portion by 90% and costs nothing to store; the minimum
 cacheable prefix is 2,048 tokens for this model family, and the system prompt is
 12,540 characters — about 3,135 tokens — resent at the start of every turn. Whether
 a hit occurs is reported on every response and never read.
-*Closed by:* reading the cached-token count (the same field as gap 3), then
-deciding on the number.
 
 **Recorded, not owned here:** the query embedding is a second Vertex call outside
 this door (`services/mcp/tools/retrieval.py` 92–93) and belongs to layers 5 and 7;

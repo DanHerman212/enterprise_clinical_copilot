@@ -115,8 +115,9 @@ architecture gap. This list exists so the bar does not move mid-review.
   current state against the requirement · gaps · design decisions · what
   changed · interview questions the layer answers.
 - Sections 1 to 3 stay brief and carry no gaps: gaps belong in section 5 and
-  nowhere else. Section 5 consolidates to one entry per distinct defect, section 6
-  holds exactly one decision per gap in the same order so work can proceed one gap
+  nowhere else. Section 5 consolidates to one entry per distinct defect and states
+  the defect and its evidence only — the remedy is not repeated there. Section 6
+  holds exactly one decision per gap, in the same order, so work can proceed one gap
   at a time, and section 7 stays empty until that work lands.
 - "Done" for a layer means every MUST is met and verified live. SHOULDs are
   recorded as decisions. Nothing from section 4 is added unless chosen.

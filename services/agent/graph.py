@@ -43,6 +43,7 @@ from langgraph.graph import END, START, StateGraph
 
 from services.mcp.config import (
     GEMINI_MAX_OUTPUT_TOKENS,
+    GEMINI_SAFETY_THRESHOLDS,
     GEMINI_THINKING_BUDGET,
     LOCATION,
     PROJECT,
@@ -195,6 +196,11 @@ def _build_llm(model: str) -> ChatGoogleGenerativeAI:
         thinking_budget=GEMINI_THINKING_BUDGET,
         max_retries=3,
         timeout=MODEL_TIMEOUT_SECONDS,
+        # The content filters are set explicitly, per category, rather than left to
+        # the model's default — which differs between models, and is `OFF` on the
+        # ones this pin is due to move to. What is set here is what applies; there
+        # is no other place content filtering is configured.
+        safety_settings=dict(GEMINI_SAFETY_THRESHOLDS),
     )
 
 

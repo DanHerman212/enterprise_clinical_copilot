@@ -81,6 +81,33 @@ def safety_ratings(message: Any) -> list[dict]:
     return list(ratings) if isinstance(ratings, list) else []
 
 
+def filtered_categories(message: Any) -> list[str] | None:
+    """Which content-filter categories this response was flagged for.
+
+    Read from the ratings rather than inferred from the finish reason, because a
+    rating carries `blocked` per category and says *which* harm was involved. A
+    prompt that never reached the model carries its ratings under `prompt_feedback`
+    instead, so both places are read.
+
+    Returns None when nothing was flagged, which is a different statement from an
+    empty list: one means the response was scored and passed, the other that no
+    scoring happened at all.
+    """
+    flagged: list[str] = []
+    meta = metadata(message)
+    feedback = meta.get("prompt_feedback") or {}
+    for ratings in (meta.get("safety_ratings"), feedback.get("safety_ratings")):
+        if not isinstance(ratings, list):
+            continue
+        for rating in ratings:
+            if not isinstance(rating, dict) or not rating.get("blocked"):
+                continue
+            category = str(rating.get("category") or "unspecified")
+            if category not in flagged:
+                flagged.append(category)
+    return flagged or None
+
+
 def served_model(message: Any) -> str | None:
     """The model version that answered, as opposed to the one we asked for.
 

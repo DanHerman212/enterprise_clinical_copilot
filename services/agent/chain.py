@@ -74,6 +74,7 @@ RECORD_FIELDS = (
     "served_model",
     "outcome",
     "finish_reason",
+    "filtered",
     "tokens",
     "question_chars",
     "duration_ms",
@@ -91,6 +92,7 @@ def record_execution(
     duration_ms: int,
     outcome: str,
     finish_reason: str | None = None,
+    filtered: list[str] | None = None,
     served_model: str | None = None,
     tokens: dict | None = None,
     tool_calls=(),
@@ -127,6 +129,9 @@ def record_execution(
     when the response reported nothing, so a missing number reads as missing
     rather than as zero. The observability layer needs this before it can have a
     token metric at all.
+
+    `filtered` names the content-filter categories that were flagged, when any
+    were. It exists so that a refusal can be counted rather than only experienced.
     """
     record = {
         "event": "agent_execution",
@@ -136,6 +141,7 @@ def record_execution(
         "served_model": served_model,
         "outcome": outcome,
         "finish_reason": finish_reason,
+        "filtered": filtered,
         "tokens": tokens,
         "question_chars": len(question or ""),
         "duration_ms": duration_ms,

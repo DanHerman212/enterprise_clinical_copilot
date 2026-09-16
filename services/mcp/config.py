@@ -132,4 +132,28 @@ MODEL_CHOICE = {
     "evidence": None,
 }
 
+# Content filtering, configured here rather than inherited from the model.
+#
+# Four categories are configurable, and these are all of them; the CSAM and
+# personal-data filters are not configurable and always apply, so there is nothing
+# to set for them. Setting a threshold makes the behaviour ours: Google's page says
+# an unset threshold falls back to the model's default, and the default is not the
+# same on every model — `OFF` is the default for `gemini-3.5-flash` and later, which
+# is where the replacements for this pin live. Without this, the migration would
+# remove the filtering that applies today, silently.
+#
+# BLOCK_MEDIUM_AND_ABOVE is the middle of three usable thresholds, and it is a
+# trade rather than a preference: stricter and legitimate clinical content gets
+# refused — an overdose, a sexual history, a self-harm assessment — looser and the
+# control is nominal. Moving a category on its own needs screening evidence, which
+# means an evaluation of what this product actually gets asked; the first candidate
+# for review is dangerous content, because a discharge note describes dangerous
+# things.
+GEMINI_SAFETY_THRESHOLDS = {
+    "HARM_CATEGORY_HATE_SPEECH": "BLOCK_MEDIUM_AND_ABOVE",
+    "HARM_CATEGORY_HARASSMENT": "BLOCK_MEDIUM_AND_ABOVE",
+    "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_MEDIUM_AND_ABOVE",
+    "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_MEDIUM_AND_ABOVE",
+}
+
 API_ENDPOINT = f"{LOCATION}-aiplatform.googleapis.com"

@@ -84,6 +84,29 @@ def test_the_model_is_pinned_and_ignores_the_environment(monkeypatch):
         importlib.reload(config)
 
 
+def test_the_pinned_model_is_the_one_on_record():
+    """The pin and its written reason move together.
+
+    A test rather than a comment because a comment does not stop anyone: changing
+    the model now means editing the record, and the record is where the reason and
+    the evidence live.
+    """
+    import services.mcp.config as config
+
+    assert config.MODEL_CHOICE["model"] == config.GEMINI_MODEL
+    assert config.MODEL_CHOICE["decided"]
+    assert config.MODEL_CHOICE["tier"]
+
+
+def test_the_record_names_what_a_comparison_would_be_against():
+    # The cheaper tier is named so the next person does not have to rediscover it,
+    # and the evidence slot exists so that filling it in is a deliberate edit.
+    import services.mcp.config as config
+
+    assert config.MODEL_CHOICE["cheaper_alternative"] != config.GEMINI_MODEL
+    assert "evidence" in config.MODEL_CHOICE
+
+
 def test_the_chain_exposes_its_model_and_identity():
     assert chain.MODEL_ID == chain.MODEL_ID.strip()
     assert chain.CODE_REVISION.strip()

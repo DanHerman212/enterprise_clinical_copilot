@@ -1,6 +1,6 @@
 # Layer 4 — Model runtime & gateway
 
-Status: audited 2026-09-16. Six of nine gaps open; gaps 1, 2 and 3 are closed
+Status: audited 2026-09-16. Five of nine gaps open; gaps 1 to 4 are closed
 (section 7). Sections 5 and 6 are paired one to one: each gap has exactly one
 decision, in the same order.
 
@@ -93,7 +93,9 @@ return ChatGoogleGenerativeAI(
 ```
 
 (`graph.py` 180–198.) Temperature is 0 because a clinical explanation that varies
-between identical questions is a defect, not variety.
+between identical questions is a defect, not variety. The model is a parameter of
+`ask` with the pin as its default, so choosing one per call is already possible;
+nothing routes on it today.
 
 ### 3.2 The runtime is Google's
 
@@ -117,6 +119,12 @@ The identity an answer is attributed to comes from the deployment rather than fr
 a number anyone types: `chain.CODE_REVISION` resolves `CODE_REVISION` (set by a
 deploy) → `K_REVISION` (Cloud Run's own revision name) → `"local"`, and an
 unexpanded placeholder counts as absent.
+
+Why this particular model is written down beside it (`MODEL_CHOICE`, `config.py`
+127), together with the cheaper tier it has not been compared against and an
+empty evidence slot. The pin and that record have to move together — a test
+refuses a pin that disagrees with it — so the next change to the model carries its
+reason with it instead of depending on whoever makes it remembering.
 
 ### 3.4 What one call is given, and what a failure looks like
 
@@ -150,7 +158,7 @@ and no exception.
 | A6 — managed runtime | **Met** | Vertex, `vertexai=True`, ADC; nothing hosted by us. |
 | H1 — retries, timeouts, exception handling, 429 | **Partly** | Timeouts and exception handling are met: one call is bounded, the bounds nest, and the response's own reason for stopping is recorded and acted on. What is missing is any *observation* of the retries, 429s included. |
 | H2 — QPS and tokens/sec baseline | **Partly** | Every execution now records what it was billed for, so a baseline is derivable from the logs. None has been written down, and the monitoring half belongs to layer 10. |
-| H3 — cheapest model that passes eval, thinking budget | **Partly** | Thinking has a cap of its own now. The model choice is still unevidenced: the pin is the mid tier, a cheaper GA tier was never evaluated, and there is no escalation path. |
+| H3 — cheapest model that passes eval, thinking budget | **Partly** | Thinking has a cap of its own, and the choice of model is now recorded with its reason and guarded. What is missing is the comparison itself: the pin is the mid tier and the cheaper alternative has never been evaluated, which is layer 9's harness to run. |
 | H4 — concise prompts, context caching | **Not decided** | Caching is enabled by default on the platform and its effect here is unmeasured. |
 | H5 — failure and load simulation | **Not met** | Nothing constructs a failing model. |
 | G2 / B4 — screening | **Not met** | No thresholds are set, and nothing addresses injection or jailbreak. |
@@ -187,10 +195,12 @@ model version that served it. The record carried none of them, and carried the
 requested model rather than the served one — which left layer 10 with nothing to
 build a token metric from (F4).
 
-**4 — The model choice is unevidenced, with no escalation.** The pin is the mid
-tier. A cheaper GA tier exists on the same lifecycle table and was never evaluated,
-there is no escalation or routing path, and the judge that would compare them is
-the same model (`evaluation/agent/judge.py` 149).
+**4 — The model choice was unevidenced, with no escalation.** *Closed 2026-09-16 —
+see 7. The comparison itself is still unrun; what closed is that the choice is
+recorded, and that changing it now requires the record to move.*
+The pin is the mid tier. A cheaper GA tier exists on the same lifecycle table and
+was never evaluated, there is no escalation or routing path, and the judge that
+would compare them is the same model (`evaluation/agent/judge.py` 149).
 
 **5 — Screening is unconfigured and unspecified.** The non-configurable filters
 (CSAM on the prompt; CSAM and personal data on the response) always apply. The four
@@ -349,6 +359,18 @@ which is where a token metric is most interesting. Seven tests in
 
 ---
 
+**Gap 4 closed 2026-09-16: the model choice is on the record, and cannot move
+quietly.** The pin is the mid tier, no comparison against a cheaper one has been
+run, and nothing routes to a smaller model. That is now written down rather than
+implied: `MODEL_CHOICE` (`config.py` 127) names the model, the date, the tier, the
+cheaper alternative, and an empty evidence slot, and two tests refuse a pin that
+disagrees with it. So changing the model means editing the record, and the record is
+where the reason and the justification live. Escalation stays unbuilt on purpose:
+`ask` already takes a model per call, so routing is a chain-level decision to make
+when a second task shape exists rather than machinery to add now.
+
+---
+
 ## 8. Interview questions this layer answers
 
 **Where is the model called, and how many places could change it?**
@@ -369,9 +391,9 @@ candidate decision under gap 2.
 The model is pinned, the loop is bounded by the per-turn tool budget and the
 recursion limit (layer 3), one call is capped at 60 seconds so a stall fails as a
 model failure rather than as a slow answer, and thinking has its own cap instead of
-drawing freely on the answer's allowance. What is still not evidenced is the model
-choice itself — the pin is the mid tier and the comparison against a cheaper tier
-does not exist yet (gap 4).
+drawing freely on the answer's allowance. The choice of model is on the record with
+the alternative it has not been compared against, so the next change to it has to
+say what justified the change.
 
 **How do you know which model produced an answer?**
 The record carries the model we asked for, the version that actually served the

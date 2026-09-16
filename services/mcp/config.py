@@ -111,4 +111,25 @@ GEMINI_MAX_OUTPUT_TOKENS = positive_int_env("GEMINI_MAX_OUTPUT_TOKENS", 2048)
 # recorded as a declared choice rather than a measured one.
 GEMINI_THINKING_BUDGET = 1024
 
+# Why this model, on the record rather than in someone's memory.
+#
+# The requirement is to start on the cheapest model that passes evaluation and
+# escalate from there, and neither half holds yet: this pin is the mid tier,
+# nothing has been compared against the cheaper model named below, and no request
+# is routed to a smaller one. What makes that a decision rather than an oversight is
+# that the entry below has to move whenever the model does — a test refuses a pin
+# that disagrees with it — so the next change cannot happen quietly, and whoever
+# makes it has to fill in the evidence that justified it.
+#
+# The evidence route is the evaluation layer's harness, which does not exist yet.
+# When it does, the comparison has to be judged by something other than the model
+# under test, which is what `evaluation/agent/judge.py` is today.
+MODEL_CHOICE = {
+    "model": GEMINI_MODEL,
+    "decided": "2026-09-16",
+    "tier": "mid",
+    "cheaper_alternative": "gemini-2.5-flash-lite",
+    "evidence": None,
+}
+
 API_ENDPOINT = f"{LOCATION}-aiplatform.googleapis.com"

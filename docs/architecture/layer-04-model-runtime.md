@@ -143,7 +143,7 @@ and no exception.
 | Requirement | State | Why |
 |---|---|---|
 | A6 — managed runtime | **Met** | Vertex, `vertexai=True`, ADC; nothing hosted by us. |
-| H1 — retries, timeouts, exception handling, 429 | **Partly** | The SDK's retry policy runs and includes 429. The call itself has no timeout, and nothing records how it went. |
+| H1 — retries, timeouts, exception handling, 429 | **Partly** | The SDK's retry policy runs and includes 429. The call itself has no timeout, and the response's own reason for stopping is now recorded and acted on rather than inferred. |
 | H2 — QPS and tokens/sec baseline | **Not met** | No baseline exists, and the counts the response reports are not read. |
 | H3 — cheapest model that passes eval, thinking budget | **Not met** | The pin is the mid tier with no comparison recorded, and thinking draws on the shared allowance with no cap of its own. |
 | H4 — concise prompts, context caching | **Not decided** | Caching is enabled by default on the platform and its effect here is unmeasured. |
@@ -157,12 +157,16 @@ and no exception.
 Each entry states the defect and the evidence for it. The decision that closes it is
 the entry of the same number in section 6.
 
-**1 — Failure visibility.** The SDK retries three attempts, 429 and 408 among
-them, and nothing observes it. The finish reason is discarded, so a `MAX_TOKENS`
-finish, a safety block and a blocked prompt all reach the caller as the same 502
-telling them to retry — which is wrong advice for a deterministic block.
-*Evidence:* nothing under `services/agent/` reads `finish_reason`, `safety_ratings`
+**1 — Failure visibility.** *Closed 2026-09-16 — see 7.*
+The SDK retries three attempts, 429 and 408 among them, and nothing observes it.
+The finish reason was discarded, so a `MAX_TOKENS` finish, a safety block and a
+blocked prompt all reached the caller as the same 502 telling them to retry —
+wrong advice for a deterministic block.
+*Evidence:* nothing under `services/agent/` read `finish_reason`, `safety_ratings`
 or `prompt_feedback`, and no retry is counted.
+*Residue:* the retry count is still unobservable, because the response reports why
+a turn ended rather than how many attempts it took. It becomes observable only if
+the retry policy becomes ours, which is gap 2's ground.
 
 **2 — One call is unbounded.** There is no timeout on the model call, and because
 the HTTP request is made with none, the SDK's retry-on-timeout can never fire.
@@ -285,8 +289,30 @@ field rather than competing with the MUSTs.
 
 ## 7. What changed
 
-Empty by design. Nothing in this layer has changed. Each entry lands here as its
-gap is remediated, with the date and the evidence.
+**Gap 1 closed 2026-09-16: the door reports how a call behaved instead of
+assuming.** `services/agent/model_turn.py` reads the three signals the response
+already carries — `finish_reason`, `safety_ratings` and
+`prompt_feedback.block_reason` — and classifies a turn that produced no text as
+truncated, refused, or unavailable. `_compose_success` (`http.py`) raises with a
+code per class, so a refusal reaches the caller as `answer_refused` in words that
+do not suggest retrying, a truncation as `answer_truncated` with words that do, and
+a turn with no signal as `answer_unavailable`, exactly as before. The execution
+record gained `finish_reason`, always present as a key so a failure can be queried
+rather than inferred from an empty answer (`chain.py` 41, `RECORD_FIELDS`).
+
+*Evidence:* ten tests in `tests/agent/test_model_turn.py`, covering the mapping,
+the unblocked-prompt case that must not be read as a refusal, the refusal sentence
+carrying no advice to retry, both routes returning the right code, and the record
+carrying the reason. Agent suite 314 passing, no regressions.
+
+*What this does not cover, stated rather than implied.* The tests drive the
+classifier with the metadata shapes the SDK produces, so a change in how LangChain
+surfaces `prompt_feedback` would not fail them. And a real refusal cannot be
+triggered on demand, so the end-to-end path is unexercised until gap 8 supplies a
+fake model — which is what that gap is for. The retry count remains unobservable
+for the reason in gap 1's residue.
+
+Nothing else in this layer has changed.
 
 ---
 
@@ -298,8 +324,13 @@ short on purpose: a second construction point is how retry policies diverge.
 
 **What happens when the model returns 429?**
 The SDK retries it — three attempts in total, 429 and 408 included, with backoff —
-and we add nothing: no count, no distinction from any other failure, no record that
-the policy fired. That is gap 1.
+and we add nothing: no count, no distinction from any other failure. So a quota
+exhaustion reaches the caller as the generic 502. What is different since gap 1
+closed is that the *other* half is answered: when a turn produces no text, the
+response's own reason is read, recorded and acted on, so a refusal is reported as
+a refusal instead of as something to retry. Counting the retries is still open, and
+it stays unobservable while the SDK owns the policy — making it ours is a
+candidate decision under gap 2.
 
 **How do you control cost on a reasoning model?**
 Partly, and not by controlling thinking. The model is pinned, the loop is bounded

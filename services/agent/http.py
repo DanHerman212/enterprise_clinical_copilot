@@ -23,7 +23,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
-from services.agent import chain, stages
+from services.agent import chain, model_turn, stages
 from services.agent.a2ui import compose_presentation
 from services.agent.contracts import (
     AgentRequestError,
@@ -31,7 +31,7 @@ from services.agent.contracts import (
     parse_agent_request,
     validate_agent_success,
 )
-from services.agent.graph import ask, final_text
+from services.agent.graph import ask, final_message, final_text
 from services.agent.guardrail import guard_answer
 from services.agent.mcp_client import MCP_TRANSPORT, toolbox
 from services.mcp.runtime import requires_cloud_run_auth, timeout_chain
@@ -110,7 +110,23 @@ class AgentAnswerUnavailable(Exception):
     `answer_unavailable` 502, and /ask/stream turns it into a terminal error
     event. It exists as an exception rather than a return value so both routes
     are forced to handle it.
+
+    `code` separates the cases a caller can act on differently — a refusal
+    (`answer_refused`) and a truncated answer (`answer_truncated`) from an answer
+    that simply did not arrive — and `finish_reason` carries the model's own
+    reason into the execution record so a failure can be queried rather than
+    inferred.
     """
+
+    def __init__(
+        self,
+        message: str,
+        code: str = "answer_unavailable",
+        finish_reason: str | None = None,
+    ):
+        super().__init__(message)
+        self.code = code
+        self.finish_reason = finish_reason
 
 
 def _compose_success(question: str, state: dict, trace: str) -> dict:
@@ -125,11 +141,16 @@ def _compose_success(question: str, state: dict, trace: str) -> dict:
     # and so a client can choose to render a note.
     text = final_text(state)
     if not text:
-        # Typically MAX_TOKENS spent entirely on thinking — the model returns
-        # empty text and raises nothing. A stale fragment must not ship as the
-        # answer (ECC-12).
-        logger.error("agent produced no final answer text trace=%s", trace)
-        raise AgentAnswerUnavailable("The agent did not produce an answer. Please retry.")
+        # An empty turn is not one thing. The response says which it was, and the
+        # cases need different words: a truncated answer is worth retrying, a
+        # refusal by the content filters is not — at temperature 0 the same
+        # question reaches the same decision (ECC-12).
+        code, sentence, reason = model_turn.classify(final_message(state))
+        logger.error(
+            "agent produced no final answer text trace=%s code=%s finish_reason=%s",
+            trace, code, reason,
+        )
+        raise AgentAnswerUnavailable(sentence, code=code, finish_reason=reason)
 
     guarded = guard_answer(text, state["tool_calls"])
 
@@ -161,7 +182,10 @@ def _compose_success(question: str, state: dict, trace: str) -> dict:
         validate_agent_success(payload)
     except AgentResponseError:
         logger.error("agent produced a payload outside its success contract trace=%s", trace)
-        raise AgentAnswerUnavailable("The agent did not produce an answer. Please retry.")
+        raise AgentAnswerUnavailable(
+            "The agent did not produce an answer. Please retry.",
+            finish_reason=model_turn.finish_reason(final_message(state)),
+        )
 
     return payload
 
@@ -295,13 +319,19 @@ async def ask_route(request: Request) -> JSONResponse:
     try:
         payload = _compose_success(question, state, trace)
     except AgentAnswerUnavailable as exc:
-        log.record(trace, question, "error", error="answer_unavailable")
+        # The record says which of the three it was, in the code and in the
+        # model's own finish reason.
+        log.record(
+            trace, question, "error",
+            error=exc.code, finish_reason=exc.finish_reason,
+        )
         return JSONResponse(
-            {"error": "answer_unavailable", "message": str(exc)},
+            {"error": exc.code, "message": str(exc)},
             status_code=502,
         )
     log.record(
         trace, question, "ok",
+        finish_reason=model_turn.finish_reason(final_message(state)),
         tool_calls=[call["name"] for call in payload["tool_calls"]],
         guardrail_flags=len(payload["guardrail_flags"]),
     )
@@ -456,12 +486,16 @@ async def _stream_chain(question: str, trace: str, question_kind: str | None = N
         try:
             payload = _compose_success(question, state, trace)
         except AgentAnswerUnavailable as exc:
-            log.record(trace, question, "error", error="answer_unavailable")
-            yield _error_frame("answer_unavailable", str(exc))
+            log.record(
+                trace, question, "error",
+                error=exc.code, finish_reason=exc.finish_reason,
+            )
+            yield _error_frame(exc.code, str(exc))
             return
 
         log.record(
             trace, question, "ok",
+            finish_reason=model_turn.finish_reason(final_message(state)),
             tool_calls=[call["name"] for call in payload["tool_calls"]],
             guardrail_flags=len(payload["guardrail_flags"]),
         )

@@ -72,6 +72,7 @@ RECORD_FIELDS = (
     "code_revision",
     "model",
     "outcome",
+    "finish_reason",
     "question_chars",
     "duration_ms",
     "stages",
@@ -87,6 +88,7 @@ def record_execution(
     stages: list[dict],
     duration_ms: int,
     outcome: str,
+    finish_reason: str | None = None,
     tool_calls=(),
     guardrail_flags: int = 0,
     error: str | None = None,
@@ -109,6 +111,11 @@ def record_execution(
 
     JSON on one line so it is queryable by whatever the observability layer
     eventually picks; today it lands in Cloud Logging with the rest of stdout.
+
+    `finish_reason` is the model's own reason for stopping, and it is always
+    present as a key so a failure can be queried rather than inferred from an
+    empty answer: `MAX_TOKENS` is a truncation worth retrying, `SAFETY` and
+    `PROHIBITED_CONTENT` are decisions that will not change.
     """
     record = {
         "event": "agent_execution",
@@ -116,6 +123,7 @@ def record_execution(
         "code_revision": code_revision,
         "model": model,
         "outcome": outcome,
+        "finish_reason": finish_reason,
         "question_chars": len(question or ""),
         "duration_ms": duration_ms,
         "stages": list(stages),

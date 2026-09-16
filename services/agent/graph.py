@@ -296,6 +296,18 @@ async def ask(
     )
 
 
+def final_message(state: dict) -> AIMessage | None:
+    """The last message, when it is the model's — the turn the answer comes from.
+
+    Returned rather than just its text because the same response carries the
+    finish reason and any content-filter feedback. A caller that has to explain a
+    missing answer needs those, not only the empty string (`model_turn`).
+    """
+    messages = state.get("messages") or []
+    last = messages[-1] if messages else None
+    return last if isinstance(last, AIMessage) else None
+
+
 def final_text(state: dict) -> str:
     """Text of the FINAL assistant message — never an earlier one.
 
@@ -304,11 +316,10 @@ def final_text(state: dict) -> str:
     documented MAX_TOKENS failure that raises nothing). Empty means the answer
     is unavailable, and the server reports exactly that (ECC-12).
     """
-    messages = state.get("messages") or []
-    last = messages[-1] if messages else None
-    if not isinstance(last, AIMessage):
+    message = final_message(state)
+    if message is None:
         return ""
-    text = last.content
+    text = message.content
     if isinstance(text, list):
         # A list of content blocks — keep the text parts.
         text = "".join(

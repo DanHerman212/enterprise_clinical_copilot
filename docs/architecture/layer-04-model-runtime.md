@@ -1,7 +1,8 @@
 # Layer 4 — Model runtime & gateway
 
-Status: audited 2026-09-16. Nine gaps, none closed, no code changed. Sections 5
-and 6 are paired one to one: each gap has exactly one decision, in the same order.
+Status: audited 2026-09-16. Six of nine gaps open; gaps 1, 2 and 3 are closed
+(section 7). Sections 5 and 6 are paired one to one: each gap has exactly one
+decision, in the same order.
 
 ---
 

@@ -107,6 +107,43 @@ def test_the_record_names_what_a_comparison_would_be_against():
     assert "evidence" in config.MODEL_CHOICE
 
 
+def test_the_retirement_is_recorded_with_the_models_that_replace_it():
+    import services.mcp.config as config
+
+    assert config.MODEL_CHOICE["retires"]
+    replacements = config.MODEL_CHOICE["replacements"]
+    assert replacements
+    assert config.GEMINI_MODEL not in replacements
+
+
+def test_the_pinned_model_is_not_near_its_retirement():
+    """The date is an input the suite enforces, not a note in a comment.
+
+    A retired model does not warn: the calls simply stop working. So this fails
+    `MIGRATION_LEAD_DAYS` before the date, which is when there is still time to run
+    the comparison the migration needs and to schedule the swap. If this is the test
+    that woke you up, the plan is in the layer 4 document, section 6.6.
+    """
+    from datetime import date, timedelta
+
+    import services.mcp.config as config
+
+    retires = date.fromisoformat(config.MODEL_CHOICE["retires"])
+    last_safe_day = retires - timedelta(days=config.MIGRATION_LEAD_DAYS)
+    assert date.today() < last_safe_day, (
+        f"{config.GEMINI_MODEL} retires on {retires} "
+        f"({(retires - date.today()).days} days away). The migration is due: swap "
+        f"the model, run the comparison, and record the evidence in MODEL_CHOICE."
+    )
+
+
+def test_the_lead_time_cannot_be_set_to_nothing():
+    # A guard that can be switched off quietly is not a guard.
+    import services.mcp.config as config
+
+    assert config.MIGRATION_LEAD_DAYS >= 7
+
+
 def test_the_chain_exposes_its_model_and_identity():
     assert chain.MODEL_ID == chain.MODEL_ID.strip()
     assert chain.CODE_REVISION.strip()

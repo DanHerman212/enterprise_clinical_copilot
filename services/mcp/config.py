@@ -129,8 +129,16 @@ MODEL_CHOICE = {
     "decided": "2026-09-16",
     "tier": "mid",
     "cheaper_alternative": "gemini-2.5-flash-lite",
+    "retires": "2026-10-20",
+    "replacements": ("gemini-3.5-flash-lite", "gemini-3.1-flash-lite"),
     "evidence": None,
 }
+
+# How long before a retirement date the suite starts failing. A date nobody acts on
+# is the same failure as no date at all, and acting on it the day it arrives is too
+# late — the calls stop working that day. Two weeks is enough to run the comparison
+# the migration needs and to schedule the swap.
+MIGRATION_LEAD_DAYS = 14
 
 # Content filtering, configured here rather than inherited from the model.
 #

@@ -1,6 +1,6 @@
 # Layer 4 — Model runtime & gateway
 
-Status: audited 2026-09-16. Four of nine gaps open; gaps 1 to 5 are closed
+Status: audited 2026-09-16. Three of nine gaps open; gaps 1 to 6 are closed
 (section 7). Sections 5 and 6 are paired one to one: each gap has exactly one
 decision, in the same order.
 
@@ -113,7 +113,10 @@ with no commit anywhere. `chain.MODEL_ID` imports it (`chain.py` 38) so the stri
 has one home, and a test asserts it ignores a `GEMINI_MODEL` in the environment
 (`tests/agent/test_chain_artifact.py` 71). The comment above it records the pin's
 expiry: released 2025-06-17, retires 2026-10-20, with Gemini 3.5 Flash-Lite or 3.1
-Flash-Lite named as replacements (`config.py` 91–95).
+Flash-Lite named as replacements (`config.py` 91–95). The date is data rather than
+prose: `MODEL_CHOICE` carries it with the replacements (`config.py` 127), and a test
+fails fourteen days before it (`MIGRATION_LEAD_DAYS`, `config.py` 141), because a
+retired model does not warn — the calls just stop working.
 
 The identity an answer is attributed to comes from the deployment rather than from
 a number anyone types: `chain.CODE_REVISION` resolves `CODE_REVISION` (set by a
@@ -131,7 +134,7 @@ reason with it instead of depending on whoever makes it remembering.
 Model, temperature 0, `max_output_tokens` 2048 (`config.py` 102), `max_retries` 3,
 a timeout on the call, a cap on thinking (`config.py` 112) so that reasoning takes
 a fixed share of the allowance instead of as much as it likes, and the four
-configurable content filters pinned to a chosen threshold (`config.py` 152).
+configurable content filters pinned to a chosen threshold (`config.py` 160).
 
 A deadline of 110 seconds covers the whole question (`asyncio.timeout`, `http.py`
 262), and the three legs nest in a chain that startup enforces: one model call
@@ -162,7 +165,7 @@ and no exception.
 | H3 — cheapest model that passes eval, thinking budget | **Partly** | Thinking has a cap of its own, and the choice of model is now recorded with its reason and guarded. What is missing is the comparison itself: the pin is the mid tier and the cheaper alternative has never been evaluated, which is layer 9's harness to run. |
 | H4 — concise prompts, context caching | **Not decided** | Caching is enabled by default on the platform and its effect here is unmeasured. |
 | H5 — failure and load simulation | **Not met** | Nothing constructs a failing model. |
-| G2 / B4 — screening | **Partly** | The four configurable categories are pinned to a chosen threshold, and a filtered response records which category flagged it. Injection and jailbreak are still unaddressed at this door, by decision — that policy is layer 11's (gap 5, gap 7). |
+| G2 / B4 — screening | **Partly** | The four configurable categories are pinned to a chosen threshold, and a filtered response records which category flagged it. Injection and jailbreak are still unaddressed at this door, by decision — that policy is layer 11's (gap 5, gap 6). |
 
 ---
 
@@ -213,12 +216,14 @@ nothing passed `safety_settings`, and nothing recorded that a response had been
 filtered. Nothing at this door addressed injection or jailbreak either, and
 `guard_answer` (`guardrail.py` 517) is a faithfulness check rather than screening.
 
-**6 — The pin's expiry is unscheduled, and the migration would change filtering
-silently.** `gemini-2.5-flash` retires 2026-10-20 and nothing schedules the move.
-Google's safety-filter page (last updated 2026-09-03) states that `OFF` is the
-default for `gemini-3.5-flash` and subsequent models, which is where the named
-replacements live, so the platform filtering that applies today would stop applying
-without anyone deciding it.
+**6 — The pin's expiry was unscheduled, and the migration would have changed
+filtering silently.** *Closed 2026-09-16 — see 7. The swap itself and the evaluation
+it needs are still ahead; what closed is that neither can be forgotten now.*
+`gemini-2.5-flash` retires 2026-10-20 and nothing scheduled the move. Google's
+safety-filter page (last updated 2026-09-03) states that `OFF` is the default for
+`gemini-3.5-flash` and subsequent models, which is where the named replacements live,
+so the platform filtering that applied then would have stopped applying without
+anyone deciding it.
 
 **7 — Region and output budget sit outside review.** Both are environment-settable
 (`config.py` 31 and 102), so a deploy can move where the model runs and how much it
@@ -376,7 +381,7 @@ when a second task shape exists rather than machinery to add now.
 
 **Gap 5 closed 2026-09-16: the content filters are ours, and a filtered response says
 so.** All four configurable categories are pinned to `BLOCK_MEDIUM_AND_ABOVE`
-(`GEMINI_SAFETY_THRESHOLDS`, `config.py` 152) and handed to the client explicitly
+(`GEMINI_SAFETY_THRESHOLDS`, `config.py` 160) and handed to the client explicitly
 (`graph.py` 203), so the filtering that applies today is a decision on the record
 rather than an inherited default that differs between models — and `OFF` on the ones
 this pin is due to move to. The threshold is a trade, not a preference: stricter and
@@ -388,6 +393,19 @@ dangerous things. A flagged response now records which category flagged it
 be counted rather than only experienced. Eight tests in `tests/agent/test_screening.py`;
 the suite is at 335 passing. Injection and jailbreak stay open by decision, recorded
 as layer 11's.
+
+---
+
+**Gap 6 closed 2026-09-16: the retirement is an input the suite enforces.** The date
+and the models that replace it are data in `MODEL_CHOICE` (`config.py` 127) rather
+than a sentence in a comment, and a test fails `MIGRATION_LEAD_DAYS` before the date
+(`config.py` 141) — in practice from 2026-10-06. A retired model does not warn, the
+calls simply stop, so acting on the day leaves no room to run a comparison and
+schedule a swap. Three tests guard it, one of which refuses a lead time under a week,
+because a guard that can be switched off quietly is not a guard. The thresholds half
+of the migration plan was already in place from gap 5, and that is what stops the
+swap changing screening behaviour; the swap itself and the comparison it needs are
+still ahead, and the failing test is what will force them.
 
 ---
 
@@ -432,6 +450,8 @@ flagged it recorded, so a false positive is visible instead of silent. The
 injection and jailbreak control itself is layer 11's.
 
 **What is the expiry date on your model pin?**
-2026-10-20, with the replacements named in the config comment. The migration is not
-scheduled, and the replacements default platform filtering to `OFF`, so it is both
-a model change and a screening change — gap 6.
+2026-10-20. It is recorded as data rather than as a comment — with the replacements
+named beside it — and the suite starts failing fourteen days before it, because a
+retired model does not warn, the calls just stop. So the date cannot pass unnoticed:
+the build breaks while there is still time to run the comparison and schedule the
+swap.

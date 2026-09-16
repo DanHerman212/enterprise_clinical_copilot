@@ -263,10 +263,12 @@ def test_a_pin_change_cannot_stay_uncompared_until_the_next_retirement():
     retires = date.fromisoformat(config.MODEL_CHOICE["retires"])
     due = retires - timedelta(days=config.COMPARISON_DUE_DAYS)
     recorded = config.MODEL_CHOICE["evidence"]["comparison"]
-    assert recorded or date.today() < due, (
+    remaining = (due - date.today()).days
+    when = f"falls due on {due}" if remaining >= 0 else f"fell due on {due}, {abs(remaining)} days ago"
+    assert recorded or remaining > 0, (
         f"The pin {config.GEMINI_MODEL} has no comparison recorded and the evidence "
-        f"falls due on {due} ({(due - date.today()).days} days away). Run the "
-        f"comparison and record it in MODEL_CHOICE['evidence']['comparison']."
+        f"{when}. Run the comparison and record it in "
+        f"MODEL_CHOICE['evidence']['comparison']."
     )
 
 

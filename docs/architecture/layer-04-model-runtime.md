@@ -1,8 +1,8 @@
 # Layer 4 — Model runtime & gateway
 
-Status: audited 2026-09-16. Two of ten gaps open: gap 9, partly addressed, and gap 10,
-opened by the model swap. Gaps 1 to 8 are closed (section 7). Sections 5 and 6 are paired one
-to one: each gap has exactly one decision, in the same order.
+Status: audited 2026-09-16. One of ten gaps open: gap 9, partly addressed. Gaps 1 to 8 and
+10 are closed (section 7). Sections 5 and 6 are paired one to one: each gap has exactly one
+decision, in the same order.
 
 ---
 
@@ -129,8 +129,8 @@ data residency and leaves the processing region unknowable.
 
 Two dates are data rather than prose. `MODEL_CHOICE` carries the retirement
 (`config.py` 190), and a test fails fourteen days before it (`MIGRATION_LEAD_DAYS`,
-`config.py` 231), because a retired model does not warn — the calls just stop working.
-A second date sits in front of that one: `COMPARISON_DUE_DAYS` (`config.py` 238) fails
+`config.py` 234), because a retired model does not warn — the calls just stop working.
+A second date sits in front of that one: `COMPARISON_DUE_DAYS` (`config.py` 241) fails
 ninety days out while the record still holds no comparison, so the evidence is due
 before the swap rather than after it.
 
@@ -153,7 +153,7 @@ precede it does not exist yet.
 Model, temperature 0, `max_output_tokens` 2048 (`config.py` 152), `max_retries` 3,
 a timeout on the call, a bound on thinking (`GEMINI_REASONING_EFFORT`, `config.py`
 151) so that reasoning does not take as much of the allowance as it likes, and the
-four configurable content filters pinned to a chosen threshold (`config.py` 257). Every
+four configurable content filters pinned to a chosen threshold (`config.py` 260). Every
 one of those values is pinned in code rather than read from the environment, because each
 of them changes something that fails quietly: a model, a region, an allowance and a filter
 threshold all produce a well-formed answer that is wrong, rather than an error.
@@ -189,7 +189,7 @@ and no exception.
 | A6 — managed runtime | **Met** | Vertex, `vertexai=True`, ADC; nothing hosted by us. |
 | H1 — retries, timeouts, exception handling, 429 | **Partly** | Timeouts and exception handling are met: one call is bounded, the bounds nest, and the response's own reason for stopping is recorded and acted on. What is missing is any *observation* of the retries, 429s included. |
 | H2 — QPS and tokens/sec baseline | **Partly** | Every execution now records what it was billed for, so a baseline is derivable from the logs. None has been written down, and the monitoring half belongs to layer 10. |
-| H3 — cheapest model that passes eval, thinking budget | **Partly** | Thinking is bounded by our own choice of level rather than the model's default, and the model is on the record with its reason and a date by which it has to be compared. What is missing is the comparison itself: the pin is the entry tier and its predecessor was never measured against it, which is layer 9's harness to run (gap 10). |
+| H3 — cheapest model that passes eval, thinking budget | **Partly** | Thinking is bounded by our own choice of level rather than the model's default, and the model is on the record with its reason and a date by which it has to be compared. What is missing is the comparison itself: the pin is the entry tier and its predecessor was never measured against it. That is layer 9's harness to run, and it is carried at the end of this section. |
 | H4 — concise prompts, context caching | **Partly** | Caching is decided for our prompt size rather than assumed: measured, and the discount cannot apply at 3,088 tokens when this family's minimum is 4,096. Whether it applies *above* the minimum is unresolved, and nothing is built on it either way. The row's other half has not been touched: the prompt's own size, 3,088 tokens resent on every turn, has never been reviewed. |
 | H5 — failure and load simulation | **Partly** | Failure is simulated now: a model that raises, stalls, or returns nothing is driven through the route, and each outcome is asserted on the caller's response and on the execution record. Load is not simulated, which is the half that keeps this row short of met. |
 | G2 / B4 — screening | **Partly** | The four configurable categories are pinned to a chosen threshold, and a filtered response records which category flagged it. Injection and jailbreak are still unaddressed at this door, by decision — that policy is layer 11's (gap 5, gap 6). |
@@ -285,19 +285,23 @@ unresolved rather than negative: prefixes of 5,176 and 8,247 tokens produced no 
 calls across two endpoints, one hit was seen and did not reproduce, and the platform documents
 this model as supporting implicit caching.
 
-**10 — The pin changed without the comparison that decision 6.4 requires.** *Opened
-2026-09-16, by the swap itself.* The evidence slot that exists to make a model change
-deliberate (`MODEL_CHOICE["evidence"]`, `config.py` 199) holds a debt rather than a
-result, because the swap was forced by a retirement date and the harness meant to
-precede it does not exist. Four questions put to both pins on the same day show the gap
-is not a formality: three were answered by both, and on the fourth the two refused in
-opposite directions. Nothing in the suite would have noticed that, and nothing in it
-notices now.
+**10 — The pin changed without the comparison that decision 6.4 requires.** *Closed
+2026-09-16 — see 7. The absence is now enforced and dated; the comparison itself has still not
+been run, and is carried at the end of this section as owned elsewhere.*
+The evidence slot that exists to make a model change deliberate (`MODEL_CHOICE["evidence"]`,
+`config.py` 199) holds a debt rather than a result, because the swap was forced by a
+retirement date and the harness meant to precede it does not exist. Four questions put to
+both pins on the same day show the gap is not a formality: three were answered by both, and
+on the fourth the two refused in opposite directions. What was missing was not the intention —
+6.4 states it plainly — but anything that would notice its absence.
 
 **Recorded, not owned here:** the query embedding is a second Vertex call outside
 this door (`services/mcp/tools/retrieval.py` 92–93) and belongs to layers 5 and 7;
 the client is rebuilt on every request (`graph.py` 244) with no reuse between them,
-which layer 3's warm-rebuild measurement already covers.
+which layer 3's warm-rebuild measurement already covers; and the comparison the model
+swap owes — the old pin against the new one over the question set — belongs to layer 9, since
+it needs that layer's harness and the retrieval endpoint, and a comparison run without tools
+would measure the wrong thing.
 
 ---
 
@@ -379,10 +383,19 @@ non-reproducing hit. `scripts/agent/measure_cache_hits.py` reads both sizes.
 
 The retirement guard forces the swap and would have been satisfied by the swap alone,
 which is how the same thing happens twice. So the comparison gets a date of its own,
-set further out than the swap's: `COMPARISON_DUE_DAYS` (`config.py` 238) fails while
+set further out than the swap's: `COMPARISON_DUE_DAYS` (`config.py` 241) fails while
 `MODEL_CHOICE["evidence"]["comparison"]` is empty, and a test refuses a due date that
 is not earlier than the swap's. The comparison itself still needs layer 9, so what this
 fixes is not the absence of evidence but the absence of anything that would notice it.
+
+Done 2026-09-16, and the guard was checked rather than assumed: moving the due date into the
+past makes it fail with a message naming the pin, the date and how long the evidence has been
+overdue, and leaves the ordering test passing — so the two are independent. Its reach is
+narrower than "evidence is a condition of changing the pin" and is worth stating plainly: it
+forces the comparison to be run *before the next retirement*, not before the next change. A pin
+changed in December would still be changed against an empty evidence slot, and nothing would
+fail until February. A record of past pin changes, each carrying its own evidence state, would
+close that; it is not built, and it is named here rather than left to be rediscovered.
 
 ---
 
@@ -455,7 +468,7 @@ pass.
 
 **Gap 5 closed 2026-09-16: the content filters are ours, and a filtered response says
 so.** All four configurable categories are pinned to `BLOCK_MEDIUM_AND_ABOVE`
-(`GEMINI_SAFETY_THRESHOLDS`, `config.py` 257) and handed to the client explicitly
+(`GEMINI_SAFETY_THRESHOLDS`, `config.py` 260) and handed to the client explicitly
 (`graph.py` 208), so the filtering that applies today is a decision on the record
 rather than an inherited default that differs between models — and `OFF` on the ones
 this pin is due to move to. The threshold is a trade, not a preference: stricter and
@@ -473,7 +486,7 @@ as layer 11's.
 **Gap 6 closed 2026-09-16: the retirement is an input the suite enforces.** The date
 and the models that replace it are data in `MODEL_CHOICE` (`config.py` 190) rather
 than a sentence in a comment, and a test fails `MIGRATION_LEAD_DAYS` before the date
-(`config.py` 231) — in practice from 2026-10-06. A retired model does not warn, the
+(`config.py` 234) — in practice from 2026-10-06. A retired model does not warn, the
 calls simply stop, so acting on the day leaves no room to run a comparison and
 schedule a swap. Three tests guard it, one of which refuses a lead time under a week,
 because a guard that can be switched off quietly is not a guard. The thresholds half
@@ -615,6 +628,33 @@ conversation on each of the chain's turns, 3,088 input tokens against a few hund
 tokens make the prompt the largest thing this layer controls the size of. Trimming it changes
 what the model is told, so it needs the evaluation layer to judge — not something to do
 because a measurement finally made the number visible.
+
+---
+
+**Gap 10, 2026-09-16: the missing comparison is dated and enforced; the comparison itself is
+still owed, and now has somewhere to be owed from.** The gap was opened by the swap the same
+day: the pin moved under a retirement date with the evidence slot empty, which is the situation
+decision 6.4 exists to prevent. What closes the gap is not the comparison — that has not been
+run — but the end of the condition that made it possible, which was that nothing noticed.
+
+Two tests hold the date. `COMPARISON_DUE_DAYS` (`config.py` 241) puts the evidence due
+2027-02-06, comfortably before the swap's own deadline of 2027-04-23, and a second test refuses
+a due date that is not earlier than the swap's, because two guards that fire together are one
+guard. The enforcement was checked rather than assumed: moving the due date into the past makes
+the guard fail with a message naming the pin, the date and how long the evidence has been
+overdue, and leaves the ordering test passing, so the two are independent. That message was
+worth fixing while testing it — it read "−167 days away" when overdue, which is the opposite of
+useful at the moment somebody reads it.
+
+Two limits are stated rather than left implied. The comparison is not run: it needs layer 9's
+harness and the retrieval endpoint, because the question set is about the patient's own notes
+and a comparison run without tools would measure the wrong thing. And the guard's reach is
+narrower than "evidence is a condition of changing the pin" — it forces the evidence to be run
+before the next *retirement*, not before the next *change*. A pin changed in December would
+still be changed against an empty evidence slot, with nothing failing until February. A record
+of past pin changes, each carrying its own evidence state, would close that; it is named here
+rather than built, because it is a mechanism decision 6.10 did not ask for and is better decided
+deliberately than added in passing.
 
 ---
 

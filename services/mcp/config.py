@@ -219,7 +219,10 @@ MODEL_CHOICE = {
         ),
         "owed": (
             "the old pin against the new one over the question set, judged by "
-            "evaluation/agent/judge.py"
+            "evaluation/agent/judge.py. It needs two things that did not exist on "
+            "2026-09-16: that harness, and the retrieval endpoint, because the questions "
+            "are about the patient's own notes and a comparison run without tools would "
+            "measure the wrong thing."
         ),
     },
 }

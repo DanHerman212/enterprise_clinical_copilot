@@ -71,8 +71,10 @@ RECORD_FIELDS = (
     "trace",
     "code_revision",
     "model",
+    "served_model",
     "outcome",
     "finish_reason",
+    "tokens",
     "question_chars",
     "duration_ms",
     "stages",
@@ -89,6 +91,8 @@ def record_execution(
     duration_ms: int,
     outcome: str,
     finish_reason: str | None = None,
+    served_model: str | None = None,
+    tokens: dict | None = None,
     tool_calls=(),
     guardrail_flags: int = 0,
     error: str | None = None,
@@ -116,14 +120,23 @@ def record_execution(
     present as a key so a failure can be queried rather than inferred from an
     empty answer: `MAX_TOKENS` is a truncation worth retrying, `SAFETY` and
     `PROHIBITED_CONTENT` are decisions that will not change.
+
+    `tokens` is the billed usage for the whole question — see
+    `model_turn.token_usage` — and `served_model` is the version that answered
+    rather than the pin we asked for. Both are always present as keys, and null
+    when the response reported nothing, so a missing number reads as missing
+    rather than as zero. The observability layer needs this before it can have a
+    token metric at all.
     """
     record = {
         "event": "agent_execution",
         "trace": trace,
         "code_revision": code_revision,
         "model": model,
+        "served_model": served_model,
         "outcome": outcome,
         "finish_reason": finish_reason,
+        "tokens": tokens,
         "question_chars": len(question or ""),
         "duration_ms": duration_ms,
         "stages": list(stages),

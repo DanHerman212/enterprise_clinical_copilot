@@ -81,6 +81,53 @@ def safety_ratings(message: Any) -> list[dict]:
     return list(ratings) if isinstance(ratings, list) else []
 
 
+def served_model(message: Any) -> str | None:
+    """The model version that answered, as opposed to the one we asked for.
+
+    The record's `model` field is the pin, which is what we intended; this is what
+    served the request. They are the same string today and would not be during a
+    migration, which is when the distinction matters for attribution.
+    """
+    name = metadata(message).get("model_name")
+    return str(name) if name else None
+
+
+def token_usage(state: dict) -> dict | None:
+    """The tokens this execution was billed for, summed over its model turns.
+
+    Summed rather than taken from the last turn, because each turn resends the
+    conversation and is billed for it — so the sum is the cost of the question,
+    not a count of unique text. Answering turns, tool-calling turns and thinking
+    all count.
+
+    `cached` is a subset of `input`, billed at a discount, so it is reported
+    alongside rather than subtracted: what the totals would be after the discount
+    is the billing system's answer, not ours.
+
+    Returns None when no turn reported usage at all, rather than a dict of zeros.
+    A zero is a measurement somebody made; absence is not.
+    """
+    totals = {"input": 0, "output": 0, "total": 0, "thinking": 0, "cached": 0}
+    reported = False
+    for message in state.get("messages") or []:
+        usage = getattr(message, "usage_metadata", None)
+        if not usage:
+            continue
+        reported = True
+        turn_in = usage.get("input_tokens") or 0
+        turn_out = usage.get("output_tokens") or 0
+        totals["input"] += turn_in
+        totals["output"] += turn_out
+        totals["total"] += usage.get("total_tokens") or 0
+        totals["thinking"] += (
+            (usage.get("output_token_details") or {}).get("reasoning") or 0
+        )
+        totals["cached"] += (
+            (usage.get("input_token_details") or {}).get("cache_read") or 0
+        )
+    return totals if reported else None
+
+
 def outcome(message: Any) -> str:
     """What happened to this turn: ok, truncated, refused or unknown."""
     if blocked_reason(message) is not None:

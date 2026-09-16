@@ -129,6 +129,19 @@ class AgentAnswerUnavailable(Exception):
         self.finish_reason = finish_reason
 
 
+def _usage_fields(state: dict) -> dict:
+    """What the response reported, in the shape the record carries.
+
+    Gathered in one place because both routes and both outcomes record them, and a
+    record that carries tokens on success but not on failure would make a metric
+    that is wrong exactly where it is most interesting.
+    """
+    return {
+        "tokens": model_turn.token_usage(state),
+        "served_model": model_turn.served_model(final_message(state)),
+    }
+
+
 def _compose_success(question: str, state: dict, trace: str) -> dict:
     """Guard the answer, compose the presentation, validate the payload.
 
@@ -324,6 +337,7 @@ async def ask_route(request: Request) -> JSONResponse:
         log.record(
             trace, question, "error",
             error=exc.code, finish_reason=exc.finish_reason,
+            **_usage_fields(state),
         )
         return JSONResponse(
             {"error": exc.code, "message": str(exc)},
@@ -332,6 +346,7 @@ async def ask_route(request: Request) -> JSONResponse:
     log.record(
         trace, question, "ok",
         finish_reason=model_turn.finish_reason(final_message(state)),
+        **_usage_fields(state),
         tool_calls=[call["name"] for call in payload["tool_calls"]],
         guardrail_flags=len(payload["guardrail_flags"]),
     )
@@ -489,6 +504,7 @@ async def _stream_chain(question: str, trace: str, question_kind: str | None = N
             log.record(
                 trace, question, "error",
                 error=exc.code, finish_reason=exc.finish_reason,
+                **_usage_fields(state),
             )
             yield _error_frame(exc.code, str(exc))
             return
@@ -496,6 +512,7 @@ async def _stream_chain(question: str, trace: str, question_kind: str | None = N
         log.record(
             trace, question, "ok",
             finish_reason=model_turn.finish_reason(final_message(state)),
+            **_usage_fields(state),
             tool_calls=[call["name"] for call in payload["tool_calls"]],
             guardrail_flags=len(payload["guardrail_flags"]),
         )

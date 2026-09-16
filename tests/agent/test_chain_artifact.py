@@ -7,6 +7,7 @@ a log that only covers the answers that worked cannot explain the ones that
 did not.
 """
 
+import ast
 import importlib
 import json
 import sys
@@ -25,6 +26,13 @@ from services.agent import chain, http as srv, stages  # noqa: E402
 @asynccontextmanager
 async def _fake_toolbox():
     yield None
+
+
+# Files allowed to build a client for the pinned model somewhere other than the pinned
+# endpoint. One entry, and it is a diagnostic whose entire purpose is asking where a model
+# answers — so a location it can vary is the feature, not a mistake. The test checks that
+# its default is still the pinned endpoint, so the exemption cannot quietly go stale.
+NON_MODEL_LOCATION_EXEMPT = {"scripts/agent/check_gemini.py"}
 
 
 def _client():
@@ -82,6 +90,121 @@ def test_the_model_is_pinned_and_ignores_the_environment(monkeypatch):
     finally:
         monkeypatch.delenv("GEMINI_MODEL", raising=False)
         importlib.reload(config)
+
+
+def test_the_environment_is_really_consulted(monkeypatch):
+    """The tests either side of this one are only worth anything if reload re-reads env.
+
+    A reload that quietly returned the same module object would make every "ignores the
+    environment" assertion pass while testing nothing. So the mechanism is pinned down
+    here, using a setting that is still meant to be optional. If every setting below ever
+    becomes pinned, delete this test rather than weakening it.
+    """
+    import services.mcp.config as config
+
+    monkeypatch.setenv("EMBEDDING_DIM", "999")
+    try:
+        importlib.reload(config)
+        assert config.EMBEDDING_DIM == 999
+    finally:
+        monkeypatch.delenv("EMBEDDING_DIM", raising=False)
+        importlib.reload(config)
+
+
+def test_the_region_is_pinned_and_ignores_the_environment(monkeypatch):
+    """The other half of gap 7.
+
+    `LOCATION` names where the vector index, the prediction endpoint, the feature bundle
+    and the BigQuery dataset live, so it is a fact about the world rather than a setting.
+    While it was an environment read, a deploy could point the app at a region its
+    resources were not in — which fails at request time with a 404, not at deploy time —
+    and the region carries a residency question that belongs in a commit.
+    """
+    import services.mcp.config as config
+
+    monkeypatch.setenv("LOCATION", "europe-west4")
+    try:
+        importlib.reload(config)
+        assert config.LOCATION != "europe-west4"
+        assert config.LOCATION == "us-east1"
+    finally:
+        monkeypatch.delenv("LOCATION", raising=False)
+        importlib.reload(config)
+
+
+def test_the_output_allowance_is_pinned_and_ignores_the_environment(monkeypatch):
+    """Thinking and the answer share this allowance, and running out of it is silent.
+
+    A deploy that lowered it would get an empty answer with `finish_reason=MAX_TOKENS`
+    and no exception — a wrong-looking result rather than a failed deployment — which is
+    why it is a reviewed change and not a deploy-time input.
+    """
+    import services.mcp.config as config
+
+    monkeypatch.setenv("GEMINI_MAX_OUTPUT_TOKENS", "64")
+    try:
+        importlib.reload(config)
+        assert config.GEMINI_MAX_OUTPUT_TOKENS != 64
+        assert config.GEMINI_MAX_OUTPUT_TOKENS >= 2048
+    finally:
+        monkeypatch.delenv("GEMINI_MAX_OUTPUT_TOKENS", raising=False)
+        importlib.reload(config)
+
+
+def _model_clients_outside_the_model_region(repo):
+    """Files that generate with the pinned model but point a client somewhere else.
+
+    Read from the syntax tree rather than the text, so a comment that mentions the old
+    region cannot produce a false alarm and a value passed through a variable cannot hide
+    from it. Files that never mention the pinned model are skipped, which is what keeps
+    the embedding clients — legitimately in the project's region — out of the result.
+    """
+    offenders = []
+    for folder in ("services", "evaluation", "scripts"):
+        for path in (repo / folder).rglob("*.py"):
+            source = path.read_text()
+            if "GEMINI_MODEL" not in source:
+                continue
+            for node in ast.walk(ast.parse(source)):
+                if not isinstance(node, ast.Call):
+                    continue
+                passed = next((k.value for k in node.keywords if k.arg == "location"), None)
+                if passed is None:
+                    continue
+                if isinstance(passed, ast.Name) and passed.id == "GEMINI_LOCATION":
+                    continue
+                offenders.append(f"{path.relative_to(repo)}:{node.lineno}")
+    return offenders
+
+
+def test_no_call_site_points_the_model_at_the_project_region():
+    """Two call sites were left behind by the swap, and both failed only when called.
+
+    `evaluation/agent/judge.py` and `scripts/agent/check_gemini.py` open their own clients
+    for the pinned model, and both took their location from the project's region. That was
+    correct while the model and the project happened to share a region and wrong the moment
+    the swap divided them: the model is not served in us-east1 at all. The suite did not
+    notice, because neither file is reached by a test that calls the model, and the second
+    of them was worse than the first — a diagnostic whose whole job is to answer "is the
+    model reachable?" would have answered 404 by default.
+    """
+    repo = Path(__file__).resolve().parents[2]
+    for exempt in NON_MODEL_LOCATION_EXEMPT:
+        # The exemption is only valid while the file's own default is the pinned endpoint,
+        # so it is checked rather than trusted.
+        assert "GEMINI_LOCATION" in (repo / exempt).read_text(), (
+            f"{exempt} is exempt from this rule only because its default is the pinned "
+            "endpoint. It no longer mentions GEMINI_LOCATION, so the exemption is stale."
+        )
+    offenders = [
+        found
+        for found in _model_clients_outside_the_model_region(repo)
+        if found.split(":")[0] not in NON_MODEL_LOCATION_EXEMPT
+    ]
+    assert offenders == [], (
+        "these files build a client for the pinned model in a location that does not "
+        f"serve it — use GEMINI_LOCATION: {offenders}"
+    )
 
 
 def test_the_pinned_model_is_the_one_on_record():

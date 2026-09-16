@@ -24,7 +24,7 @@ from google.genai import types
 HARNESS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HARNESS))
 
-from services.mcp.config import PROJECT, LOCATION, GEMINI_MODEL  # noqa: E402
+from services.mcp.config import GEMINI_LOCATION, GEMINI_MODEL, PROJECT  # noqa: E402
 
 TRACES = HARNESS / "eval" / "results" / "traces.jsonl"
 RUBRIC = (HARNESS / "eval" / "rubric.md").read_text()
@@ -198,7 +198,9 @@ def main() -> int:
     report_path = Path(args.report_path)
 
     _load_env_file(HARNESS / ".env.lanfuse")
-    client = genai.Client(vertexai=True, project=PROJECT, location=LOCATION)
+    # The model's endpoint, not the project's region: the pinned model is not served in
+    # us-east1, so this client answered 404 from the day of the swap until it was fixed.
+    client = genai.Client(vertexai=True, project=PROJECT, location=GEMINI_LOCATION)
     lf = _langfuse_client()
     traces = [json.loads(l) for l in traces_path.read_text().splitlines() if l.strip()]
     print(f"Judging {len(traces)} traces (model {GEMINI_MODEL})")

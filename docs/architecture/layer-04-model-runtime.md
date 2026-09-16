@@ -1,6 +1,6 @@
 # Layer 4 — Model runtime & gateway
 
-Status: audited 2026-09-16. Four of ten gaps open; gaps 1 to 6 are closed, and gap
+Status: audited 2026-09-16. Three of ten gaps open; gaps 1 to 7 are closed, and gap
 10 was opened by the model swap the same day (section 7). Sections 5 and 6 are paired
 one to one: each gap has exactly one decision, in the same order.
 
@@ -99,15 +99,17 @@ nothing routes on it today.
 
 ### 3.2 The runtime is Google's
 
-`vertexai=True`, project and regions from configuration (`services/mcp/config.py`
-30–31 and 49), authenticated by application default credentials. No key file, no
-self-hosted weights, no open-source serving stack. The project's own resources are in
-`us-east1`, chosen 2026-07-30 for reachability and co-location with the prediction
-endpoint. The chat model is reached somewhere else, which is 3.3's subject.
+`vertexai=True`, project from configuration and both regions pinned in code
+(`services/mcp/config.py` 30, 45 and 63), authenticated by application default
+credentials. No key file, no self-hosted weights, no open-source serving stack. The
+project's own resources are in `us-east1`, chosen 2026-07-30 for reachability and
+co-location with the prediction endpoint; the chat model is reached somewhere else,
+which is 3.3's subject. Neither region nor the output allowance can be moved by a
+deploy, which is gap 7 in section 7.
 
 ### 3.3 The pin is in code, and it has an expiry date
 
-`GEMINI_MODEL = "gemini-3.1-flash-lite"` (`config.py` 121) is a literal rather than an
+`GEMINI_MODEL = "gemini-3.1-flash-lite"` (`config.py` 135) is a literal rather than an
 environment read, because an environment default lets a deploy change the model
 with no commit anywhere. `chain.MODEL_ID` imports it (`chain.py` 38) so the string
 has one home, and a test asserts it ignores a `GEMINI_MODEL` in the environment
@@ -116,19 +118,19 @@ has one home, and a test asserts it ignores a `GEMINI_MODEL` in the environment
 be put side by side and the change reversed.
 
 The pin's endpoint is no longer the project's region. `GEMINI_LOCATION = "us"`
-(`config.py` 49) is Google's multi-region endpoint, and it had to become a constant of
+(`config.py` 63) is Google's multi-region endpoint, and it had to become a constant of
 its own: the replacement has no regional endpoint at all (404 on us-east1, us-central1,
 us-east5, us-east4, us-west1, us-south1 and europe-west4), while `LOCATION`
-(`config.py` 31) is also how the vector index, the prediction endpoint and BigQuery are
+(`config.py` 45) is also how the vector index, the prediction endpoint and BigQuery are
 reached, so one shared value would have moved retrieval with the model. `us` rather
 than `global` because Google's locations page says the multi-region endpoint is the one
 that keeps ML processing inside a jurisdiction, and that the global one does not support
 data residency and leaves the processing region unknowable.
 
 Two dates are data rather than prose. `MODEL_CHOICE` carries the retirement
-(`config.py` 173), and a test fails fourteen days before it (`MIGRATION_LEAD_DAYS`,
-`config.py` 214), because a retired model does not warn — the calls just stop working.
-A second date sits in front of that one: `COMPARISON_DUE_DAYS` (`config.py` 221) fails
+(`config.py` 190), and a test fails fourteen days before it (`MIGRATION_LEAD_DAYS`,
+`config.py` 231), because a retired model does not warn — the calls just stop working.
+A second date sits in front of that one: `COMPARISON_DUE_DAYS` (`config.py` 238) fails
 ninety days out while the record still holds no comparison, so the evidence is due
 before the swap rather than after it.
 
@@ -140,7 +142,7 @@ unexpanded placeholder counts as absent.
 Why this model rather than the newer one is in the code beside it (`config.py`
 105–120): `gemini-3.5-flash-lite` drops `temperature=0` from the request and only
 warns, and determinism at temperature 0 is what `model_turn.refusal_sentence` and the
-empty-text guard in `http.py` both reason from. `MODEL_CHOICE` (`config.py` 173) then
+empty-text guard in `http.py` both reason from. `MODEL_CHOICE` (`config.py` 190) then
 records what a comparison would be against — the model this replaced, since nothing
 below the pin has been checked — beside an `evidence` entry that says the comparison is
 owed rather than done, because the swap happened under a date and the harness meant to
@@ -148,10 +150,13 @@ precede it does not exist yet.
 
 ### 3.4 What one call is given, and what a failure looks like
 
-Model, temperature 0, `max_output_tokens` 2048 (`config.py` 135), `max_retries` 3,
+Model, temperature 0, `max_output_tokens` 2048 (`config.py` 152), `max_retries` 3,
 a timeout on the call, a bound on thinking (`GEMINI_REASONING_EFFORT`, `config.py`
 151) so that reasoning does not take as much of the allowance as it likes, and the
-four configurable content filters pinned to a chosen threshold (`config.py` 240).
+four configurable content filters pinned to a chosen threshold (`config.py` 257). Every
+one of those values is pinned in code rather than read from the environment, because each
+of them changes something that fails quietly: a model, a region, an allowance and a filter
+threshold all produce a well-formed answer that is wrong, rather than an error.
 That bound is a level rather than a token count, which is a real difference and not a
 renaming: a level bounds effort, so what thinking will spend is known only afterwards
 and the allowance cannot be sized by subtracting a cap from it. 64 tokens was enough
@@ -184,7 +189,7 @@ and no exception.
 | A6 — managed runtime | **Met** | Vertex, `vertexai=True`, ADC; nothing hosted by us. |
 | H1 — retries, timeouts, exception handling, 429 | **Partly** | Timeouts and exception handling are met: one call is bounded, the bounds nest, and the response's own reason for stopping is recorded and acted on. What is missing is any *observation* of the retries, 429s included. |
 | H2 — QPS and tokens/sec baseline | **Partly** | Every execution now records what it was billed for, so a baseline is derivable from the logs. None has been written down, and the monitoring half belongs to layer 10. |
-| H3 — cheapest model that passes eval, thinking budget | **Partly** | Thinking has a cap of its own, and the choice of model is now recorded with its reason and guarded. What is missing is the comparison itself: the pin is the mid tier and the cheaper alternative has never been evaluated, which is layer 9's harness to run. |
+| H3 — cheapest model that passes eval, thinking budget | **Partly** | Thinking is bounded by our own choice of level rather than the model's default, and the model is on the record with its reason and a date by which it has to be compared. What is missing is the comparison itself: the pin is the entry tier and its predecessor was never measured against it, which is layer 9's harness to run (gap 10). |
 | H4 — concise prompts, context caching | **Not decided** | Caching is enabled by default on the platform and its effect here is unmeasured. |
 | H5 — failure and load simulation | **Not met** | Nothing constructs a failing model. |
 | G2 / B4 — screening | **Partly** | The four configurable categories are pinned to a chosen threshold, and a filtered response records which category flagged it. Injection and jailbreak are still unaddressed at this door, by decision — that policy is layer 11's (gap 5, gap 6). |
@@ -224,7 +229,7 @@ build a token metric from (F4).
 **4 — The model choice was unevidenced, with no escalation.** *Closed 2026-09-16 —
 see 7. The comparison itself is still unrun; what closed is that the choice is
 recorded, and that changing it now requires the record to move.*
-The pin is the mid tier. A cheaper GA tier exists on the same lifecycle table and
+The pin was the mid tier. A cheaper GA tier existed on the same lifecycle table and
 was never evaluated, there is no escalation or routing path, and the judge that
 would compare them is the same model (`evaluation/agent/judge.py` 149).
 
@@ -247,14 +252,17 @@ safety-filter page (last updated 2026-09-03) states that `OFF` is the default fo
 so the platform filtering that applied then would have stopped applying without
 anyone deciding it.
 
-**7 — The project's region and the output budget still sit outside review.** *Half of
-this closed with the swap: the model's endpoint is now a pinned constant, chosen in a
-review recorded in 3.3, rather than the shared environment value.* Both `LOCATION`
-(`config.py` 31) and the allowance (`config.py` 135) remain environment-settable, so a
-deploy can still move where retrieval and the prediction endpoint run, and how much the
-model may generate, with no commit anywhere. The record does distinguish the result,
-because Cloud Run gives every configuration its own revision name and the record
-carries it — but the change is unreviewed.
+**7 — The project's region and the output budget sat outside review.** *Closed
+2026-09-16 — see 7. The model's endpoint was split out by the swap; the two remaining
+values are pinned in code and guarded.* Both `LOCATION` (the region the vector index,
+the prediction endpoint, the feature bundle and BigQuery live in) and the output
+allowance were environment reads, so a deploy could move either with no commit
+anywhere. Both failed silently rather than loudly: the wrong region is a 404 at request
+time rather than a failed deployment, and an allowance too small for thinking is an
+empty answer with `finish_reason=MAX_TOKENS` and no exception. The record does
+distinguish the result, because Cloud Run gives every configuration its own revision
+name and the record carries it — but that explains a change after the fact rather than
+reviewing it before.
 
 **8 — No failure simulation (H5).** Nothing injects a 429, a stall, an empty
 candidate or a safety block, and no test constructs a failing model. The behaviour
@@ -268,7 +276,7 @@ a hit occurs is reported on every response and never read.
 
 **10 — The pin changed without the comparison that decision 6.4 requires.** *Opened
 2026-09-16, by the swap itself.* The evidence slot that exists to make a model change
-deliberate (`MODEL_CHOICE["evidence"]`, `config.py` 182) holds a debt rather than a
+deliberate (`MODEL_CHOICE["evidence"]`, `config.py` 199) holds a debt rather than a
 result, because the swap was forced by a retirement date and the harness meant to
 precede it does not exist. Four questions put to both pins on the same day show the gap
 is not a formality: three were answered by both, and on the fourth the two refused in
@@ -332,10 +340,12 @@ default platform filtering differently.
 
 The argument that pins the model in code applies equally to the region and the
 output budget, so both move there. The record's deploy identity already covers the
-runtime configuration, so this decision is about review, not visibility. Partly done:
-the model's own endpoint is a pinned constant (`GEMINI_LOCATION`, `config.py` 49) and
-the swap is what forced the split, because model and project no longer live in the same
-region. The project's region and the output allowance are still environment reads.
+runtime configuration, so this decision is about review, not visibility. Done for all
+three: the model's endpoint (`GEMINI_LOCATION`, `config.py` 63) was split out by the
+swap, and the project's region (`config.py` 45) and the output allowance (`config.py`
+152) are now literals rather than environment reads. The enforcement is the same test
+shape the model pin already used: reload the module with the variable set and assert
+the value did not move, because a rule with no test is a comment.
 
 ### 6.8 — for gap 8: write the failure tests before changing the behaviour
 
@@ -353,7 +363,7 @@ field rather than competing with the MUSTs.
 
 The retirement guard forces the swap and would have been satisfied by the swap alone,
 which is how the same thing happens twice. So the comparison gets a date of its own,
-set further out than the swap's: `COMPARISON_DUE_DAYS` (`config.py` 221) fails while
+set further out than the swap's: `COMPARISON_DUE_DAYS` (`config.py` 238) fails while
 `MODEL_CHOICE["evidence"]["comparison"]` is empty, and a test refuses a due date that
 is not earlier than the swap's. The comparison itself still needs layer 9, so what this
 fixes is not the absence of evidence but the absence of anything that would notice it.
@@ -416,7 +426,7 @@ which is where a token metric is most interesting. Seven tests in
 **Gap 4 closed 2026-09-16: the model choice is on the record, and cannot move
 quietly.** The pin was the mid tier at the time, no comparison against a cheaper one
 had been run, and nothing routed to a smaller model. That is now written down rather
-than implied: `MODEL_CHOICE` (`config.py` 173) names the model, the date, the tier,
+than implied: `MODEL_CHOICE` (`config.py` 190) names the model, the date, the tier,
 what a comparison would be against, and the evidence, and two tests refuse a pin that
 disagrees with it. So changing the model means editing the record, and the record is
 where the reason and the justification live. Escalation stays unbuilt on purpose:
@@ -429,7 +439,7 @@ pass.
 
 **Gap 5 closed 2026-09-16: the content filters are ours, and a filtered response says
 so.** All four configurable categories are pinned to `BLOCK_MEDIUM_AND_ABOVE`
-(`GEMINI_SAFETY_THRESHOLDS`, `config.py` 240) and handed to the client explicitly
+(`GEMINI_SAFETY_THRESHOLDS`, `config.py` 257) and handed to the client explicitly
 (`graph.py` 208), so the filtering that applies today is a decision on the record
 rather than an inherited default that differs between models — and `OFF` on the ones
 this pin is due to move to. The threshold is a trade, not a preference: stricter and
@@ -445,9 +455,9 @@ as layer 11's.
 ---
 
 **Gap 6 closed 2026-09-16: the retirement is an input the suite enforces.** The date
-and the models that replace it are data in `MODEL_CHOICE` (`config.py` 173) rather
+and the models that replace it are data in `MODEL_CHOICE` (`config.py` 190) rather
 than a sentence in a comment, and a test fails `MIGRATION_LEAD_DAYS` before the date
-(`config.py` 214) — in practice from 2026-10-06. A retired model does not warn, the
+(`config.py` 231) — in practice from 2026-10-06. A retired model does not warn, the
 calls simply stop, so acting on the day leaves no room to run a comparison and
 schedule a swap. Three tests guard it, one of which refuses a lead time under a week,
 because a guard that can be switched off quietly is not a guard. The thresholds half
@@ -458,7 +468,7 @@ comparison it owes is now gap 10.
 ---
 
 **The model pin moved on 2026-09-16, ahead of the retirement rather than on it.**
-`gemini-2.5-flash` → `gemini-3.1-flash-lite` (`config.py` 121), chosen over the newer
+`gemini-2.5-flash` → `gemini-3.1-flash-lite` (`config.py` 135), chosen over the newer
 `gemini-3.5-flash-lite` because that one drops `temperature=0` from the request and
 only warns. Measured, eight repeats of one question each: the 3.1 runs at temperature 0
 returned identical reasoning-token counts and scattered ones at temperature 2, while the
@@ -469,21 +479,21 @@ false.
 
 The thinking control had to move with the model, because the families reject each
 other's: a level on 2.5 is a 400 and the budget is deprecated on 3.x, so no value suits
-both. The level chosen is `medium` (`config.py` 151) — 269 thinking tokens on a probe
+both. The level chosen is `medium` (`config.py` 168) — 269 thinking tokens on a probe
 shaped like the chain's last turn, against 231 from the old pin at `thinking_budget=1024`
 — which keeps the model the only thing that changed. `low` measured 117 and `minimal`
 none at all, which is a different regime rather than a cheaper one. `low` is the lever to
 pull once the evaluation can show quality holds.
 
 The swap also split a value that had been doing two jobs. The model is reached on the
-`us` multi-region endpoint (`config.py` 49) because it has no regional endpoint in any
-of seven regions checked, while `LOCATION` (`config.py` 31) goes on naming where the
+`us` multi-region endpoint (`config.py` 63) because it has no regional endpoint in any
+of seven regions checked, while `LOCATION` (`config.py` 45) goes on naming where the
 vector index, the prediction endpoint and BigQuery live. Pinning them separately is what
 stops a model migration from moving retrieval, and `us` rather than `global` is what
 keeps the processing in a jurisdiction.
 
 What was not done is the comparison decision 6.4 asks for, and it is recorded as owed
-rather than skipped (`MODEL_CHOICE["evidence"]`, `config.py` 182). What was done is four
+rather than skipped (`MODEL_CHOICE["evidence"]`, `config.py` 199). What was done is four
 questions put to both models, one run each — three answered by both, and one refusal each
 way: the new pin refuses a paracetamol-overdose question the old pin answered, and the
 old pin refused the suicidal-ideation question the new one answers. One run each is a
@@ -494,11 +504,56 @@ answer at the allowance the new pin answered within.
 
 ---
 
+**Gap 7 closed 2026-09-16: the region and the output allowance are reviewed, not deployed.**
+`LOCATION` (`config.py` 45) and `GEMINI_MAX_OUTPUT_TOKENS` (`config.py` 152) are literals
+now, where both were environment reads. The reason is the same one that pins the model,
+and it is stronger for these two because both fail quietly: a region the resources are
+not in returns a 404 at request time instead of failing a deployment, and an allowance
+that thinking exhausts returns an empty answer with no exception. Pinning the region also
+makes the app and the deployment agree by construction, since the scripts that create and
+find the index, the predictor endpoint and the bundle import this same constant instead
+of restating a region of their own.
+
+Three tests hold it, and one of them exists to keep the other two honest: the same shape
+as the model pin, reloading the module with the variable set and asserting the value did
+not move, plus a test that the environment is genuinely consulted at all — because a
+reload that silently did nothing would make every "ignores the environment" assertion
+pass while proving nothing. Verified in a fresh interpreter as well: with `LOCATION`,
+`GEMINI_MAX_OUTPUT_TOKENS` and `EMBEDDING_DIM` all set, the first two stayed at their
+pinned values and the third moved, which is the difference between a value that is
+reviewed and one that is merely not changed yet.
+
+The residue is duplication rather than risk: the Vertex job scripts under
+`scripts/agent/` that build features and embeddings run in their own containers and still
+hard-code `"us-east1"` rather than importing it. They agree with the pin today, and
+unifying them is tidying rather than a defect — but it is the duplication that would have
+let a region drift quietly, which is the reason the pin is worth having at all.
+
+Both call sites outside the served application were broken by the swap, and pinning the
+region is what made that visible. `evaluation/agent/judge.py` and
+`scripts/agent/check_gemini.py` build their own clients for the pinned model and both took
+the location from the project's region; neither is reached by a test that calls a model,
+so nothing failed. The diagnostic is the sharper case: its whole job is to answer whether
+the model is reachable, and its default would have answered 404. Both now use
+`GEMINI_LOCATION`, and a structural test holds the rule — a file that mentions the pinned
+model may not hand a client any location but `GEMINI_LOCATION` — with one named exemption,
+checked to still default to the pinned endpoint so that the exemption cannot quietly go
+stale.
+
+---
+
 ## 8. Interview questions this layer answers
 
 **Where is the model called, and how many places could change it?**
-One function, `_build_llm` (`graph.py` 179). That is the whole answer, and it is
-short on purpose: a second construction point is how retry policies diverge.
+Three, and until the swap the honest answer was one. `_build_llm` (`graph.py` 179) is the
+only place the *chain* constructs a model, which is what keeps retry policy and generation
+settings single-sourced, and it is the only one that serves a user. Outside the served
+application there are two more: the evaluation judge builds its own client
+(`evaluation/agent/judge.py` 203), and the reachability diagnostic takes its location on
+the command line (`scripts/agent/check_gemini.py` 35). Both were left pointing at the
+project's region when the model moved to an endpoint that region does not serve, and
+neither was caught, because no test calls a model through them. That is now checked from
+the syntax tree instead of from memory.
 
 **What happens when the model returns 429?**
 The SDK retries it — three attempts in total, 429 and 408 included, with backoff —
@@ -540,8 +595,10 @@ flagged it recorded, so a false positive is visible instead of silent. The
 injection and jailbreak control itself is layer 11's.
 
 **What is the expiry date on your model pin?**
-2026-10-20. It is recorded as data rather than as a comment — with the replacements
-named beside it — and the suite starts failing fourteen days before it, because a
-retired model does not warn, the calls just stop. So the date cannot pass unnoticed:
-the build breaks while there is still time to run the comparison and schedule the
-swap.
+2027-05-07, for the model pinned on 2026-09-16 — and the question is the right one to
+ask, because there is always an answer. The previous pin expired 2026-10-20 and was
+replaced a month early, while it still answered, so the two models could be measured
+against each other and the change reversed. Both dates are data rather than comments: the
+suite fails fourteen days before the retirement, because a retired model does not warn,
+and it fails ninety days before it if no comparison has been recorded, because the guard
+that forces the swap would have been satisfied by the swap alone.

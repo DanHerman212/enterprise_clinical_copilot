@@ -28,7 +28,21 @@ def _validated_table_ref(ref: str, name: str, parts: tuple[int, ...]) -> str:
 
 
 PROJECT = resolve_project_id()
-LOCATION = os.environ.get("LOCATION", "us-east1")
+
+# Where the project's own resources are, pinned rather than read from the environment,
+# for the same reason as the model below: this is not a preference, it is where the
+# things are. The vector index, the prediction endpoint, the feature bundle and the
+# BigQuery dataset all live here, and the deployment scripts import this constant rather
+# than repeating it, so the app and the resources it reads cannot be pointed at
+# different regions. Until 2026-09-16 it was an environment read, which let a deploy
+# move the app to a region its resources were not in — a 404 at request time rather than
+# a failed deployment — and the region carries a residency question, which belongs in a
+# commit either way.
+#
+# Residue: the Vertex job scripts under `scripts/agent/` that run inside their own
+# containers still hard-code `"us-east1"` instead of importing it. They agree today, and
+# the duplication is the reason the pin is worth having here rather than nowhere.
+LOCATION = "us-east1"
 
 # Where the chat model is served, which is deliberately not `LOCATION`.
 #
@@ -131,8 +145,11 @@ GEMINI_MODEL = "gemini-3.1-flash-lite"
 # A level bounds effort rather than tokens, so what thinking will spend is known only
 # afterwards. Measured 2026-09-16: at 64 tokens both 3.x candidates returned empty text
 # this way, and a synthesis probe spent 269 thinking tokens at the level set below.
-# Keep this generous.
-GEMINI_MAX_OUTPUT_TOKENS = positive_int_env("GEMINI_MAX_OUTPUT_TOKENS", 2048)
+#
+# Pinned rather than read from the environment, like the model and the region: a deploy
+# that lowered it would reintroduce that silent empty answer, which reaches the caller as
+# a wrong-looking result rather than a failed deployment. Keep it generous.
+GEMINI_MAX_OUTPUT_TOKENS = 2048
 
 # How much thinking the model may do, as a level rather than a token budget. The 3.x
 # family replaces `thinking_budget` with this and the 2.5 family rejects it outright

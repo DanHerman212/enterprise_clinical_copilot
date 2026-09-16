@@ -21,9 +21,9 @@ from google.genai import types
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from services.mcp.config import (  # noqa: E402
+    GEMINI_LOCATION,
     GEMINI_MAX_OUTPUT_TOKENS,
     GEMINI_MODEL,
-    LOCATION,
     PROJECT,
 )
 
@@ -72,8 +72,10 @@ def check(model: str, location: str, max_output_tokens: int) -> bool:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default=GEMINI_MODEL)
-    parser.add_argument("--location", default=LOCATION,
-                        help="use 'global' only if the region cannot serve the model")
+    parser.add_argument("--location", default=GEMINI_LOCATION,
+                        help="the endpoint the pinned model is served from; override only "
+                             "to test another region (the regional endpoints do not serve "
+                             "it, so most overrides will 404)")
     parser.add_argument("--max-output-tokens", type=int, default=GEMINI_MAX_OUTPUT_TOKENS)
     args = parser.parse_args()
 

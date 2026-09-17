@@ -17,6 +17,7 @@ Run service. `toolbox()` picks; the graph never knows which it got.
 import asyncio
 import contextlib
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -30,7 +31,10 @@ from google.genai import types
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
+from services.mcp.contracts import ToolContractError, validate_tool_result
 from services.mcp.runtime import timeout_chain
+
+_LOG = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -63,15 +67,45 @@ def _clean_schema(node: Any) -> Any:
     return cleaned
 
 
+def _unwrap(payload: dict) -> dict:
+    """Unwrap the single-key envelope a union return type produces.
+
+    A tool annotated `-> Result | Error` is advertised as returning `{"result": …}`, and the
+    SDK puts that envelope in the structured payload. Only an envelope whose value is itself
+    an object is unwrapped: the `{"result": "<text>"}` fallback below hands back a string,
+    and unwrapping that would leave the caller with something that is not a payload at all.
+    """
+    if set(payload) == {"result"} and isinstance(payload["result"], dict):
+        return payload["result"]
+    return payload
+
+
+def _checked(name: str, payload: dict) -> dict:
+    """Check a tool result against its contract before anything downstream acts on it.
+
+    This is the point where a result arrives from outside the process, so it is checked
+    rather than trusted. A payload outside its contract becomes a structured error the model
+    can report, which is the shape every other failure already takes here.
+    """
+    try:
+        return validate_tool_result(name, payload)
+    except ToolContractError:
+        _LOG.error("MCP tool %s returned a payload outside its contract", name)
+        return {
+            "error": "invalid_tool_response",
+            "message": f"The {name} tool returned a payload outside its contract.",
+        }
+
+
 def _payload(result: Any) -> dict:
     """Normalise a CallToolResult into the dict the tool returned."""
     if getattr(result, "structured_content", None):
-        return result.structured_content
+        return _unwrap(result.structured_content)
     for block in result.content or []:
         text = getattr(block, "text", None)
         if text:
             try:
-                return json.loads(text)
+                return _unwrap(json.loads(text))
             except json.JSONDecodeError:
                 return {"result": text}
     return {}
@@ -131,7 +165,7 @@ class MCPToolbox:
         payload = _payload(result)
         if getattr(result, "is_error", False) and "error" not in payload:
             payload = {"error": "tool_call_failed", "message": str(payload)}
-        return payload
+        return _checked(name, payload)
 
 
 @contextlib.asynccontextmanager

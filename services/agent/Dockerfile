@@ -25,8 +25,12 @@ COPY services/agent/ ./services/agent/
 # (features, endpoint, manifest) imports google-cloud-aiplatform and BigQuery,
 # which are deliberately not in this image — the agent reaches all of that
 # through the MCP server. retrieval/sections.py is the canonical discharge-note
-# heading vocabulary used by the citation layer (pure stdlib).
-COPY services/mcp/__init__.py services/mcp/config.py services/mcp/runtime.py ./services/mcp/
+# heading vocabulary used by the citation layer (pure stdlib). contracts.py is
+# here because the client checks every tool result against the contract before
+# anything downstream sees it — the same file the server enforces, so the two
+# sides cannot drift.
+COPY services/mcp/__init__.py services/mcp/config.py services/mcp/runtime.py \
+     services/mcp/contracts.py ./services/mcp/
 COPY services/mcp/retrieval/__init__.py services/mcp/retrieval/sections.py ./services/mcp/retrieval/
 
 USER 1000

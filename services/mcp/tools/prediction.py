@@ -11,7 +11,13 @@ from functools import lru_cache
 from typing import Any
 
 from ..dependencies.model_endpoint import predict_one
-from ..contracts import ToolContractError, tool_error, validate_prediction_result
+from ..contracts import (
+    PredictionResult,
+    ToolContractError,
+    ToolError,
+    tool_error,
+    validate_prediction_result,
+)
 from ..dependencies.features import FEATURE_SOURCE, FeatureSource, get_feature_source, to_vector
 from ..dependencies.features.manifest import feature_order, model_version
 from ._validation import valid_hadm_id
@@ -97,7 +103,7 @@ def _predict(hadm_id: int) -> dict[str, Any]:
     }
 
 
-async def predict_readmission(hadm_id: int) -> dict[str, Any]:
+async def predict_readmission(hadm_id: int) -> PredictionResult | ToolError:
     """Predict 30-day unplanned readmission risk for one hospital admission.
 
     Returns the calibrated probability, the threshold decision, and the feature

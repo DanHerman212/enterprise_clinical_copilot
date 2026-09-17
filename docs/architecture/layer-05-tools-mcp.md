@@ -1,8 +1,8 @@
 # Layer 5 — Tools & grounding
 
-Status: audited 2026-09-16, and independently reviewed the same day. Six gaps recorded,
-none closed. Sections 5 and 6 are paired one to one: each gap has exactly one decision, in
-the same order.
+Status: audited 2026-09-16, and independently reviewed the same day. Five of six gaps open;
+gap 1 was closed on 2026-09-17. Sections 5 and 6 are paired one to one: each gap has exactly
+one decision, in the same order.
 
 ---
 
@@ -92,39 +92,50 @@ in the prompt (`prompts.py` 39–50).
 
 The client (`services/agent/mcp_client.py`) turns each advertised tool into a LangChain
 tool for the model to call, with the tool's `input_schema` cleaned of the keys Gemini
-rejects (`_clean_schema`, 43–49; `graph.py` 212–229 does the wiring). That cleaning matters
+rejects (`_clean_schema`, 47–53; `graph.py` 212–229 does the wiring). That cleaning matters
 because pydantic emits `title`, `additionalProperties` and `default`, and an unknown key is
 a 400 at generate time rather than at declaration time. What comes back is normalised from
-whatever the protocol returned (`_payload`, 66), and a transport failure becomes a
-structured error (`call`, 115) so the model can report it rather than crash.
+whatever the protocol returned (`_payload`, 100), and a transport failure becomes a
+structured error (`call`, 149) so the model can report it rather than crash.
 
 Input validation has one definition applied by every tool entry point — `valid_hadm_id`
 (`tools/_validation.py` 11), which rejects booleans because `bool` is an `int` subclass —
-plus the ranges each tool owns, such as `top_k` between 1 and 20 (`retrieval.py` 203–204).
+plus the ranges each tool owns, such as `top_k` between 1 and 20 (`retrieval.py` 209).
 Above that sits the SDK's own coercion of arguments to the declared types, which happens
 before the tool function is entered.
 
-Output validation runs before any payload leaves a tool. `validate_prediction_result` and
-`validate_retrieval_result` (`services/mcp/contracts.py` 76 and 110) check fields, types and
-internal consistency — a `returned` count that disagrees with the passages is an error —
-against the `TypedDict`s that name each shape (`services/mcp/contracts.py` 7–44). A payload
-that fails is replaced with `invalid_tool_response` and logged server-side, never returned as
-a malformed success.
+Output validation runs on both sides of the boundary, against one file. Each tool annotates
+its return with its contract — `-> PredictionResult | ToolError` and
+`-> RetrievalResult | ToolError` (`prediction.py` 106, `retrieval.py` 338 and 473) — which is
+what makes the server advertise a real output schema instead of an object with no properties,
+and what makes the payload arrive as `{"result": …}`. The client unwraps that envelope and
+checks the result against the same contract before anything downstream sees it
+(`mcp_client.py` 70–97), because a tool result is the one thing here that arrives from
+outside the process: before this change the client asked only that a dict had arrived and
+passed it on (`_payload`, 100). A payload outside its contract becomes `invalid_tool_response`
+and a log line, on both sides, never a malformed success.
+
+The server-side validators (`validate_prediction_result` and `validate_retrieval_result`,
+`services/mcp/contracts.py` 83 and 117) check fields, types and internal consistency — a
+`returned` count that disagrees with the passages is an error — against the `TypedDict`s
+that name each shape (`services/mcp/contracts.py` 7–50), and the keys the tools emit are
+declared there too, so the schema cannot silently drop one. The agent image carries
+`services/mcp/contracts.py` so both sides enforce the same file rather than a copy.
 
 Retrieval stays inside one patient by two independent means. The admission id is passed
-into the index query as a filter (`retrieval.py` 230), so it constrains ranking rather
+into the index query as a filter (`retrieval.py` 236), so it constrains ranking rather
 than being applied afterwards; and every note the index returns is re-checked at the
-BigQuery layer (`_fetch_texts`, 119), where a row belonging to another admission raises
-`IsolationViolation` (145) and the call returns a structured error instead of serving the
+BigQuery layer (`_fetch_texts`, 125), where a row belonging to another admission raises
+`IsolationViolation` (151) and the call returns a structured error instead of serving the
 passage. An id the server cannot parse, and a note that is missing text, are both errors
 rather than silently dropped passages — a dropped passage looks like a retrieval gap and
 is hard to debug.
 
-Section retrieval does not depend on the index at all. `_search_sections` (418) re-parses
+Section retrieval does not depend on the index at all. `_search_sections` (426) re-parses
 the note and re-chunks it with the same deterministic chunker that built the index, returns
 one passage per section in a fixed order, and marks those passages `retrieval:
 deterministic` rather than giving them an embedding score they do not have. The section
-vocabulary is single-sourced from that chunker (`retrieval.py` 45 and 67), so a build and a
+vocabulary is single-sourced from that chunker (`retrieval.py` 45 and 73), so a build and a
 serving path cannot disagree about which sections exist.
 
 Tool results reach the prompt wrapped in a literal delimiter (`graph.py` 150), and the
@@ -138,11 +149,11 @@ The deployed path is Cloud Run. `services/mcp/Dockerfile` and
 from the live service at deploy time rather than holding a copy (`services/agent/cloudbuild.yaml`
 2–4, 46); every request except `/health` must carry an `Authorization` header (`server.py`
 63–77), with the token itself verified by Cloud Run IAM and minted for the service's
-audience and cached for 45 minutes (`mcp_client.py` 192). One tool
+audience and cached for 45 minutes (`mcp_client.py` 226). One tool
 call is bounded by the tool leg of the timeout chain — 100 seconds, inside the question's
 110 and above the model's 60 — with the HTTP client's own timeout of 110 seconds set just
 above the per-call read timeout, so the tool deadline fires first and fails with a
-structured error (`mcp_client.py` 220). The image copies the package wholesale, which also
+structured error (`mcp_client.py` 254). The image copies the package wholesale, which also
 ships `pipelines/` and the `__pycache__` directories of deleted modules; that is image
 hygiene rather than a requirement, and is noted here so it is not rediscovered as a surprise.
 
@@ -152,7 +163,7 @@ hygiene rather than a requirement, and is noted here so it is not rediscovered a
 
 | Requirement | State | Why |
 |---|---|---|
-| A4 — typed schemas both ways | **Partly** | The input schemas are derived from the signatures and keep their types all the way to the model. The output contract is enforced inside the tool and used nowhere else — not declared to any client, not checked by the consumer (gap 1). |
+| A4 — typed schemas both ways | **Met** | The input schemas are derived from the signatures and keep their types all the way to the model. The output contract is declared — each tool annotates its return with its contract, so the advertised schema names the payload and the error shapes — and enforced twice: by the tool before it returns, and by the client before anything downstream sees the result. |
 | A5 — small definitions, enums, focused toolsets | **Partly** | One parameter, three and one, all primitive and all below the limit, on one focused server with one job per tool; the two retrieval tools are separate rather than merged behind a mode flag. No parameter is an enum, and the one bounded parameter's range is in prose and in code but not in the schema (gap 2). |
 | G1 — tool results treated as untrusted | **Partly** | Provenance is enforced twice — the admission constrains the vector query, and every resolved row is re-checked — and a mismatch refuses to serve the text. The content is not validated: it reaches the prompt unbounded and unscreened (gap 3). The failure paths return internal detail, including another patient's identifiers on the isolation path (gap 4). |
 | B3 — same embedding model and parameters both sides | **Partly** | Both sides use `gemini-embedding-001` at 768 dimensions with the asymmetric task types today. The same facts are defined in four places, one of them an environment read on the serving path (gap 5). |
@@ -166,33 +177,31 @@ hygiene rather than a requirement, and is noted here so it is not rediscovered a
 Each entry states the defect and the evidence for it. The decision that closes it is the
 entry of the same number in section 6.
 
-**1 — The tool contract is enforced inside the tool and known nowhere else.**
-All three tools advertise `{"type": "object", "additionalProperties": true}` — an object
-with no declared properties, dumped from the running server. The validators behind it are
-real, tested and enforced (`services/mcp/contracts.py` 76 and 110, called by every tool
-before it returns), but that is the only place the shape exists. Nothing downstream checks
-it: the agent's own guard requires only that the response is a dict
-(`services/agent/contracts.py` 215–225). The cause is the return annotation — the SDK
-derives an output schema from the return type, and every tool is annotated
-`-> dict[str, Any]` (`prediction.py` 100, `retrieval.py` 332 and 465). The contracts are
-also incomplete for what the tools emit: `granularity` (`retrieval.py` 325) and `note`
-(`retrieval.py` 435 and 460) are returned and declared nowhere. Measured over stdio against
-the installed SDK (mcp 2.0.0): annotating a tool with a union of two `TypedDict`s advertises
-a schema whose only property is `result`, the structured payload then arrives wrapped as
-`{"result": …}` — which is what `_payload` returns (`mcp_client.py` 66) — and a key the
-schema does not declare is dropped from it.
+**1 — The tool contract was enforced inside the tool and known nowhere else.** *Closed
+2026-09-17 — see 7.*
+All three tools advertised `{"type": "object", "additionalProperties": true}` — an object
+with no declared properties, dumped from the running server. The validators behind it were
+real, tested and enforced, but that was the only place the shape existed: nothing downstream
+checked it — the client asked only that a dict had arrived and passed it on (`_payload`, 100)
+and the trace record asked only that the response be a dict (`services/agent/contracts.py`
+215–225) — and the contracts were incomplete for what the tools emitted — `granularity` and
+`note` were returned and declared nowhere. The cause was the return annotation: the SDK
+derives an output schema from the return type, and every tool was annotated
+`-> dict[str, Any]`. Measured over stdio against the installed SDK (mcp 2.0.0): a union of
+two `TypedDict`s advertises a schema whose only property is `result`, the structured payload
+arrives wrapped as `{"result": …}`, and a key the schema does not declare is dropped from it.
 
 **2 — The one bounded parameter does not declare its bound.**
 `top_k` is advertised as `{"type": "integer", "default": 5}` and nothing more. Its range
-lives in prose ("1-20, default 5", `retrieval.py` 342) and in a check that returns
-`bad_request` when it is exceeded (`retrieval.py` 203–204), so the constraint rejects a
+lives in prose ("1-20, default 5", `retrieval.py` 350) and in a check that returns
+`bad_request` when it is exceeded (`retrieval.py` 209), so the constraint rejects a
 call rather than preventing it. No parameter in any tool is an enum — the only free text is
 `query`, a search phrase that cannot be enumerated — so that half of A5 is unexercised
 rather than violated.
 
 **3 — Tool results enter the prompt without content validation.**
 Nothing bounds the size of what arrives: a `granularity: note` fallback passage is a whole
-discharge note (`retrieval.py` 325) and up to `top_k` of them arrive at once, so the text
+discharge note (`retrieval.py` 331) and up to `top_k` of them arrive at once, so the text
 entering the prompt has no ceiling. Nothing handles the characters either. `json.dumps`
 escapes quotes and newlines but not `<` or `>`, measured, so a passage whose text contains
 the closing tag produces a second closing tag in what the model receives (`graph.py`
@@ -205,15 +214,15 @@ that lands here — what may enter a prompt from the outside — as against the 
 
 **4 — Error messages carry internals into the prompt and back to the caller.**
 `call` returns `f"{type(exc).__name__}: {exc}"` when the transport fails
-(`mcp_client.py` 129). Measured over MCP: a wrongly typed argument comes back as
+(`mcp_client.py` 163). Measured over MCP: a wrongly typed argument comes back as
 `tool_call_failed` carrying pydantic's message and a documentation URL, so a bad argument
 is also indistinguishable from a broken connection. The isolation refusal returns the
-exception text, which names the foreign note ids (`retrieval.py` 283, message built at
-145–148) — and a note id is `{subject_id}-DS-{note}`, so that is another patient's
+exception text, which names the foreign note ids (`retrieval.py` 289, message built at
+151–154) — and a note id is `{subject_id}-DS-{note}`, so that is another patient's
 identifier, asserted by a test (`tests/agent/test_rag_search.py` 147). `missing_text`
-embeds the table name (`retrieval.py` 305–306), `unparsed_datapoint` echoes the raw
-datapoint id (294–298), and `incomplete_features` lists internal column names
-(`prediction.py` 65–67). Every one of those *is* the tool result, so each enters the
+embeds the table name (`retrieval.py` 311–312), `unparsed_datapoint` echoes the raw
+datapoint id (300–304), and `incomplete_features` lists internal column names
+(`prediction.py` 71–73). Every one of those *is* the tool result, so each enters the
 prompt, and the success payload carries each tool call's response to the caller verbatim
 (`http.py` 354). The record cannot compensate: it keeps the stage, the tool and the timing
 and drops the payload (`http.py` 226–232), so a refused call and a failed one are the same
@@ -222,7 +231,7 @@ row there.
 **5 — The embedding space is defined in four places, and the serving copy is settable.**
 `retrieval/embed.py` 17–20 holds literals, used by the ingest component
 (`pipelines/components/embed_chunks.py` 185–189) and the build script. `services/mcp/config.py` 99–100
-holds environment reads, used by the serving path (`retrieval.py` 209 and 212).
+holds environment reads, used by the serving path (`retrieval.py` 215 and 218).
 `rag_config.yaml` 36–39 holds a third copy, in a file that describes itself as the place
 those settings live "so the corpus switch is ONE value". `rag_ingest_pipeline.py` 55
 carries a fourth as a default. `RESTRICT_NAMESPACE` is defined twice as well
@@ -234,8 +243,8 @@ comment saying build and serving "can never drift".
 
 **6 — An unknown admission is indistinguishable from an admission with no notes.**
 `predict_readmission` returns `unknown_patient` when the admission is not in the feature
-source (`prediction.py` 44–48). Both retrieval tools return success with `returned: 0` and
-a note saying nothing was found (`retrieval.py` 435 and 460) — including when the admission
+source (`prediction.py` 50–54). Both retrieval tools return success with `returned: 0` and
+a note saying nothing was found (`retrieval.py` 443 and 468) — including when the admission
 id does not exist at all. So the model reports "no notes found" for a patient that does not
 exist, and a typo in an identifier reads as an empty record. This is not a requirement row;
 it was found auditing one tool's contract against another's.
@@ -251,6 +260,8 @@ is also where the record's shape is owned; and injection and jailbreak as a poli
 
 ### 6.1 — for gap 1: complete the contract, declare it, and check it where it is used
 
+Done 2026-09-17, all three steps together.
+
 Three steps, in this order, because probing it showed it is not the one-line change it first
 appears to be. First the contracts gain the keys the tools already emit (`note`,
 `granularity`), because a declared schema that omits them drops them from the structured
@@ -261,6 +272,11 @@ received against the same contract — the consumer is where an untrusted result
 checked, and today it is where nothing is checked. The three land together: the second
 breaks the first if it ships alone. Two tests: every advertised tool declares properties,
 and a payload the contract rejects does not reach the model.
+
+The drop was the part worth measuring rather than reasoning about: with the annotation in
+place and `granularity` still undeclared, the server returned a payload without it. The
+envelope is likewise real and not theoretical — every tool result now crosses the boundary
+as `{"result": …}`, which the client unwraps before the model can see it.
 
 ### 6.2 — for gap 2: put the bound in the signature
 
@@ -312,8 +328,33 @@ admission that exists with no discharge note.
 
 ## 7. What changed
 
-Nothing yet. This layer is audited and its gaps are recorded; this section is filled in as
-they are closed, one at a time.
+gap 1 closed, 2026-09-17.
+
+The three tools now state what they return. `predict_readmission` is annotated
+`-> PredictionResult | ToolError` and the two retrieval tools `-> RetrievalResult |
+ToolError`, so the server advertises a schema that names the payload, its fields and the
+error shape instead of an object with no properties — the same shape over the real boundary
+as in the file that declares it. Making the contract complete came first, because it turned
+out not to be complete: `note` and `granularity` were emitted by the tools and declared
+nowhere, and a key the advertised schema does not declare is dropped from the structured
+payload. Both are declared now.
+
+The consumer checks what it receives. The agent's tool client unwraps the `{"result": …}`
+envelope the annotation introduces, then validates the payload against the same contract the
+server enforces, importing it from `services/mcp/contracts.py` — so the agent image carries
+that file rather than a second copy of the shape, and the two sides cannot drift apart
+without a test noticing. A result outside its contract becomes `invalid_tool_response` and a
+log line: what reaches the model is either a payload that satisfied the contract or a
+sentence saying the tool's response was unusable, never a malformed success.
+
+Five tests cover it: every advertised tool declares properties and declares the keys the
+tools emit, a valid payload passes through unchanged, the envelope is unwrapped before the
+payload is used, a payload outside its contract never reaches the caller, and a text-only
+result is not mistaken for an envelope. The check was verified by reverting it rather than
+by trusting a green run — with the annotation and the client-side check removed, exactly the
+tests that assert them fail, and the full suite passes with them in place. End to end
+against the running server over stdio, all three tools called with an invalid admission id
+return a validated structured error as a plain dict, unwrapped.
 
 ---
 
@@ -360,10 +401,12 @@ exception text itself, which is gap 4.
 
 **Why declare an output schema when the output is validated anyway?**
 Because they answer different questions. The validator answers "may this payload leave the
-server", and it runs at the moment the answer is produced. The schema answers "what shape
-is this", and it is read before the call, by anything that is not this process — another
-agent, a test, or a reviewer. Today the second answer is an empty object, which means a
-client can see the input contract but not the output one.
+server", and it runs at the moment the answer is produced — twice now, since the client
+checks the result against the same contract rather than trusting the server to have done it.
+The schema answers "what shape is this", and it is read before the call, by anything that is
+not this process: another agent, a test, or a reviewer. Both were missing at first: the
+advertised schema was an empty object, so a client could see the input contract and not the
+output one, and nothing on the agent side checked what arrived.
 
 **Why three tools rather than one that takes a mode?**
 Because a mode parameter is a hidden branch: the model has to be told in prose when to use

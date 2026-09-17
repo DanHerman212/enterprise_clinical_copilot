@@ -34,6 +34,10 @@ class RetrievalPassage(TypedDict):
     text: str
     score: NotRequired[float]
     retrieval: NotRequired[str]
+    # Set when the serving chunker could not reproduce the matched chunk and the whole
+    # note is returned instead. Declared here because a key the schema does not declare is
+    # dropped from the structured payload the client receives.
+    granularity: NotRequired[str]
 
 
 class RetrievalResult(TypedDict):
@@ -41,6 +45,9 @@ class RetrievalResult(TypedDict):
     query: str
     returned: int
     passages: list[RetrievalPassage]
+    # Present when an empty result needs explaining — no discharge note, or none of the
+    # summary sections. Declared for the same reason as `granularity`.
+    note: NotRequired[str]
 
 
 class ToolContractError(ValueError):
@@ -128,8 +135,33 @@ def validate_retrieval_result(payload: Any) -> RetrievalResult | ToolError:
             for field in ("id", "section", "text")
         ):
             raise ToolContractError("Retrieval passage is malformed.")
+        if "granularity" in passage and not isinstance(passage["granularity"], str):
+            raise ToolContractError("Retrieval passage granularity is invalid.")
         if passage.get("retrieval") == "deterministic":
             continue
         if not _number(passage.get("score")):
             raise ToolContractError("Retrieval passage is malformed.")
     return payload
+
+
+# Which validator applies to which tool. Keyed by the name the server advertises, because
+# that is all a client has when a result arrives — the payload does not say what it is meant
+# to be. Both sides of the boundary import this, so a tool and its contract cannot ship apart.
+TOOL_CONTRACTS = {
+    "predict_readmission": validate_prediction_result,
+    "rag_search": validate_retrieval_result,
+    "rag_search_sections": validate_retrieval_result,
+}
+
+
+def validate_tool_result(name: str, payload: Any) -> dict[str, Any]:
+    """Validate one tool's payload against that tool's contract.
+
+    Raises `ToolContractError` for a payload outside its contract. A tool with no contract
+    registered here is returned unchanged: the only way that happens is a partial deploy,
+    and failing every call to that tool would turn a missing declaration into an outage.
+    """
+    validator = TOOL_CONTRACTS.get(name)
+    if validator is None:
+        return payload
+    return validator(payload)

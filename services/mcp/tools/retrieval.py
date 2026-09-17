@@ -56,7 +56,13 @@ from ..config import (
     PROJECT,
     RESTRICT_NAMESPACE,
 )
-from ..contracts import ToolContractError, tool_error, validate_retrieval_result
+from ..contracts import (
+    RetrievalResult,
+    ToolContractError,
+    ToolError,
+    tool_error,
+    validate_retrieval_result,
+)
 from ._validation import valid_hadm_id
 
 # The narrative sections we index — single-sourced from services.mcp.retrieval.chunking, the same
@@ -329,7 +335,9 @@ def _search(hadm_id: int, query: str, top_k: int, *,
             "passages": passages}
 
 
-async def rag_search(hadm_id: int, query: str, top_k: int = 5) -> dict[str, Any]:
+async def rag_search(
+    hadm_id: int, query: str, top_k: int = 5
+) -> RetrievalResult | ToolError:
     """Retrieve cited passages from a patient's discharge notes for a query.
 
     Searches the patient's own notes only (the hadm_id restrict is applied
@@ -462,7 +470,7 @@ def _search_sections(hadm_id: int) -> dict[str, Any]:
             "returned": len(merged), "passages": merged}
 
 
-async def rag_search_sections(hadm_id: int) -> dict[str, Any]:
+async def rag_search_sections(hadm_id: int) -> RetrievalResult | ToolError:
     """Retrieve one cited passage per major discharge-note section (hospital
     course, discharge diagnosis, discharge medications, discharge
     instructions), merged in that fixed order. Use for summarization questions

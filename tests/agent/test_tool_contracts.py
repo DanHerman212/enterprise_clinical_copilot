@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from services.mcp.contracts import (
@@ -6,6 +8,34 @@ from services.mcp.contracts import (
     validate_prediction_result,
     validate_retrieval_result,
 )
+
+
+def test_every_tool_declares_its_output_schema():
+    """Gap 1: a typed schema on the way out, not only on the way in.
+
+    The SDK derives the advertised output schema from the return annotation, so a tool
+    annotated `-> dict[str, Any]` advertises an object with no properties while a tool
+    annotated with its contract advertises the shape. Both shapes are asserted here, because
+    a contract that omits a key the tool emits is worse than no contract: the SDK drops that
+    key from the structured payload.
+    """
+    import asyncio
+
+    from services.mcp.server import server
+
+    tools = asyncio.run(server.list_tools())
+    assert tools, "the server advertises no tools at all"
+
+    for tool in tools:
+        properties = (tool.output_schema or {}).get("properties") or {}
+        assert properties, f"{tool.name} advertises no output shape at all"
+        # A union return type is declared under a single `result` property.
+        assert "result" in properties, f"{tool.name} does not declare a result"
+
+    # The keys the tools actually emit, including the two the contracts were missing.
+    declared = json.dumps([tool.output_schema for tool in tools])
+    for key in ("granularity", "note", "top_factors", "passages", "model_version"):
+        assert f'"{key}"' in declared, f"{key} is emitted but not declared anywhere"
 
 
 def test_tool_error_has_common_shape():

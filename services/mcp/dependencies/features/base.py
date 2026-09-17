@@ -28,6 +28,16 @@ class FeatureSource(Protocol):
     def fetch(self, hadm_id: int) -> FeatureRow:
         ...
 
+    def exists(self, hadm_id: int) -> bool:
+        """Whether this admission is in the source at all.
+
+        Separate from `fetch` because the question is different and cheaper: a
+        retrieval tool that found nothing needs to know whether the admission is
+        one we serve, and pulling a whole feature row to answer that would read
+        columns it never uses.
+        """
+        ...
+
 
 def to_vector(row: FeatureRow, feature_order: list[str]) -> list[float | None]:
     """Order a feature dict into the array the endpoint expects."""

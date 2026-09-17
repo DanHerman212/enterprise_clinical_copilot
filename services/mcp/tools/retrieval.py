@@ -44,6 +44,10 @@ from services.mcp.retrieval.embed import (
     OUTPUT_DIMENSIONALITY,
     RESTRICT_NAMESPACE,
 )
+from services.mcp.dependencies.features import (
+    FeatureSource,
+    get_feature_source,
+)
 from services.mcp.retrieval.sections import parse_note
 from services.mcp.retrieval.chunking import (
     DEFAULT_MAX_CHARS,
@@ -125,6 +129,57 @@ def _error(
     if detail:
         _LOG.warning("%s refused for hadm %s: %s", code, hadm_id, detail)
     return tool_error(hadm_id, code, message)
+
+
+@lru_cache(maxsize=1)
+def _admission_source() -> FeatureSource:
+    return get_feature_source()
+
+
+def _admission_known(hadm_id: int) -> bool | None:
+    """Whether this admission is one the site serves at all.
+
+    Retrieval must not answer "no notes" for an admission that does not exist: the
+    prompt tells the model an all-empty result is a real answer, so a typo becomes a
+    claim about a patient rather than a statement that the identifier is unknown.
+    Prediction already tells those apart, and this asks the same source it asks, so
+    `unknown_patient` means one thing across the three tools.
+
+    None means the lookup itself failed, and it is deliberately not False: a failed
+    query must not become a claim that the patient does not exist. The caller keeps
+    its empty answer and the failure goes to the log.
+    """
+    try:
+        return _admission_source().exists(hadm_id)
+    except Exception:
+        _LOG.error("admission lookup failed for hadm %s", hadm_id, exc_info=True)
+        return None
+
+
+def _unknown_if_absent(hadm_id: int) -> dict[str, Any] | None:
+    """The unknown-admission error, or None when the admission is one we serve."""
+    if _admission_known(hadm_id) is False:
+        return _error(
+            hadm_id, "unknown_patient",
+            "No such admission in the dataset.",
+            detail="absent from the feature source (admission lookup returned no row)",
+        )
+    return None
+
+
+def _nothing_retrieved(hadm_id: int, query: str) -> dict[str, Any]:
+    """Nothing to cite for this admission — unless there is no such admission.
+
+    An empty result is only a real answer when the admission is one we serve. The
+    prompt tells the model to read it as one, so answering this way for an admission
+    that does not exist turns a typo into a statement about a patient (gap 6).
+    """
+    unknown = _unknown_if_absent(hadm_id)
+    if unknown:
+        return unknown
+    _LOG.info("rag_search: nothing retrieved for hadm %s", hadm_id)
+    return {"hadm_id": hadm_id, "query": query, "returned": 0, "passages": [],
+            "note": "no passages were retrieved for this admission"}
 
 
 def _parse_datapoint_id(datapoint_id: str) -> tuple[str | None, str | None]:
@@ -300,7 +355,7 @@ def _search(hadm_id: int, query: str, top_k: int, *,
                 if res.get("error"):
                     return res
                 return {**res, "query": query}
-        return {"hadm_id": hadm_id, "query": query, "returned": 0, "passages": []}
+        return _nothing_retrieved(hadm_id, query)
 
     # Resolve text by note_id in one batched query, re-checking that every
     # note belongs to THIS admission (second R1 layer — ECC-19).
@@ -366,6 +421,9 @@ def _search(hadm_id: int, query: str, top_k: int, *,
             )
             passage["granularity"] = "note"
         passages.append(passage)
+
+    if not passages:
+        return _nothing_retrieved(hadm_id, query)
 
     return {"hadm_id": hadm_id, "query": query, "returned": len(passages),
             "passages": passages}
@@ -483,6 +541,13 @@ def _search_sections(hadm_id: int) -> dict[str, Any]:
         return _error(hadm_id, "bad_request", "hadm_id must be a positive integer")
     note_id, text = _fetch_note_row(hadm_id)
     if not text:
+        # No note for this admission — but which case is it? A note that was never
+        # ingested is an empty record; an admission that does not exist is not a
+        # record at all, and saying "no discharge note" about it invents a patient
+        # (gap 6).
+        unknown = _unknown_if_absent(hadm_id)
+        if unknown:
+            return unknown
         return {"hadm_id": hadm_id, "query": "discharge notes",
                 "returned": 0, "passages": [],
                 "note": "no discharge note found for this admission"}

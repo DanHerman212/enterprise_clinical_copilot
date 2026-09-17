@@ -74,7 +74,34 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def _run_search(endpoint: _FakeEndpoint, note_texts: dict | None = None, **kwargs):
+class _FakeAdmissions:
+    """The admission lookup, which is only consulted when nothing was found."""
+
+    def __init__(self, known=True, blows_up=False):
+        self._known = known
+        self._blows_up = blows_up
+        self.asked: list[int] = []
+
+    def exists(self, hadm_id):
+        self.asked.append(hadm_id)
+        if self._blows_up:
+            raise RuntimeError("warehouse unreachable")
+        return self._known
+
+
+def _admissions(known=True, blows_up=False):
+    """Patch the lookup, and hand the fake back so a test can read `asked`.
+
+    Patched rather than left real in every test: without credentials the real source
+    raises, which lands on the same branch as a genuine failure, so a test that did
+    not patch it would pass while exercising the wrong path.
+    """
+    fake = _FakeAdmissions(known=known, blows_up=blows_up)
+    return patch.object(rs, "_admission_source", lambda: fake), fake
+
+
+def _run_search(endpoint: _FakeEndpoint, note_texts: dict | None = None,
+                known_admission: bool = True, **kwargs):
     """Run rag_search with all cloud touchpoints faked."""
     embed = _FakeEmbedClient()
     note_texts = note_texts or {}
@@ -84,9 +111,11 @@ def _run_search(endpoint: _FakeEndpoint, note_texts: dict | None = None, **kwarg
         # stays missing so the missing_text error path can be exercised.
         return {nid: note_texts[nid] for nid in note_ids if nid in note_texts}
 
+    admission_patch, _ = _admissions(known=known_admission)
     with patch.object(rs, "_index_endpoint", lambda: endpoint), \
          patch.object(rs, "_embed_client", lambda: embed), \
-         patch.object(rs, "_fetch_texts", fake_fetch):
+         patch.object(rs, "_fetch_texts", fake_fetch), \
+         admission_patch:
         return _run(rs.rag_search(**kwargs))
 
 
@@ -113,11 +142,17 @@ def test_restrict_always_applied():
 
 
 def test_empty_is_a_real_answer():
-    """No neighbors -> empty passages, not an error."""
+    """No neighbors -> empty passages, not an error.
+
+    The result says which empty this is. An admission we serve that returned nothing
+    is an empty record; the same shape for an admission that does not exist would be
+    a claim about a patient (gap 6), so the note is part of the contract now.
+    """
     endpoint = _FakeEndpoint([])
     result = _run_search(endpoint, hadm_id=HADM_A, query="nothing should match")
     assert result == {"hadm_id": HADM_A, "query": "nothing should match",
-                      "returned": 0, "passages": []}
+                      "returned": 0, "passages": [],
+                      "note": "no passages were retrieved for this admission"}
 
 
 def test_bad_hadm_id_is_structured_error():
@@ -386,13 +421,16 @@ def test_empty_retry_does_not_discard_real_hits():
 def test_non_section_query_still_returns_empty():
     """A query with no section intent and 0 hits stays empty (no fabrication)."""
     endpoint = _Recorder([], [])
+    admission_patch, _ = _admissions(known=True)
     with patch.object(rs, "_index_endpoint", lambda: endpoint), \
          patch.object(rs, "_embed_client", lambda: _FakeEmbedClient()), \
-         patch.object(rs, "_fetch_texts", lambda note_ids, hadm_id: {}):
+         patch.object(rs, "_fetch_texts", lambda note_ids, hadm_id: {}), \
+         admission_patch:
         result = _run(rs.rag_search(hadm_id=23613002, query="what did the nurse chart say"))
 
     assert result == {"hadm_id": 23613002, "query": "what did the nurse chart say",
-                      "returned": 0, "passages": []}
+                      "returned": 0, "passages": [],
+                      "note": "no passages were retrieved for this admission"}
     assert endpoint.calls == 1
 
 
@@ -581,3 +619,83 @@ def test_bool_hadm_id_rejected_everywhere():
     for bad in (True, 0, -5):
         result = pr._predict(bad)
         assert result["error"] == "bad_request"
+
+
+# --- unknown admission vs empty record (gap 6) ---------------------------------
+#
+# The prompt tells the model an all-empty result is a real answer, so an empty result
+# for an admission that does not exist turns a typo into a statement about a patient.
+# Prediction already answers `unknown_patient`; these pin the same meaning onto both
+# retrieval tools, and pin the borrow of its source rather than a second opinion.
+
+def test_an_unknown_admission_is_an_error_not_an_empty_record():
+    result = _run_search(_FakeEndpoint([]), hadm_id=90000001, query="sepsis",
+                         known_admission=False)
+
+    assert result["error"] == "unknown_patient"
+    assert "passages" not in result, "an error is not a record with nothing in it"
+
+
+def test_an_unknown_admission_is_an_error_for_sections_too():
+    admission_patch, _ = _admissions(known=False)
+    with patch.object(rs, "_fetch_note_row", lambda hadm: (None, None)), admission_patch:
+        result = _run(rs.rag_search_sections(90000001))
+
+    assert result["error"] == "unknown_patient"
+
+
+def test_an_admission_that_exists_without_a_note_is_still_an_empty_success():
+    """The other side of the distinction: no note is an empty record, not a typo."""
+    admission_patch, fake = _admissions(known=True)
+    with patch.object(rs, "_fetch_note_row", lambda hadm: (None, None)), admission_patch:
+        result = _run(rs.rag_search_sections(90000015))
+
+    assert "error" not in result
+    assert result["returned"] == 0
+    assert "no discharge note" in result["note"]
+    assert fake.asked == [90000015], "the lookup is what told the two cases apart"
+
+
+def test_an_empty_retrieval_says_so_without_claiming_an_empty_record():
+    result = _run_search(_FakeEndpoint([]), hadm_id=HADM_A, query="nothing matches")
+
+    assert "error" not in result
+    assert result["returned"] == 0
+    assert result["passages"] == []
+    assert "no passages were retrieved" in result["note"]
+
+
+def test_a_failed_lookup_does_not_invent_an_unknown_patient(caplog):
+    """A failed lookup is not an answer.
+
+    None is deliberately not False: if the admission lookup itself breaks, the tool
+    keeps the empty answer and logs, rather than telling the model the patient does
+    not exist — the same failure-must-not-become-a-fact rule as gap 4.
+    """
+    admission_patch, _ = _admissions(blows_up=True)
+    with patch.object(rs, "_fetch_note_row", lambda hadm: (None, None)), \
+         admission_patch, caplog.at_level("ERROR"):
+        result = _run(rs.rag_search_sections(90000015))
+
+    assert "error" not in result
+    assert result["returned"] == 0
+    assert "warehouse unreachable" in caplog.text
+
+
+def test_the_lookup_is_not_consulted_when_there_is_something_to_return():
+    """It is a fallback, not a tax: a normal retrieval must not pay for it."""
+    endpoint = _FakeEndpoint([
+        _FakeNeighbor("13479418-DS-24_brief_hospital_course_2", 0.27),
+    ])
+    admission_patch, fake = _admissions(known=True)
+    embed = _FakeEmbedClient()
+    note = "Brief Hospital Course: Diuresed with furosemide."
+
+    with patch.object(rs, "_index_endpoint", lambda: endpoint), \
+         patch.object(rs, "_embed_client", lambda: embed), \
+         patch.object(rs, "_fetch_texts", lambda ids, hadm: {ids[0]: note}), \
+         admission_patch:
+        result = _run(rs.rag_search(hadm_id=HADM_A, query="sepsis"))
+
+    assert result["returned"] == 1
+    assert fake.asked == [], "a successful retrieval must not call the lookup at all"

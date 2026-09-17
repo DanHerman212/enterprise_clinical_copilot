@@ -18,6 +18,16 @@ class BigQueryFeatureSource:
         self._client = bigquery.Client(project=project)
         self._table = table
 
+    def exists(self, hadm_id: int) -> bool:
+        """One row, one column: is this admission in the dataset we serve?"""
+        query = (
+            f"SELECT 1 FROM {self._table} WHERE {ENTITY_ID_COLUMN} = @hid LIMIT 1"
+        )
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ScalarQueryParameter("hid", "INT64", hadm_id)]
+        )
+        return bool(list(self._client.query(query, job_config=job_config).result()))
+
     def fetch(self, hadm_id: int) -> FeatureRow:
         query = f"SELECT * FROM {self._table} WHERE {ENTITY_ID_COLUMN} = @hid LIMIT 1"
         job_config = bigquery.QueryJobConfig(

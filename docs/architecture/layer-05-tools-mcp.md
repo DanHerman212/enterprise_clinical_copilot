@@ -1,7 +1,7 @@
 # Layer 5 — Tools & grounding
 
-Status: audited 2026-09-16, and independently reviewed the same day. One of six gaps open;
-gaps 1 to 5 were closed on 2026-09-17. Sections 5 and 6 are paired one to one: each gap has
+Status: audited 2026-09-16, and independently reviewed the same day. All six gaps are
+closed, gaps 1 to 5 on 2026-09-17. Sections 5 and 6 are paired one to one: each gap has
 exactly one decision, in the same order.
 
 ---
@@ -100,13 +100,13 @@ structured error (`call`, 149) so the model can report it rather than crash.
 
 Input validation has one definition applied by every tool entry point — `valid_hadm_id`
 (`tools/_validation.py` 11), which rejects booleans because `bool` is an `int` subclass —
-plus the ranges each tool owns, such as `top_k` between 1 and 20 (`retrieval.py` 229).
+plus the ranges each tool owns, such as `top_k` between 1 and 20 (`retrieval.py` 284).
 Above that sits the SDK's own coercion of arguments to the declared types, which happens
 before the tool function is entered.
 
 Output validation runs on both sides of the boundary, against one file. Each tool annotates
 its return with its contract — `-> PredictionResult | ToolError` and
-`-> RetrievalResult | ToolError` (`prediction.py` 118, `retrieval.py` 374 and 518) — which is
+`-> RetrievalResult | ToolError` (`prediction.py` 118, `retrieval.py` 432 and 583) — which is
 what makes the server advertise a real output schema instead of an object with no properties,
 and what makes the payload arrive as `{"result": …}`. The client unwraps that envelope and
 checks the result against the same contract before anything downstream sees it
@@ -123,19 +123,19 @@ declared there too, so the schema cannot silently drop one. The agent image carr
 `services/mcp/contracts.py` so both sides enforce the same file rather than a copy.
 
 Retrieval stays inside one patient by two independent means. The admission id is passed
-into the index query as a filter (`retrieval.py` 260), so it constrains ranking rather
+into the index query as a filter (`retrieval.py` 315), so it constrains ranking rather
 than being applied afterwards; and every note the index returns is re-checked at the
-BigQuery layer (`_fetch_texts`, 143), where a row belonging to another admission raises
-`IsolationViolation` (169) and the call returns a structured error instead of serving the
+BigQuery layer (`_fetch_texts`, 198), where a row belonging to another admission raises
+`IsolationViolation` (224) and the call returns a structured error instead of serving the
 passage. An id the server cannot parse, and a note that is missing text, are both errors
 rather than silently dropped passages — a dropped passage looks like a retrieval gap and
 is hard to debug.
 
-Section retrieval does not depend on the index at all. `_search_sections` (471) re-parses
+Section retrieval does not depend on the index at all. `_search_sections` (529) re-parses
 the note and re-chunks it with the same deterministic chunker that built the index, returns
 one passage per section in a fixed order, and marks those passages `retrieval:
 deterministic` rather than giving them an embedding score they do not have. The section
-vocabulary is single-sourced from that chunker (`retrieval.py` 51 and 76), so a build and a
+vocabulary is single-sourced from that chunker (`retrieval.py` 55 and 80), so a build and a
 serving path cannot disagree about which sections exist.
 
 Tool results reach the prompt wrapped in a literal delimiter (`graph.py` 212), and the
@@ -194,8 +194,8 @@ arrives wrapped as `{"result": …}`, and a key the schema does not declare is d
 **2 — The one bounded parameter did not declare its bound.** *Closed 2026-09-17 — see 7.*
 `top_k` reached the model as `{"type": "integer"}` and nothing more — no minimum, no
 maximum, and no default either, because `_clean_schema` strips `default` before the model sees
-it. Its range lived in prose ("1-20, default 5", `retrieval.py` 395) and in a check that
-returned `bad_request` when it was exceeded (`retrieval.py` 229), so the constraint rejected a
+it. Its range lived in prose ("1-20, default 5", `retrieval.py` 453) and in a check that
+returned `bad_request` when it was exceeded (`retrieval.py` 284), so the constraint rejected a
 call rather than preventing one: a model that guessed `top_k=50` spent a tool round-trip to
 learn what the schema could have told it. No parameter in any tool is an enum — the only free
 text is `query`, a search phrase that cannot be enumerated — so that half of A5 is unexercised
@@ -203,7 +203,7 @@ rather than violated.
 
 **3 — Tool results entered the prompt without content validation.** *Closed 2026-09-17 — see 7.*
 Nothing bounded the size of what arrived: a `granularity: note` fallback passage is a whole
-discharge note (`retrieval.py` 367) and up to `top_k` of them arrive at once, so the text
+discharge note (`retrieval.py` 422) and up to `top_k` of them arrive at once, so the text
 entering the prompt had no ceiling. Nothing handled the characters either. `json.dumps`
 escapes quotes and newlines but not `<` or `>`, measured, so a passage whose text contains
 the closing tag produced a second closing tag in what the model receives (`graph.py`
@@ -221,11 +221,11 @@ that lands here — what may enter a prompt from the outside — as against the 
 (`mcp_client.py` 165–170). Measured over MCP: a wrongly typed or out-of-range argument came back
 as `tool_call_failed` carrying pydantic's message and a documentation URL, so a bad argument
 was also indistinguishable from a broken connection. The isolation refusal returned the
-exception text, which named the foreign note ids (`retrieval.py` 316–321, message built at
-169–172) — and a note id is `{subject_id}-DS-{note}`, so that is another patient's
+exception text, which named the foreign note ids (`retrieval.py` 371–376, message built at
+224–227) — and a note id is `{subject_id}-DS-{note}`, so that is another patient's
 identifier, asserted by a test (`tests/agent/test_rag_search.py` 147). `missing_text`
-embedded the table name (`retrieval.py` 345–349), `unparsed_datapoint` echoed the raw
-datapoint id (333–340), and `incomplete_features` listed internal column names
+embedded the table name (`retrieval.py` 400–404), `unparsed_datapoint` echoed the raw
+datapoint id (388–395), and `incomplete_features` listed internal column names
 (`prediction.py` 79–86). Every one of those *is* the tool result, so each entered the
 prompt, and the success payload carries each tool call's response to the caller verbatim
 (`http.py` 193–196). The record could not compensate: it kept the stage, the tool and the
@@ -245,14 +245,19 @@ nothing and retrieval would return zero without an error. The failure the requir
 about is not an exception — it is plausible neighbours from a different space, and nothing in
 the repository set those variables, so the risk was a deploy that did, with no artifact to
 review. The contrast is in the same file: the section vocabulary *is* single-sourced
-(`retrieval.py` 51), with a comment saying build and serving "can never drift".
+(`retrieval.py` 55), with a comment saying build and serving "can never drift".
 
-**6 — An unknown admission is indistinguishable from an admission with no notes.**
-`predict_readmission` returns `unknown_patient` when the admission is not in the feature
-source (`prediction.py` 61–64). Both retrieval tools return success with `returned: 0` and
-a note saying nothing was found (`retrieval.py` 488 and 513) — including when the admission
-id does not exist at all. So the model reports "no notes found" for a patient that does not
-exist, and a typo in an identifier reads as an empty record. This is not a requirement row;
+**6 — An unknown admission was indistinguishable from an admission with no notes.**
+*Closed 2026-09-17 — see 7.*
+`predict_readmission` returned `unknown_patient` when the admission was not in the feature
+source (`prediction.py` 61–64). Both retrieval tools returned success with `returned: 0`
+instead — `rag_search` with a bare empty payload and no note at all, `rag_search_sections`
+with a note saying no discharge note was found (`retrieval.py` 553) — including when the
+admission id did not exist at all. So the model reported "no notes found" for a patient that
+does not exist, and a typo in an identifier read as an empty record. The prompt made it worse
+rather than better: it tells the model that an all-empty result is a real answer
+(`prompts.py` 63) while also teaching it what `unknown_patient` means (`prompts.py` 171),
+and only one of the three tools ever produced that error. This was not a requirement row; it
 it was found auditing one tool's contract against another's.
 
 **Recorded, not owned here:** the index, the note tables and the pipeline that builds them
@@ -374,10 +379,27 @@ meant to be optional (`RAG_TOP_K`), which is the condition its own docstring set
 
 ### 6.6 — for gap 6: one meaning for "this admission has nothing"
 
+Done 2026-09-17.
+
 The retrieval tools answer an unknown admission the way the prediction tool already does —
 an `unknown_patient` error rather than an empty success — so that an empty result means the
 record is empty and nothing else. A test each: an admission that does not exist, and an
 admission that exists with no discharge note.
+
+Telling those two apart needs a source that lists admissions, and the tools had none. They
+now ask the one prediction asks (`_admission_known`, `retrieval.py` 139–170), through a new
+`exists()` on the feature source that reads one row and one column rather than the whole
+feature row. It is consulted only on the branch that is already empty, so a retrieval that
+finds something pays nothing — a test asserts that, because a check that quietly became a
+tax on every call would be worse than the gap.
+
+One deliberate asymmetry: a lookup that *fails* is not an answer. `None` is not `False`, so
+an unreachable warehouse leaves the empty result and logs, rather than telling the model the
+patient does not exist — the same rule as gap 4.
+
+`rag_search`'s empty result now carries a note as well. Its shape was `returned: 0` with
+nothing else, so a caller could not tell an empty record from a missing one even with the
+note absent from the payload entirely.
 
 ---
 
@@ -521,6 +543,30 @@ duration, so a path that still reads a setting fails there. Verified by reintrod
 in three places: the serving module, the pipeline default, and the removed config constant.
 Each was caught, and the pipeline default was checked on its own so the assertion could not
 pass behind the other two.
+
+gap 6 closed, 2026-09-17.
+
+All three tools now answer an unknown admission the same way. The retrieval tools borrow
+prediction's source rather than forming a second opinion about who exists: a new `exists()` on
+the feature source answers with one row and one column, and it is called only when the tool
+has nothing to return. A retrieval that finds something never touches it — asserted, because
+the risk with a check like this is not that it is wrong but that it quietly becomes a query
+on every call.
+
+The distinction is now: an admission we serve that returned nothing is an empty record and
+says so; an admission we do not serve is `unknown_patient`, which the prompt already renders
+as "that admission is not in the dataset". `rag_search`'s empty payload gained the note it
+was missing, so both retrieval tools name which empty they are returning.
+
+A failed lookup is deliberately not treated as absence. `None` is not `False` — the tool keeps
+the empty answer and logs the failure, because turning an unreachable warehouse into "that
+patient does not exist" would be gap 4's mistake in a new place. That case has its own test.
+
+Six tests: an unknown admission from each retrieval tool, an admission that exists without a
+note staying an empty success, the empty `rag_search` payload, a failed lookup, and the
+confirmation that a successful retrieval never calls the lookup. Two existing tests that
+asserted the exact empty payload changed with it — the payload deliberately grew a note.
+Verified by removing the distinction: four of them fail.
 
 ---
 

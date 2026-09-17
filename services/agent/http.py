@@ -129,6 +129,21 @@ class AgentAnswerUnavailable(Exception):
         self.finish_reason = finish_reason
 
 
+def _tool_error_codes(state: dict) -> list[str]:
+    """The stable codes of the tool calls that failed, in call order.
+
+    A refused call already reaches the model and the caller as a code plus a
+    sentence; this is the third place it has to arrive, and the only one an
+    operator can count. Note text and question text are deliberately absent from
+    the record, and so is anything else a tool said about itself.
+    """
+    return [
+        call["response"]["error"]
+        for call in state.get("tool_calls") or []
+        if isinstance(call.get("response"), dict) and call["response"].get("error")
+    ]
+
+
 def _response_fields(state: dict) -> dict:
     """What the response reported, in the shape the record carries.
 
@@ -136,13 +151,14 @@ def _response_fields(state: dict) -> dict:
     record that carries tokens on success but not on failure would make a metric
     that is wrong exactly where it is most interesting. The same is true of a
     filtered response: it has to be visible on the runs that were refused, not only
-    on the ones that were not.
+    on the ones that were not. A failed tool call is the third case.
     """
     message = final_message(state)
     return {
         "tokens": model_turn.token_usage(state),
         "served_model": model_turn.served_model(message),
         "filtered": model_turn.filtered_categories(message),
+        "tool_errors": _tool_error_codes(state),
     }
 
 

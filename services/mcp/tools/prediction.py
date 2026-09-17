@@ -35,8 +35,17 @@ def _source() -> FeatureSource:
     return get_feature_source()
 
 
-def _error(hadm_id: int, code: str, message: str) -> dict[str, Any]:
-    """A failure the agent can read and explain, rather than a stack trace."""
+def _error(
+    hadm_id: int, code: str, message: str, *, detail: str | None = None
+) -> dict[str, Any]:
+    """A failure the caller can act on, with the detail left in the log.
+
+    The message IS the tool result: it reaches the model, the caller and the
+    browser, so it carries a sentence and nothing else. Column names and feature
+    source internals are diagnostics; they go to the log.
+    """
+    if detail:
+        _LOG.warning("%s refused for hadm %s: %s", code, hadm_id, detail)
     return tool_error(hadm_id, code, message, feature_source=FEATURE_SOURCE)
 
 
@@ -69,8 +78,11 @@ def _predict(hadm_id: int) -> dict[str, Any]:
     if missing:
         return _error(
             hadm_id, "incomplete_features",
-            f"Feature source returned {len(order) - len(missing)}/{len(order)} columns; "
-            f"missing {missing[:5]}{'…' if len(missing) > 5 else ''}.",
+            "The feature source returned an incomplete row for this admission.",
+            detail=(
+                f"{FEATURE_SOURCE} returned {len(order) - len(missing)}/{len(order)} "
+                f"columns; missing {missing}"
+            ),
         )
 
     try:

@@ -194,3 +194,58 @@ def test_predict_prediction_failure_is_generic():
     assert result["error"] == "prediction_failed"
     assert "778397675435" not in result["message"]
     assert "RuntimeError" not in result["message"]
+
+
+# --- detail that was interpolated on purpose (gap 4) ----------------------------
+#
+# The paths above never put `str(exc)` in a message. These did: the detail was
+# written into the sentence by hand, which is why they survived the ECC-21 pass.
+# Each one now logs the detail and returns the sentence.
+
+def test_incomplete_features_lists_no_columns(caplog):
+    class _Source:
+        def fetch(self, hadm_id):
+            return {"f1": 1.0}  # f2 missing
+
+    with patch.object(pr, "feature_order", lambda: ["f1", "f2"]), \
+         patch.object(pr, "_source", lambda: _Source()), \
+         caplog.at_level("WARNING"):
+        result = pr._predict(90000009)
+
+    assert result["error"] == "incomplete_features"
+    assert "f2" not in result["message"]
+    assert "f2" in caplog.text  # the operator still learns which column
+
+
+def test_the_record_carries_the_tool_error_code(caplog):
+    """F2: a refused call has to be countable, not only visible to a reader.
+
+    The record exists so an isolation refusal can be alerted on; a code that
+    reaches only the prompt and the browser cannot be.
+    """
+    state = {
+        "messages": [HumanMessage(content="q"),
+                     AIMessage(content="No notes were found.")],
+        "tool_calls": [
+            {"name": "rag_search", "args": {"hadm_id": 1, "query": "q"},
+             "response": {"hadm_id": 1, "error": "isolation_violation",
+                          "message": "A retrieved note did not belong to the "
+                                     "requested admission; no passage was served."}},
+            {"name": "predict_readmission", "args": {"hadm_id": 1},
+             "response": {"hadm_id": 1, "probability": 0.2}},
+        ],
+    }
+
+    fields = srv._response_fields(state)
+
+    assert fields["tool_errors"] == ["isolation_violation"]
+
+
+def test_the_record_stays_silent_when_every_call_succeeded():
+    state = {
+        "messages": [AIMessage(content="ok")],
+        "tool_calls": [{"name": "rag_search", "args": {},
+                        "response": {"returned": 0, "passages": []}}],
+    }
+
+    assert srv._response_fields(state)["tool_errors"] == []

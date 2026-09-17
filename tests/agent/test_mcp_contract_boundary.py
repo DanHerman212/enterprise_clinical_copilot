@@ -65,7 +65,13 @@ def test_mcp_client_preserves_structured_tool_errors_as_data():
     }
 
 
-def test_mcp_client_converts_transport_errors_to_structured_data():
+def test_mcp_client_converts_transport_errors_to_structured_data(caplog):
+    """The model gets a code and a sentence; the exception text goes to the log.
+
+    A transport's exception carries whatever the transport knows — project ids,
+    URLs, IAM detail — and this message reaches the prompt, the caller and the
+    browser (gap 4).
+    """
     class BrokenSession(FakeSession):
         async def call_tool(self, name, arguments, read_timeout_seconds):
             raise RuntimeError("private transport detail")
@@ -73,10 +79,45 @@ def test_mcp_client_converts_transport_errors_to_structured_data():
     toolbox = MCPToolbox(session=BrokenSession({}))
     asyncio.run(toolbox.load())
 
-    result = asyncio.run(toolbox.call("rag_search", {"hadm_id": 90000009}))
+    with caplog.at_level("ERROR"):
+        result = asyncio.run(toolbox.call("rag_search", {"hadm_id": 90000009}))
 
     assert result["error"] == "tool_call_failed"
-    assert "RuntimeError" in result["message"]
+    assert "RuntimeError" not in result["message"]
+    assert "private transport detail" not in result["message"]
+    assert "private transport detail" in caplog.text
+
+
+def test_a_call_the_sdk_refuses_before_the_tool_runs_is_generic(caplog):
+    """The route gap 2 uncovered: pydantic validates arguments at the boundary,
+    so an out-of-range or wrongly typed argument comes back as an SDK error whose
+    text carries the offending value and a documentation URL."""
+    pydantic_text = (
+        "Error executing tool rag_search: 1 validation error for rag_searchArguments\n"
+        "top_k\n  Input should be less than or equal to 20 [type=less_than_equal, "
+        "input_value=50, input_type=int]\n    For further information visit "
+        "https://errors.pydantic.dev/2.13/v/less_than_equal"
+    )
+
+    class RefusingSession(FakeSession):
+        async def call_tool(self, name, arguments, read_timeout_seconds):
+            return SimpleNamespace(
+                structured_content=None,
+                content=[SimpleNamespace(text=pydantic_text)],
+                is_error=True,
+            )
+
+    toolbox = MCPToolbox(session=RefusingSession({}))
+    asyncio.run(toolbox.load())
+
+    with caplog.at_level("ERROR"):
+        result = asyncio.run(toolbox.call("rag_search", {"hadm_id": 1, "top_k": 50}))
+
+    assert result["error"] == "tool_call_failed"
+    assert "less_than_equal" not in result["message"]
+    assert "errors.pydantic.dev" not in result["message"]
+    assert result["message"] == "The tool refused the call before it ran."
+    assert "less_than_equal" in caplog.text
 
 
 # --- what the boundary does with the result (gap 1) --------------------------

@@ -151,7 +151,10 @@ class MCPToolbox:
 
         The model is instructed to report errors rather than invent a number,
         so an error must reach it as data, not as an exception that collapses
-        the graph.
+        the graph. What reaches it is a sentence: a transport's exception text
+        and the SDK's own refusal detail — pydantic validation messages carry a
+        documentation URL and the offending value — are diagnostics, and they go
+        to the log (ECC-21 / gap 4).
         """
         if name not in self._tools:
             return {"error": "unknown_tool", "message": f"No MCP tool named {name!r}"}
@@ -160,11 +163,23 @@ class MCPToolbox:
                 name, arguments, read_timeout_seconds=self.call_timeout_seconds
             )
         except Exception as exc:
-            return {"error": "tool_call_failed", "message": f"{type(exc).__name__}: {exc}"}
+            _LOG.error("MCP tool %s call failed", name, exc_info=exc)
+            return {
+                "error": "tool_call_failed",
+                "message": "The tool call failed before it returned a result.",
+            }
 
         payload = _payload(result)
         if getattr(result, "is_error", False) and "error" not in payload:
-            payload = {"error": "tool_call_failed", "message": str(payload)}
+            # The tool returned no structured error of its own, so this is the
+            # SDK refusing the call: invalid arguments, or the call raising
+            # before the tool could shape a failure. Both read the same to a
+            # caller, and the difference is in the log.
+            _LOG.error("MCP tool %s was refused before it ran: %s", name, payload)
+            payload = {
+                "error": "tool_call_failed",
+                "message": "The tool refused the call before it ran.",
+            }
         return _checked(name, payload)
 
 

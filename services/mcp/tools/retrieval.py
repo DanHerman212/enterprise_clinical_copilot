@@ -110,8 +110,18 @@ def _bigquery() -> bigquery.Client:
     return bigquery.Client(project=PROJECT)
 
 
-def _error(hadm_id: int, code: str, message: str) -> dict[str, Any]:
-    """A failure the agent can read and explain, rather than a stack trace."""
+def _error(
+    hadm_id: int, code: str, message: str, *, detail: str | None = None
+) -> dict[str, Any]:
+    """A failure the caller can act on, with the detail left in the log.
+
+    The message IS the tool result: it reaches the model, the caller and the
+    browser, so it carries a sentence and nothing else. Ids, table names and
+    exception text are diagnostics — an operator needs them and a prompt must not
+    have them, and `str(exc)` on the isolation path names another patient.
+    """
+    if detail:
+        _LOG.warning("%s refused for hadm %s: %s", code, hadm_id, detail)
     return tool_error(hadm_id, code, message)
 
 
@@ -297,8 +307,16 @@ def _search(hadm_id: int, query: str, top_k: int, *,
     try:
         texts = _fetch_texts(note_ids, hadm_id)
     except IsolationViolation as exc:
-        _LOG.error("rag_search: %s", exc)
-        return _error(hadm_id, "isolation_violation", str(exc))
+        # The refusal may say a note did not belong to this admission; it must not
+        # say which note. A note id is "{subject_id}-DS-{note}", so `str(exc)`
+        # names another patient — and this message reaches the model, the caller
+        # and the browser (ECC-21 / gap 4).
+        return _error(
+            hadm_id, "isolation_violation",
+            "A retrieved note did not belong to the requested admission; "
+            "no passage was served.",
+            detail=str(exc),
+        )
 
     # Deterministically re-chunk each fetched note so a passage returns the
     # exact SECTION chunk the index matched, not the whole note.
@@ -312,8 +330,11 @@ def _search(hadm_id: int, query: str, top_k: int, *,
         if note_id is None:
             return _error(
                 hadm_id, "unparsed_datapoint",
-                f"Index returned id {nb.id!r} that does not match "
-                "'{note_id}_{section}_{ordinal}' for any indexed section",
+                "The index returned an identifier this server does not recognise.",
+                detail=(
+                    f"datapoint id {nb.id!r} does not match "
+                    "'{note_id}_{section}_{ordinal}' for any indexed section"
+                ),
             )
         text = texts.get(note_id)
         # A returned ID with no text in BigQuery must error, not silently drop
@@ -321,7 +342,8 @@ def _search(hadm_id: int, query: str, top_k: int, *,
         if text is None:
             return _error(
                 hadm_id, "missing_text",
-                f"Index returned id {nb.id} but no note {note_id} in {DISCHARGE_TABLE}",
+                "The index returned a passage with no text in the source table.",
+                detail=f"note {note_id} is not in {DISCHARGE_TABLE}",
             )
         # Prefer the exact chunk. A miss means the serving chunker has drifted
         # from the index build; keep retrieval alive with the whole note, but

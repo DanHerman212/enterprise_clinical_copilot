@@ -1,8 +1,8 @@
 # Layer 5 — Tools & grounding
 
-Status: audited 2026-09-16, and independently reviewed the same day. Three of six gaps open;
-gaps 1, 2 and 3 were closed on 2026-09-17. Sections 5 and 6 are paired one to one: each gap
-has exactly one decision, in the same order.
+Status: audited 2026-09-16, and independently reviewed the same day. Two of six gaps open;
+gaps 1, 2, 3 and 4 were closed on 2026-09-17. Sections 5 and 6 are paired one to one: each
+gap has exactly one decision, in the same order.
 
 ---
 
@@ -100,13 +100,13 @@ structured error (`call`, 149) so the model can report it rather than crash.
 
 Input validation has one definition applied by every tool entry point — `valid_hadm_id`
 (`tools/_validation.py` 11), which rejects booleans because `bool` is an `int` subclass —
-plus the ranges each tool owns, such as `top_k` between 1 and 20 (`retrieval.py` 217).
+plus the ranges each tool owns, such as `top_k` between 1 and 20 (`retrieval.py` 227).
 Above that sits the SDK's own coercion of arguments to the declared types, which happens
 before the tool function is entered.
 
 Output validation runs on both sides of the boundary, against one file. Each tool annotates
 its return with its contract — `-> PredictionResult | ToolError` and
-`-> RetrievalResult | ToolError` (`prediction.py` 106, `retrieval.py` 350 and 494) — which is
+`-> RetrievalResult | ToolError` (`prediction.py` 118, `retrieval.py` 372 and 516) — which is
 what makes the server advertise a real output schema instead of an object with no properties,
 and what makes the payload arrive as `{"result": …}`. The client unwraps that envelope and
 checks the result against the same contract before anything downstream sees it
@@ -123,15 +123,15 @@ declared there too, so the schema cannot silently drop one. The agent image carr
 `services/mcp/contracts.py` so both sides enforce the same file rather than a copy.
 
 Retrieval stays inside one patient by two independent means. The admission id is passed
-into the index query as a filter (`retrieval.py` 248), so it constrains ranking rather
+into the index query as a filter (`retrieval.py` 258), so it constrains ranking rather
 than being applied afterwards; and every note the index returns is re-checked at the
-BigQuery layer (`_fetch_texts`, 131), where a row belonging to another admission raises
-`IsolationViolation` (157) and the call returns a structured error instead of serving the
+BigQuery layer (`_fetch_texts`, 141), where a row belonging to another admission raises
+`IsolationViolation` (167) and the call returns a structured error instead of serving the
 passage. An id the server cannot parse, and a note that is missing text, are both errors
 rather than silently dropped passages — a dropped passage looks like a retrieval gap and
 is hard to debug.
 
-Section retrieval does not depend on the index at all. `_search_sections` (447) re-parses
+Section retrieval does not depend on the index at all. `_search_sections` (469) re-parses
 the note and re-chunks it with the same deterministic chunker that built the index, returns
 one passage per section in a fixed order, and marks those passages `retrieval:
 deterministic` rather than giving them an embedding score they do not have. The section
@@ -149,11 +149,11 @@ The deployed path is Cloud Run. `services/mcp/Dockerfile` and
 from the live service at deploy time rather than holding a copy (`services/agent/cloudbuild.yaml`
 2–4, 46); every request except `/health` must carry an `Authorization` header (`server.py`
 63–77), with the token itself verified by Cloud Run IAM and minted for the service's
-audience and cached for 45 minutes (`mcp_client.py` 226). One tool
+audience and cached for 45 minutes (`mcp_client.py` 241). One tool
 call is bounded by the tool leg of the timeout chain — 100 seconds, inside the question's
 110 and above the model's 60 — with the HTTP client's own timeout of 110 seconds set just
 above the per-call read timeout, so the tool deadline fires first and fails with a
-structured error (`mcp_client.py` 254). The image copies the package wholesale, which also
+structured error (`mcp_client.py` 269). The image copies the package wholesale, which also
 ships `pipelines/` and the `__pycache__` directories of deleted modules; that is image
 hygiene rather than a requirement, and is noted here so it is not rediscovered as a surprise.
 
@@ -165,9 +165,9 @@ hygiene rather than a requirement, and is noted here so it is not rediscovered a
 |---|---|---|
 | A4 — typed schemas both ways | **Met** | The input schemas are derived from the signatures and keep their types all the way to the model. The output contract is declared — each tool annotates its return with its contract, so the advertised schema names the payload and the error shapes — and enforced twice: by the tool before it returns, and by the client before anything downstream sees the result. |
 | A5 — small definitions, enums, focused toolsets | **Partly** | One parameter, three and one, all primitive and all below the limit, on one focused server with one job per tool; the two retrieval tools are separate rather than merged behind a mode flag. The one bounded parameter now declares its range in the schema, and the SDK enforces it at the boundary before the tool body runs. No parameter is an enum: the only free text is `query`, a search phrase that cannot be enumerated, so that half of the requirement is unexercised rather than violated. |
-| G1 — tool results treated as untrusted | **Partly** | Provenance is enforced twice — the admission constrains the vector query, and every resolved row is re-checked — and a mismatch refuses to serve the text. What may enter the prompt is now bounded and escaped at the wrapper (gap 3 closed). What remains is the failure paths, which still return internal detail, including another patient's identifiers on the isolation path (gap 4). |
+| G1 — tool results treated as untrusted | **Partly** | Provenance is enforced twice — the admission constrains the vector query, and every resolved row is re-checked — and a mismatch refuses to serve the text. What may enter the prompt is bounded and escaped at the wrapper, and every failure path returns a code with a sentence while the detail goes to the log. What is still absent is any screening of the text itself: a passage can still read as an instruction, and deciding what to do about that is layer 11's injection policy rather than this layer's gate — deferred there rather than claimed here. |
 | B3 — same embedding model and parameters both sides | **Partly** | Both sides use `gemini-embedding-001` at 768 dimensions with the asymmetric task types today. The same facts are defined in four places, one of them an environment read on the serving path (gap 5). |
-| F2 — which tools, inputs and outputs, latency, distributed tracing | **Partly** | Tool names and a per-step latency are on every execution record, and the stream emits tool and result events as they happen. Inputs and payloads are absent by decision — note text is patient data, the same reason layer 4's record carries no question or answer text (F6). The tool's own error code does not reach the record either, so a refused call and a failed one look alike there. No trace id crosses to the MCP server; that clause belongs to layer 10's plane. |
+| F2 — which tools, inputs and outputs, latency, distributed tracing | **Partly** | Tool names, their stable error codes and a per-step latency are on every execution record, and the stream emits tool and result events as they happen. Inputs and payloads are absent by decision — note text is patient data, the same reason layer 4's record carries no question or answer text (F6). No trace id crosses to the MCP server; that clause belongs to layer 10's plane. |
 | G4 — least privilege per service, service-to-service auth | **Partly** | The agent authenticates to the MCP service with a per-audience identity token, and the server refuses a request that carries no `Authorization` header — while the token itself is verified by Cloud Run IAM rather than in-process. Whether the accounts are least-privilege, and who may invoke the service, cannot be evidenced from the repository: no invoker binding or role for `mcp-server` appears in it. That half is deferred to layer 11 rather than claimed here. |
 
 ---
@@ -194,8 +194,8 @@ arrives wrapped as `{"result": …}`, and a key the schema does not declare is d
 **2 — The one bounded parameter did not declare its bound.** *Closed 2026-09-17 — see 7.*
 `top_k` reached the model as `{"type": "integer"}` and nothing more — no minimum, no
 maximum, and no default either, because `_clean_schema` strips `default` before the model sees
-it. Its range lived in prose ("1-20, default 5", `retrieval.py` 371) and in a check that
-returned `bad_request` when it was exceeded (`retrieval.py` 217), so the constraint rejected a
+it. Its range lived in prose ("1-20, default 5", `retrieval.py` 393) and in a check that
+returned `bad_request` when it was exceeded (`retrieval.py` 227), so the constraint rejected a
 call rather than preventing one: a model that guessed `top_k=50` spent a tool round-trip to
 learn what the schema could have told it. No parameter in any tool is an enum — the only free
 text is `query`, a search phrase that cannot be enumerated — so that half of A5 is unexercised
@@ -203,7 +203,7 @@ rather than violated.
 
 **3 — Tool results entered the prompt without content validation.** *Closed 2026-09-17 — see 7.*
 Nothing bounded the size of what arrived: a `granularity: note` fallback passage is a whole
-discharge note (`retrieval.py` 343) and up to `top_k` of them arrive at once, so the text
+discharge note (`retrieval.py` 365) and up to `top_k` of them arrive at once, so the text
 entering the prompt had no ceiling. Nothing handled the characters either. `json.dumps`
 escapes quotes and newlines but not `<` or `>`, measured, so a passage whose text contains
 the closing tag produced a second closing tag in what the model receives (`graph.py`
@@ -215,25 +215,27 @@ that lands here — what may enter a prompt from the outside — as against the 
 *policy* that layer 11 owns.
 
 **4 — Error messages carry internals into the prompt and back to the caller.**
-`call` returns `f"{type(exc).__name__}: {exc}"` when the transport fails
-(`mcp_client.py` 163). Measured over MCP: a wrongly typed or out-of-range argument comes back
+**4 — Error messages carried internals into the prompt and back to the caller.** *Closed
+2026-09-17 — see 7.*
+`call` returned `f"{type(exc).__name__}: {exc}"` when the transport failed
+(`mcp_client.py` 165–170). Measured over MCP: a wrongly typed or out-of-range argument came back
 as `tool_call_failed` carrying pydantic's message and a documentation URL, so a bad argument
-is also indistinguishable from a broken connection. The isolation refusal returns the
-exception text, which names the foreign note ids (`retrieval.py` 301, message built at
-157–160) — and a note id is `{subject_id}-DS-{note}`, so that is another patient's
+was also indistinguishable from a broken connection. The isolation refusal returned the
+exception text, which named the foreign note ids (`retrieval.py` 314–319, message built at
+167–170) — and a note id is `{subject_id}-DS-{note}`, so that is another patient's
 identifier, asserted by a test (`tests/agent/test_rag_search.py` 147). `missing_text`
-embeds the table name (`retrieval.py` 323–324), `unparsed_datapoint` echoes the raw
-datapoint id (312–316), and `incomplete_features` lists internal column names
-(`prediction.py` 71–73). Every one of those *is* the tool result, so each enters the
+embedded the table name (`retrieval.py` 343–347), `unparsed_datapoint` echoed the raw
+datapoint id (331–338), and `incomplete_features` listed internal column names
+(`prediction.py` 79–86). Every one of those *is* the tool result, so each entered the
 prompt, and the success payload carries each tool call's response to the caller verbatim
-(`http.py` 354). The record cannot compensate: it keeps the stage, the tool and the timing
-and drops the payload (`http.py` 226–232), so a refused call and a failed one are the same
-row there.
+(`http.py` 193–196). The record could not compensate: it kept the stage, the tool and the
+timing and dropped the payload (`http.py` 242–249), so a refused call and a failed one were
+the same row there.
 
 **5 — The embedding space is defined in four places, and the serving copy is settable.**
 `retrieval/embed.py` 17–20 holds literals, used by the ingest component
 (`pipelines/components/embed_chunks.py` 185–189) and the build script. `services/mcp/config.py` 99–100
-holds environment reads, used by the serving path (`retrieval.py` 227 and 230).
+holds environment reads, used by the serving path (`retrieval.py` 237 and 240).
 `rag_config.yaml` 36–39 holds a third copy, in a file that describes itself as the place
 those settings live "so the corpus switch is ONE value". `rag_ingest_pipeline.py` 55
 carries a fourth as a default. `RESTRICT_NAMESPACE` is defined twice as well
@@ -245,8 +247,8 @@ comment saying build and serving "can never drift".
 
 **6 — An unknown admission is indistinguishable from an admission with no notes.**
 `predict_readmission` returns `unknown_patient` when the admission is not in the feature
-source (`prediction.py` 50–54). Both retrieval tools return success with `returned: 0` and
-a note saying nothing was found (`retrieval.py` 464 and 489) — including when the admission
+source (`prediction.py` 61–64). Both retrieval tools return success with `returned: 0` and
+a note saying nothing was found (`retrieval.py` 486 and 511) — including when the admission
 id does not exist at all. So the model reports "no notes found" for a patient that does not
 exist, and a typo in an identifier reads as an empty record. This is not a requirement row;
 it was found auditing one tool's contract against another's.
@@ -325,6 +327,8 @@ than stripped.
 
 ### 6.4 — for gap 4: a code and a sentence out, the detail to the log
 
+Done 2026-09-17.
+
 Every failure path returns a stable code with a message a caller can act on, and the detail
 goes to the log — which is what the routes do and what these paths do not. The isolation
 refusal is the one that matters most: it may say that a note did not belong to the requested
@@ -333,6 +337,18 @@ and have to change with it (`tests/agent/test_rag_search.py` 147,
 `tests/agent/test_mcp_contract_boundary.py` 79); a test that pins a leak is not a reason to
 keep one. The record should also carry the tool's error code, so a refused call can be
 counted rather than only seen.
+
+The ECC-21 pass had already covered the paths that interpolate `str(exc)`. What it missed
+were the paths that interpolated an internal by hand, and the two on the client side that
+invented a message from whatever they were given — including the SDK's own argument refusal,
+which gap 2 uncovered. Both halves now share one shape: `_error()` takes a `detail` it logs
+and returns the sentence, and the client's two refusal paths do the same. The isolation
+message no longer contains a note id in either direction, and the id is in the log where the
+incident review will look for it.
+
+`record_execution` now carries `tool_errors`, built in `_response_fields` so both routes and
+both outcomes record it, on the same argument as `filtered`: a refusal that exists only
+inside a prompt cannot be alerted on.
 
 ### 6.5 — for gap 5: one definition, and the serving path stops reading the environment
 
@@ -440,6 +456,33 @@ the closing tag yields exactly one closing tag with the words still present and 
 oversized passage is refused with the refusal visible and its slot intact, and the record
 keeps the text the model never saw. A fourth asserts the ceiling sits above anything the
 real chunker produces.
+
+gap 4 closed, 2026-09-17.
+
+Every failure path now returns a stable code and a sentence, and the detail it used to
+interpolate goes to the log. That covers the four the audit found by hand — the isolation
+refusal (which named the foreign note ids, and a note id carries the subject id), `missing_text`
+(the source table), `unparsed_datapoint` (the raw index id) and `incomplete_features` (the
+missing column names) — and two the client invented from whatever it was handed: a transport
+exception's class and text, and the SDK's own refusal of an argument, whose text carries the
+offending value and a documentation URL.
+
+The isolation message is the one that mattered. It still says a note did not belong to the
+requested admission and that nothing was served; it no longer says which note. The ids are
+in the log line, which is where an incident review looks and where a prompt cannot follow.
+
+`record_execution` carries `tool_errors`, built alongside the other response fields so both
+routes and both outcomes write it, on the same argument as `filtered`: a refusal that exists
+only inside a prompt cannot be alerted on. The field is always present and empty when nothing
+failed, so an operator can count isolation refusals instead of finding them by reading.
+
+Two tests pinned the old shape and were inverted rather than deleted — they now assert the
+identifier is *absent* from the message and *present* in the log, which is the boundary this
+gap is about. Four more were added for the paths that had no test: the column names, the two
+client-side refusals, and the record's codes. Each was verified by restoring the leak and
+watching exactly the tests that assert it fail. End to end over stdio, an out-of-range
+argument now reaches the model as `tool_call_failed` with one sentence, with pydantic's text
+in the log.
 
 ---
 

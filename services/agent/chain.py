@@ -96,6 +96,7 @@ def record_execution(
     served_model: str | None = None,
     tokens: dict | None = None,
     tool_calls=(),
+    tool_errors=(),
     guardrail_flags: int = 0,
     error: str | None = None,
     model: str = MODEL_ID,
@@ -132,6 +133,10 @@ def record_execution(
 
     `filtered` names the content-filter categories that were flagged, when any
     were. It exists so that a refusal can be counted rather than only experienced.
+
+    `tool_errors` carries the stable codes of the tool calls that failed, and is
+    always present for the same reason: an isolation refusal is an incident, and
+    an incident that only exists inside a model's prompt cannot be alerted on.
     """
     record = {
         "event": "agent_execution",
@@ -147,6 +152,7 @@ def record_execution(
         "duration_ms": duration_ms,
         "stages": list(stages),
         "tool_calls": [name for name in tool_calls],
+        "tool_errors": list(tool_errors),
         "guardrail_flags": guardrail_flags,
     }
     if error:

@@ -143,25 +143,35 @@ def test_top_k_out_of_range_is_structured_error():
     assert result["error"] == "bad_request"
 
 
-def test_missing_bigquery_text_errors_not_drops():
-    """A returned ID missing from BigQuery must error, not silently drop."""
+def test_missing_bigquery_text_errors_not_drops(caplog):
+    """A returned ID missing from BigQuery must error, not silently drop.
+
+    The id names a note, so it identifies a patient: it goes to the log with the
+    table name, and the message carries the sentence (gap 4).
+    """
     endpoint = _FakeEndpoint([
         _FakeNeighbor("99999999-DS-1_brief_hospital_course_1", 0.25),
     ])
-    result = _run_search(endpoint, note_texts={}, hadm_id=HADM_A, query="sepsis")
+    with caplog.at_level("WARNING"):
+        result = _run_search(endpoint, note_texts={}, hadm_id=HADM_A, query="sepsis")
+
     assert result["error"] == "missing_text"
-    assert "99999999-DS-1" in result["message"]
+    assert "99999999-DS-1" not in result["message"]
+    assert "99999999-DS-1" in caplog.text
 
 
-def test_unparsed_datapoint_id_is_structured_error():
+def test_unparsed_datapoint_id_is_structured_error(caplog):
     """An index id no section token matches (stale vocabulary, foreign
     datapoint) must be a structured error, never a citation with no text."""
     endpoint = _FakeEndpoint([
         _FakeNeighbor("12345-DS-9_unknown_section_1", 0.25),
     ])
-    result = _run_search(endpoint, note_texts={}, hadm_id=HADM_A, query="sepsis")
+    with caplog.at_level("WARNING"):
+        result = _run_search(endpoint, note_texts={}, hadm_id=HADM_A, query="sepsis")
+
     assert result["error"] == "unparsed_datapoint"
-    assert "12345-DS-9_unknown_section_1" in result["message"]
+    assert "12345-DS-9_unknown_section_1" not in result["message"]
+    assert "12345-DS-9_unknown_section_1" in caplog.text
 
 
 def test_whole_note_fallback_is_tagged_and_exact_chunk_is_not():
@@ -503,9 +513,15 @@ def test_fetch_texts_passes_when_all_rows_match():
     assert "hadm_id" in bq.last_query  # the re-check column is fetched
 
 
-def test_isolation_violation_is_a_structured_error():
+def test_isolation_violation_is_a_structured_error(caplog):
     """End to end: an isolation breach surfaces as a structured error the
-    agent can read, not an exception."""
+    agent can read, not an exception.
+
+    The exception names the foreign note, and a note id is "{subject_id}-DS-{note}"
+    — so the one place in this layer that handles another patient's data is the one
+    place the message must say the least. The id is in the log; the message is not
+    (gap 4).
+    """
     endpoint = _FakeEndpoint([
         _FakeNeighbor("MT-9-DS_brief_hospital_course_1", 0.3),
     ])
@@ -515,11 +531,17 @@ def test_isolation_violation_is_a_structured_error():
 
     with patch.object(rs, "_index_endpoint", lambda: endpoint), \
          patch.object(rs, "_embed_client", lambda: _FakeEmbedClient()), \
-         patch.object(rs, "_fetch_texts", raising_fetch):
+         patch.object(rs, "_fetch_texts", raising_fetch), \
+         caplog.at_level("WARNING"):
         result = _run(rs.rag_search(hadm_id=90000015, query="course"))
 
     assert result["error"] == "isolation_violation"
-    assert "another admission" in result["message"]
+    assert "MT-9-DS" not in result["message"]
+    assert "another admission" not in result["message"]
+    # It still says what a caller needs: which admission, and that nothing served.
+    assert result["hadm_id"] == 90000015
+    assert "did not belong" in result["message"]
+    assert "MT-9-DS" in caplog.text
 
 
 def test_note_row_queries_are_deterministic():

@@ -4,6 +4,10 @@
 # google-cloud-aiplatform is how a working image starts failing on a rebuild.
 
 mcp==2.0.0
+# Imported directly by the tool signatures: `Annotated[int, Field(ge=..., le=...)]` is how a
+# parameter's range reaches the advertised schema. It arrives transitively via mcp, and a
+# direct import on a transitive dependency breaks the day the intermediary drops it.
+pydantic==2.13.4
 google-cloud-aiplatform==1.161.0
 google-cloud-bigquery==3.41.0
 google-cloud-storage==2.19.0

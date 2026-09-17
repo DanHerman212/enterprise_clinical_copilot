@@ -133,6 +133,12 @@ def test_empty_query_is_structured_error():
 
 
 def test_top_k_out_of_range_is_structured_error():
+    """The guard behind the declared bound.
+
+    Over MCP the populated schema refuses this before the tool body runs, so this asserts the
+    path a caller that bypasses the schema takes — an in-process call, or a transport that does
+    not validate. Called directly on purpose: through the SDK it never reaches the check.
+    """
     result = _run_search(_FakeEndpoint([]), hadm_id=HADM_A, query="sepsis", top_k=50)
     assert result["error"] == "bad_request"
 

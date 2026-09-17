@@ -103,6 +103,33 @@ def test_retrieval_contract_checks_returned_count():
     assert validate_retrieval_result(payload) is payload
 
 
+def test_the_advertised_schema_declares_the_one_bound():
+    """Gap 2: the model is told the range instead of discovering it by failing.
+
+    Asserted against the cleaned schema, because that is what the client hands the model —
+    a bound that does not survive `_clean_schema` does not reach anyone. The default does not
+    survive it (`default` is stripped, as Gemini rejects the key), so the range is the only
+    thing that can tell the model what a sensible call looks like.
+    """
+    import asyncio
+
+    from services.agent.mcp_client import _clean_schema
+    from services.mcp.server import server
+    from services.mcp.tools.retrieval import TOP_K_MAX, TOP_K_MIN
+
+    tools = asyncio.run(server.list_tools())
+    declared = {
+        tool.name: _clean_schema(tool.input_schema)["properties"]["top_k"]
+        for tool in tools
+        if "top_k" in (_clean_schema(tool.input_schema).get("properties") or {})
+    }
+
+    assert declared, "no advertised tool declares top_k at all"
+    for name, prop in declared.items():
+        assert prop.get("minimum") == TOP_K_MIN, f"{name} does not declare the lower bound"
+        assert prop.get("maximum") == TOP_K_MAX, f"{name} does not declare the upper bound"
+
+
 def test_retrieval_contract_rejects_inconsistent_count():
     payload = {
         "hadm_id": 90000009,

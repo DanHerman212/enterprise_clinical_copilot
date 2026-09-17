@@ -29,7 +29,7 @@ import asyncio
 import logging
 import re
 from functools import lru_cache
-from typing import Any
+from typing import Annotated, Any
 
 from google import genai
 from google.cloud import aiplatform, bigquery
@@ -37,6 +37,7 @@ from google.cloud.aiplatform.matching_engine.matching_engine_index_endpoint impo
     Namespace,
 )
 from google.genai import types
+from pydantic import Field
 
 from services.mcp.retrieval.sections import parse_note
 from services.mcp.retrieval.chunking import (
@@ -74,6 +75,11 @@ _KNOWN_SECTIONS = INDEX_SECTIONS
 _SECTION_RE = re.compile(r"_(?P<section>(" + "|".join(_KNOWN_SECTIONS) + r"))_")
 
 _LOG = logging.getLogger(__name__)
+
+# The one parameter in this layer with a range. Defined once so the advertised schema and the
+# check that enforces it cannot disagree: a schema steers a caller, it does not stop one.
+TOP_K_MIN = 1
+TOP_K_MAX = 20
 
 
 @lru_cache(maxsize=1)
@@ -206,8 +212,14 @@ def _search(hadm_id: int, query: str, top_k: int, *,
         return _error(hadm_id, "bad_request", "hadm_id must be a positive integer")
     if not query or not query.strip():
         return _error(hadm_id, "bad_request", "query must be non-empty")
-    if not (1 <= top_k <= 20):
-        return _error(hadm_id, "bad_request", "top_k must be between 1 and 20")
+    # The schema carries this bound, so over MCP the SDK refuses an out-of-range argument
+    # before this line runs. Kept as the guard for a caller that bypasses the schema.
+    if not (TOP_K_MIN <= top_k <= TOP_K_MAX):
+        return _error(
+            hadm_id,
+            "bad_request",
+            f"top_k must be between {TOP_K_MIN} and {TOP_K_MAX}",
+        )
 
     # Embed the query.
     try:
@@ -336,7 +348,16 @@ def _search(hadm_id: int, query: str, top_k: int, *,
 
 
 async def rag_search(
-    hadm_id: int, query: str, top_k: int = 5
+    hadm_id: int,
+    query: str,
+    top_k: Annotated[
+        int,
+        Field(
+            ge=TOP_K_MIN,
+            le=TOP_K_MAX,
+            description="max passages to return (1-20, default 5)",
+        ),
+    ] = 5,
 ) -> RetrievalResult | ToolError:
     """Retrieve cited passages from a patient's discharge notes for a query.
 

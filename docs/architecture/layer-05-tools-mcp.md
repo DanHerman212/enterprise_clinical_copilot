@@ -1,8 +1,8 @@
 # Layer 5 — Tools & grounding
 
-Status: audited 2026-09-16, and independently reviewed the same day. Five of six gaps open;
-gap 1 was closed on 2026-09-17. Sections 5 and 6 are paired one to one: each gap has exactly
-one decision, in the same order.
+Status: audited 2026-09-16, and independently reviewed the same day. Four of six gaps open;
+gaps 1 and 2 were closed on 2026-09-17. Sections 5 and 6 are paired one to one: each gap has
+exactly one decision, in the same order.
 
 ---
 
@@ -100,13 +100,13 @@ structured error (`call`, 149) so the model can report it rather than crash.
 
 Input validation has one definition applied by every tool entry point — `valid_hadm_id`
 (`tools/_validation.py` 11), which rejects booleans because `bool` is an `int` subclass —
-plus the ranges each tool owns, such as `top_k` between 1 and 20 (`retrieval.py` 209).
+plus the ranges each tool owns, such as `top_k` between 1 and 20 (`retrieval.py` 217).
 Above that sits the SDK's own coercion of arguments to the declared types, which happens
 before the tool function is entered.
 
 Output validation runs on both sides of the boundary, against one file. Each tool annotates
 its return with its contract — `-> PredictionResult | ToolError` and
-`-> RetrievalResult | ToolError` (`prediction.py` 106, `retrieval.py` 338 and 473) — which is
+`-> RetrievalResult | ToolError` (`prediction.py` 106, `retrieval.py` 350 and 494) — which is
 what makes the server advertise a real output schema instead of an object with no properties,
 and what makes the payload arrive as `{"result": …}`. The client unwraps that envelope and
 checks the result against the same contract before anything downstream sees it
@@ -123,19 +123,19 @@ declared there too, so the schema cannot silently drop one. The agent image carr
 `services/mcp/contracts.py` so both sides enforce the same file rather than a copy.
 
 Retrieval stays inside one patient by two independent means. The admission id is passed
-into the index query as a filter (`retrieval.py` 236), so it constrains ranking rather
+into the index query as a filter (`retrieval.py` 248), so it constrains ranking rather
 than being applied afterwards; and every note the index returns is re-checked at the
-BigQuery layer (`_fetch_texts`, 125), where a row belonging to another admission raises
-`IsolationViolation` (151) and the call returns a structured error instead of serving the
+BigQuery layer (`_fetch_texts`, 131), where a row belonging to another admission raises
+`IsolationViolation` (157) and the call returns a structured error instead of serving the
 passage. An id the server cannot parse, and a note that is missing text, are both errors
 rather than silently dropped passages — a dropped passage looks like a retrieval gap and
 is hard to debug.
 
-Section retrieval does not depend on the index at all. `_search_sections` (426) re-parses
+Section retrieval does not depend on the index at all. `_search_sections` (447) re-parses
 the note and re-chunks it with the same deterministic chunker that built the index, returns
 one passage per section in a fixed order, and marks those passages `retrieval:
 deterministic` rather than giving them an embedding score they do not have. The section
-vocabulary is single-sourced from that chunker (`retrieval.py` 45 and 73), so a build and a
+vocabulary is single-sourced from that chunker (`retrieval.py` 46 and 74), so a build and a
 serving path cannot disagree about which sections exist.
 
 Tool results reach the prompt wrapped in a literal delimiter (`graph.py` 150), and the
@@ -164,7 +164,7 @@ hygiene rather than a requirement, and is noted here so it is not rediscovered a
 | Requirement | State | Why |
 |---|---|---|
 | A4 — typed schemas both ways | **Met** | The input schemas are derived from the signatures and keep their types all the way to the model. The output contract is declared — each tool annotates its return with its contract, so the advertised schema names the payload and the error shapes — and enforced twice: by the tool before it returns, and by the client before anything downstream sees the result. |
-| A5 — small definitions, enums, focused toolsets | **Partly** | One parameter, three and one, all primitive and all below the limit, on one focused server with one job per tool; the two retrieval tools are separate rather than merged behind a mode flag. No parameter is an enum, and the one bounded parameter's range is in prose and in code but not in the schema (gap 2). |
+| A5 — small definitions, enums, focused toolsets | **Partly** | One parameter, three and one, all primitive and all below the limit, on one focused server with one job per tool; the two retrieval tools are separate rather than merged behind a mode flag. The one bounded parameter now declares its range in the schema, and the SDK enforces it at the boundary before the tool body runs. No parameter is an enum: the only free text is `query`, a search phrase that cannot be enumerated, so that half of the requirement is unexercised rather than violated. |
 | G1 — tool results treated as untrusted | **Partly** | Provenance is enforced twice — the admission constrains the vector query, and every resolved row is re-checked — and a mismatch refuses to serve the text. The content is not validated: it reaches the prompt unbounded and unscreened (gap 3). The failure paths return internal detail, including another patient's identifiers on the isolation path (gap 4). |
 | B3 — same embedding model and parameters both sides | **Partly** | Both sides use `gemini-embedding-001` at 768 dimensions with the asymmetric task types today. The same facts are defined in four places, one of them an environment read on the serving path (gap 5). |
 | F2 — which tools, inputs and outputs, latency, distributed tracing | **Partly** | Tool names and a per-step latency are on every execution record, and the stream emits tool and result events as they happen. Inputs and payloads are absent by decision — note text is patient data, the same reason layer 4's record carries no question or answer text (F6). The tool's own error code does not reach the record either, so a refused call and a failed one look alike there. No trace id crosses to the MCP server; that clause belongs to layer 10's plane. |
@@ -191,17 +191,19 @@ derives an output schema from the return type, and every tool was annotated
 two `TypedDict`s advertises a schema whose only property is `result`, the structured payload
 arrives wrapped as `{"result": …}`, and a key the schema does not declare is dropped from it.
 
-**2 — The one bounded parameter does not declare its bound.**
-`top_k` is advertised as `{"type": "integer", "default": 5}` and nothing more. Its range
-lives in prose ("1-20, default 5", `retrieval.py` 350) and in a check that returns
-`bad_request` when it is exceeded (`retrieval.py` 209), so the constraint rejects a
-call rather than preventing it. No parameter in any tool is an enum — the only free text is
-`query`, a search phrase that cannot be enumerated — so that half of A5 is unexercised
+**2 — The one bounded parameter did not declare its bound.** *Closed 2026-09-17 — see 7.*
+`top_k` reached the model as `{"type": "integer"}` and nothing more — no minimum, no
+maximum, and no default either, because `_clean_schema` strips `default` before the model sees
+it. Its range lived in prose ("1-20, default 5", `retrieval.py` 371) and in a check that
+returned `bad_request` when it was exceeded (`retrieval.py` 217), so the constraint rejected a
+call rather than preventing one: a model that guessed `top_k=50` spent a tool round-trip to
+learn what the schema could have told it. No parameter in any tool is an enum — the only free
+text is `query`, a search phrase that cannot be enumerated — so that half of A5 is unexercised
 rather than violated.
 
 **3 — Tool results enter the prompt without content validation.**
 Nothing bounds the size of what arrives: a `granularity: note` fallback passage is a whole
-discharge note (`retrieval.py` 331) and up to `top_k` of them arrive at once, so the text
+discharge note (`retrieval.py` 343) and up to `top_k` of them arrive at once, so the text
 entering the prompt has no ceiling. Nothing handles the characters either. `json.dumps`
 escapes quotes and newlines but not `<` or `>`, measured, so a passage whose text contains
 the closing tag produces a second closing tag in what the model receives (`graph.py`
@@ -214,14 +216,14 @@ that lands here — what may enter a prompt from the outside — as against the 
 
 **4 — Error messages carry internals into the prompt and back to the caller.**
 `call` returns `f"{type(exc).__name__}: {exc}"` when the transport fails
-(`mcp_client.py` 163). Measured over MCP: a wrongly typed argument comes back as
-`tool_call_failed` carrying pydantic's message and a documentation URL, so a bad argument
+(`mcp_client.py` 163). Measured over MCP: a wrongly typed or out-of-range argument comes back
+as `tool_call_failed` carrying pydantic's message and a documentation URL, so a bad argument
 is also indistinguishable from a broken connection. The isolation refusal returns the
-exception text, which names the foreign note ids (`retrieval.py` 289, message built at
-151–154) — and a note id is `{subject_id}-DS-{note}`, so that is another patient's
+exception text, which names the foreign note ids (`retrieval.py` 301, message built at
+157–160) — and a note id is `{subject_id}-DS-{note}`, so that is another patient's
 identifier, asserted by a test (`tests/agent/test_rag_search.py` 147). `missing_text`
-embeds the table name (`retrieval.py` 311–312), `unparsed_datapoint` echoes the raw
-datapoint id (300–304), and `incomplete_features` lists internal column names
+embeds the table name (`retrieval.py` 323–324), `unparsed_datapoint` echoes the raw
+datapoint id (312–316), and `incomplete_features` lists internal column names
 (`prediction.py` 71–73). Every one of those *is* the tool result, so each enters the
 prompt, and the success payload carries each tool call's response to the caller verbatim
 (`http.py` 354). The record cannot compensate: it keeps the stage, the tool and the timing
@@ -231,20 +233,20 @@ row there.
 **5 — The embedding space is defined in four places, and the serving copy is settable.**
 `retrieval/embed.py` 17–20 holds literals, used by the ingest component
 (`pipelines/components/embed_chunks.py` 185–189) and the build script. `services/mcp/config.py` 99–100
-holds environment reads, used by the serving path (`retrieval.py` 215 and 218).
+holds environment reads, used by the serving path (`retrieval.py` 227 and 230).
 `rag_config.yaml` 36–39 holds a third copy, in a file that describes itself as the place
 those settings live "so the corpus switch is ONE value". `rag_ingest_pipeline.py` 55
 carries a fourth as a default. `RESTRICT_NAMESPACE` is defined twice as well
 (`embed.py` 21, `services/mcp/config.py` 101): a drift in that one makes the serving filter match
 nothing and retrieval return zero without an error. The failure the requirement is about is
 not an exception — it is plausible neighbours from a different space. The contrast is in
-the same file: the section vocabulary *is* single-sourced (`retrieval.py` 45), with a
+the same file: the section vocabulary *is* single-sourced (`retrieval.py` 46), with a
 comment saying build and serving "can never drift".
 
 **6 — An unknown admission is indistinguishable from an admission with no notes.**
 `predict_readmission` returns `unknown_patient` when the admission is not in the feature
 source (`prediction.py` 50–54). Both retrieval tools return success with `returned: 0` and
-a note saying nothing was found (`retrieval.py` 443 and 468) — including when the admission
+a note saying nothing was found (`retrieval.py` 464 and 489) — including when the admission
 id does not exist at all. So the model reports "no notes found" for a patient that does not
 exist, and a typo in an identifier reads as an empty record. This is not a requirement row;
 it was found auditing one tool's contract against another's.
@@ -280,10 +282,19 @@ as `{"result": …}`, which the client unwraps before the model can see it.
 
 ### 6.2 — for gap 2: put the bound in the signature
 
+Done 2026-09-17.
+
 Declare `top_k`'s range in the signature so it reaches the advertised schema, and keep the
 existing check as the enforcement for a caller that ignores the schema. The bound does not
 change; what changes is that the model can see it instead of discovering it by failing.
 A test asserts the advertised schema carries it.
+
+Measured over stdio, the change did more than the decision asked for. The model now receives
+`minimum: 1` and `maximum: 20` with the description, and the SDK rejects an out-of-range call
+at the boundary before the tool body runs — so the in-code check is now the guard for a caller
+that bypasses the schema rather than the path a deployed caller hits. An out-of-range call
+consequently arrives as `tool_call_failed` carrying pydantic's message, which is gap 4's
+defect reached by a second route; that remedy owns it.
 
 ### 6.3 — for gap 3: bound and validate what may enter the prompt
 
@@ -355,6 +366,31 @@ by trusting a green run — with the annotation and the client-side check remove
 tests that assert them fail, and the full suite passes with them in place. End to end
 against the running server over stdio, all three tools called with an invalid admission id
 return a validated structured error as a plain dict, unwrapped.
+
+gap 2 closed, 2026-09-17.
+
+`top_k` now declares its range where the schema is derived — in the signature, as
+`Annotated[int, Field(ge=…, le=…)]` — so the model is told the bound instead of meeting it by
+failing. The two numbers are defined once, as `TOP_K_MIN` and `TOP_K_MAX`, and used by both the
+declaration and the check that enforces it, so the schema and the code cannot disagree about
+the range. The default is stated in the description, because `default` is stripped from what
+the model receives. The runtime check stays: a schema steers a caller, it does not stop one.
+
+Measured over stdio, the declaration turned out to be the stronger half. The model receives
+the range, and the SDK refuses an out-of-range call at the boundary before the tool body runs
+— so the in-code check is now the guard for a caller that bypasses the schema, not the path a
+deployed caller hits. One consequence is recorded rather than smoothed over: the refusal now
+arrives as `tool_call_failed` carrying pydantic's message and a documentation URL, where the
+check it pre-empts would have returned a clean `bad_request`. A model that ignores the schema
+therefore gets a message that reads like a connection failure. That is gap 4's defect reached
+by a second route, and gap 4's remedy is where it is answered, so it is written into that
+gap's evidence instead of being patched here.
+
+One test asserts the advertised schema carries the bound. It is asserted against the cleaned
+schema — what the client hands the model — rather than the raw protocol schema, because a
+bound that does not survive that cleaning reaches nobody; verified by removing the bound and
+watching exactly that test fail. The existing test for the in-code check still calls the tool
+directly and still asserts `bad_request`, which is now the only way to reach that guard.
 
 ---
 

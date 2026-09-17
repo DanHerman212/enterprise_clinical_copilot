@@ -29,6 +29,7 @@ from pipelines.components.eval_ingest import eval_ingest  # noqa: E402
 from services.mcp.config import PROJECT as PROJECT_ID  # noqa: E402
 from services.mcp.retrieval.chunking import DEFAULT_PACK_TO  # noqa: E402
 from services.mcp.retrieval.config import load as load_rag_config  # noqa: E402
+from services.mcp.retrieval.embed import OUTPUT_DIMENSIONALITY  # noqa: E402
 
 PIPELINE_NAME = "rag-ingest"
 LOCATION = "us-east1"
@@ -52,7 +53,7 @@ def rag_ingest_pipeline(
     pack_to: int = DEFAULT_PACK_TO,
     sections_csv: str = ",".join(DEFAULT_SECTIONS),
     previous_ingest_uri: str = "",
-    dimensions: int = 768,
+    dimensions: int = OUTPUT_DIMENSIONALITY,
     embed_workers: int = 1,
     brute_sample: int = 2000,
     approximate_neighbors: int = 40,

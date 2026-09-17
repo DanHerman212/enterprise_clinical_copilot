@@ -1,10 +1,17 @@
-# rag_config.yaml — single source of truth for the RAG pipeline.
+# rag_config.yaml — config-as-code for the RAG pipeline.
 #
-# Corpus, chunking, embedding, index, eval, and deploy settings live here so
-# the corpus switch (MIMIC benchmark vs MTSamples demo) is ONE value, not a
-# scatter of env vars across scripts. Env overrides: PROJECT_ID, RAG_CORPUS.
+# Corpus, chunking, index, eval, and deploy settings live here so the corpus
+# switch (MIMIC benchmark vs MTSamples demo) is ONE value, not a scatter of env
+# vars across scripts. Env overrides: PROJECT_ID, RAG_CORPUS.
 #
-# The section whitelist is deliberately NOT duplicated here — it stays
+# The embedding parameters are deliberately NOT here: model, dimensions and task
+# types decide which vector space the index was built in, and they would return
+# plausible-but-wrong neighbours if the build and the serving path ever
+# disagreed. They are defined once, in retrieval/embed.py, and this file's
+# loader imports them from there. RagConfig.load() raises if an `embedding:`
+# block reappears here — deleting it was the fix, not copying it back.
+#
+# The section whitelist is deliberately NOT duplicated here either — it stays
 # single-sourced in rag/chunking.INDEX_SECTIONS (validated against
 # rag/sections.KNOWN_HEADINGS), so build and serving can never drift (ECC-33).
 
@@ -32,11 +39,6 @@ corpus:
 chunking:
   pack_to: 700
   max_chars: 1500
-
-embedding:
-  model: "gemini-embedding-001"
-  dimensions: 768
-  query_task_type: "RETRIEVAL_QUERY"
 
 index:
   approximate_neighbors: 40

@@ -102,11 +102,36 @@ def test_the_environment_is_really_consulted(monkeypatch):
     """
     import services.mcp.config as config
 
+    monkeypatch.setenv("RAG_TOP_K", "9")
+    try:
+        importlib.reload(config)
+        assert config.DEFAULT_TOP_K == 9
+    finally:
+        monkeypatch.delenv("RAG_TOP_K", raising=False)
+        importlib.reload(config)
+
+
+def test_the_embedding_space_is_not_a_setting(monkeypatch):
+    """Gap 5, and the same argument as the model pin above.
+
+    The embedding parameters decide which vector space the index was built in. Left
+    settable, a deploy could point the query embedder at a different model and get
+    plausible neighbours from the wrong space — no error, no commit, no artifact to
+    review. They are no longer settings at all, so the variables do nothing.
+    """
+    import services.mcp.config as config
+    from services.mcp.retrieval import embed
+
+    monkeypatch.setenv("EMBEDDING_MODEL", "gemini-imaginary-1")
     monkeypatch.setenv("EMBEDDING_DIM", "999")
     try:
         importlib.reload(config)
-        assert config.EMBEDDING_DIM == 999
+        assert not hasattr(config, "EMBEDDING_MODEL")
+        assert not hasattr(config, "EMBEDDING_DIM")
+        assert embed.EMBEDDING_MODEL == "gemini-embedding-001"
+        assert embed.OUTPUT_DIMENSIONALITY == 768
     finally:
+        monkeypatch.delenv("EMBEDDING_MODEL", raising=False)
         monkeypatch.delenv("EMBEDDING_DIM", raising=False)
         importlib.reload(config)
 

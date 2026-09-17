@@ -1,9 +1,16 @@
 """Config-as-code loader for the RAG pipeline.
 
-Single source of truth for corpus, chunking, embedding, index, eval, and
-deploy settings. Reads ``rag_config.yaml`` (committed) and exposes typed
-values, so the ingest pipeline, the eval gate, and the deploy step never hold
-a second copy of a value that could drift.
+Single source of truth for corpus, chunking, index, eval, and deploy settings.
+Reads ``rag_config.yaml`` (committed) and exposes typed values, so the ingest
+pipeline, the eval gate, and the deploy step never hold a second copy of a
+value that could drift.
+
+The embedding parameters are the deliberate exception: they are NOT in the YAML
+and not settable here, because they decide which vector space the index was
+built in. They are imported from :mod:`services.mcp.retrieval.embed`, the same
+definition the serving path uses, so the build and the query cannot disagree
+(gap 5). A YAML that carries an ``embedding`` block again is an error rather
+than an override.
 
 Env overrides:
   * ``PROJECT_ID`` — override ``corpus.project`` (one-off / local runs).
@@ -21,6 +28,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+
+from services.mcp.retrieval.embed import (
+    EMBEDDING_MODEL,
+    OUTPUT_DIMENSIONALITY,
+    QUERY_TASK_TYPE,
+)
 
 HARNESS = Path(__file__).resolve().parents[1]
 CONFIG_PATH = HARNESS / "rag_config.yaml"
@@ -70,6 +83,14 @@ def load(path: Path | None = None) -> RAGConfig:
     path = path or CONFIG_PATH
     doc = yaml.safe_load(path.read_text())
 
+    if "embedding" in doc:
+        raise ValueError(
+            f"{path.name} carries an embedding block again. Those parameters are "
+            "defined once in services/mcp/retrieval/embed.py, because a copy here "
+            "can build an index in a different space than the serving path queries "
+            "(gap 5). Delete the block rather than editing it."
+        )
+
     project = os.environ.get("PROJECT_ID", doc["corpus"]["project"])
     active = os.environ.get("RAG_CORPUS", doc["corpus"]["active"])
     if active not in doc["corpus"]:
@@ -92,9 +113,9 @@ def load(path: Path | None = None) -> RAGConfig:
         ),
         pack_to=int(doc["chunking"]["pack_to"]),
         max_chars=int(doc["chunking"]["max_chars"]),
-        embedding_model=doc["embedding"]["model"],
-        dimensions=int(doc["embedding"]["dimensions"]),
-        query_task_type=doc["embedding"]["query_task_type"],
+        embedding_model=EMBEDDING_MODEL,
+        dimensions=OUTPUT_DIMENSIONALITY,
+        query_task_type=QUERY_TASK_TYPE,
         approximate_neighbors=int(doc["index"]["approximate_neighbors"]),
         brute_sample=int(doc["index"]["brute_sample"]),
         shard_size=c["shard_size"],

@@ -39,6 +39,11 @@ from google.cloud.aiplatform.matching_engine.matching_engine_index_endpoint impo
 from google.genai import types
 from pydantic import Field
 
+from services.mcp.retrieval.embed import (
+    EMBEDDING_MODEL,
+    OUTPUT_DIMENSIONALITY,
+    RESTRICT_NAMESPACE,
+)
 from services.mcp.retrieval.sections import parse_note
 from services.mcp.retrieval.chunking import (
     DEFAULT_MAX_CHARS,
@@ -50,12 +55,9 @@ from services.mcp.retrieval.chunking import (
 from ..config import (
     DEPLOYED_INDEX_ID,
     DISCHARGE_TABLE,
-    EMBEDDING_DIM,
-    EMBEDDING_MODEL,
     INDEX_ENDPOINT_NAME,
     LOCATION,
     PROJECT,
-    RESTRICT_NAMESPACE,
 )
 from ..contracts import (
     RetrievalResult,
@@ -237,7 +239,7 @@ def _search(hadm_id: int, query: str, top_k: int, *,
             model=EMBEDDING_MODEL,
             contents=[query],
             config=types.EmbedContentConfig(
-                output_dimensionality=EMBEDDING_DIM,
+                output_dimensionality=OUTPUT_DIMENSIONALITY,
                 task_type="RETRIEVAL_QUERY",
             ),
         )

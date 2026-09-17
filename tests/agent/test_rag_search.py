@@ -57,7 +57,7 @@ class _FakeEmbeddings:
         self.last_config = config
 
         class _Emb:
-            values = [0.1] * rs.EMBEDDING_DIM
+            values = [0.1] * rs.OUTPUT_DIMENSIONALITY
 
         class _Resp:
             embeddings = [_Emb()]

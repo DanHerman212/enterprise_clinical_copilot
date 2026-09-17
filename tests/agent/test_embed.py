@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -56,3 +57,64 @@ def test_constants_sane():
     assert EMBEDDING_MODEL == "gemini-embedding-001"
     assert OUTPUT_DIMENSIONALITY == 768
     assert RESTRICT_NAMESPACE == "hadm_id"
+
+
+def test_the_embedding_space_is_defined_once(monkeypatch):
+    """Gap 5: every consumer resolves THIS object, not an equal value.
+
+    Identity is the assertion, not equality: a copy that happens to agree today is
+    exactly the drift surface this gap is about — the index is built with one
+    definition and the query is embedded with the other, and the failure is
+    plausible neighbours rather than an error.
+
+    The environment is set for the duration, so a path that still reads a setting
+    fails here rather than in production.
+    """
+    import importlib
+
+    import services.mcp.retrieval.config as pipeline_config
+    import services.mcp.tools.retrieval as serving
+    from services.mcp.pipelines import rag_ingest_pipeline as pipeline
+
+    monkeypatch.setenv("EMBEDDING_MODEL", "gemini-imaginary-1")
+    monkeypatch.setenv("EMBEDDING_DIM", "999")
+
+    importlib.reload(serving)
+
+    # The serving path: same objects, whatever the environment says.
+    assert serving.EMBEDDING_MODEL is EMBEDDING_MODEL
+    assert serving.OUTPUT_DIMENSIONALITY is OUTPUT_DIMENSIONALITY
+    assert serving.RESTRICT_NAMESPACE is RESTRICT_NAMESPACE
+
+    # The pipeline: same objects again, resolved rather than read from the YAML.
+    cfg = pipeline_config.load()
+    assert cfg.embedding_model is EMBEDDING_MODEL
+    assert cfg.dimensions is OUTPUT_DIMENSIONALITY
+    assert cfg.query_task_type is QUERY_TASK_TYPE
+
+    # The pipeline's own default, which is how a DAG is compiled. The decorated object
+    # is a KFP GraphComponent, so the function is reached through `pipeline_func`.
+    from inspect import signature
+
+    compiled = pipeline.rag_ingest_pipeline.pipeline_func
+    default = signature(compiled).parameters["dimensions"].default
+    assert default is OUTPUT_DIMENSIONALITY
+
+    # And the copy that was removed has not crept back.
+    assert "embedding" not in yaml.safe_load(
+        pipeline_config.CONFIG_PATH.read_text()
+    )
+
+
+def test_a_returning_embedding_block_is_an_error(tmp_path):
+    """Deleting the copy is the fix; refusing its return is what keeps it deleted."""
+    import services.mcp.retrieval.config as pipeline_config
+
+    doc = yaml.safe_load(pipeline_config.CONFIG_PATH.read_text())
+    doc["embedding"] = {"model": "gemini-embedding-001", "dimensions": 768,
+                        "query_task_type": "RETRIEVAL_QUERY"}
+    path = tmp_path / "rag_config.yaml"
+    path.write_text(yaml.safe_dump(doc))
+
+    with pytest.raises(ValueError, match="embedding block"):
+        pipeline_config.load(path)

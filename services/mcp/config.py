@@ -96,9 +96,11 @@ COHORT_TABLE_FQN = f"{PROJECT}.{COHORT_TABLE}"
 # deployed id never needs to be hardcoded, and so teardown/stand-up just works.
 INDEX_ENDPOINT_NAME = os.environ.get("INDEX_ENDPOINT_NAME", "readmission-rag-index")
 DEPLOYED_INDEX_ID = os.environ.get("DEPLOYED_INDEX_ID", "rag_tree_ah")
-EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "gemini-embedding-001")
-EMBEDDING_DIM = positive_int_env("EMBEDDING_DIM", 768)
-RESTRICT_NAMESPACE = "hadm_id"
+# The embedding parameters are deliberately NOT here, and not settable. They decide
+# which vector space the index was built in, so they are defined once in
+# `retrieval/embed.py` and the serving path imports them from there: a value that can
+# change silently and still return plausible neighbours is not a setting (gap 5 — the
+# same argument that pins GEMINI_MODEL above).
 # The discharge notes table (note_id -> hadm_id mapping, text by note_id).
 # Defaults to the HYBRID notes table — the deployed RAG index is built from
 # these MT-* notes, so serving must read passage text from the same place.

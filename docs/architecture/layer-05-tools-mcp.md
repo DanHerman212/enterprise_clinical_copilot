@@ -1,8 +1,8 @@
 # Layer 5 — Tools & grounding
 
-Status: audited 2026-09-16, and independently reviewed the same day. Two of six gaps open;
-gaps 1, 2, 3 and 4 were closed on 2026-09-17. Sections 5 and 6 are paired one to one: each
-gap has exactly one decision, in the same order.
+Status: audited 2026-09-16, and independently reviewed the same day. One of six gaps open;
+gaps 1 to 5 were closed on 2026-09-17. Sections 5 and 6 are paired one to one: each gap has
+exactly one decision, in the same order.
 
 ---
 
@@ -100,13 +100,13 @@ structured error (`call`, 149) so the model can report it rather than crash.
 
 Input validation has one definition applied by every tool entry point — `valid_hadm_id`
 (`tools/_validation.py` 11), which rejects booleans because `bool` is an `int` subclass —
-plus the ranges each tool owns, such as `top_k` between 1 and 20 (`retrieval.py` 227).
+plus the ranges each tool owns, such as `top_k` between 1 and 20 (`retrieval.py` 229).
 Above that sits the SDK's own coercion of arguments to the declared types, which happens
 before the tool function is entered.
 
 Output validation runs on both sides of the boundary, against one file. Each tool annotates
 its return with its contract — `-> PredictionResult | ToolError` and
-`-> RetrievalResult | ToolError` (`prediction.py` 118, `retrieval.py` 372 and 516) — which is
+`-> RetrievalResult | ToolError` (`prediction.py` 118, `retrieval.py` 374 and 518) — which is
 what makes the server advertise a real output schema instead of an object with no properties,
 and what makes the payload arrive as `{"result": …}`. The client unwraps that envelope and
 checks the result against the same contract before anything downstream sees it
@@ -123,19 +123,19 @@ declared there too, so the schema cannot silently drop one. The agent image carr
 `services/mcp/contracts.py` so both sides enforce the same file rather than a copy.
 
 Retrieval stays inside one patient by two independent means. The admission id is passed
-into the index query as a filter (`retrieval.py` 258), so it constrains ranking rather
+into the index query as a filter (`retrieval.py` 260), so it constrains ranking rather
 than being applied afterwards; and every note the index returns is re-checked at the
-BigQuery layer (`_fetch_texts`, 141), where a row belonging to another admission raises
-`IsolationViolation` (167) and the call returns a structured error instead of serving the
+BigQuery layer (`_fetch_texts`, 143), where a row belonging to another admission raises
+`IsolationViolation` (169) and the call returns a structured error instead of serving the
 passage. An id the server cannot parse, and a note that is missing text, are both errors
 rather than silently dropped passages — a dropped passage looks like a retrieval gap and
 is hard to debug.
 
-Section retrieval does not depend on the index at all. `_search_sections` (469) re-parses
+Section retrieval does not depend on the index at all. `_search_sections` (471) re-parses
 the note and re-chunks it with the same deterministic chunker that built the index, returns
 one passage per section in a fixed order, and marks those passages `retrieval:
 deterministic` rather than giving them an embedding score they do not have. The section
-vocabulary is single-sourced from that chunker (`retrieval.py` 46 and 74), so a build and a
+vocabulary is single-sourced from that chunker (`retrieval.py` 51 and 76), so a build and a
 serving path cannot disagree about which sections exist.
 
 Tool results reach the prompt wrapped in a literal delimiter (`graph.py` 212), and the
@@ -166,7 +166,7 @@ hygiene rather than a requirement, and is noted here so it is not rediscovered a
 | A4 — typed schemas both ways | **Met** | The input schemas are derived from the signatures and keep their types all the way to the model. The output contract is declared — each tool annotates its return with its contract, so the advertised schema names the payload and the error shapes — and enforced twice: by the tool before it returns, and by the client before anything downstream sees the result. |
 | A5 — small definitions, enums, focused toolsets | **Partly** | One parameter, three and one, all primitive and all below the limit, on one focused server with one job per tool; the two retrieval tools are separate rather than merged behind a mode flag. The one bounded parameter now declares its range in the schema, and the SDK enforces it at the boundary before the tool body runs. No parameter is an enum: the only free text is `query`, a search phrase that cannot be enumerated, so that half of the requirement is unexercised rather than violated. |
 | G1 — tool results treated as untrusted | **Partly** | Provenance is enforced twice — the admission constrains the vector query, and every resolved row is re-checked — and a mismatch refuses to serve the text. What may enter the prompt is bounded and escaped at the wrapper, and every failure path returns a code with a sentence while the detail goes to the log. What is still absent is any screening of the text itself: a passage can still read as an instruction, and deciding what to do about that is layer 11's injection policy rather than this layer's gate — deferred there rather than claimed here. |
-| B3 — same embedding model and parameters both sides | **Partly** | Both sides use `gemini-embedding-001` at 768 dimensions with the asymmetric task types today. The same facts are defined in four places, one of them an environment read on the serving path (gap 5). |
+| B3 — same embedding model and parameters both sides | **Met** | One definition, in `retrieval/embed.py`: the serving path imports it, the pipeline loader resolves it, and the pipeline's own default is it — and a test asserts identity rather than equality, so a copy that agrees today still fails. What the repository cannot evidence is which model the deployed index was built with; the code can no longer disagree with itself, but the index is a deployment fact. |
 | F2 — which tools, inputs and outputs, latency, distributed tracing | **Partly** | Tool names, their stable error codes and a per-step latency are on every execution record, and the stream emits tool and result events as they happen. Inputs and payloads are absent by decision — note text is patient data, the same reason layer 4's record carries no question or answer text (F6). No trace id crosses to the MCP server; that clause belongs to layer 10's plane. |
 | G4 — least privilege per service, service-to-service auth | **Partly** | The agent authenticates to the MCP service with a per-audience identity token, and the server refuses a request that carries no `Authorization` header — while the token itself is verified by Cloud Run IAM rather than in-process. Whether the accounts are least-privilege, and who may invoke the service, cannot be evidenced from the repository: no invoker binding or role for `mcp-server` appears in it. That half is deferred to layer 11 rather than claimed here. |
 
@@ -194,8 +194,8 @@ arrives wrapped as `{"result": …}`, and a key the schema does not declare is d
 **2 — The one bounded parameter did not declare its bound.** *Closed 2026-09-17 — see 7.*
 `top_k` reached the model as `{"type": "integer"}` and nothing more — no minimum, no
 maximum, and no default either, because `_clean_schema` strips `default` before the model sees
-it. Its range lived in prose ("1-20, default 5", `retrieval.py` 393) and in a check that
-returned `bad_request` when it was exceeded (`retrieval.py` 227), so the constraint rejected a
+it. Its range lived in prose ("1-20, default 5", `retrieval.py` 395) and in a check that
+returned `bad_request` when it was exceeded (`retrieval.py` 229), so the constraint rejected a
 call rather than preventing one: a model that guessed `top_k=50` spent a tool round-trip to
 learn what the schema could have told it. No parameter in any tool is an enum — the only free
 text is `query`, a search phrase that cannot be enumerated — so that half of A5 is unexercised
@@ -203,7 +203,7 @@ rather than violated.
 
 **3 — Tool results entered the prompt without content validation.** *Closed 2026-09-17 — see 7.*
 Nothing bounded the size of what arrived: a `granularity: note` fallback passage is a whole
-discharge note (`retrieval.py` 365) and up to `top_k` of them arrive at once, so the text
+discharge note (`retrieval.py` 367) and up to `top_k` of them arrive at once, so the text
 entering the prompt had no ceiling. Nothing handled the characters either. `json.dumps`
 escapes quotes and newlines but not `<` or `>`, measured, so a passage whose text contains
 the closing tag produced a second closing tag in what the model receives (`graph.py`
@@ -221,34 +221,36 @@ that lands here — what may enter a prompt from the outside — as against the 
 (`mcp_client.py` 165–170). Measured over MCP: a wrongly typed or out-of-range argument came back
 as `tool_call_failed` carrying pydantic's message and a documentation URL, so a bad argument
 was also indistinguishable from a broken connection. The isolation refusal returned the
-exception text, which named the foreign note ids (`retrieval.py` 314–319, message built at
-167–170) — and a note id is `{subject_id}-DS-{note}`, so that is another patient's
+exception text, which named the foreign note ids (`retrieval.py` 316–321, message built at
+169–172) — and a note id is `{subject_id}-DS-{note}`, so that is another patient's
 identifier, asserted by a test (`tests/agent/test_rag_search.py` 147). `missing_text`
-embedded the table name (`retrieval.py` 343–347), `unparsed_datapoint` echoed the raw
-datapoint id (331–338), and `incomplete_features` listed internal column names
+embedded the table name (`retrieval.py` 345–349), `unparsed_datapoint` echoed the raw
+datapoint id (333–340), and `incomplete_features` listed internal column names
 (`prediction.py` 79–86). Every one of those *is* the tool result, so each entered the
 prompt, and the success payload carries each tool call's response to the caller verbatim
 (`http.py` 193–196). The record could not compensate: it kept the stage, the tool and the
 timing and dropped the payload (`http.py` 242–249), so a refused call and a failed one were
 the same row there.
 
-**5 — The embedding space is defined in four places, and the serving copy is settable.**
-`retrieval/embed.py` 17–20 holds literals, used by the ingest component
-(`pipelines/components/embed_chunks.py` 185–189) and the build script. `services/mcp/config.py` 99–100
-holds environment reads, used by the serving path (`retrieval.py` 237 and 240).
-`rag_config.yaml` 36–39 holds a third copy, in a file that describes itself as the place
-those settings live "so the corpus switch is ONE value". `rag_ingest_pipeline.py` 55
-carries a fourth as a default. `RESTRICT_NAMESPACE` is defined twice as well
-(`embed.py` 21, `services/mcp/config.py` 101): a drift in that one makes the serving filter match
-nothing and retrieval return zero without an error. The failure the requirement is about is
-not an exception — it is plausible neighbours from a different space. The contrast is in
-the same file: the section vocabulary *is* single-sourced (`retrieval.py` 46), with a
-comment saying build and serving "can never drift".
+**5 — The embedding space was defined in four places, and the serving copy was settable.**
+*Closed 2026-09-17 — see 7.*
+`retrieval/embed.py` 17–21 held the literals, used by the ingest component
+(`pipelines/components/embed_chunks.py` 185–189) and the build script. The serving path
+resolved its own values instead, from the environment (`EMBEDDING_MODEL`, `EMBEDDING_DIM`),
+and carried a second `RESTRICT_NAMESPACE`. `rag_config.yaml` held a third copy, read by the
+pipeline loader, in a file that described itself as the place those settings live "so the
+corpus switch is ONE value", and `rag_ingest_pipeline.py` carried a fourth as a default.
+A drift in `RESTRICT_NAMESPACE` was the quietest of the four: the serving filter would match
+nothing and retrieval would return zero without an error. The failure the requirement is
+about is not an exception — it is plausible neighbours from a different space, and nothing in
+the repository set those variables, so the risk was a deploy that did, with no artifact to
+review. The contrast is in the same file: the section vocabulary *is* single-sourced
+(`retrieval.py` 51), with a comment saying build and serving "can never drift".
 
 **6 — An unknown admission is indistinguishable from an admission with no notes.**
 `predict_readmission` returns `unknown_patient` when the admission is not in the feature
 source (`prediction.py` 61–64). Both retrieval tools return success with `returned: 0` and
-a note saying nothing was found (`retrieval.py` 486 and 511) — including when the admission
+a note saying nothing was found (`retrieval.py` 488 and 513) — including when the admission
 id does not exist at all. So the model reports "no notes found" for a patient that does not
 exist, and a typo in an identifier reads as an empty record. This is not a requirement row;
 it was found auditing one tool's contract against another's.
@@ -352,6 +354,8 @@ inside a prompt cannot be alerted on.
 
 ### 6.5 — for gap 5: one definition, and the serving path stops reading the environment
 
+Done 2026-09-17.
+
 `retrieval/embed.py` already holds the parameters ingestion uses; it becomes the only
 definition, and the serving path, the pipeline configuration and the pipeline default all
 resolve from it. `EMBEDDING_MODEL` and `EMBEDDING_DIM` stop being deploy-time inputs, on the
@@ -359,6 +363,14 @@ same argument that pinned the model and the region in layer 4: a value that can 
 silently and produce plausible wrong answers is not a setting. `RESTRICT_NAMESPACE` is
 included, because a drift in that one is silent zero recall rather than a wrong neighbour.
 A test asserts every consumer resolves the same object, so drift means editing one place.
+
+The YAML's `embedding:` block was deleted rather than kept and validated, so Python is the
+single source and the file keeps only what is genuinely deploy-time (corpus, chunking, index
+sizing, eval thresholds). The loader refuses the block outright if it returns: deleting a copy
+is the fix, and refusing its return is what keeps it deleted. Two tests that pinned the old
+shape were inverted with it — the one that asserted `EMBEDDING_DIM` was settable now asserts
+the variables do nothing, and the environment-sentinel test moved to a setting that is still
+meant to be optional (`RAG_TOP_K`), which is the condition its own docstring set.
 
 ### 6.6 — for gap 6: one meaning for "this admission has nothing"
 
@@ -483,6 +495,32 @@ client-side refusals, and the record's codes. Each was verified by restoring the
 watching exactly the tests that assert it fail. End to end over stdio, an out-of-range
 argument now reaches the model as `tool_call_failed` with one sentence, with pydantic's text
 in the log.
+
+gap 5 closed, 2026-09-17.
+
+The embedding parameters are now defined once, in `retrieval/embed.py`, and every consumer
+resolves that definition: the serving path imports it (`retrieval.py` 42–45), the pipeline
+loader assigns it (`services/mcp/retrieval/config.py` 116–118), and the pipeline's own default
+is it (`rag_ingest_pipeline.py` 56). `EMBEDDING_MODEL` and `EMBEDDING_DIM` are no longer read
+from the environment and no longer exist in `services/mcp/config.py`; the second
+`RESTRICT_NAMESPACE` is gone with them. That is the same argument layer 4 used for the model
+and the region: a value that can change silently, produce plausible neighbours from the wrong
+space, and leave no artifact to review is not a setting.
+
+The YAML's `embedding:` block was deleted rather than kept and cross-checked, so Python holds
+the single source and the file keeps what is genuinely deploy-time. The loader refuses the
+block if it returns, which is the difference between deleting a copy and preventing its
+reappearance.
+
+Two tests that pinned the old shape were inverted with the change. The one asserting
+`EMBEDDING_DIM` *was* settable now asserts the variables do nothing; the environment-sentinel
+test moved to `RAG_TOP_K`, which its own docstring said to do if every setting became pinned.
+A new test asserts every consumer resolves the *same object* — identity, not equality, because
+a copy that agrees today is exactly the drift surface — and it sets the environment for the
+duration, so a path that still reads a setting fails there. Verified by reintroducing a copy
+in three places: the serving module, the pipeline default, and the removed config constant.
+Each was caught, and the pipeline default was checked on its own so the assertion could not
+pass behind the other two.
 
 ---
 

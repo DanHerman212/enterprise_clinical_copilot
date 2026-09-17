@@ -32,6 +32,7 @@ from typing import NamedTuple
 
 from kfp import dsl
 from ._image import TRAINING_IMAGE, component
+from mlops.serving.image_ref import require_serving_image
 
 # The Custom Prediction Routine (CPR) serving image is recorded on the
 # provenance entry so lineage points at the correct serving image; the actual
@@ -211,9 +212,7 @@ def run_register_model(
     """Assemble the bundle, record a provenance model entry, return its name."""
     from google.cloud import aiplatform
 
-    serving_image = serving_container_image_uri or (
-        f"{location}-docker.pkg.dev/{project_id}/readmission/readmission-cpr:latest"
-    )
+    serving_image = require_serving_image(serving_container_image_uri)
 
     # Persist the gate metrics WITH the bundle (ECC-71) — previously they were
     # only printed to the component log and lost with it. They are handed to

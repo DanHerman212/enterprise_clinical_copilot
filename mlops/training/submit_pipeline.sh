@@ -13,10 +13,12 @@
 # Override any value by exporting it first, e.g. a full run:
 #   N_TRIALS=50 bash mlops/training/submit_pipeline.sh
 #
-# SERVING_IMAGE_URI is optional: when empty, register_model records its default
-# CPR serving image on the provenance entry. The servable model is built and
-# deployed separately by mlops/serving/deploy_cpr.py. Only set it to override
-# that recorded image.
+# SERVING_IMAGE_URI is the container this run records on the provenance entry. It
+# must be an immutable reference (`repo@sha256:...`), so when it is unset this
+# script resolves the newest CPR image digest from Artifact Registry instead of
+# recording the mutable `:latest` tag that used to be the default. Set it to
+# override. The servable model is built and deployed separately by
+# mlops/serving/deploy_cpr.py, which records the digest it deploys.
 set -euo pipefail
 
 # --- Resolve paths relative to this script -----------------------------------
@@ -31,7 +33,26 @@ REGION="${REGION:-us-east1}"                         # pipeline is pinned to us-
 export PIPELINE_ROOT="${PIPELINE_ROOT:-gs://trim-icon-498815-a0-mlops/pipeline-root}"
 export N_TRIALS="${N_TRIALS:-5}"                     # dry-run default; use 50 for a full run
 export HPO_TIMEOUT="${HPO_TIMEOUT:-2700}"            # HPO wall-clock backstop (sec); 45 min default
-export SERVING_IMAGE_URI="${SERVING_IMAGE_URI:-}"    # empty -> CPR provenance image (deploy_cpr.py serves)
+# SERVING_IMAGE_URI is the container the registry entry records for this bundle.
+# It must be an immutable reference, so it is resolved here as a DIGEST rather
+# than passed as a tag: a tag can be re-pushed, and then the entry names bytes
+# that never trained. It is not deploy-time truth either — mlops/serving/
+# deploy_cpr.py resolves and records the digest of what it actually deploys.
+CPR_IMAGE_REPO="${CPR_IMAGE_REPO:-${REGION}-docker.pkg.dev/${PROJECT_ID}/readmission/readmission-cpr}"
+if [[ -z "${SERVING_IMAGE_URI:-}" ]]; then
+  CPR_DIGEST="$(gcloud artifacts docker images list "$CPR_IMAGE_REPO" \
+      --format="value(version)" --limit=1 --sort-by=~createTime 2>/dev/null || true)"
+  if [[ -z "$CPR_DIGEST" ]]; then
+    echo "ERROR: no CPR serving image found in $CPR_IMAGE_REPO." >&2
+    echo "The registry entry must name the container that wraps this bundle, by" >&2
+    echo "digest, and there is no \`:latest\` fallback. Build it first:" >&2
+    echo "  python mlops/serving/deploy_cpr.py --build-only" >&2
+    echo "or set SERVING_IMAGE_URI explicitly to a repo@sha256:... reference." >&2
+    exit 1
+  fi
+  SERVING_IMAGE_URI="${CPR_IMAGE_REPO}@${CPR_DIGEST}"
+fi
+export SERVING_IMAGE_URI
 export PIPELINE_SA="${PIPELINE_SA:-mlops-pipeline@trim-icon-498815-a0.iam.gserviceaccount.com}"
 # REQUIRED: components import their helpers from source baked into this image, and
 # the run must record WHICH image, because that is the only way the code that
@@ -76,7 +97,7 @@ echo "  PIPELINE_ROOT     : $PIPELINE_ROOT"
 echo "  N_TRIALS          : $N_TRIALS   (dry run = 5, full run = 50)"
 echo "  HPO_TIMEOUT       : ${HPO_TIMEOUT}s   (HPO wall-clock backstop)"
 echo "  PIPELINE_SA       : $PIPELINE_SA"
-echo "  SERVING_IMAGE_URI : ${SERVING_IMAGE_URI:-<unset — CPR provenance image; deploy_cpr.py serves>}"
+echo "  SERVING_IMAGE_URI : $SERVING_IMAGE_URI"
 echo "  TRAINING_IMAGE_URI: $TRAINING_IMAGE_URI"
 echo "  GIT_REVISION      : ${GIT_REVISION:-<unset — the entry will record no revision>}"
 echo

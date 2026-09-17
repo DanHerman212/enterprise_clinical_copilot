@@ -1,7 +1,9 @@
 # Layer 6 — Your own models
 
 Status: audited 2026-09-17, and independently reviewed the same day. Twelve gaps, all
-recorded in section 5 with the decision that closes each; gaps 1 to 10 are closed. A
+recorded in section 5 with the decision that closes each; gaps 1 to 10 and 12 are closed,
+and gap
+11 is recorded with its options and awaits a decision. A
 gap is described once — defect, decision, outcome — rather than restated per section.
 
 ---
@@ -171,10 +173,11 @@ AUCPR, the threshold, the run that produced it, the revision of the code and the
 count of the data (`provenance_labels`, `register_model.py` 127–160), with the same facts spelled out in
 its description for a reader. Deployment is a separate
 step and a *different* record: `deploy_cpr.py` discovers the newest such entry
-(161–189), uploads its own model entry named `readmission-cpr-<ts>` carrying the CPR
-container spec, deploys it to the endpoint at 0% traffic while the old one still
+(186–214), uploads its own model entry named `readmission-cpr-<ts>` carrying the CPR
+container spec — by digest, not by tag (`267`–283) — deploys it to the endpoint at 0%
+traffic while the old one still
 serves, shifts traffic, asks the new deployment to answer as itself, and only then
-undeploys the previous model (237, 255, 260–266, 275). Because
+undeploys the previous model (320, 346, 351, 367). Because
 only the pipeline writes that name, and only a run whose gates passed registers, the
 newest entry is the most recent successful run: the last deployment (2026-09-16)
 resolved to `readmission-final-20260902014308`, from the training job of 2026-09-02,
@@ -189,7 +192,7 @@ A deployment is not finished until the model answers. After the shift the script
 the endpoint about one instance — every value null, keyed by the code-owned feature
 contract — and requires the answer to have come from the deployment it just made;
 if it did not, the previous traffic split is restored and the script exits non-zero
-(`deploy_check.py` 139–180, called at `deploy_cpr.py` 313–319). That is why the
+(`deploy_check.py` 139–180, called at `deploy_cpr.py` 351–357). That is why the
 previous deployment is retired last: the thing to roll back to has to still be there.
 It is the only step that can tell a working deploy from one that loads and serves
 nothing, and it is deliberately narrow — whether the numbers are clinically sensible
@@ -200,7 +203,7 @@ newest bundle's manifest declares (`services/mcp/dependencies/features/manifest.
 81, `…/features/base.py` 47), calls the endpoint
 (`services/mcp/dependencies/model_endpoint.py` 29–45), and reports the identity the
 endpoint gives back with the answer — the deployment stamps the provenance record's
-name into the container (`deploy_cpr.py` 255–258) and the CPR returns it on every
+name into the container (`deploy_cpr.py` 267–283) and the CPR returns it on every
 prediction (`predictor.py` 77, 205). No registry lookup is involved in naming the
 model any more. The manifest lookup is still cached for the life of the process
 (`manifest.py` 26), but it now decides only where the feature order comes from — a
@@ -225,7 +228,8 @@ it lands — what actually changed and how it was checked. A gap marked *Closed*
 outcome recorded; the rest are open. Ordered by how much of the requirement each one
 breaks. Twelve gaps: the first seven were found in the audit, the eighth and ninth were
 with it, and gap 12 was found while closing gap 3 and is recorded here rather than
-folded into it. Ten of the twelve are closed. Line numbers are the working tree's, and a
+folded into it. Eleven of the twelve are closed, and gap 11 records its options and awaits a
+decision. Line numbers are the working tree's, and a
 number marked *then* is where the code sat when the gap was recorded — the change closed
 it and moved the line.
 
@@ -287,7 +291,7 @@ somewhere else: the tool filled `model_version` from the newest
 `readmission-final-*` registry entry — the lookup lived in
 `...features.manifest.model_version()`, since deleted — and cached it for the life of
 the process (`manifest.py` 26), while the endpoint serves whatever bundle was
-deployed when the deploy script last ran (`deploy_cpr.py` 308). Nothing compared
+deployed when the deploy script last ran (`deploy_cpr.py` 346). Nothing compared
 them. Three consequences, all silent. The answer was attributed to a model that may
 not have produced it — the defect layer 4 recorded as "recording the model we asked
 for, not the one that served". Two instances serving the same traffic could disagree
@@ -328,8 +332,8 @@ loaded and scored wrongly — which is what gap 4's hand re-registration produce
 would have served until somebody used the demo.
 
 A second script in the same folder deployed a *provenance record* rather than a CPR
-model: the newest `readmission-final-*` entry, whose serving image is the mutable
-`readmission-cpr:latest` (`register_model.py` 214–215), straight to full traffic with
+model: the newest `readmission-final-*` entry, whose serving image was the mutable
+`readmission-cpr:latest` (`register_model.py` 215 then), straight to full traffic with
 no 0% stage, no retiral of the previous deployment, no predict or health route, and
 without the `GOOGLE_CLOUD_PROJECT` environment that `deploy_cpr.py` documents as the
 fix for a worker that never becomes ready (196–198). It was named in no runbook or
@@ -366,7 +370,7 @@ nothing depends on it now.
 say which of two successful runs was better.** *Closed 2026-09-17*
 The pipeline uploads `readmission-final-<ts>`, labelled with the test AUCPR and the
 threshold (`provenance_labels`, `register_model.py` 127–160). Every selection in the system is then one
-query — newest by `create_time` on that prefix: `deploy_cpr.py` 161–189,
+query — newest by `create_time` on that prefix: `deploy_cpr.py` 186–214,
 `manifest.py` 47–50, `smoke_test.py` 53–64 — and that
 query is equivalent to "the most recent successful run" only while the pipeline is
 the only writer. It is: registration is wired after the eval gate and both audits
@@ -555,12 +559,16 @@ checkout held a threshold for a model it did not contain. `generate_synthetic_co
 hardcoded `0.12` with the comment "from threshold.json" while nothing imported it at
 all — a false comment on dead code.
 
-The consequence was measurable. The committed fixture records `"threshold": 0.12` on
+The consequence was measurable. The fixture records `"threshold": 0.12` on
 every patient, because it was built while a 0.12 bundle was current; the endpoint serves
 the 2026-09-02 bundle at 0.11. Ten of the 108 patients in
 `data/agent/demo_fixtures/cohort_risk.json` have probabilities between 0.11 and 0.12,
 so the fixture calls them negative where the live path calls them positive: the offline
 fixture and the live system disagreed about ten of 108 patients, on opposite decisions.
+It is a local artifact rather than a committed one — `data/` is gitignored
+(`.gitignore` 33), so it is present on the machine that built it and absent from a clean
+checkout, which is how a threshold for a booster `model.bst` was never in the repository
+either.
 
 Fix. Fetch the booster from the registered bundle rather than reading an untracked file
 on one machine — or drop it, and let the scripts fail when it is absent. Read the
@@ -583,9 +591,12 @@ deleted: nothing imported it and its comment was untrue. Eight tests
 (`tests/agent/test_serving_bundle_source.py`), including one per file asserting no loose
 copy exists at the root and none is read from there again.
 
-**Still true, and it is a different problem:** the committed fixture is stale. Rebuilding
+**Still true, and it is a different problem:** the fixture is stale. Rebuilding
 it is gap 8's follow-through, not its closure — the mixture is gone, and the fixture now
-has to be regenerated from the bundle that serves.
+has to be regenerated from the bundle that serves. Whoever regenerates it should read gap
+11 first: the `readmission_30d` column the demo cohort carries is derived from the model's
+own scores, so it can be used to rebuild the fixture and must not be used to report
+accuracy.
 
 **9 — The feature contract is restated five times, and a divergence would arrive as
 a missing value rather than an error.** *Closed 2026-09-17*
@@ -690,6 +701,7 @@ baked into the image the run records — the bundle serving today still carries 
 digests, and rebuilding the image is what changes that.
 
 **11 — The monitoring that is documented as triggering retraining does not exist.**
+*Decision pending 2026-09-17.*
 `docs/operations.md` 44–45 states Vertex Model Monitoring on input and attribution
 drift, a scheduled job that recomputes AUCPR on matured labels, and a Pub/Sub topic
 that carries the retraining signal. No monitoring job, schedule, topic, subscription
@@ -709,25 +721,123 @@ schedule, a signal and something that acts on it — real work, worth doing deli
 rather than announcing first. What is not defensible is a document describing a mechanism
 that does not run.
 
+*Decision pending.* The options were worked out on 2026-09-17 and are recorded here with
+the constraint that shapes them, because the constraint is not obvious and it rules out the
+metric a monitoring story would normally lead with.
+
+**The demo cannot supply the label that performance monitoring needs — and it appears to.**
+The served cohort's table carries `readmission_30d` (89 rows, 13 positive), but it is not an
+outcome: `generate_hybrid_features_v2.py` 281–286 ranks the rows by the model's own
+probability and labels the top 15% positive. The label is therefore a function of the score
+it would be used to judge, so an AUCPR computed against it is circular and would look near
+perfect. Nothing may report it as model quality. Real performance monitoring needs labels
+that mature 30 days after discharge, which no demo cohort has.
+
+*What is observable without labels, in descending value:*
+
+1. **Serving-path health.** The tool already returns and logs structured codes —
+   `feature_fetch_failed`, `incomplete_features`, `model_unavailable`,
+   `invalid_tool_response` (`prediction.py` 43–54, 76–165) — so a log-based metric and an
+   alert policy are configuration rather than code. This is the signal that would have
+   caught the unimportable feature source on 2026-09-17 (see gap 9) instead of a person
+   finding it.
+2. **A prediction log.** One row per call: admission, probability, decision, threshold,
+   `deployed_model_id`, feature source, error code, timestamp. Nothing writes one. The
+   `readmission.test_predictions` table (49,103 rows, last written 2026-08-05 at threshold
+   0.12) is an orphan: no code in the repository reads or writes it. The log is the
+   substrate for the rest, and it makes "which model answered, at which threshold"
+   auditable — layer 4's question, and this layer's evidence.
+3. **Drift, which needs no labels at all.** Input drift: the 49 features against the
+   training distribution. Prediction drift: the score distribution and the decision rate
+   against training. The mechanism already exists — `hospital_baseline.json` ships inside
+   the training image and `validate_data.py` computes a drifted share against it — and
+   serving-side monitoring is the same statistic applied to requests instead of the
+   training table.
+
+*Options.*
+
+- **A — Correct the document only.** `docs/operations.md` 44–45 stops describing a loop
+  that does not run, and says retraining is manual and what would trigger it. No code. E6
+  stays *Not met*.
+- **B — Correct the document, then build the three label-free signals** (serving-path
+  alerting, prediction log, drift reports). E6 still stays *Not met*: detection without
+  something that acts on it is half the requirement, and the honest split is that
+  detection becomes real while the trigger does not. The reason for stopping there is
+  stateable — a frozen 89-patient cohort gives drift nothing to move.
+- **C — The full loop.** B plus Cloud Scheduler, a Pub/Sub topic and a job that submits
+  the pipeline. Real work, and in the demo it can never fire.
+
+Open question if B or C is chosen: the prediction log belongs either in the MCP predict
+tool, which already holds the row, the score and the deployed model id, or in the endpoint
+itself, where request logging is not currently configured (`deploy_cpr.py` has no logging
+setup).
+
 **12 — The image that serves cannot be pinned to immutable bytes, and a mutable tag is
-published beside the pinned one.**
+published beside the pinned one.** *Closed 2026-09-17*
 The CPR image tag is a hash over the Dockerfile, the predictor and the requirements
-(`deploy_cpr.py` 119–126), so changed source means a changed tag. Two things weaken that
-to less than the requirement asks for. The build publishes `:latest` alongside the
-hashed tag (`deploy_cpr.py` 138–145, and the `:latest` tag in
-`mlops/serving/cpr/cloudbuild.yaml`), so a mutable name points at the same bytes and
-nothing stops anything from deploying it. And the digest the script resolves
-(`image_exists`, `deploy_cpr.py` 128–135) is used as a boolean and discarded: the one
-immutable identifier of the bytes that ran is fetched and then thrown away, so no
-artifact records it. The image is also not bit-reproducible — the build resolves `apt`
-and pip ranges when it runs — which is acceptable if it is stated, and is currently
-neither stated nor compensated by a recorded digest.
+(`deploy_cpr.py` 119–126 then), so changed source means a changed tag. Two things weaken that
+to less than the requirement asks for. The build published `:latest` alongside the
+hashed tag (`deploy_cpr.py` 138–145 then, and the `:latest` tag in
+`mlops/serving/cpr/cloudbuild.yaml`), so a mutable name pointed at the same bytes and
+nothing stopped anything from deploying it — and it was not decorative: when no image URI
+was passed, registration recorded `readmission-cpr:latest` on the entry
+(`register_model.py` 215 then). And the digest the script resolved
+(`image_exists`, `deploy_cpr.py` 128–135 then) was used as a boolean and discarded: the one
+immutable identifier of the bytes that ran was fetched and then thrown away, so no
+artifact recorded it. The image is also not bit-reproducible — the build resolves `apt`
+and pip ranges when it runs — which is acceptable if it is stated, and was neither stated
+nor compensated by a recorded digest.
 
 Fix. Record the digest where the deployment is recorded, so the immutable identifier
 of the serving image travels with the model the way the run and the revision now do.
 Stop publishing `:latest`, or make plain that nothing may consume it. Then either pin
 the build inputs or say in the runbook that images are reproducible by tag content and
 not by bytes.
+
+Change. An image recorded on an artifact is now recorded by digest, and the rule lives
+in one place so the three call sites cannot drift: `mlops/serving/image_ref.py`
+(`require_serving_image`, `digest_label`), used by the training registration, the manual
+registration and the deploy.
+
+The deploy resolves the digest after the build or reuse decision and returns
+`repo@sha256:...` rather than a tag (`ensure_image`, `deploy_cpr.py` 159–183); what is
+handed to `Model.upload` is that reference (267–283), so the serving-container spec — the
+record the registry keeps — identifies the bytes. The digest is also written on the
+deployment itself, full value in the description and truncated in an `image_digest` label,
+so it can be read without asking Artifact Registry what it holds today. `resolve_digest`
+replaced `image_exists` and returns the value it used to discard, and a build whose digest
+cannot be read back stops the deploy instead of proceeding (172–180).
+
+The mutable name is gone from every place it existed: the build no longer tags `:latest`
+(`mlops/serving/cpr/cloudbuild.yaml`), the stale `latest` tag was deleted from Artifact
+Registry, the `:latest` fallback is removed from registration — an empty
+`serving_container_image_uri` now raises, and a tag is refused as well as an empty value —
+and `test_cpr_local.py` resolves by digest too. The pipeline cannot know the digest, so
+`submit_pipeline.sh` resolves the newest CPR image version at submit time and passes
+`repo@sha256:...`; when no CPR image exists it stops and says how to build one, which is
+gap 1's pattern applied to the second image this pipeline depends on.
+
+Seventeen tests (`mlops/training/tests/test_image_identity.py`): no build step publishes a
+mutable tag, the reference `ensure_image` returns is a digest, an unresolvable digest stops
+the deploy, the upload argument is that reference, the digest label is registry-legal, an
+empty or tagged `SERVING_IMAGE` is refused, the rule has one definition, the submit script
+resolves a version and fails when there is none, and the committed IR bakes neither a tag
+nor a resolved digest.
+
+Verified against the real registry rather than only by test. The first build after the
+change published one tag and no `latest`
+(`1283d1649caa` → `sha256:4994534bf57ec7f0c470e6e6fbab4e56573aae281469090c389712266bc6359a`)
+and the deploy path printed that digest as its reference
+(`...readmission-cpr@sha256:4994534b…`); `gcloud artifacts docker tags list` then showed
+three content-hash tags and no `latest`. The tag had pointed at older bytes than the
+newest build, which is the defect in miniature: a name that tells you nothing about what
+it resolves to.
+
+The deployment that serves today was uploaded before this change, so its record names a
+tag; the next deploy records a digest. And one item is recorded rather than fixed:
+`test_cpr_local.py` also loads the predictor from `mlops/pipelines/serving/cpr`, a path
+from before the rename, so the harness is not runnable and nothing depends on it — the
+same class of leftover as `mlops/training/smoke_test.py`.
 
 **Recorded, not owned here:** the tool contract and the validation of what reaches
 the model are layer 5's; the feature view, the note tables and the retrieval index

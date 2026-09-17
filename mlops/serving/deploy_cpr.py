@@ -45,6 +45,7 @@ from mlops.data.config import get_project_id  # noqa: E402
 from mlops.serving.deploy_check import (  # noqa: E402
     verify_or_rollback,
 )
+from mlops.serving.image_ref import digest_label  # noqa: E402
 
 PROJECT = get_project_id()
 LOCATION = "us-east1"
@@ -125,18 +126,26 @@ def image_tag() -> str:
     return h.hexdigest()[:12]
 
 
-def image_exists(image: str) -> bool:
-    """True if the tagged image already exists in Artifact Registry."""
+def resolve_digest(image: str) -> str | None:
+    """The immutable digest of a tagged image, or None if it is not published.
+
+    A tag says what a build intended to publish; a digest says which bytes exist.
+    This is the value that makes "the image that served" a fact rather than a
+    name, and it used to be fetched here and thrown away: the command already
+    read it, and the function returned a boolean.
+    """
     r = subprocess.run(
         ["gcloud", "artifacts", "docker", "images", "describe", image,
          "--format=value(image_summary.digest)"],
         capture_output=True, text=True,
     )
-    return r.returncode == 0 and bool(r.stdout.strip())
+    if r.returncode != 0:
+        return None
+    return r.stdout.strip() or None
 
 
 def cloud_build(tag: str) -> None:
-    """Build & push the CPR image on Cloud Build (linux/amd64), tagged + latest."""
+    """Build & push the CPR image on Cloud Build (linux/amd64), tagged by content."""
     print(f"Cloud Build: {IMAGE_REPO}:{tag}")
     subprocess.run(
         ["gcloud", "builds", "submit", str(CPR_SRC),
@@ -147,15 +156,31 @@ def cloud_build(tag: str) -> None:
     )
 
 
-def ensure_image(force: bool = False) -> str:
-    """Return the CPR image URI, building on Cloud Build only if needed."""
+def ensure_image(force: bool = False) -> tuple[str, str]:
+    """Return (immutable image reference, digest) for the CPR image.
+
+    The reference is `repo@sha256:...`, not `repo:tag`. The tag is a content hash
+    of the CPR source, so it is stable across builds of the same source — but the
+    build resolves apt and pip at build time, so the same tag can produce
+    different bytes, and a reference by tag is a promise about the past rather
+    than a record of it. Deploying by digest also puts the identity of the bytes
+    into the serving-container spec, which is what the registry keeps.
+    """
     tag = image_tag()
-    image = f"{IMAGE_REPO}:{tag}"
-    if not force and image_exists(image):
-        print(f"CPR image up-to-date, reusing: {image}")
-        return image
-    cloud_build(tag)
-    return image
+    tagged = f"{IMAGE_REPO}:{tag}"
+    digest = None if force else resolve_digest(tagged)
+    if digest is None:
+        cloud_build(tag)
+        digest = resolve_digest(tagged)
+        if digest is None:
+            raise SystemExit(
+                f"ERROR: {tagged} was built but no digest could be read back "
+                "from Artifact Registry, so the bytes that would serve cannot be "
+                "named. Refusing to deploy."
+            )
+    else:
+        print(f"CPR image up-to-date, reusing: {tagged} ({digest})")
+    return f"{IMAGE_REPO}@{digest}", digest
 
 
 def discover_bundle() -> tuple[str, str]:
@@ -229,7 +254,7 @@ def _try_probe(ep: "aiplatform.Endpoint", instance: dict) -> float | None:
 
 def main() -> None:
     aiplatform.init(project=PROJECT, location=LOCATION)
-    image = ensure_image(force="--force-build" in sys.argv)
+    image, digest = ensure_image(force="--force-build" in sys.argv)
     if "--build-only" in sys.argv:
         print(f"Build-only: {image}")
         return
@@ -241,6 +266,8 @@ def main() -> None:
     print(f"  model_version stamped for serving: {model_version}")
     model = aiplatform.Model.upload(
         display_name=display_name,
+        # By digest, so this record identifies the bytes that serve. A tag here
+        # would be a mutable name in the one place that is supposed to say what ran.
         serving_container_image_uri=image,
         serving_container_predict_route=PREDICT_ROUTE,
         serving_container_health_route=HEALTH_ROUTE,
@@ -257,7 +284,18 @@ def main() -> None:
             "MODEL_VERSION": model_version,
         },
         artifact_uri=bundle_uri,
-        labels={"pipeline": "readmission-training", "stage": "cpr"},
+        description=(
+            f"CPR serving image {image} · bundle {bundle_uri} · "
+            f"model version {model_version}"
+        ),
+        labels={
+            "pipeline": "readmission-training",
+            "stage": "cpr",
+            # The digest again, registry-legal and truncated; the full value is in
+            # the description. Both are read from the record, not from Artifact
+            # Registry, which may have moved on.
+            "image_digest": digest_label(digest),
+        },
     )
     print(f"Registered: {model.resource_name}")
 

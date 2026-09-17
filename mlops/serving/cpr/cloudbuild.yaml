@@ -2,8 +2,12 @@
 #
 # Invoked by scripts/deploy_cpr.py only when the CPR source hash changes.
 # Cloud Build workers are linux/amd64, so this avoids the Apple-Silicon arm64
-# cross-build trap entirely. The image is tagged with a content hash (_TAG) and
-# also with `latest` for the provenance record in register_model.
+# cross-build trap entirely. The image is tagged with a content hash of the CPR
+# source (_TAG) and nothing else: a `latest` tag used to be published beside it,
+# which made a mutable name deployable and was the default image recorded on a
+# registry entry. deploy_cpr.py resolves the digest after the build and deploys
+# `repo@sha256:...`, so the tag is a build label rather than a reference anything
+# serves.
 #
 # _IMAGE has no default (no project id is committed); deploy_cpr.py always
 # passes it via --substitutions.
@@ -18,12 +22,9 @@ steps:
       - build
       - -t
       - ${_IMAGE}:${_TAG}
-      - -t
-      - ${_IMAGE}:latest
       - -f
       - Dockerfile
       - .
 
 images:
   - ${_IMAGE}:${_TAG}
-  - ${_IMAGE}:latest

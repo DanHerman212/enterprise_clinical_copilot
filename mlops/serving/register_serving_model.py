@@ -37,6 +37,7 @@ from google.cloud import aiplatform
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from mlops.data.config import get_project_id  # noqa: E402
+from mlops.serving.image_ref import require_serving_image  # noqa: E402
 
 PROJECT = get_project_id()
 LOCATION = "us-east1"
@@ -54,9 +55,15 @@ def main() -> None:
     image = os.environ.get("SERVING_IMAGE")
     if not image:
         sys.exit(
-            "SERVING_IMAGE is required (ECC-59): the pre-built xgboost-cpu.2-1:latest "
-            "container is mutable. Pass a versioned/digest-pinned serving image."
+            "SERVING_IMAGE is required (ECC-59): there is no mutable `:latest` "
+            "default. Pass a digest-pinned serving image — the same rule the "
+            "training registration and the CPR deploy apply "
+            "(mlops/serving/image_ref.py)."
         )
+    try:
+        image = require_serving_image(image)
+    except ValueError as exc:
+        sys.exit(f"SERVING_IMAGE rejected: {exc}")
 
     aiplatform.init(project=PROJECT, location=LOCATION)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")

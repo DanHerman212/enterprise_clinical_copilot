@@ -112,13 +112,15 @@ architecture gap. This list exists so the bar does not move mid-review.
 - One document per layer, in request-path order: 1 → 12.
 - Each document follows the same shape: what the layer is · what Google
   requires · how this application implements it (verified file and line) ·
-  current state against the requirement · gaps · design decisions · what
-  changed · interview questions the layer answers.
+  current state against the requirement · gaps · interview questions the layer
+  answers.
 - Sections 1 to 3 stay brief and carry no gaps: gaps belong in section 5 and
-  nowhere else. Section 5 consolidates to one entry per distinct defect and states
-  the defect and its evidence only — the remedy is not repeated there. Section 6
-  holds exactly one decision per gap, in the same order, so work can proceed one gap
-  at a time, and section 7 stays empty until that work lands.
+  nowhere else. Section 5 holds one entry per gap — the defect and its evidence,
+  the `Fix.` decision, and, once it lands, a `Change.` block saying what actually
+  changed and how it was checked. A gap is described once, not restated per
+  section; the older layers 1–5 still use the eight-section shape (defect, then a
+  separate decision section, then a separate outcome section) and are converted
+  when they are next opened.
 - "Done" for a layer means every MUST is met and verified live. SHOULDs are
   recorded as decisions. Nothing from section 4 is added unless chosen.
 - Fixed decisions: keep LangGraph (framework is a library inside layer 3);
@@ -133,8 +135,8 @@ architecture gap. This list exists so the bar does not move mid-review.
 | 3 Orchestrator | `layer-03-orchestrator.md` | Audited 2026-09-13, all seven gaps closed 2026-09-15 and verified live. |
 | 4 Model runtime & gateway | `layer-04-model-runtime.md` | Audited 2026-09-15, rewritten shorter and independently reviewed 2026-09-16. Gaps 1 to 8 and 10 closed; gap 9 partly addressed and open (caching cannot apply at this prompt size). Model swapped to `gemini-3.1-flash-lite` on 2026-09-16. |
 | 5 Tools & grounding | `layer-05-tools-mcp.md` | Audited 2026-09-16 and independently reviewed the same day. Six gaps recorded; all six closed 2026-09-17. |
-| 6 Your own models | `layer-06-own-models.md` | Audited 2026-09-17 and independently reviewed the same day. Twelve gaps recorded; gaps 1 to 10 closed, gap 1 confirmed by a completed pipeline run. Each gap carries its own decision and outcome in section 5. |
-| 7 Data & indexes | — | |
+| 6 Your own models | `layer-06-own-models.md` | Audited 2026-09-17 and independently reviewed the same day. Twelve gaps recorded; gaps 1 to 10 and 12 closed, gap 1 confirmed by a completed pipeline run, gap 11 carries its options and awaits a decision. Each gap carries its own decision and outcome in section 5. |
+| 7 Data & indexes | `layer-07-data-and-indexes.md` | Audited 2026-09-17 and independently reviewed the same day. Eight gaps recorded, none closed; B3 met, B1 and E1 partly, B2 and B6 not met. Gap 1 was found live: the demo index exists but no index endpoint did, so free-text retrieval returned `search_failed` while section summaries still answered. |
 | 8 Memory / session state | — | |
 | 9 Evaluation | — | |
 | 10 Observability | — | Langfuse stack torn down 2026-09-12; to be rebuilt from a written design. |

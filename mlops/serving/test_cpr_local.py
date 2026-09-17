@@ -25,11 +25,22 @@ sys.path.insert(0, CPR_SRC)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from predictor import ReadmissionPredictor  # noqa: E402
 from mlops.data.config import get_project_id  # noqa: E402
+from mlops.serving.deploy_cpr import ensure_image  # noqa: E402
 
 PROJECT = get_project_id()
 LOCATION = "us-east1"
 TABLE = "readmission.analytics_dataset_encoded"
-IMAGE_URI = f"{LOCATION}-docker.pkg.dev/{PROJECT}/readmission/readmission-cpr:latest"
+
+
+def _image_uri() -> str:
+    """The image that serves, by digest rather than the mutable `latest` tag.
+
+    Resolved here rather than at import time: this module is imported by nothing
+    in the serving path, and a module-level build decision would make an import a
+    network call. The same rule the deploy and registration paths apply, so a
+    local run tests the bytes that are published.
+    """
+    return ensure_image()[0]
 BUNDLE_URI_OVERRIDE = os.environ.get("BUNDLE_URI")
 CREDS = os.path.expanduser("~/.config/gcloud/application_default_credentials.json")
 
@@ -83,7 +94,7 @@ def main() -> None:
 
     local_model = LocalModel.build_cpr_model(
         CPR_SRC,
-        IMAGE_URI,
+        _image_uri(),
         predictor=ReadmissionPredictor,
         requirements_path=os.path.join(CPR_SRC, "requirements.txt"),
     )

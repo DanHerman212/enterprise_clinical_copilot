@@ -1,20 +1,24 @@
 # Build context minimizer for `gcloud builds submit` (context = mlops).
 #
-# The container builds only need:
-#   src/, pipelines/components/, pipelines/serving/, pipelines/Dockerfile
+# The image needs the package itself (data/, training/, evaluation/, serving/),
+# the Dockerfile, and the one artifact that is read inside the container.
 # Everything below is excluded to keep the uploaded context small and to avoid
 # walking heavy / non-source directories (artifacts/ also contains a
 # self-referential symlink that crashes the uploader).
 
-# Heavy, non-source directories
+# Artifacts: the missingness policy is read at run time by mlops/data/config.py,
+# and the HOSPITAL baseline by the gates (mlops/training/components/_baselines.py)
+# — a gate that receives its threshold as a parameter can have it weakened at
+# submit time, so the value travels in the image instead. The rest are run
+# outputs (feature-selection reports, validation reports).
 artifacts/*
 !artifacts/missingness_policy.csv
+!artifacts/hospital_baseline.json
 notebooks/
 docs/
-scripts/
 
 # Tests are not needed inside the images
-pipelines/tests/
+training/tests/
 
 # Python / tooling cruft
 **/__pycache__/

@@ -22,13 +22,13 @@ Design (see the locked serving-architecture decisions):
     known level PLUS a ``<parent>_unknown`` catch-all that captures NULL and any
     level unseen at authoring time (leak-free and robust to new raw levels).
   * ``race`` is bucketed into OMB groups (mirrors
-    ``pipelines.components.fairness_audit._omb_race``) both to tame cardinality
+    ``mlops.training.components.fairness_audit._omb_race``) both to tame cardinality
     and to align one-hot columns with the fairness slices.
 
 Regenerate the view after editing this module::
 
-    python -m src.encoding --emit-sql   > /tmp/encoded_select.sql
-    python -m src.encoding --emit-order         # sanity-check feature_order
+    python -m mlops.data.encoding --emit-sql   > /tmp/encoded_select.sql
+    python -m mlops.data.encoding --emit-order         # sanity-check feature_order
 """
 
 from __future__ import annotations

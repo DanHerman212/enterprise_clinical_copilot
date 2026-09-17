@@ -36,27 +36,13 @@ FEATURES_TABLE = f"{PROJECT}.{DATASET}.hybrid_features"
 NOTES_SRC = Path(__file__).resolve().parents[2] / "evaluation" / "agent" / "results" / "hybrid_notes.json"
 COHORT_SRC = Path(__file__).resolve().parents[2] / "evaluation" / "agent" / "results" / "hybrid_cohort_v2.json"
 
-# Same feature-name list as the synthetic loader (49 model features).
-_FEATURE_NAMES = [
-    "age", "prior_admission_count", "prior_inpatient_days", "recent_ed_visits",
-    "index_los_days", "procedure_count", "medication_count",
-    "medication_order_count", "rbc_last", "rbc_min", "rdw_max", "monocytes_min",
-    "hemoglobin_min", "sodium_last", "sodium_max", "sodium_min", "gender",
-    "has_procedure", "oncology_flag",
-    "race_white", "race_black", "race_hispanic", "race_asian", "race_amind",
-    "race_nhpi", "race_unknown",
-    "admission_type_ew_emer", "admission_type_eu_obs", "admission_type_obs_admit",
-    "admission_type_urgent", "admission_type_direct_emer",
-    "admission_type_ambulatory_obs", "admission_type_direct_obs",
-    "admission_type_unknown",
-    "discharge_location_home", "discharge_location_home_health",
-    "discharge_location_snf", "discharge_location_rehab", "discharge_location_ltac",
-    "discharge_location_hospice", "discharge_location_ama",
-    "discharge_location_psych", "discharge_location_assisted_living",
-    "discharge_location_unknown",
-    "insurance_medicare", "insurance_medicaid", "insurance_private",
-    "insurance_other", "insurance_unknown",
-]
+# The model's feature contract, imported rather than retyped. The hybrid table is
+# a synthetic mirror of the real one, and it has to present exactly the vocabulary
+# the booster was trained on or the model is scoring a row it never expected.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from mlops.data.encoding import feature_order  # noqa: E402
+
+_FEATURE_NAMES = feature_order()
 
 
 def main() -> int:

@@ -263,7 +263,6 @@ def evaluate_test(
     tuned_threshold: float,
     hpo_val_aucpr: float,
     benchmark_aucpr: float,
-    hospital_aucpr: float,
     metrics: dsl.Output[dsl.Metrics],
     classification_metrics: dsl.Output[dsl.ClassificationMetrics],
     eval_report: dsl.Output[dsl.HTML],
@@ -276,7 +275,12 @@ def evaluate_test(
     "TestOutputs",
     [("test_aucpr", float), ("beat_hospital", bool), ("stable", bool)],
 ):
-    """KFP component: evaluate model on held-out test set at the tuned threshold."""
+    """KFP component: evaluate model on held-out test set at the tuned threshold.
+
+    Takes no baseline: it reads the same artifact the benchmark gate does, so the
+    two gates cannot be given two different numbers (or one convenient one).
+    """
+    from mlops.training.components._baselines import hospital_aucpr
     from mlops.training.components.evaluate_test import _build_eval_html, run_evaluate_test
     from mlops.training.components._experiment import (
         companion_run, safe_log_metrics, safe_log_params,
@@ -288,7 +292,7 @@ def evaluate_test(
         tuned_threshold=tuned_threshold,
         hpo_val_aucpr=hpo_val_aucpr,
         benchmark_aucpr=benchmark_aucpr,
-        hospital_aucpr=hospital_aucpr,
+        hospital_aucpr=hospital_aucpr(),
         beta=beta,
     )
 

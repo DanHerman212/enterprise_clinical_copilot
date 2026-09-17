@@ -65,6 +65,10 @@ GEMINI_LOCATION = "us"
 # Vertex serving
 ENDPOINT_NAME = os.environ.get("ENDPOINT_NAME", "readmission-endpoint")
 FINAL_MODEL_PREFIX = "readmission-final-"
+# The stage label the training pipeline writes with that name. Selection requires
+# both: a record with the name and not the label was not written by a pipeline run,
+# and the manual registration path (readmission-manual-*) cannot take the position.
+PIPELINE_STAGE = "final"
 BUNDLE_URI_OVERRIDE = os.environ.get("BUNDLE_URI")
 
 # BigQuery feature source

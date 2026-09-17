@@ -19,7 +19,7 @@ Wiring::
                   register_model
 
 All feature encoding (one-hot categoricals, missingness policy) is now static in
-BigQuery (``analytics_dataset_encoded``, generated from :mod:`src.encoding`), so
+BigQuery (``analytics_dataset_encoded``, generated from :mod:`mlops.data.encoding`), so
 ``load_data`` is a plain projection and there is no in-pipeline imputer. The
 model is a pure numeric XGBoost booster. ``register_model`` publishes a versioned
 serving bundle (model.bst + manifest.json + threshold.json) to GCS and records a
@@ -47,6 +47,10 @@ from mlops.training.components.validate_data import validate_data
 
 PIPELINE_NAME = "readmission-training"
 
+# The compiled KFP IR is committed with the source it came from (see
+# compile_pipeline); nothing writes it to the working directory any more.
+IR_FILENAME = "readmission_training_pipeline.yaml"
+
 # Vertex AI Experiment shared with the HOSPITAL baseline and feature-selection
 # runs, so training runs land alongside them for side-by-side comparison.
 EXPERIMENT_NAME = "readmission-mlops"
@@ -55,7 +59,7 @@ EXPERIMENT_NAME = "readmission-mlops"
 # All feature encoding is now static in BigQuery (analytics_dataset_encoded),
 # generated from mlops.data.encoding. The model consumes the fixed-order NUMERIC
 # one-hot vector below; there are no native categoricals at train time, so
-# CAT_FEATURES is empty. To change the feature set, edit src.encoding and
+# CAT_FEATURES is empty. To change the feature set, edit mlops.data.encoding and
 # regenerate the encoded Dataform view.
 from mlops.data.encoding import feature_order as _feature_order
 
@@ -76,23 +80,13 @@ DEFAULT_XGB_PARAMS = {
 }
 
 
-def _load_hospital_baseline() -> float:
-    """Single source of truth for the HOSPITAL baseline AUCPR (build-time).
-
-    The artifact is versioned in the repo (method, n_patients, prevalence,
-    generated_at_utc — its provenance); the value is validated here and again
-    fail-closed inside each gate (ECC-65).
-    """
-    path = Path(__file__).resolve().parents[1] / "artifacts" / "hospital_baseline.json"
-    record = json.loads(path.read_text())
-    aucpr = float(record["aucpr"])
-    if not (0.0 < aucpr < 1.0):
-        raise ValueError(f"hospital_baseline.json aucpr ({aucpr}) is implausible")
-    return aucpr
-
-
-# Resolved once at build/submit time and baked into the compiled pipeline.
-HOSPITAL_AUCPR = _load_hospital_baseline()
+# The HOSPITAL baseline and the drift share are deliberately absent from this
+# module. They are gate thresholds, and a gate threshold that arrives as a
+# parameter is a threshold the submitter chooses: `hospital_aucpr=0.01` used to
+# pass validation and neutralize the benchmark gate and the test gate together.
+# Each gate reads its own from `mlops/training/components/_baselines.py`, inside
+# the container that runs it, so the only way to change one is to change the code
+# or the versioned artifact in a commit.
 
 
 @dsl.pipeline(
@@ -114,15 +108,40 @@ def training_pipeline(
     n_trials: int = 50,
     hpo_timeout_seconds: int = 2700,
     fbeta_beta: float = 2.0,
-    max_drifted_share: float = 0.2,
-    hospital_aucpr: float = HOSPITAL_AUCPR,
     serving_container_image_uri: str = "",
-    parent_model: str = "",
+    git_revision: str = "",
 ):
-    """Assemble the readmission training DAG."""
+    """Assemble the readmission training DAG.
+
+    ``git_revision`` is a parameter rather than a constant on purpose: a value
+    compiled into the pipeline definition would be frozen in the committed IR and
+    would describe the machine that compiled it, not the run. ``submit()``
+    resolves it once and sends it as a parameter value, so the run records the
+    revision it was submitted from.
+    """
+    # The dataset is named once, as an artifact rather than only as a parameter.
+    # An importer is a metadata-only step — no container runs, nothing is billed —
+    # and it is what puts a Dataset node in the run's lineage, upstream of every
+    # step that touches the data and therefore upstream of the model.
+    #
+    # `reimport=True` because this table is rebuilt in place by Dataform: reusing
+    # an artifact by URI would show one node for every state the table has ever
+    # been in, which is exactly the confusion the reference below exists to
+    # remove. A fresh artifact per run lets the run's own observed state (row
+    # count, last modified) tell two states apart.
+    dataset = dsl.importer(
+        artifact_uri=f"bq://{full_table_ref}",
+        artifact_class=dsl.Dataset,
+        reimport=True,
+        metadata={"source": "bigquery"},
+    )
+    # The IR keeps KFP's own task key (`importer`); the graph shows this name,
+    # so a reviewer reading the lineage sees what the node is for.
+    dataset.set_display_name("import-dataset")
+
     data = load_data(
         project_id=project_id,
-        full_table_ref=full_table_ref,
+        training_table=dataset.output,
         label_col=label_col,
         split_col=split_col,
         train_split=train_split,
@@ -133,7 +152,6 @@ def training_pipeline(
     validate = validate_data(
         x_train=data.outputs["x_train"],
         x_val=data.outputs["x_val"],
-        max_drifted_share=max_drifted_share,
     )
 
     bench = benchmark_xgboost(
@@ -147,7 +165,6 @@ def training_pipeline(
 
     gate = benchmark_gate(
         benchmark_aucpr=bench.outputs["Output"],
-        hospital_aucpr=hospital_aucpr,
     )
 
     hpo = optuna_hpo(
@@ -199,7 +216,6 @@ def training_pipeline(
         tuned_threshold=calib.outputs["Output"],
         hpo_val_aucpr=hpo.outputs["Output"],
         benchmark_aucpr=bench.outputs["Output"],
-        hospital_aucpr=hospital_aucpr,
         beta=fbeta_beta,
         project_id=project_id,
         experiment_name=EXPERIMENT_NAME,
@@ -234,12 +250,25 @@ def training_pipeline(
         benchmark_aucpr=bench.outputs["Output"],
         tuned_threshold=calib.outputs["Output"],
         beta=fbeta_beta,
-        parent_model=parent_model,
+        # The run identity is already in scope for five other components; this is
+        # the one that publishes an artifact a human will look up later.
+        pipeline_job_name=dsl.PIPELINE_JOB_NAME_PLACEHOLDER,
+        git_revision=git_revision,
     ).after(evalt).after(shap).after(fairness)
 
 
-def compile_pipeline(package_path: str = "readmission_training_pipeline.yaml") -> str:
-    """Compile the pipeline to a KFP IR YAML and return the path."""
+def compile_pipeline(package_path: str | None = None) -> str:
+    """Compile the pipeline to a KFP IR YAML and return the path.
+
+    The default is the committed IR next to this module. Keeping it in the
+    package rather than the working directory means the artifact that a run is
+    submitted from lives with the source it came from, and
+    ``tests/test_pipeline.py`` recompiles and compares them so the two cannot
+    drift apart.
+    """
+    package_path = package_path or str(
+        Path(__file__).resolve().with_name(IR_FILENAME)
+    )
     compiler.Compiler().compile(
         pipeline_func=training_pipeline, package_path=package_path
     )
@@ -274,6 +303,10 @@ def submit() -> None:
             # Optional override for the serving image recorded on the provenance
             # entry; empty -> register_model uses its CPR image default.
             "serving_container_image_uri": os.environ.get("SERVING_IMAGE_URI", ""),
+            # Which revision of the code this run came from, resolved once here
+            # and recorded on the registry entry. Empty when not resolvable —
+            # an absent label is honest, a wrong one is not.
+            "git_revision": os.environ.get("GIT_REVISION", ""),
         },
         # Every run logs fresh (no cached step reuse) so the experiment record
         # reflects the actual execution.

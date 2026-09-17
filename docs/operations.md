@@ -28,7 +28,7 @@ How to build, deploy, monitor, and tear down the system. The full step-by-step r
 | `scripts/setup_environment.sh` | One-time environment bootstrap |
 | `scripts/copy_mimic.sh` | Mirror MIMIC-IV tables into BigQuery |
 | `scripts/launch_endpoints.sh` | Start local serving endpoints for development |
-| `mlops/serving/deploy_cpr.py` | Register + deploy the risk model |
+| `mlops/serving/deploy_cpr.py` | Register, deploy and verify the risk model — the only way a model reaches the endpoint |
 | `scripts/agent/deploy_rag.py` | Deploy the retrieval index |
 | `scripts/agent/generate_hybrid_features_v2.py` | Regenerate demo-cohort features |
 

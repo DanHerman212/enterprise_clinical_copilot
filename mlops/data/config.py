@@ -53,7 +53,7 @@ BQ_DATASET = "readmission"
 BQ_TABLE = "analytics_dataset"
 
 # One-hot ENCODED view consumed by the training pipeline for the decoupled
-# pre-built XGBoost serving pattern (see src/encoding.py). All-numeric so the
+# pre-built XGBoost serving pattern (see mlops/data/encoding.py). All-numeric so the
 # model is a fixed-order vector and Vertex Explainable AI can attribute it.
 BQ_TABLE_ENCODED = "analytics_dataset_encoded"
 

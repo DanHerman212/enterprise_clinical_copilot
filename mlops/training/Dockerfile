@@ -5,6 +5,9 @@
 # evidently, optuna, matplotlib, joblib, and the GCP clients used
 # by the components.  Build + push this, then point components at it
 # via TRAINING_IMAGE_URI so runs use pinned deps and skip per-step installs.
+#
+# Build context is `mlops/` (see build_images.sh, cloudbuild.yaml), so it lands
+# at /app/mlops and /app is what belongs on PYTHONPATH.
 FROM us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:latest
 
 RUN pip install --no-cache-dir \
@@ -23,11 +26,15 @@ RUN pip install --no-cache-dir \
 # Bake the project source into the image so the thin @dsl.component wrappers can
 # `import` their `run_*` helpers at runtime. KFP lightweight components only
 # serialize the decorated function body, so shared module-level code must be
-# present on PYTHONPATH inside the container (build context is mlops).
-WORKDIR /app
-COPY src /app/src
-COPY pipelines /app/pipelines
-# The missingness imputer reads this static policy at fit time; src/config.py
-# resolves it to /app/artifacts/missingness_policy.csv inside the container.
-COPY artifacts/missingness_policy.csv /app/artifacts/missingness_policy.csv
+# present on PYTHONPATH inside the container.
+#
+# The whole package is copied under its own name: `import mlops.training...`
+# needs the PARENT of `mlops` on the path, not `mlops` itself.
+COPY . /app/mlops
 ENV PYTHONPATH=/app
+WORKDIR /app
+
+# The missingness policy travels inside the package, which is where it is read
+# from: mlops/data/config.py resolves it to mlops/artifacts/missingness_policy.csv.
+# Every other file under artifacts/ is kept out of the build by .gcloudignore.
+

@@ -26,14 +26,20 @@ def endpoint() -> aiplatform.Endpoint:
     )
 
 
-def predict_one(features: list[float | None]) -> dict[str, Any]:
-    """One instance in, one prediction out.
+def predict_one(instance: dict[str, float | None]) -> tuple[dict[str, Any], str]:
+    """One named instance in; the prediction, plus who served it, out.
+
+    Vertex returns ``deployed_model_id`` on every prediction and this function
+    used to keep only ``predictions[0]``, which is why the caller had to infer
+    the model from the registry. That id is the authoritative answer to "which
+    model produced this number", and the endpoint's own response is the only
+    place it exists.
 
     Raises rather than returning a partial result if the endpoint answers with
     an empty prediction list — an empty 200 is the kind of silent success that
     is far more expensive to debug than an exception.
     """
-    response = endpoint().predict(instances=[features])
+    response = endpoint().predict(instances=[instance])
     if not response.predictions:
         raise RuntimeError("Endpoint returned a response with no predictions.")
-    return response.predictions[0]
+    return response.predictions[0], getattr(response, "deployed_model_id", "") or ""

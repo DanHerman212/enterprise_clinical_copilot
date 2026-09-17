@@ -1,13 +1,17 @@
 """Tests for the benchmark_gate and evaluate_test gates (pipeline module 6).
 
 Pins:
-  * HOSPITAL_AUCPR is a passed-in value (single source of truth), not a
-    hardcoded module constant duplicated across components;
   * both gates fail closed on an implausible baseline and require a minimum
     margin over it (ECC-65);
   * benchmark_gate hard-fails when the benchmark does not beat the baseline;
   * evaluate_test scores the hold-out test set, hard-fails below the baseline,
     and hard-fails on val→test instability (ECC-66).
+
+The gate functions below take `hospital_aucpr` as an argument on purpose: that is
+what lets each comparison be tested against a chosen baseline. Nothing in the
+pipeline passes one — the wrappers read the artifact themselves
+(`_baselines.hospital_aucpr`), and `test_pipeline.py` asserts the compiled IR
+declares no such parameter.
 """
 
 import warnings
@@ -51,8 +55,14 @@ def test_benchmark_gate_requires_a_margin():
         run_benchmark_gate(benchmark_aucpr=0.3326, hospital_aucpr=0.3325)
 
 
-def test_gates_fail_closed_on_a_neutralized_baseline():
-    """Passing hospital_aucpr=0.0 used to neutralize both gates (ECC-65)."""
+def test_gates_fail_closed_on_an_implausible_baseline():
+    """The guard that used to catch a neutralizing override now guards the artifact.
+
+    A baseline of 0.0 made every candidate look better than it was, and it arrived
+    as a parameter, so nothing could tell a hostile value from a careless one
+    (ECC-65). The parameter is gone; a value like this can now only come from a
+    corrupt artifact, and the gate still refuses to run on it.
+    """
     with pytest.raises(ValueError):
         run_benchmark_gate(benchmark_aucpr=0.50, hospital_aucpr=0.0)
     with pytest.raises(ValueError):

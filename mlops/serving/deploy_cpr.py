@@ -2,6 +2,15 @@
 deploy_cpr.py — Register and deploy the readmission Custom Prediction Routine
 (CPR) to a Vertex AI endpoint.
 
+This is the only way a model reaches the endpoint: `scripts/agent/teardown.py`
+removes the billable resources, and nothing else deploys.
+
+A deployment is not finished when the traffic shifts — it is finished when the
+model answers. After the shift this script asks the endpoint about one instance
+and checks that the answer came from the deployment it just made; if it did not,
+the traffic is put back where it was and the script exits non-zero. That check is
+why the previous deployment is not retired until the last step.
+
 The CPR serving image is built on Cloud Build (native linux/amd64) and is
 content-addressed: it is rebuilt only when the CPR source (Dockerfile,
 predictor.py, requirements.txt) changes. A newly trained model reuses the same
@@ -33,6 +42,9 @@ from google.cloud import aiplatform
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from mlops.data.config import get_project_id  # noqa: E402
+from mlops.serving.deploy_check import (  # noqa: E402
+    verify_or_rollback,
+)
 
 PROJECT = get_project_id()
 LOCATION = "us-east1"
@@ -62,6 +74,46 @@ HASH_INPUTS = ["Dockerfile", "predictor.py", "requirements.txt"]
 # (readmission-final-*). Set BUNDLE_URI to override (e.g. to pin a specific run).
 BUNDLE_URI_OVERRIDE = os.environ.get("BUNDLE_URI")
 FINAL_MODEL_PREFIX = "readmission-final-"
+# The label the training pipeline writes alongside that name. Selection requires
+# both, and that is the rule rather than a convenience: a record carrying the name
+# without the label was not written by a pipeline run. The manual registration
+# path now publishes readmission-manual-* with stage=manual, so a hand-made record
+# cannot take the newest position without training anything.
+PIPELINE_STAGE = "final"
+
+
+def score_of(labels: dict) -> str:
+    """The test AUCPR and threshold a record carries, in readable form.
+
+    Registry label values allow [a-z0-9_-] only, so the training registration
+    encodes the decimal point as a dash (0.3294 -> "0-3294").
+    """
+    def decode(value: str) -> str:
+        # "0-1100" is 0.1100 as the registrar wrote it; str() drops the padding.
+        return str(float(value.replace("-", ".", 1))) if value else "?"
+
+    return (f"test AUCPR {decode(labels.get('test_aucpr', ''))}, "
+            f"threshold {decode(labels.get('tuned_threshold', ''))}")
+
+
+def select_serving_record(models: list) -> object | None:
+    """The record that serves, from a list ordered newest-first.
+
+    The rule: the model that serves is the bundle from the most recent successful
+    pipeline run. A record qualifies only if the training pipeline registered it —
+    the final name prefix *and* the stage label `register_model.py` writes with
+    it. Creation order then picks between qualifying runs; the metric labels say
+    which one was better when that matters, and the score is printed so a human
+    can see it before the traffic moves.
+
+    Kept pure, and separate from the query, so the rule is testable without a
+    registry.
+    """
+    for m in models:
+        if (m.display_name.startswith(FINAL_MODEL_PREFIX)
+                and (m.labels or {}).get("stage") == PIPELINE_STAGE):
+            return m
+    return None
 
 
 def image_tag() -> str:
@@ -106,21 +158,73 @@ def ensure_image(force: bool = False) -> str:
     return image
 
 
-def discover_bundle_uri() -> str:
-    """Return the artifact_uri of the newest readmission-final-* provenance record."""
-    models = [
-        m for m in aiplatform.Model.list(order_by="create_time desc")
-        if m.display_name.startswith(FINAL_MODEL_PREFIX)
-    ]
-    if not models:
+def discover_bundle() -> tuple[str, str]:
+    """(artifact_uri, display name) of the newest pipeline-registered version.
+
+    States what it resolved and what that record scored, because "newest" and
+    "better" are different claims and only a person can weigh the second.
+    """
+    models = list(aiplatform.Model.list(order_by="create_time desc"))
+    serving = select_serving_record(models)
+    if serving is None:
         raise SystemExit(
-            f"No '{FINAL_MODEL_PREFIX}*' model found; run the training pipeline first "
-            "or set BUNDLE_URI explicitly."
+            f"No pipeline-registered '{FINAL_MODEL_PREFIX}*' model found "
+            f"(stage={PIPELINE_STAGE}); run the training pipeline first or set "
+            "BUNDLE_URI explicitly."
         )
-    latest = models[0]
-    uri = latest.gca_resource.artifact_uri.rstrip("/")
-    print(f"Discovered bundle from {latest.display_name}: {uri}")
-    return uri
+    uri = serving.gca_resource.artifact_uri.rstrip("/")
+    print(f"Discovered bundle from {serving.display_name}: {uri}")
+    print(f"  {score_of(serving.labels or {})}")
+    previous = next(
+        (m for m in models
+         if m.display_name != serving.display_name
+         and m.display_name.startswith(FINAL_MODEL_PREFIX)
+         and (m.labels or {}).get("stage") == PIPELINE_STAGE),
+        None,
+    )
+    if previous is not None:
+        print(f"  previous registration: {previous.display_name} "
+              f"({score_of(previous.labels or {})})")
+    return uri, serving.display_name
+
+
+def resolve_bundle() -> tuple[str, str]:
+    """(artifact_uri, model version) from BUNDLE_URI if set, else the registry.
+
+    The version travels into the container as MODEL_VERSION, so a prediction can
+    say which model produced it without asking the registry — the registry's
+    newest record and the deployed model are two different things.
+    """
+    if BUNDLE_URI_OVERRIDE:
+        uri = BUNDLE_URI_OVERRIDE.rstrip("/")
+        return uri, os.path.basename(uri) or uri
+    return discover_bundle()
+
+
+def probe_instance() -> dict[str, None]:
+    """One instance to ask the endpoint about, keyed by feature name.
+
+    Every value is null, which the CPR reads as a missing measurement by design,
+    so this needs no patient and no BigQuery — the question is whether the model
+    we deployed runs and answers as itself. The names are the code-owned feature
+    contract, which doubles as a check: a deployed bundle whose manifest
+    disagrees with it refuses the request, and the deploy fails here instead of
+    during a demo.
+    """
+    from mlops.data.encoding import feature_order
+
+    return {name: None for name in feature_order()}
+
+
+def _try_probe(ep: "aiplatform.Endpoint", instance: dict) -> float | None:
+    """Best-effort prediction from whatever is serving now, for comparison."""
+    try:
+        response = ep.predict(instances=[instance])
+        return float(response.predictions[0]["probability"])
+    except Exception as exc:
+        print(f"    (could not ask the current deployment for a baseline: "
+              f"{type(exc).__name__})")
+        return None
 
 
 def main() -> None:
@@ -130,10 +234,11 @@ def main() -> None:
         print(f"Build-only: {image}")
         return
 
-    bundle_uri = BUNDLE_URI_OVERRIDE.rstrip("/") if BUNDLE_URI_OVERRIDE else discover_bundle_uri()
+    bundle_uri, model_version = resolve_bundle()
     ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     display_name = f"readmission-cpr-{ts}"
     print(f"Registering model: {display_name}")
+    print(f"  model_version stamped for serving: {model_version}")
     model = aiplatform.Model.upload(
         display_name=display_name,
         serving_container_image_uri=image,
@@ -144,7 +249,13 @@ def main() -> None:
         # needs a project. Pin it explicitly so worker boot never depends on
         # ambient metadata-server project resolution (the "Model server never
         # became ready" failure was storage.Client() unable to resolve one).
-        serving_container_environment_variables={"GOOGLE_CLOUD_PROJECT": PROJECT},
+        # MODEL_VERSION is the provenance record this deployment came from: the
+        # endpoint returns it with every prediction, so an answer can name the
+        # model that produced it without a registry lookup.
+        serving_container_environment_variables={
+            "GOOGLE_CLOUD_PROJECT": PROJECT,
+            "MODEL_VERSION": model_version,
+        },
         artifact_uri=bundle_uri,
         labels={"pipeline": "readmission-training", "stage": "cpr"},
     )
@@ -161,6 +272,9 @@ def main() -> None:
     stale = list(ep.list_models())
     if stale:
         print(f"  Existing deployments: {[dm.id for dm in stale]}")
+    # What is serving now, so a failed verification can put it back exactly.
+    serving_split = dict(ep.gca_resource.traffic_split or {})
+    before_probability = None
 
     # Deploy the new model at 0% traffic FIRST (ECC-47): the old deployment
     # keeps serving, so there is no outage window, and a failed deploy leaves
@@ -178,18 +292,42 @@ def main() -> None:
         new_dm_id = next(
             dm.id for dm in ep.list_models() if dm.display_name == display_name
         )
-        # Shift all traffic to the new deployment, then retire the stale ones.
-        ep.update(traffic_split={new_dm_id: 100})
     except Exception:
-        print("Deploy or traffic shift failed — the previous deployment is "
-              "still serving 100% traffic (rollback = no-op).")
+        print("Deploy failed — the previous deployment is still serving 100% "
+              "traffic (rollback = no-op).")
         raise
+
+    instance = probe_instance()
+    if serving_split:
+        # A baseline for the same question, answered by the model that serves
+        # now. Best effort: the point of the comparison is information for the
+        # operator, not a gate.
+        before_probability = _try_probe(ep, instance)
+
+    print(f"Shifting traffic to {new_dm_id} …")
+    ep.update(traffic_split={new_dm_id: 100})
+
+    # A deployment is not finished until the model answers. This is the only
+    # step that can tell a working deploy from one that loads and serves
+    # nothing, and it is why the previous deployment is not retired until now.
+    probability = verify_or_rollback(
+        ep,
+        instance=instance,
+        new_dm_id=new_dm_id,
+        expected_version=model_version,
+        serving_split=serving_split,
+    )
+
+    delta = ""
+    if before_probability is not None:
+        delta = f" (the previous deployment answered {before_probability:.4f})"
+    print(f"  Verified: probability {probability:.4f}{delta}")
 
     for dm in ep.list_models():
         if dm.id != new_dm_id:
             print(f"  Undeploying stale model {dm.id} …")
             ep.undeploy(deployed_model_id=dm.id)
-    print(f"Deployed. Endpoint: {ep.resource_name}")
+    print(f"Deployed and verified. Endpoint: {ep.resource_name}")
 
 
 if __name__ == "__main__":

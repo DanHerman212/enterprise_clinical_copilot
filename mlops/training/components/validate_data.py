@@ -4,6 +4,8 @@ validate_data — Evidently AI data quality and drift gate.
 Compares the train (reference) and validation (current) feature distributions
 with Evidently. The gate HARD-FAILS the pipeline when the share of drifted
 columns exceeds ``max_drifted_share`` (override with ``fail_on_drift=False``).
+The threshold itself is `_baselines.MAX_DRIFTED_SHARE` — a constant in the code the
+container runs, not an input a submitter answers.
 
 Evidently 0.4.34 is pinned against the base image's NumPy 1.26.4 (verified);
 an unpinned install would pull an Evidently that requires NumPy >= 2 and a
@@ -15,6 +17,7 @@ from evidently.metric_preset import DataDriftPreset, DataQualityPreset
 from evidently.report import Report
 from kfp import dsl
 
+from ._baselines import MAX_DRIFTED_SHARE
 from ._image import TRAINING_IMAGE, component
 
 
@@ -33,7 +36,7 @@ def run_validate_data(
     x_val_path: str,
     drift_report_html: str,
     quality_report_html: str,
-    max_drifted_share: float = 0.2,
+    max_drifted_share: float = MAX_DRIFTED_SHARE,
     fail_on_drift: bool = True,
 ) -> bool:
     """Run Evidently drift + quality checks.
@@ -74,18 +77,20 @@ def run_validate_data(
 def validate_data(
     x_train: dsl.Input[dsl.Dataset],
     x_val: dsl.Input[dsl.Dataset],
-    max_drifted_share: float,
     drift_html: dsl.Output[dsl.HTML],
     quality_html: dsl.Output[dsl.HTML],
     fail_on_drift: bool = True,
 ) -> bool:
-    """KFP component: Evidently AI data validation gate (hard-fail on drift)."""
+    """KFP component: Evidently AI data validation gate (hard-fail on drift).
+
+    The drift threshold is not an input: it is `_baselines.MAX_DRIFTED_SHARE`, in
+    the code the container runs.
+    """
     from mlops.training.components.validate_data import run_validate_data
 
     return run_validate_data(
         x_train_path=x_train.path, x_val_path=x_val.path,
         drift_report_html=drift_html.path,
         quality_report_html=quality_html.path,
-        max_drifted_share=max_drifted_share,
         fail_on_drift=fail_on_drift,
     )

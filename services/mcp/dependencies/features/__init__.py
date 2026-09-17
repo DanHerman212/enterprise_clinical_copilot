@@ -6,7 +6,7 @@ which is not defensible for a demo that is idle most of the time. BigQuery reads
 the same table with no standing infrastructure.
 """
 
-from .base import FeatureRow, FeatureSource, to_vector
+from .base import FeatureRow, FeatureSource, to_instance, to_vector
 
 # Reported in every prediction payload so the provenance of a score is visible.
 FEATURE_SOURCE = "bigquery"
@@ -15,8 +15,9 @@ __all__ = [
     "FEATURE_SOURCE",
     "FeatureRow",
     "FeatureSource",
-    "to_vector",
     "get_feature_source",
+    "to_instance",
+    "to_vector",
 ]
 
 

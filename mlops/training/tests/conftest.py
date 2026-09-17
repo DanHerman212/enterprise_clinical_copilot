@@ -25,7 +25,7 @@ _MLOPS_ROOT = Path(__file__).resolve().parents[2]  # mlops
 if str(_MLOPS_ROOT) not in sys.path:
     sys.path.insert(0, str(_MLOPS_ROOT))
 
-# src.config resolves a GCP project id at import time; give it a value so the
+# mlops.data.config resolves a GCP project id at import time; give it a value so the
 # unit tests never depend on a local .env or real credentials.
 os.environ.setdefault("PROJECT_ID", "unit-test-project")
 

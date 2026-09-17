@@ -42,3 +42,16 @@ class FeatureSource(Protocol):
 def to_vector(row: FeatureRow, feature_order: list[str]) -> list[float | None]:
     """Order a feature dict into the array the endpoint expects."""
     return [row.get(col) for col in feature_order]
+
+
+def to_instance(row: FeatureRow, feature_order: list[str]) -> dict[str, float | None]:
+    """Name the values ``to_vector`` orders positionally.
+
+    The endpoint accepts both shapes, and a null value means "missing" either
+    way. What differs is what it can check: a named instance is validated
+    against the feature order the booster was loaded with, so a name it does not
+    know is refused, while a positional vector of the same width is scored
+    as-is — the one way a feature-order change becomes a wrong score instead of
+    an error.
+    """
+    return {col: row.get(col) for col in feature_order}

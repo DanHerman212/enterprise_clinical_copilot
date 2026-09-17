@@ -73,6 +73,7 @@ def _predictor(threshold=0.2):
     p._feature_set = set(_FEATURES)
     p._groups = {}
     p._threshold = threshold
+    p._model_version = "readmission-final-test"
     return p
 
 
@@ -91,6 +92,18 @@ def test_unknown_dict_key_is_rejected_not_silently_nan():
     p = _predictor()
     with pytest.raises(ValueError, match="unknown feature keys"):
         p.preprocess({"instances": [{"age": 70, "sodiun_min": 138}]})
+
+
+def test_partial_dict_is_rejected_not_scored_as_missing():
+    """Gap 2: a caller with a different vocabulary is refused, not scored.
+
+    A null value is a missing measurement; an absent key means the caller's
+    feature set differs from this bundle's, and XGBoost would read the gap as
+    "missing" and answer confidently.
+    """
+    p = _predictor()
+    with pytest.raises(ValueError, match="missing feature keys"):
+        p.preprocess({"instances": [{"age": 70, "glucose_last": 120.5}]})
 
 
 def test_wrong_length_list_is_rejected():
@@ -177,3 +190,49 @@ def test_response_declares_attribution_units():
     assert pred["attribution_units"] == "log_odds"
     assert pred["prediction"] == 1
     assert pred["base_value"] == pytest.approx(-1.5)
+
+
+def test_response_declares_the_model_it_is_serving():
+    """Gap 2: the answer carries the identity of the model that produced it.
+
+    The caller used to infer this from the newest registry record, which is a
+    different thing from the deployed model — so the identity has to come from
+    the container that ran the booster.
+    """
+    p = _predictor(threshold=0.2)
+    out = p.postprocess((np.array([0.3]), np.array([[0.1, -0.2, 0.05, -1.5]])))
+    assert out["predictions"][0]["model_version"] == "readmission-final-test"
+
+
+def test_load_takes_the_serving_model_version_from_the_environment(
+    tmp_path, monkeypatch
+):
+    """The deployment stamps MODEL_VERSION; load() has to pick it up.
+
+    If it does not, postprocess raises on the first live prediction — a failure
+    met in production rather than here.
+    """
+    monkeypatch.setattr(
+        cpr.prediction_utils, "download_model_artifacts", lambda uri: None
+    )
+    monkeypatch.chdir(tmp_path)
+    manifest = json.dumps({"feature_order": _FEATURES, "groups": {}})
+    threshold = json.dumps({"threshold": 0.2})
+    (tmp_path / "manifest.json").write_text(manifest)
+    (tmp_path / "threshold.json").write_text(threshold)
+    (tmp_path / "checksums.json").write_text(json.dumps({
+        "manifest.json": hashlib.sha256(manifest.encode()).hexdigest(),
+        "threshold.json": hashlib.sha256(threshold.encode()).hexdigest(),
+    }))
+
+    class _Booster:
+        def load_model(self, path):
+            pass
+
+    monkeypatch.setattr(cpr.xgb, "Booster", _Booster)
+    monkeypatch.setenv("MODEL_VERSION", "readmission-final-20260902014308")
+
+    p = cpr.ReadmissionPredictor()
+    p.load("gs://unused")
+
+    assert p._model_version == "readmission-final-20260902014308"

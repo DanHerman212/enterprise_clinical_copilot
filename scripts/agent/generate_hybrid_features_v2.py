@@ -53,26 +53,12 @@ BUNDLE = (
     "readmission-training-20260901151741/register-model_1444282052923883520/serving_model"
 )
 
-FEATURE_NAMES = [
-    "age", "prior_admission_count", "prior_inpatient_days", "recent_ed_visits",
-    "index_los_days", "procedure_count", "medication_count",
-    "medication_order_count", "rbc_last", "rbc_min", "rdw_max", "monocytes_min",
-    "hemoglobin_min", "sodium_last", "sodium_max", "sodium_min", "gender",
-    "has_procedure", "oncology_flag",
-    "race_white", "race_black", "race_hispanic", "race_asian", "race_amind",
-    "race_nhpi", "race_unknown",
-    "admission_type_ew_emer", "admission_type_eu_obs", "admission_type_obs_admit",
-    "admission_type_urgent", "admission_type_direct_emer",
-    "admission_type_ambulatory_obs", "admission_type_direct_obs",
-    "admission_type_unknown",
-    "discharge_location_home", "discharge_location_home_health",
-    "discharge_location_snf", "discharge_location_rehab", "discharge_location_ltac",
-    "discharge_location_hospice", "discharge_location_ama",
-    "discharge_location_psych", "discharge_location_assisted_living",
-    "discharge_location_unknown",
-    "insurance_medicare", "insurance_medicaid", "insurance_private",
-    "insurance_other", "insurance_unknown",
-]
+# The model's feature contract, imported rather than retyped: these rows are
+# scored by the trained booster, so they have to carry the names it expects.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from mlops.data.encoding import feature_order  # noqa: E402
+
+FEATURE_NAMES = feature_order()
 
 # MIMIC med-order-count ~= 1.6x med-count for the demo notes (orders per med).
 MED_ORDER_RATIO = 1.6

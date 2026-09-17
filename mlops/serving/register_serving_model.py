@@ -6,7 +6,14 @@ Use this to (re)register a model from a completed pipeline's serving bundle
 (model.bst + manifest.json) without re-running the whole training pipeline —
 e.g. after changing the serving pattern. No managed explanation spec is
 attached; feature attributions are computed client-side with native TreeSHAP
-(see pipelines.serving.ReadmissionExplainer).
+(see mlops.serving.readmission_explainer).
+
+This is the *manual* path, so it must not be able to take the newest position
+that everything downstream resolves. The model that serves is the bundle from
+the most recent successful pipeline run; a record written by hand has no run
+behind it, no gate metrics and no digests of its own. It therefore publishes
+under its own name and its own stage label (readmission-manual-*, stage=manual)
+and no resolver selects it — the two paths cannot be confused for each other.
 
 Usage (from repo root):
     .venv/bin/python mlops/serving/register_serving_model.py [BUNDLE_URI]
@@ -25,7 +32,9 @@ from pathlib import Path
 
 from google.cloud import aiplatform
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# Repo root, so `import mlops...` resolves: the parent of the package goes on
+# the path, not the package directory.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from mlops.data.config import get_project_id  # noqa: E402
 
@@ -51,7 +60,8 @@ def main() -> None:
 
     aiplatform.init(project=PROJECT, location=LOCATION)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    display_name = f"readmission-final-{ts}"
+    # Own namespace on purpose: nothing resolves readmission-manual-*.
+    display_name = f"readmission-manual-{ts}"
 
     print(f"Registering {display_name}")
     print(f"  Bundle:  {bundle_uri}")
@@ -60,9 +70,11 @@ def main() -> None:
         display_name=display_name,
         artifact_uri=bundle_uri,
         serving_container_image_uri=image,
-        labels={"pipeline": "readmission-training", "stage": "final"},
+        labels={"pipeline": "readmission-training", "stage": "manual"},
     )
     print(f"Registered: {model.resource_name}")
+    print("  Not selected by the deploy script or the application: both resolve")
+    print("  pipeline registrations (readmission-final-*, stage=final) only.")
 
 
 if __name__ == "__main__":

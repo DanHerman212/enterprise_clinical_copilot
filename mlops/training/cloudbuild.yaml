@@ -1,5 +1,8 @@
 # Cloud Build — build and push the training image to Artifact Registry.
-# Usage: gcloud builds submit --config pipelines/cloudbuild.yaml .
+# Build context is `mlops/`, so the Dockerfile is at training/Dockerfile and the
+# whole package is copied into the image.
+# Usage: bash mlops/training/build_images.sh
+#    or: gcloud builds submit mlops --config mlops/training/cloudbuild.yaml
 
 steps:
   - name: "gcr.io/cloud-builders/docker"
@@ -10,7 +13,7 @@ steps:
       - -t
       - us-east1-docker.pkg.dev/$PROJECT_ID/readmission/training:latest
       - -f
-      - pipelines/Dockerfile
+      - training/Dockerfile
       - .
 
 images:

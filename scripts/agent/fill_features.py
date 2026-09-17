@@ -8,9 +8,10 @@ text when present, and otherwise derives a plausible value from signals in the
 note (prior-admission mentions, ED mentions, length-of-stay phrases, chronic
 disease count, age-based insurance, etc.).
 
-Scoring mirrors the deployed ReadmissionPredictor exactly (local model.bst +
-manifest.json + threshold.json): calibrated probability + TreeSHAP attributions
-aggregated to parent groups + top_factors. The output includes, per note, the
+Scoring mirrors the deployed ReadmissionPredictor exactly, and reads the booster,
+the manifest and the threshold from ONE registered serving bundle (the newest
+pipeline registration by default; set BUNDLE_URI to pin a run) rather than from
+three loose files at the repository root. The output includes, per note, the
 provenance of every feature (parsed vs filled + basis) so the coherence rule
 (note story <-> feature row <-> risk score) can be verified note by note.
 
@@ -20,22 +21,77 @@ Output: data/mtsamples/fill.json  { sample_id: {...} }
 """
 
 import json
+import hashlib
+import os
 import re
 import sys
 from pathlib import Path
 
 import numpy as np
 import xgboost as xgb
+from google.cloud import storage
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 REPO = Path(__file__).resolve().parents[2]  # enterprise_clinical_copilot
 HARNESS = REPO / "projects" / "agent-harness"
 DATA_DIR = HARNESS / "data" / "mtsamples"
-MANIFEST = json.loads((REPO / "manifest.json").read_text())
+
+
+def _serving_bundle() -> Path:
+    """The local copy of ONE registered bundle: booster, manifest and threshold.
+
+    These three files have to come from the same run. Read from three loose files
+    at the repository root they can silently be a mixture — which they were: the
+    booster was July's, the threshold September's, and one of the two scripts that
+    read them applied a literal that matched neither.
+
+    The record is resolved by the same rule the deploy script uses (newest
+    pipeline registration), so what scores the cohort here is what serves it in
+    production. `BUNDLE_URI` overrides it to pin a specific run.
+    """
+    override = os.environ.get("BUNDLE_URI")
+    if override:
+        uri = override.rstrip("/")
+    else:
+        from google.cloud import aiplatform
+        from mlops.serving.deploy_cpr import select_serving_record
+
+        aiplatform.init(project=PROJECT_ID, location=LOCATION)
+        record = select_serving_record(
+            list(aiplatform.Model.list(order_by="create_time desc"))
+        )
+        if record is None:
+            raise SystemExit(
+                "No pipeline-registered serving bundle found; run the training "
+                "pipeline or set BUNDLE_URI."
+            )
+        uri = record.gca_resource.artifact_uri.rstrip("/")
+        print(f"Scoring with {record.display_name}: {uri}")
+
+    cache = (
+        Path(os.environ.get("BUNDLE_CACHE", "/tmp/ecc-serving-bundles"))
+        / hashlib.sha256(uri.encode()).hexdigest()[:12]
+    )
+    cache.mkdir(parents=True, exist_ok=True)
+    bucket_name, _, prefix = uri[len("gs://"):].partition("/")
+    bucket = storage.Client(project=PROJECT_ID).bucket(bucket_name)
+    for name in ("model.bst", "manifest.json", "threshold.json"):
+        dest = cache / name
+        if not dest.exists():
+            bucket.blob(f"{prefix}/{name}").download_to_filename(str(dest))
+    return cache
+
+
+PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT", "trim-icon-498815-a0")
+LOCATION = "us-east1"
+
+_BUNDLE = _serving_bundle()
+MANIFEST = json.loads((_BUNDLE / "manifest.json").read_text())
 FEATURES: list[str] = MANIFEST["feature_order"]
 GROUPS: dict[str, list[str]] = MANIFEST.get("groups", {})
-THRESHOLD = float(json.loads((REPO / "threshold.json").read_text())["threshold"])
+THRESHOLD = float(json.loads((_BUNDLE / "threshold.json").read_text())["threshold"])
+BOOSTER_PATH = _BUNDLE / "model.bst"
 
 RACE_KEYS = ["race_white", "race_black", "race_hispanic", "race_asian",
              "race_amind", "race_nhpi", "race_unknown"]
@@ -387,7 +443,7 @@ def _load_booster() -> xgb.Booster:
     global _booster
     if _booster is None:
         _booster = xgb.Booster()
-        _booster.load_model(str(REPO / "model.bst"))
+        _booster.load_model(str(BOOSTER_PATH))
     return _booster
 
 

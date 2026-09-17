@@ -18,8 +18,13 @@ from ..contracts import (
     tool_error,
     validate_prediction_result,
 )
-from ..dependencies.features import FEATURE_SOURCE, FeatureSource, get_feature_source, to_vector
-from ..dependencies.features.manifest import feature_order, model_version
+from ..dependencies.features import (
+    FEATURE_SOURCE,
+    FeatureSource,
+    get_feature_source,
+    to_instance,
+)
+from ..dependencies.features.manifest import feature_order
 from ._validation import valid_hadm_id
 
 # The risk card renders five; returning all 23 parent groups would just be
@@ -49,6 +54,22 @@ def _error(
     return tool_error(hadm_id, code, message, feature_source=FEATURE_SOURCE)
 
 
+def _model_identity(pred: dict[str, Any], deployed_model_id: str) -> str:
+    """What produced this number, as reported by the endpoint that ran it.
+
+    The deployment stamps the provenance record's name into the container
+    (``deploy_cpr.py``), so the response can name the model in the terms the
+    registry uses. If an older deployment carries no stamp, the deployed model's
+    own resource id is still the truth about what answered. What is *not*
+    acceptable is the registry lookup this replaced: it named the newest
+    registered record, which is a different thing from the one that served.
+    """
+    named = pred.get("model_version")
+    if isinstance(named, str) and named:
+        return named
+    return deployed_model_id or "unknown"
+
+
 def _predict(hadm_id: int) -> dict[str, Any]:
     """Blocking implementation. Wrapped in a thread by the tool below."""
     if not valid_hadm_id(hadm_id):
@@ -72,7 +93,7 @@ def _predict(hadm_id: int) -> dict[str, Any]:
         )
 
     # A missing *value* is legitimate — the model reads null as NaN by design.
-    # A missing *column* is not: to_vector fills absent keys with None, so a
+    # A missing *column* is not: `to_instance` fills absent keys with None, so a
     # short row would silently shift every feature after the gap.
     missing = [col for col in order if col not in row]
     if missing:
@@ -86,13 +107,21 @@ def _predict(hadm_id: int) -> dict[str, Any]:
         )
 
     try:
-        pred = predict_one(to_vector(row, order))
+        pred, deployed_model_id = predict_one(to_instance(row, order))
     except Exception as exc:
         _LOG.error("predict: prediction failed for hadm %s", hadm_id, exc_info=exc)
         return _error(
             hadm_id, "prediction_failed",
             "The prediction service could not be reached. Try again shortly.",
         )
+
+    # Which model answered is worth a line: it is the end of the chain from a
+    # surprising number back to the artifact that produced it, and it costs one
+    # log statement to have it in the record.
+    _LOG.info(
+        "predict: hadm %s served by %s (deployed model %s)",
+        hadm_id, _model_identity(pred, deployed_model_id), deployed_model_id or "unknown",
+    )
 
     factors = [
         {
@@ -110,7 +139,7 @@ def _predict(hadm_id: int) -> dict[str, Any]:
         "decision": int(pred["prediction"]),
         "base_value": round(float(pred["base_value"]), 6),
         "top_factors": factors,
-        "model_version": model_version(),
+        "model_version": _model_identity(pred, deployed_model_id),
         "feature_source": FEATURE_SOURCE,
     }
 

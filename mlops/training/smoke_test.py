@@ -34,9 +34,13 @@ LOCATION = "us-east1"
 ENDPOINT_NAME = "readmission-endpoint"
 TABLE = "readmission.analytics_dataset_encoded"
 
-# Serving bundle is discovered from the newest readmission-final-* provenance
+# Serving bundle is discovered from the newest pipeline-registered provenance
 # record; set BUNDLE_URI to override (e.g. to pin a specific run).
 BUNDLE_URI_OVERRIDE = os.environ.get("BUNDLE_URI")
+# Same rule as mlops/serving/deploy_cpr.py and services/mcp/.../manifest.py: the
+# pipeline's name prefix and the stage label it writes alongside it.
+FINAL_MODEL_PREFIX = "readmission-final-"
+PIPELINE_STAGE = "final"
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FIXTURE_PATH = REPO_ROOT / "projects" / "agent-harness" / "tests" / "fixtures" / "expected.json"
@@ -47,13 +51,17 @@ FIXTURE_TOLERANCE = 1e-4
 
 
 def _discover_bundle() -> tuple[str, str]:
-    """(artifact_uri, display_name) of the newest readmission-final-* record."""
+    """(artifact_uri, display_name) of the newest pipeline-registered version."""
     models = [
         m for m in aiplatform.Model.list(order_by="create_time desc")
-        if m.display_name.startswith("readmission-final-")
+        if m.display_name.startswith(FINAL_MODEL_PREFIX)
+        and (m.labels or {}).get("stage") == PIPELINE_STAGE
     ]
     if not models:
-        sys.exit("No 'readmission-final-*' model found; run the pipeline or set BUNDLE_URI.")
+        sys.exit(
+            f"No pipeline-registered '{FINAL_MODEL_PREFIX}*' model found "
+            f"(stage={PIPELINE_STAGE}); run the pipeline or set BUNDLE_URI."
+        )
     return models[0].gca_resource.artifact_uri.rstrip("/"), models[0].display_name
 
 

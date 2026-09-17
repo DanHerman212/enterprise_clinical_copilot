@@ -147,7 +147,7 @@ def _derive_subgroups(sens: pd.DataFrame) -> dict[str, pd.Series]:
     groups: dict[str, pd.Series] = {}
 
     if "gender" in sens:
-        # gender is encoded 1 == male (see src.encoding.BINARY_FEATURES).
+        # gender is encoded 1 == male (see mlops.data.encoding.BINARY_FEATURES).
         groups["gender"] = (
             pd.to_numeric(sens["gender"], errors="coerce")
             .map({1: "M", 0: "F"})

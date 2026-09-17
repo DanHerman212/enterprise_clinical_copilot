@@ -3,10 +3,10 @@
 # build_images.sh — build & push the training container image to Artifact
 # Registry via Cloud Build. Creates the `readmission` Docker repo if it doesn't
 # exist. Serving uses a Custom Prediction Routine image built separately by
-# scripts/deploy_cpr.py (register_model only records it for provenance).
+# mlops/serving/deploy_cpr.py (register_model only records it for provenance).
 #
 # Usage:
-#   bash mlops/scripts/build_images.sh [training]
+#   bash mlops/training/build_images.sh [training]
 #
 # Default target is `training`. Override PROJECT_ID / REGION by exporting them.
 set -euo pipefail
@@ -44,11 +44,13 @@ echo
 
 # --- Build helpers -----------------------------------------------------------
 build_training() {
-  echo ">>> Building TRAINING image (pipelines/Dockerfile) …"
+  echo ">>> Building TRAINING image (training/Dockerfile, context mlops) …"
   gcloud builds submit "$MLOPS_DIR" \
     --project "$PROJECT_ID" \
-    --config "$MLOPS_DIR/pipelines/cloudbuild.yaml"
+    --config "$MLOPS_DIR/training/cloudbuild.yaml"
   echo "    -> ${AR_HOST}/${PROJECT_ID}/${REPO}/training:latest"
+  echo "    (each build also tags :\${BUILD_ID} — use that tag in"
+  echo "     TRAINING_IMAGE_URI when a run has to be reproducible)"
 }
 
 case "$TARGET" in
@@ -57,5 +59,5 @@ case "$TARGET" in
 esac
 
 echo
-echo "Done. To use the pinned training image for pipeline steps (optional):"
+echo "Done. To use the pinned training image for pipeline steps:"
 echo "  export TRAINING_IMAGE_URI=${AR_HOST}/${PROJECT_ID}/${REPO}/training:latest"

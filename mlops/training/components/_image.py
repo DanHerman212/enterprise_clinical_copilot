@@ -4,10 +4,10 @@ _image.py — Docker image URI for the pipeline components.
 Defaults to the Vertex prebuilt XGBoost training image; components then install
 their extra dependencies at runtime via ``packages_to_install``. Set
 ``TRAINING_IMAGE_URI`` (at compile/submit time) to a custom pre-built image
-(see ``pipelines/Dockerfile``) to get pinned, reproducible dependencies baked
+(see ``mlops/training/Dockerfile``) to get pinned, reproducible dependencies baked
 in and skip the per-step installs, e.g.::
 
-    export TRAINING_IMAGE_URI=us-east1-docker.pkg.dev/$PROJECT_ID/readmission/training:latest
+    export TRAINING_IMAGE_URI=us-east1-docker.pkg.dev/$PROJECT_ID/readmission/training:BUILD_ID
 """
 
 import os
@@ -20,7 +20,7 @@ _DEFAULT_BASE_IMAGE = "us-docker.pkg.dev/vertex-ai/training/xgboost-cpu.2-1:late
 # major ranges (see each component's packages_to_install), with xgboost pinned
 # to >=2.1,<2.2 for exact parity with the CPR serving image. For full
 # reproducibility, set TRAINING_IMAGE_URI to the custom pre-built image (see
-# pipelines/Dockerfile) so nothing is installed at step runtime.
+# mlops/training/Dockerfile) so nothing is installed at step runtime.
 
 TRAINING_IMAGE = os.environ.get("TRAINING_IMAGE_URI", _DEFAULT_BASE_IMAGE)
 

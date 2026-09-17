@@ -1,5 +1,0 @@
-{
-  "threshold": 0.11,
-  "beta": 2.0,
-  "note": "Operating threshold for the decision layer only; the endpoint returns calibrated probabilities."
-}

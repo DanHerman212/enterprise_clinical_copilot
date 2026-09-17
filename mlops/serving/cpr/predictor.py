@@ -70,6 +70,13 @@ class ReadmissionPredictor(Predictor):
         prediction_utils.download_model_artifacts(artifacts_uri)
         _verify_bundle_checksums()
 
+        # Which model this container is serving, stamped into the environment by
+        # deploy_cpr.py from the provenance record it deployed. Returned with
+        # every prediction so the answer carries the identity of the model that
+        # produced it, instead of the caller inferring one from the registry.
+        self._model_version = os.environ.get("MODEL_VERSION", "")
+        print(f"  serving model_version: {self._model_version or '<unstamped>'}")
+
         with open("manifest.json") as f:
             manifest = json.load(f)
         self._feature_order: list[str] = manifest["feature_order"]
@@ -97,7 +104,8 @@ class ReadmissionPredictor(Predictor):
         Every instance is validated (ECC-60): unknown dict keys are rejected
         instead of silently becoming NaN (XGBoost treats NaN as "missing" and
         would return a confident, silently wrong probability for a typo'd
-        key); positional lists must match the feature count; values must be
+        key), a dict that omits a declared feature is rejected for the same
+        reason, positional lists must match the feature count, values must be
         finite numbers or null.
         """
         instances = prediction_input.get("instances")
@@ -118,6 +126,16 @@ class ReadmissionPredictor(Predictor):
                         f"{sorted(unknown)[:5]} — check the manifest "
                         "feature_order (a typo'd key would silently be "
                         "treated as missing)."
+                    )
+                # A null VALUE is a legitimate missing measurement; an ABSENT
+                # KEY is a caller whose vocabulary differs from this bundle's,
+                # and scoring it as missing is the silent wrong answer the
+                # unknown-key check above exists to prevent.
+                absent = [c for c in self._feature_order if c not in inst]
+                if absent:
+                    raise ValueError(
+                        f"Instance {i}: missing feature keys {absent[:5]} — "
+                        "send null for a value that is genuinely missing."
                     )
                 raw = [inst.get(c) for c in self._feature_order]
             elif isinstance(inst, (list, tuple)):
@@ -184,6 +202,7 @@ class ReadmissionPredictor(Predictor):
                     # TreeSHAP on binary:logistic is margin-space (ECC-73) —
                     # these are NOT probability deltas.
                     "attribution_units": ATTRIBUTION_UNITS,
+                    "model_version": self._model_version,
                     "top_factors": [
                         {"feature": name, "attribution": val} for name, val in top
                     ],

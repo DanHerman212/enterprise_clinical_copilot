@@ -1,4 +1,4 @@
-"""Unit tests for src/thresholds.py — threshold calibration & decision analytics."""
+"""Unit tests for mlops/training/thresholds.py — threshold calibration & decision analytics."""
 
 import numpy as np
 import pandas as pd

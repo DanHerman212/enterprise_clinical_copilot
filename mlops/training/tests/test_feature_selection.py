@@ -1,4 +1,4 @@
-"""Tests for src/feature_selection.py (leakage-controlled feature selection).
+"""Tests for mlops/training/feature_selection.py (leakage-controlled feature selection).
 
 Pins the properties that were flawed in feature_selection_v2.ipynb:
   * CV folds are patient-grouped (no subject_id across a fold);

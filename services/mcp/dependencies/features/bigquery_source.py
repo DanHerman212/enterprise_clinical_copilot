@@ -6,7 +6,10 @@ live endpoint. Point lookups run ~1-2s and cost effectively nothing.
 
 from google.cloud import bigquery
 
-from ..config import ENTITY_ID_COLUMN, PROJECT, TABLE
+# Two levels below services/mcp/ (dependencies/features/), so the config import
+# needs three dots: `..config` resolved to services.mcp.dependencies.config, which
+# does not exist, and that made the whole predict path unimportable.
+from ...config import ENTITY_ID_COLUMN, PROJECT, TABLE
 from .base import FeatureRow
 from .manifest import feature_order
 
@@ -41,7 +44,17 @@ class BigQueryFeatureSource:
         # Restrict to the model's features. SELECT * also returns the label and
         # bookkeeping columns; letting those reach the model input would be a
         # silent correctness bug rather than an error.
+        #
+        # A column the table does not carry is left out rather than filled in with
+        # None. The two are not the same thing, and treating them as one is what
+        # made the tool's completeness check unreachable: a null VALUE is a
+        # measurement that was not taken, which the booster reads as NaN by design;
+        # an ABSENT COLUMN is a table that does not speak the model's vocabulary,
+        # and scoring it produced a confident answer to a question the model was
+        # never asked. Left out, the check in `tools/prediction.py` refuses the row.
+        expected = set(feature_order())
         return {
-            col: (None if row.get(col) is None else float(row[col]))
-            for col in feature_order()
+            col: (None if value is None else float(value))
+            for col, value in row.items()
+            if col in expected
         }

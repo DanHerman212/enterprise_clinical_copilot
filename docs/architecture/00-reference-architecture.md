@@ -133,7 +133,7 @@ architecture gap. This list exists so the bar does not move mid-review.
 | 3 Orchestrator | `layer-03-orchestrator.md` | Audited 2026-09-13, all seven gaps closed 2026-09-15 and verified live. |
 | 4 Model runtime & gateway | `layer-04-model-runtime.md` | Audited 2026-09-15, rewritten shorter and independently reviewed 2026-09-16. Gaps 1 to 8 and 10 closed; gap 9 partly addressed and open (caching cannot apply at this prompt size). Model swapped to `gemini-3.1-flash-lite` on 2026-09-16. |
 | 5 Tools & grounding | `layer-05-tools-mcp.md` | Audited 2026-09-16 and independently reviewed the same day. Six gaps recorded; all six closed 2026-09-17. |
-| 6 Your own models | — | |
+| 6 Your own models | `layer-06-own-models.md` | Audited 2026-09-17 and independently reviewed the same day. Twelve gaps recorded; gaps 1 to 10 closed, gap 1 confirmed by a completed pipeline run. Each gap carries its own decision and outcome in section 5. |
 | 7 Data & indexes | — | |
 | 8 Memory / session state | — | |
 | 9 Evaluation | — | |

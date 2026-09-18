@@ -13,6 +13,7 @@ previous index authorises the next one just as convincingly.
 """
 
 import pathlib
+import re
 
 import pytest
 
@@ -215,15 +216,103 @@ def test_the_evidence_path_is_keyed_by_corpus_and_by_index():
 
 
 def test_the_deploy_cannot_promote_without_measuring():
-    """The gate used to be a flag, and the flag was easy to forget."""
+    """The gate used to be a flag, and the flag was easy to forget.
+
+    Stated over every promotion, because there is now more than one: a promotion
+    that measures the candidate and judges it in this run, and a promotion that
+    reuses a measurement already on file for an index whose contents and
+    thresholds have not changed. Both rest on a measurement; neither rest on a
+    flag, a caller's word, or nothing at all.
+    """
     source = (REPO / "scripts/agent/deploy_rag.py").read_text()
 
     assert "--recall-report" not in source, "a supplied report is not a measurement"
     assert "recall_gate.judge(" in source
-    judge_at = source.index("recall_gate.judge(")
-    promote_at = source.index("_deploy(c, ep_name, index_name, LIVE_ID")
-    assert judge_at < promote_at, "the verdict must precede the promotion"
-    assert "ROLLED BACK" in source[judge_at:promote_at + 400]
+
+    promotions = list(re.finditer(r"_deploy\(c, ep_name, index_name, LIVE_ID", source))
+    assert promotions, "the promotion path moved; point this at its new wording"
+    for promotion in promotions:
+        before = source[:promotion.start()]
+        fresh = "recall_gate.judge(" in before
+        stored = "reused = recall_gate.prior_measurement(" in before
+        assert fresh or stored, (
+            "a promotion at offset " f"{promotion.start()} rests on no measurement")
+        if stored:
+            # A reused measurement may not be invented: it has to have passed,
+            # to name this index, and to have applied these thresholds.
+            assert "prior_measurement" in before
+    assert "ROLLED BACK" in source
+
+
+def test_a_reused_measurement_requires_the_index_and_the_thresholds_to_match():
+    """Reuse is a claim about what did not change, so it is checked, not assumed."""
+    source = (REPO / "scripts/agent/recall_gate.py").read_text()
+
+    assert "if not payload.get(\"passed\")" in source
+    assert "payload.get(\"data_fingerprint\") != data_fingerprint" in source
+    assert "get(\"recall_at_10\") != recall_min" in source
+    assert "get(\"empty_result_rate\") != empty_max" in source
+
+
+def test_prior_measurement_ignores_a_report_that_did_not_pass():
+    """A stored failure must not authorise anything, and must not stop the
+    search from finding an older report that did pass."""
+    import json as _json
+    from types import SimpleNamespace
+
+    def _entry(passed, fingerprint="fp1", recall=0.99, empty=0.05):
+        return _json.dumps({
+            "passed": passed, "index_name": "rag-tree-ah-1",
+            "data_fingerprint": fingerprint,
+            "metrics": {"recall_at_10": recall},
+            "thresholds": {"recall_at_10": 0.90},
+            "max_thresholds": {"empty_result_rate": empty},
+        })
+
+    blobs = {
+        "rag/recall/demo/rag-tree-ah-1/20260918-020000/eval_results.json":
+            _entry(passed=False),
+        "rag/recall/demo/rag-tree-ah-1/20260918-010000/eval_results.json":
+            _entry(passed=True),
+    }
+
+    class _Blob:
+        def __init__(self, text):
+            self._text = text
+
+        def download_as_text(self):
+            return self._text
+
+    class _Client:
+        """Just enough of the storage client for the lookup to run."""
+
+        def bucket(self, name):
+            return self
+
+        def blob(self, name):
+            return _Blob(blobs[name])
+
+        def list_blobs(self, bucket, prefix=""):
+            return [SimpleNamespace(name=name) for name in blobs]
+
+    client = _Client()
+
+    found = recall_gate.prior_measurement(
+        "demo", "rag-tree-ah-1", data_fingerprint="fp1",
+        recall_min=0.90, empty_max=0.05, client=client)
+    assert found, "the passing report must be found"
+    assert found["uri"].endswith("20260918-010000/eval_results.json")
+    assert found["recall_at_10"] == 0.99
+
+    # Different index contents are not this index's measurement.
+    assert recall_gate.prior_measurement(
+        "demo", "rag-tree-ah-1", data_fingerprint="fp2",
+        recall_min=0.90, empty_max=0.05, client=client) is None
+
+    # Nor is a report judged by thresholds other than the ones in force now.
+    assert recall_gate.prior_measurement(
+        "demo", "rag-tree-ah-1", data_fingerprint="fp1",
+        recall_min=0.999, empty_max=0.05, client=client) is None
 
 
 def test_the_recall_job_names_nothing_it_could_outlive():

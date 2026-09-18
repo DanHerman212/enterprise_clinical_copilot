@@ -40,6 +40,12 @@ from google.cloud.aiplatform_v1 import (
     IndexEndpointServiceClient,
     IndexServiceClient,
 )
+from google.api_core.exceptions import (
+    DeadlineExceeded,
+    InternalServerError,
+    ServiceUnavailable,
+    TooManyRequests,
+)
 from google.cloud.aiplatform_v1.types import (
     DeployedIndex,
     DedicatedResources,
@@ -108,25 +114,56 @@ def _deploy(c: IndexEndpointServiceClient, ep_name: str, index_name: str,
         ),
     )
     print(f"deploying {deployed_id} -> {index_name.split('/')[-1]} ({machine})…")
-    op = c.deploy_index(index_endpoint=ep_name, deployed_index=di)
+    op = _retrying(lambda: c.deploy_index(index_endpoint=ep_name, deployed_index=di),
+                   f"deploy {deployed_id}")
     while not op.done():
         time.sleep(5)
     if op.exception() is not None:
         raise SystemExit(f"deploy failed: {op.exception()}")
 
 
+# Transient and retryable: the API says "try again", and a deploy that gives up
+# on the first one leaves the endpoint half-configured for no reason. A 503 here
+# cost a full re-run of this script on 2026-09-18 after the staging index was
+# already deployed. Anything else is a real answer and is raised as it is.
+_TRANSIENT = (ServiceUnavailable, DeadlineExceeded, InternalServerError, TooManyRequests)
+
+
+def _retrying(call, what: str, attempts: int = 3, pause: int = 15):
+    """Run an API call, retrying only what the API called transient."""
+    for attempt in range(1, attempts + 1):
+        try:
+            return call()
+        except _TRANSIENT as exc:
+            if attempt == attempts:
+                raise
+            print(f"  {what} failed transiently ({type(exc).__name__}: {exc}); "
+                  f"retrying in {pause}s ({attempt}/{attempts - 1})")
+            time.sleep(pause)
+
+
 def _undeploy(c: IndexEndpointServiceClient, ep_name: str, deployed_id: str) -> None:
     print(f"undeploying {deployed_id}…")
-    c.undeploy_index(index_endpoint=ep_name, deployed_index_id=deployed_id)
+    _retrying(lambda: c.undeploy_index(index_endpoint=ep_name,
+                                       deployed_index_id=deployed_id),
+              f"undeploy {deployed_id}")
+
+
+def _deployed(c: IndexEndpointServiceClient, ep_name: str) -> dict[str, str]:
+    """deployed id -> the index resource it serves, for one endpoint."""
+    return {d.id: d.index for d in c.get_index_endpoint(name=ep_name).deployed_indexes}
 
 
 def _deployed_ids(c: IndexEndpointServiceClient, ep_name: str) -> list[str]:
-    return [d.id for d in c.get_index_endpoint(name=ep_name).deployed_indexes]
+    return list(_deployed(c, ep_name))
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--force-measure", action="store_true",
+        help="take a fresh measurement even when an applicable stored one exists")
     args = parser.parse_args()
 
     cfg = load_config()
@@ -160,8 +197,6 @@ def main() -> int:
     else:
         print(f"using endpoint: {ep_name}")
 
-    live_present = LIVE_ID in _deployed_ids(c, ep_name) if not args.dry_run else False
-
     if args.dry_run:
         print(f"dry-run: deploy {display} as {STAGING_ID}, measure that id, "
               f"and promote to {LIVE_ID} only if recall@10 "
@@ -169,14 +204,68 @@ def main() -> int:
         print(f"dry-run: evidence would be written to {evidence_dir}")
         return 0
 
+    deployed = _deployed(c, ep_name)
+
+    # The index may already be measured, and standing the endpoints back up does
+    # not change it. Reusing that measurement is what keeps a restart from
+    # spending a machine and twenty minutes to re-derive a verdict that is
+    # already written down. `--force-measure` is the way out of it.
+    reused = None
+    if not args.force_measure:
+        reused = recall_gate.prior_measurement(
+            cfg.corpus.name, display,
+            data_fingerprint=source["data_fingerprint"],
+            recall_min=cfg.recall_at_10_min,
+            empty_max=cfg.empty_result_rate_max,
+        )
+        if reused:
+            print(f"stored measurement applies: {reused['uri']}")
+            print(f"  recall@10={reused['recall_at_10']}, same index contents, "
+                  f"same thresholds. Not re-measured; --force-measure overrides.")
+
+    if reused and deployed.get(LIVE_ID) == index_name:
+        print(f"{LIVE_ID} already serves {display} and the measurement that "
+              f"authorised it is on file — nothing to do.")
+        return 0
+
+    if reused:
+        label = recall_gate.label_for_recall(display, reused["recall_at_10"])
+        if deployed.get(LIVE_ID) not in (None, index_name):
+            _undeploy(c, ep_name, LIVE_ID)
+        _deploy(c, ep_name, index_name, LIVE_ID, machine, display_name=label)
+        print(f"PROMOTED {display} to {LIVE_ID} on the stored measurement; "
+              f"evidence: {reused['uri']}")
+        return 0
+
     # Blue: the candidate serves under a staging id; the live id is untouched.
-    _deploy(c, ep_name, index_name, STAGING_ID, machine)
+    # A staging id left behind by an interrupted run is reused rather than
+    # refused, so a re-run continues instead of starting again.
+    if deployed.get(STAGING_ID) == index_name:
+        print(f"{STAGING_ID} already serves {display} — continuing from the "
+              f"measurement instead of redeploying it.")
+    else:
+        if STAGING_ID in deployed:
+            print(f"{STAGING_ID} serves a different index; replacing it.")
+            _undeploy(c, ep_name, STAGING_ID)
+        _deploy(c, ep_name, index_name, STAGING_ID, machine)
 
     # Measure the candidate. A report describing the index already serving
     # cannot authorise the next one, which is why the id below is the staging.
-    report = recall_gate.report_for(
-        endpoint=ep_name, deployed_id=STAGING_ID, chunks=source["chunks"],
-        ingest=source["ingest"], out_dir_uri=evidence_dir)
+    try:
+        report = recall_gate.report_for(
+            endpoint=ep_name, deployed_id=STAGING_ID, chunks=source["chunks"],
+            ingest=source["ingest"], out_dir_uri=evidence_dir)
+    except Exception as exc:
+        # Nothing about the candidate has been decided; the staging index is
+        # deployed and the live one is untouched. Say exactly that, with the way
+        # to continue, rather than exiting on a traceback that leaves the state
+        # to be inferred.
+        print(f"MEASUREMENT FAILED ({type(exc).__name__}: {exc}).")
+        print(f"  {STAGING_ID} is deployed with {display}; {LIVE_ID} is still serving.")
+        print(f"  Re-run this script to continue: it will reuse the deployed "
+              f"{STAGING_ID} and measure it again.")
+        return 1
+
     passed, result, failing = recall_gate.judge(
         report, corpus=cfg.corpus.name, index_name=display,
         data_fingerprint=source["data_fingerprint"])
@@ -205,7 +294,7 @@ def main() -> int:
 
     # Green: promote, carrying the measurement on the deployment itself.
     label = recall_gate.label(display, report)
-    if live_present:
+    if deployed.get(LIVE_ID) not in (None, index_name):
         _undeploy(c, ep_name, LIVE_ID)
     _deploy(c, ep_name, index_name, LIVE_ID, machine, display_name=label)
     _undeploy(c, ep_name, STAGING_ID)

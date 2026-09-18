@@ -30,6 +30,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from google.api_core.exceptions import NotFound
 from google.cloud import aiplatform, storage
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -56,6 +57,7 @@ IMAGE = os.environ.get(
 # name, because that is the one field of a deployment a person reads.
 LABEL_MAX = 128
 REPORT_NAME = "recall_report.json"
+RESULTS_NAME = "eval_results.json"
 
 
 def _stamp() -> str:
@@ -221,6 +223,62 @@ def judge(report: dict, *, corpus: str, index_name: str,
     return passed, result, list(failing)
 
 
+def prior_measurement(corpus: str, index_display: str, *, data_fingerprint: str,
+                      recall_min: float, empty_max: float,
+                      client=None) -> dict | None:
+    """The newest measurement already taken for this index, if it still applies.
+
+    Standing the endpoints back up changes nothing about the index: the same
+    vectors, built by the same ingest run, judged by the same thresholds.
+    Re-running the recall job then spends a machine and twenty minutes
+    re-deriving a verdict that is already written down, so the deploy looks for
+    the written one first.
+
+    What makes a stored measurement applicable is checked rather than assumed: it
+    must have PASSED, it must name this index, it must have been taken against
+    the same index contents (the data fingerprint of the ingest run that built
+    it), and it must have applied the same thresholds. What is NOT covered is the
+    measurement's own code — nothing in the artifact names the recall component
+    that produced it, so a report from an older component passes every check
+    above. That is why `--force-measure` exists and why a reuse is announced
+    with its evidence URI rather than folded in silently.
+
+    Returns ``{'report':…, 'uri':…, 'recall_at_10':…}`` or None when a fresh
+    measurement has to be taken.
+    """
+    client = client or storage.Client()
+    bucket_name = f"{PROJECT}-mlops"
+    bucket = client.bucket(bucket_name)
+    prefix = f"rag/recall/{corpus}/{index_display}/"
+    # The stamp is `%Y%m%d-%H%M%S`, so newest-first is a reverse sort of names.
+    names = sorted(
+        (b.name for b in client.list_blobs(bucket_name, prefix=prefix)
+         if b.name.endswith(RESULTS_NAME)),
+        reverse=True,
+    )
+    for name in names:
+        try:
+            payload = json.loads(bucket.blob(name).download_as_text())
+        except (json.JSONDecodeError, UnicodeDecodeError, NotFound):
+            continue
+        if not payload.get("passed"):
+            continue
+        if payload.get("index_name") and payload["index_name"] != index_display:
+            continue
+        if data_fingerprint and payload.get("data_fingerprint") != data_fingerprint:
+            continue
+        if (payload.get("thresholds") or {}).get("recall_at_10") != recall_min:
+            continue
+        if (payload.get("max_thresholds") or {}).get("empty_result_rate") != empty_max:
+            continue
+        return {
+            "report": payload,
+            "uri": f"gs://{bucket_name}/{name}",
+            "recall_at_10": (payload.get("metrics") or {}).get("recall_at_10"),
+        }
+    return None
+
+
 def publish(result, out_dir_uri: str) -> dict[str, str]:
     """Write the gate's artifacts beside the report in the bucket.
 
@@ -241,6 +299,18 @@ def publish(result, out_dir_uri: str) -> dict[str, str]:
     return written
 
 
+def label_for_recall(index_display: str, recall_at_10) -> str:
+    """The deployment label, from a recall already recorded rather than a report.
+
+    A promoted deployment carries the measurement that authorised it in its
+    display name, and a reused measurement authorises a promotion just as
+    directly as a fresh one — the number on the endpoint has to be the number
+    the evidence holds, whichever run produced it.
+    """
+    suffix = f" recall@10={recall_at_10}" if recall_at_10 is not None else ""
+    return f"{index_display}{suffix}"[:LABEL_MAX]
+
+
 def label(index_display: str, report: dict) -> str:
     """A deployment name carrying the measurement.
 
@@ -249,5 +319,4 @@ def label(index_display: str, report: dict) -> str:
     having to find the report.
     """
     recall = (report or {}).get("recall", {})
-    suffix = f" recall@10={recall['@10']}" if "@10" in recall else ""
-    return f"{index_display}{suffix}"[:LABEL_MAX]
+    return label_for_recall(index_display, recall.get("@10"))

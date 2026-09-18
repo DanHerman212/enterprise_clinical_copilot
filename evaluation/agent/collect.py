@@ -14,17 +14,26 @@ import argparse
 import asyncio
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
-HARNESS = Path(__file__).resolve().parents[1]
+HARNESS = Path(__file__).resolve().parents[2]
+# Where the run's artifacts go, and where the archive already is. This used to
+# be `HARNESS/"eval"/"results"`, computed from a `parents[1]` that pointed at
+# `evaluation/` once this file moved up a level — so a run wrote
+# `evaluation/eval/results/traces.jsonl`, a path that does not exist, is not
+# ignored by .gitignore, and would have committed clinical text into the
+# repository. The archive's real home is beside the golden sample it reads, and
+# `.gitignore` already covers it (2026-09-18).
+RESULTS = Path(__file__).resolve().parent / "results"
 sys.path.insert(0, str(HARNESS))
-sys.path.insert(0, str(HARNESS / "agent"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from services.agent.graph import ask, final_text  # noqa: E402
 from services.agent.mcp_client import toolbox  # noqa: E402
 
-SAMPLE = HARNESS / "eval" / "results" / "golden_sample.json"
-OUT = HARNESS / "eval" / "results" / "traces.jsonl"
+SAMPLE = RESULTS / "golden_sample.json"
+OUT = RESULTS / "traces.jsonl"
 
 PROMPTS = {
     "risk": lambda h: f"What is the 30-day readmission risk for admission {h}?",
@@ -123,6 +132,13 @@ async def main() -> int:
                         "tool_calls": state["tool_calls"],
                         "probability": patient["probability"],
                         "band": patient.get("band"),
+                        # When the record was written. The archive has a stated
+                        # lifetime (layer 8 retention decision) and a lifetime
+                        # cannot be enforced on a record that does not say how
+                        # old it is: without this field the only options were to
+                        # keep everything or to delete by file, and the file is
+                        # the whole archive.
+                        "at": datetime.now(timezone.utc).isoformat(),
                     }
                     # Keep the Langfuse trace id (when Langfuse is enabled) so
                     # judge.py can attach rubric scores to the right trace.

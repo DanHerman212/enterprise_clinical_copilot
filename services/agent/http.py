@@ -26,6 +26,7 @@ from starlette.routing import Route
 from services.agent import chain, model_turn, stages
 from services.agent.a2ui import compose_presentation
 from services.agent.contracts import (
+    RE_DERIVABLE_TOOLS,
     AgentRequestError,
     AgentResponseError,
     parse_agent_request,
@@ -86,21 +87,23 @@ def _trace(request: Request) -> str:
     return request.headers.get("x-cloud-trace-context", "").split("/", 1)[0] or "-"
 
 
-async def _question_or_error(request: Request) -> tuple[str, str | None, JSONResponse | None]:
-    """The validated question and its kind, or the response to return instead."""
+async def _question_or_error(
+    request: Request,
+) -> tuple[str, str | None, list[dict[str, str]], JSONResponse | None]:
+    """The validated question, its kind and any replayed turns, or the response."""
     try:
         body = await request.json()
     except Exception:
-        return "", None, JSONResponse({"error": "invalid_json"}, status_code=400)
+        return "", None, [], JSONResponse({"error": "invalid_json"}, status_code=400)
 
     try:
         parsed = parse_agent_request(body, max_question_chars=MAX_QUESTION_CHARS)
     except AgentRequestError as exc:
-        return "", None, JSONResponse(
+        return "", None, [], JSONResponse(
             {"error": exc.code, "message": exc.message},
             status_code=exc.status_code,
         )
-    return parsed["question"], parsed["kind"], None
+    return parsed["question"], parsed["kind"], parsed["turns"], None
 
 
 class AgentAnswerUnavailable(Exception):
@@ -187,11 +190,28 @@ def _compose_success(question: str, state: dict, trace: str) -> dict:
 
     guarded = guard_answer(text, state["tool_calls"])
 
-    # tool_calls are trimmed to what the site's canvas composition reads
-    # (name + response) — the raw arguments never need to reach the browser
-    # (ECC-08). Guardrails above ran on the full records.
+    # tool_calls carry name, arguments, response and whether the response can be
+    # produced again. The arguments used to be dropped here on the grounds that
+    # only the canvas composition read this list (ECC-08); that stopped being
+    # true when the site began storing a turn to replay it, because a replayed
+    # call with no arguments misstates what was asked. Nothing new is exposed:
+    # the arguments are the caller's own question and admission, and the passages
+    # the call returned already cross this boundary. Guardrails above ran on the
+    # full records.
+    #
+    # `derivable` says whether the site should keep the response. A caller that
+    # stores a turn keeps the name and arguments either way, and the response
+    # only when it cannot be produced again — see `RE_DERIVABLE_TOOLS`. The flag
+    # is stated by the layer that ran the tool because only that layer knows, and
+    # a caller that had to guess from the response's shape would guess wrong
+    # (`rag_search_sections` returns note text without a `passages` key).
     trimmed_calls = [
-        {"name": tc["name"], "response": tc["response"]}
+        {
+            "name": tc["name"],
+            "args": tc.get("args") or {},
+            "response": tc["response"],
+            "derivable": tc["name"] in RE_DERIVABLE_TOOLS,
+        }
         for tc in state["tool_calls"]
     ]
 
@@ -209,6 +229,10 @@ def _compose_success(question: str, state: dict, trace: str) -> dict:
         "a2ui": presentation["a2ui"],
         "sources": presentation["sources"],
         "model": chain.MODEL_ID,
+        # The revision that produced this answer travels with it. A stored turn
+        # without it cannot be explained once the code has moved on, which is
+        # what the conversation store exists to prevent.
+        "code_revision": chain.CODE_REVISION,
         "mcp_transport": MCP_TRANSPORT,
     }
     try:
@@ -267,18 +291,29 @@ class _StageLog:
 
 
 async def _run_chain(
-    question: str, question_kind: str | None = None, on_event=None
+    question: str,
+    question_kind: str | None = None,
+    on_event=None,
+    turns: list[dict[str, str]] | None = None,
 ) -> dict:
     """Run the graph under the wall-clock deadline, inside one MCP session.
 
     Extracted because both routes need the identical bound: the deadline is a
     spend control (ECC-02), and a second copy of it is a second place for the
     two routes to disagree about how long a question may take.
+
+    `turns` is passed through rather than resolved here: the caller owns the
+    conversation, this service holds none, and the chain turns what it is given
+    into messages.
     """
     async with asyncio.timeout(ASK_TIMEOUT_SECONDS):
         async with toolbox() as box:
             return await ask(
-                box, question, question_kind=question_kind, on_event=on_event
+                box,
+                question,
+                question_kind=question_kind,
+                on_event=on_event,
+                turns=turns,
             )
 
 
@@ -309,7 +344,7 @@ async def ask_route(request: Request) -> JSONResponse:
     if error is not None:
         return error
     trace = _trace(request)
-    question, question_kind, error = await _question_or_error(request)
+    question, question_kind, turns, error = await _question_or_error(request)
     if error is not None:
         return error
 
@@ -317,7 +352,9 @@ async def ask_route(request: Request) -> JSONResponse:
     # emits exactly one execution record.
     log = _StageLog()
     try:
-        state = await _run_chain(question, question_kind, on_event=log)
+        state = await _run_chain(
+            question, question_kind, on_event=log, turns=turns
+        )
     except TimeoutError:
         logger.error("agent /ask timed out after %.0fs trace=%s", ASK_TIMEOUT_SECONDS, trace)
         log.record(trace, question, "timeout", error="timeout")
@@ -419,12 +456,12 @@ async def ask_stream_route(request: Request) -> Response:
     if error is not None:
         return error
     trace = _trace(request)
-    question, question_kind, error = await _question_or_error(request)
+    question, question_kind, turns, error = await _question_or_error(request)
     if error is not None:
         return error
 
     return StreamingResponse(
-        _stream_chain(question, trace, question_kind),
+        _stream_chain(question, trace, question_kind, turns),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -437,7 +474,12 @@ async def ask_stream_route(request: Request) -> Response:
     )
 
 
-async def _stream_chain(question: str, trace: str, question_kind: str | None = None):
+async def _stream_chain(
+    question: str,
+    trace: str,
+    question_kind: str | None = None,
+    turns: list[dict[str, str]] | None = None,
+):
     """Yield stage frames as they happen, then exactly one terminal frame.
 
     Nothing is composed here. The stages come from the chain (`graph._emit`) at
@@ -450,7 +492,9 @@ async def _stream_chain(question: str, trace: str, question_kind: str | None = N
     # The events the caller sees are also the record of what ran: the sink relays
     # them, the log timestamps them.
     log = _StageLog(sink=queue.put_nowait)
-    task = asyncio.create_task(_run_chain(question, question_kind, on_event=log))
+    task = asyncio.create_task(
+        _run_chain(question, question_kind, on_event=log, turns=turns)
+    )
 
     def _finished(finished: asyncio.Task) -> None:
         # Reading the exception marks it retrieved: it is logged where it

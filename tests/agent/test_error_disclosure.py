@@ -53,7 +53,7 @@ def test_health_reports_which_code_is_running():
 # --- /ask 502 (ECC-06) -------------------------------------------------------
 
 def test_ask_failure_returns_generic_body_with_correlation_id():
-    async def boom(box, question, on_event=None, question_kind=None):
+    async def boom(box, question, on_event=None, question_kind=None, turns=None):
         raise RuntimeError("https://secret-mcp-url/ask audience=projects/12345")
 
     with patch.object(srv, "toolbox", _fake_toolbox), \
@@ -77,7 +77,7 @@ def test_ask_logs_the_forwarded_cloud_trace_id(caplog):
     """Django forwards X-Cloud-Trace-Context; the agent's log line for the
     request must carry the trace id (the part before the slash) so the two
     services' entries pair up."""
-    async def boom(box, question, on_event=None, question_kind=None):
+    async def boom(box, question, on_event=None, question_kind=None, turns=None):
         raise RuntimeError("nope")
 
     with patch.object(srv, "toolbox", _fake_toolbox), \
@@ -94,7 +94,15 @@ def test_ask_logs_the_forwarded_cloud_trace_id(caplog):
 
 # --- tool_calls trim (ECC-08) --------------------------------------------------
 
-def test_ask_response_trims_tool_calls_to_name_and_response():
+def test_ask_response_carries_each_tool_call_with_its_arguments():
+    """A turn is stored so it can be replayed, and a replayed call needs its
+    arguments: without them the replayed call misstates what was asked.
+
+    This used to assert the opposite (name and response only, no args). The
+    arguments are the caller's own question and admission, and the passages the
+    call returned already cross this boundary, so carrying them exposes nothing
+    new while making a faithful replay possible.
+    """
     state = {
         "messages": [HumanMessage(content="q"),
                      AIMessage(content="The note describes pneumonia. ^[1]")],
@@ -109,7 +117,7 @@ def test_ask_response_trims_tool_calls_to_name_and_response():
         }],
     }
 
-    async def fake_ask(box, question, on_event=None, question_kind=None):
+    async def fake_ask(box, question, on_event=None, question_kind=None, turns=None):
         return state
 
     with patch.object(srv, "toolbox", _fake_toolbox), \
@@ -118,8 +126,12 @@ def test_ask_response_trims_tool_calls_to_name_and_response():
 
     assert resp.status_code == 200
     calls = resp.json()["tool_calls"]
-    assert calls == [{"name": "rag_search", "response": state["tool_calls"][0]["response"]}]
-    assert "args" not in calls[0]
+    assert calls == [{
+        "name": "rag_search",
+        "args": {"hadm_id": 90000009, "query": "diagnosis"},
+        "response": state["tool_calls"][0]["response"],
+        "derivable": True,
+    }]
 
 
 # --- generic tool errors (ECC-21) ----------------------------------------------

@@ -7,7 +7,7 @@ found, what changed, and how to explain it.
 
 Derived from Google Cloud Architecture Center guidance, compiled 2026-09-11.
 The full requirement list, with MUST/SHOULD levels, is in
-`../google-cloud-ai-architecture-requirements.pdf`.
+`../google-cloud-ai-architecture-requirements.html`.
 
 ---
 
@@ -114,13 +114,12 @@ architecture gap. This list exists so the bar does not move mid-review.
   requires · how this application implements it (verified file and line) ·
   current state against the requirement · gaps · interview questions the layer
   answers.
-- Sections 1 to 3 stay brief and carry no gaps: gaps belong in section 5 and
-  nowhere else. Section 5 holds one entry per gap — the defect and its evidence,
-  the `Fix.` decision, and, once it lands, a `Change.` block saying what actually
-  changed and how it was checked. A gap is described once, not restated per
-  section; the older layers 1–5 still use the eight-section shape (defect, then a
-  separate decision section, then a separate outcome section) and are converted
-  when they are next opened.
+- Sections 1 to 3 stay brief and carry no gaps. A gap is described once, not
+  restated per section, and it lives only in the gaps section: section 5 in the
+eight-section layers 1–5, which are converted when they are next opened, and
+  section 4 in the four-section layers from 6 onward, which carry the gap table
+  and the record of change together. An entry states the defect and its evidence,
+  the remediation, and, once it lands, the outcome and how it was checked.
 - "Done" for a layer means every MUST is met and verified live. SHOULDs are
   recorded as decisions. Nothing from section 4 is added unless chosen.
 - Fixed decisions: keep LangGraph (framework is a library inside layer 3);
@@ -139,7 +138,7 @@ architecture gap. This list exists so the bar does not move mid-review.
 | 5 Tools & grounding | `layer-05-tools-mcp.md` | Audited 2026-09-16 and independently reviewed the same day. Six gaps recorded; all six closed 2026-09-17. |
 | 6 Your own models | `layer-06-own-models.md` | Audited 2026-09-17 and independently reviewed the same day. Twelve gaps recorded; gaps 1 to 10 and 12 closed, gap 1 confirmed by a completed pipeline run, gap 11 carries its options and awaits a decision. Each gap carries its own decision and outcome in section 5. |
 | 7 Data & indexes | `layer-07-data-and-indexes.md` | Audited 2026-09-17, reviewed the same day and again on 2026-09-18, and reformatted to the four-section shape on 2026-09-18. Eight entries, all settled the same day: entry 1 withdrawn (the hourly-billed endpoints are deployed only for live tests) and entries 2 to 8 closed (no event stream by decision, each artifact records the data version it read, embedding reuse is refused unless the recorded vector space matches, the embedding manifest names the model the serving path imports, one gated script is the deploy path, that deploy measures the index before promoting it, the authorised cohort is derived from the corpus the tools serve, and the corpus descriptions say what the data is). B3 met, B1 and E1 partly, B2 and B6 not met by decision. |
-| 8 Memory / session state | — | |
+| 8 Memory / session state | `layer-08-memory-session-state.md` | Audited 2026-09-18, rewritten the same day after an independent review, and written in the four-section shape. Five entries, all closed 2026-09-18: the thread is transmitted rather than only displayed (the site stores each answered turn and sends the earlier ones back, the browser carries the conversation identifier, and a session is a page load that the interface states), the site's request boundary is closed alongside the agent's, the retention policy is twenty-four hours swept by a job with citation identity only, the replay is structural (dialogue as messages, tool calls rebuilt through the same wrapper and delimiter guard, retrieval re-resolved rather than stored), and the money and continuity rules are enforced in the ask path. A1 and A3 are met; A7 is not applicable and declined on the record. The thirteen decisions are in the strategy session beside it, `layer-08-memory-and-ux-strategy.md`. This row also adjudicates the client layer's deferred finding: the client keeps state, and this layer owns it. |
 | 9 Evaluation | — | |
 | 10 Observability | — | Langfuse stack torn down 2026-09-12; to be rebuilt from a written design. |
 | 11 Security & identity | — | |

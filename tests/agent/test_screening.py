@@ -114,7 +114,7 @@ def test_a_refusal_records_which_category_refused_it(caplog):
         ],
     ))
 
-    async def fake_ask(box, question, on_event=None, question_kind=None):
+    async def fake_ask(box, question, on_event=None, question_kind=None, turns=None):
         return state
 
     with caplog.at_level("INFO", logger="services.agent.chain"):
@@ -146,7 +146,7 @@ def test_an_ordinary_answer_records_no_filtering(caplog):
         }],
     }
 
-    async def fake_ask(box, question, on_event=None, question_kind=None):
+    async def fake_ask(box, question, on_event=None, question_kind=None, turns=None):
         return state
 
     with caplog.at_level("INFO", logger="services.agent.chain"):

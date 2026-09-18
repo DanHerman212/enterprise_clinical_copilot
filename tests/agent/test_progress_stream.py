@@ -251,7 +251,7 @@ def test_a_failing_listener_does_not_take_the_answer_down():
 # --- the streaming route ----------------------------------------------------
 
 def test_stream_sends_stages_then_one_answer_frame():
-    async def fake_ask(box, question, on_event=None, question_kind=None):
+    async def fake_ask(box, question, on_event=None, question_kind=None, turns=None):
         on_event(stages.planning_event())
         on_event(stages.tool_event("rag_search"))
         return _state()
@@ -271,9 +271,16 @@ def test_stream_sends_stages_then_one_answer_frame():
     answer = frames[-1][1]
     assert set(answer) == {
         "question", "answer", "guardrail_flags", "tool_calls",
-        "a2ui", "sources", "model", "mcp_transport",
+        "a2ui", "sources", "model", "code_revision", "mcp_transport",
     }
     assert answer["answer"].strip()
+
+    # The streamed frame is what the site stores and later replays, so it has to
+    # carry the same tool-call detail the single-response route carries.
+    assert answer["tool_calls"][0]["args"] == {
+        "hadm_id": 90000009, "query": "diagnosis",
+    }
+    assert answer["tool_calls"][0]["derivable"] is True
 
 
 def test_the_answer_does_not_wait_for_a_keepalive_after_the_chain_finishes():
@@ -286,7 +293,7 @@ def test_the_answer_does_not_wait_for_a_keepalive_after_the_chain_finishes():
     streaming at all. The timer here is the test: if the loop regresses, this
     takes a keepalive interval instead of milliseconds.
     """
-    async def fake_ask(box, question, on_event=None, question_kind=None):
+    async def fake_ask(box, question, on_event=None, question_kind=None, turns=None):
         on_event(stages.planning_event())
         return _state()
 
@@ -328,7 +335,7 @@ def test_stream_reports_a_mid_stream_failure_as_a_terminal_event():
     """Once the first byte is out the status code is spent, so a failure that
     happens after that arrives as an error frame carrying the same code and
     correlation id the single-response route would have put in its body."""
-    async def boom(box, question, on_event=None, question_kind=None):
+    async def boom(box, question, on_event=None, question_kind=None, turns=None):
         on_event(stages.tool_event("rag_search"))
         raise RuntimeError("https://secret-mcp-url/ask audience=projects/12345")
 
@@ -352,7 +359,7 @@ def test_stream_refuses_to_ship_an_empty_answer():
     """The MAX_TOKENS failure raises nothing, so it is caught downstream: the
     final turn is empty and the caller gets answer_unavailable, not a blank
     frame that looks like a real answer."""
-    async def empty_final_turn(box, question, on_event=None, question_kind=None):
+    async def empty_final_turn(box, question, on_event=None, question_kind=None, turns=None):
         state = _state()
         state["messages"] = [AIMessage(content="")]
         return state
@@ -440,7 +447,7 @@ def test_the_planning_label_follows_the_chip_in_the_request():
     """The chip survives from the request contract to the first progress frame."""
     seen = {}
 
-    async def capture(box, question, on_event=None, question_kind=None):
+    async def capture(box, question, on_event=None, question_kind=None, turns=None):
         seen["kind"] = question_kind
         on_event(stages.planning_event(question_kind))
         return _state()

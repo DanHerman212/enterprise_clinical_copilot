@@ -352,6 +352,7 @@ async def ask(
     tags: list[str] | None = None,
     on_event: Callable[[dict[str, Any]], None] | None = None,
     question_kind: str | None = None,
+    turns: list[dict[str, str]] | None = None,
 ) -> dict:
     """Run one question to completion. Returns the final state.
 
@@ -363,6 +364,12 @@ async def ask(
     `stages.py`). It is a plain synchronous callback — the streaming route
     hands it a queue's `put_nowait` — and it is optional, so the answer path
     and the progress path stay one implementation.
+
+    `turns` is the earlier conversation, as the caller understands it. Each turn
+    is replayed as its own messages rather than pasted into the prompt, so the
+    template stays a template and the replayed material stays data: the answer a
+    user saw is an assistant message here, exactly as it would be mid-turn, and
+    it never becomes part of the instruction that frames the question.
     """
     graph = build_graph(
         toolbox, model=model, on_event=on_event, question_kind=question_kind
@@ -378,12 +385,97 @@ async def ask(
         {
             "messages": [
                 SystemMessage(content=SYSTEM_PROMPT),
+                *await replay_messages(toolbox, turns),
                 HumanMessage(content=question),
             ],
             "tool_calls": [],
         },
         config=config,
     )
+
+
+def replayed_turns(turns: list[dict[str, str]] | None) -> list[BaseMessage]:
+    """Earlier turns as messages, in order, oldest first.
+
+    A turn becomes the pair a conversation would have produced: the question as
+    a human message, the answer as an assistant message. Kept as messages rather
+    than folded into a transcript string, because the prompt marks tool results
+    as data and a flattened history would put clinical text where the prompt says
+    instructions live.
+
+    Nothing here decodes or reformats the text: what the user asked and what they
+    were told are replayed as they were, which is the only faithful option and
+    the reason the stored shape keeps them verbatim.
+
+    This is the dialogue half of a replay. `replay_messages` is what a run uses,
+    because a turn that made tool calls needs those results back in their place
+    in the sequence.
+    """
+    messages: list[BaseMessage] = []
+    for turn in turns or []:
+        messages.append(HumanMessage(content=turn["question"]))
+        messages.append(AIMessage(content=turn["answer"]))
+    return messages
+
+
+def _replayed_tool_messages(
+    call: dict[str, Any], call_id: str, payload: Any
+) -> list[BaseMessage]:
+    """One replayed tool call and its result, rendered exactly as a live pair is.
+
+    The same two message types in the same order the chain produces mid-turn: the
+    assistant turn that asked for the call, then the result. The result goes
+    through the same renderer a live one does, so the wrapper and the delimiter
+    guard apply identically — replaying a passage outside the wrapper would put
+    clinical text where the prompt says instructions live, which is the whole
+    reason the boundary exists.
+    """
+    asked = AIMessage(
+        content="",
+        tool_calls=[{"name": call["name"], "args": call.get("args") or {}, "id": call_id}],
+    )
+    body = _render_tool_result(payload)
+    result = ToolMessage(
+        content=f'<tool_result name="{call["name"]}">\n{body}\n</tool_result>',
+        tool_call_id=call_id,
+        name=call["name"],
+    )
+    return [asked, result]
+
+
+async def replay_messages(
+    toolbox: MCPToolbox, turns: list[dict[str, Any]] | None
+) -> list[BaseMessage]:
+    """The earlier conversation, as the messages the model would have seen.
+
+    A turn is replayed in the order it happened: the question, then each tool
+    call with its result, then the answer. The result is the one the turn stored
+    when it has one — a prediction score cannot be recomputed to the same value —
+    and is otherwise resolved again by calling the tool, which is deterministic
+    here because the corpus is written offline and never mutated by a request.
+
+    Re-resolving is the price of not storing passage text, and it is paid only
+    for the calls that did not store a payload. Nothing is emitted as a progress
+    stage: this happens before the run, and a stage describing work the caller
+    did not ask for in this turn would be a line about someone else's question.
+    """
+    messages: list[BaseMessage] = []
+    for turn_index, turn in enumerate(turns or []):
+        messages.append(HumanMessage(content=turn["question"]))
+        for call_index, call in enumerate(turn.get("tool_calls") or []):
+            payload = call.get("payload")
+            if payload is None:
+                logger.info(
+                    "re-resolving %r for replayed turn %d: its payload is not "
+                    "stored, and the corpus it reads is deterministic",
+                    call["name"], turn_index,
+                )
+                payload = await toolbox.call(call["name"], dict(call.get("args") or {}))
+            messages.extend(
+                _replayed_tool_messages(call, f"replay-{turn_index}-{call_index}", payload)
+            )
+        messages.append(AIMessage(content=turn["answer"]))
+    return messages
 
 
 def final_message(state: dict) -> AIMessage | None:

@@ -1,6 +1,11 @@
+import re
+from pathlib import Path
+
 import pytest
 
 from services.agent.contracts import (
+    RE_DERIVABLE_TOOLS,
+    RESULT_KEPT_TOOLS,
     AgentRequestError,
     AgentResponseError,
     validate_recorded_tool_call,
@@ -19,12 +24,16 @@ def test_parse_agent_request_canonicalises_the_question():
     """
     assert parse_agent_request(
         {"question": " assess risk "}, max_question_chars=20
-    ) == {"question": "assess risk", "kind": None}
+    ) == {"question": "assess risk", "kind": None, "turns": []}
 
 
-# Single-turn is a decision, not an accident (layer 3, gap 4). These pin the
-# refusal, because the failure they prevent is invisible: a dropped field
-# produced a normal-looking answer, and the caller had no way to tell.
+# The shape of a request is a decision, not an accident. These pin the refusal,
+# because the failure they prevent is invisible: a dropped field produced a
+# normal-looking answer, and the caller had no way to tell.
+#
+# `turns` is now the one accepted way to carry earlier turns. The names below are
+# still refused, and each is refused by name, because a caller reaching for one
+# of them believes the agent will remember a conversation it holds nothing about.
 
 def test_a_conversation_field_is_refused_rather_than_ignored():
     with pytest.raises(AgentRequestError) as caught:
@@ -34,12 +43,12 @@ def test_a_conversation_field_is_refused_rather_than_ignored():
         )
     assert caught.value.code == "unsupported_field"
     assert caught.value.status_code == 400
-    assert "single-turn" in caught.value.message
+    assert "layer" in caught.value.message or "turns" in caught.value.message
 
 
 @pytest.mark.parametrize(
     "field",
-    ["history", "messages", "session_id", "conversation_id", "context", "turns"],
+    ["history", "messages", "session_id", "conversation_id", "context"],
 )
 def test_every_conversation_field_is_named_in_the_refusal(field):
     with pytest.raises(AgentRequestError) as caught:
@@ -78,13 +87,82 @@ def test_the_closed_contract_still_accepts_the_three_shapes():
     """Closing the field set must not narrow what already worked."""
     assert parse_agent_request(
         {"question": "why?"}, max_question_chars=2000
-    ) == {"question": "why?", "kind": None}
+    ) == {"question": "why?", "kind": None, "turns": []}
     assert parse_agent_request(
         {"chip": "risk", "hadm_id": 90000009}, max_question_chars=2000
     )
     assert parse_agent_request(
         {"hadm_id": 90000009}, max_question_chars=2000
     )
+
+
+def test_earlier_turns_are_accepted_and_normalised():
+    """The caller owns the conversation; this is how it hands one over."""
+    parsed = parse_agent_request(
+        {
+            "question": "and the potassium?",
+            "hadm_id": 90000009,
+            "turns": [
+                {"question": "  why flagged?  ", "answer": "  She was…  "},
+                {"question": "by how much?", "answer": "0.31."},
+            ],
+        },
+        max_question_chars=2000,
+    )
+
+    assert parsed["turns"] == [
+        {"question": "why flagged?", "answer": "She was…", "tool_calls": []},
+        {"question": "by how much?", "answer": "0.31.", "tool_calls": []},
+    ]
+
+
+def test_an_absent_turns_field_means_the_question_stands_alone():
+    assert parse_agent_request(
+        {"question": "why?"}, max_question_chars=2000
+    )["turns"] == []
+
+
+def test_a_turn_with_an_unknown_field_is_refused():
+    """A carried field is one the model never sees while the caller believes
+    it was sent — the failure the closed contract exists to prevent."""
+    with pytest.raises(AgentRequestError) as caught:
+        parse_agent_request(
+            {"question": "why?",
+             "turns": [{"question": "q", "answer": "a", "citations": []}]},
+            max_question_chars=2000,
+        )
+    assert caught.value.code == "unsupported_field"
+    assert "'citations'" in caught.value.message
+
+
+def test_a_turn_needs_both_a_question_and_an_answer():
+    for turn in ({"question": "q"}, {"answer": "a"}, {"question": "  ", "answer": "a"}):
+        with pytest.raises(AgentRequestError) as caught:
+            parse_agent_request(
+                {"question": "why?", "turns": [turn]}, max_question_chars=2000
+            )
+        assert caught.value.code == "invalid_request"
+
+
+def test_the_replayed_conversation_is_capped():
+    turn = {"question": "q", "answer": "a"}
+    with pytest.raises(AgentRequestError) as caught:
+        parse_agent_request(
+            {"question": "why?", "turns": [turn] * 7}, max_question_chars=2000
+        )
+    assert caught.value.code == "too_many_turns"
+    assert caught.value.status_code == 413
+
+
+def test_turns_must_be_a_list_of_objects():
+    with pytest.raises(AgentRequestError):
+        parse_agent_request(
+            {"question": "why?", "turns": "history"}, max_question_chars=2000
+        )
+    with pytest.raises(AgentRequestError):
+        parse_agent_request(
+            {"question": "why?", "turns": ["q", "a"]}, max_question_chars=2000
+        )
 
 
 # The wording moved here from the website (layer 3, chain artifact), so these
@@ -101,6 +179,7 @@ def test_a_chip_and_admission_compose_what_the_website_used_to_build():
             "For admission 90000009."
         ),
         "kind": "risk",
+        "turns": [],
     }
 
 
@@ -111,6 +190,7 @@ def test_free_text_with_an_admission_gets_the_same_suffix_the_website_added():
     ) == {
         "question": "Why was this patient flagged? For admission 90000009.",
         "kind": None,
+        "turns": [],
     }
 
 
@@ -126,6 +206,7 @@ def test_an_admission_alone_asks_the_default_question():
     ) == {
         "question": "Assess the 30-day readmission risk for admission 90000009.",
         "kind": None,
+        "turns": [],
     }
 
 
@@ -211,11 +292,17 @@ def _success_payload():
         "question": "Assess risk.",
         "answer": "The estimate is below threshold.",
         "guardrail_flags": [],
-        "tool_calls": [{"name": "predict_readmission", "response": {}}],
+        "tool_calls": [{
+            "name": "predict_readmission",
+            "args": {"hadm_id": 90000009},
+            "response": {},
+            "derivable": False,
+        }],
         "a2ui": None,
         "sources": [{"cite": 1, "section": "discharge_medications",
                      "text": "warfarin 4 mg QD", "query": "medications"}],
         "model": "gemini-2.5-flash",
+        "code_revision": "rev-1",
         "mcp_transport": "http",
     }
 
@@ -240,6 +327,60 @@ def test_validate_agent_success_rejects_malformed_tool_response():
 
     with pytest.raises(AgentResponseError):
         validate_agent_success(payload)
+
+
+def test_validate_agent_success_rejects_malformed_tool_arguments():
+    """A turn is stored to be replayed, so the arguments are part of the
+    contract: a call whose arguments are not an object cannot be replayed."""
+    payload = _success_payload()
+    payload["tool_calls"][0]["args"] = "hadm_id=90000009"
+
+    with pytest.raises(AgentResponseError):
+        validate_agent_success(payload)
+
+
+def test_validate_agent_success_requires_a_code_revision():
+    """The revision is what makes a stored turn explainable after a deploy, so
+    its absence is a contract failure rather than a cosmetic omission. An empty
+    string is legitimate (a local run with no revision to report)."""
+    payload = _success_payload()
+    del payload["code_revision"]
+
+    with pytest.raises(AgentResponseError):
+        validate_agent_success(payload)
+
+    payload = _success_payload()
+    payload["code_revision"] = ""
+
+    assert validate_agent_success(payload) is payload
+
+
+def test_validate_agent_success_requires_each_call_to_say_whether_it_is_derivable():
+    """The flag decides what a storing caller keeps, and a caller that has to
+    guess from the response's shape guesses wrong: `rag_search_sections` returns
+    discharge-note text under section names rather than a 'passages' key."""
+    payload = _success_payload()
+    del payload["tool_calls"][0]["derivable"]
+
+    with pytest.raises(AgentResponseError):
+        validate_agent_success(payload)
+
+
+def test_every_registered_tool_is_classified_as_derivable_or_kept():
+    """Exhaustive by construction, because the default is a privacy decision.
+
+    A new tool that is not classified here would be emitted with whatever the
+    composition falls back to, and the failure that produces is invisible: note
+    text accumulating in the web application's database. The tool names are read
+    from the server that registers them rather than listed twice.
+    """
+    server = (Path(__file__).resolve().parents[2]
+              / "services" / "mcp" / "server.py").read_text()
+    registered = set(re.findall(r"server\.add_tool\((\w+)\)", server))
+
+    assert registered, "no tools found — has registration moved?"
+    assert registered == RE_DERIVABLE_TOOLS | RESULT_KEPT_TOOLS
+    assert not RE_DERIVABLE_TOOLS & RESULT_KEPT_TOOLS
 
 
 def test_validate_agent_success_rejects_missing_sources():

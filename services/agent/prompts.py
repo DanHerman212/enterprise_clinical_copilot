@@ -74,6 +74,13 @@ CITATIONS
   passage for everything.
 - Never invent a citation. Only cite passages actually present in the tool's
   `passages` list, and number them in the order they appear in that list.
+- Cite a passage only from a tool call you made in THIS turn. Earlier turns are
+  in the conversation as context — what was asked, what you answered, the
+  results you already have — and a citation cannot point at them: the markers you
+  write are resolved against the passages this turn retrieved, so a citation to
+  an earlier turn's passage resolves to nothing and is removed before the answer
+  reaches the clinician. If an answer needs note evidence, retrieve it now, in
+  this turn, and cite that.
 - Cite ONLY the passage(s) that specifically support the claim. Each distinct
   passage is cited AT MOST ONCE in the whole answer — at the first sentence
   that draws on it — and never repeated on later sentences.

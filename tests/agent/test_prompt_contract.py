@@ -108,6 +108,11 @@ RULE_MARKERS = (
     ("the must-call-the-tool rule", "MUST call"),
     ("never invent a citation", "Never invent a citation"),
     ("the exact number, not a risk band", "above or below the operating threshold"),
+    # A citation is resolved against the passages THIS turn retrieved, and the
+    # post-hoc citation guard removes a marker that points anywhere else. The
+    # rule and the guard have to say the same thing, or a follow-up answered from
+    # an earlier turn loses a citation it was right to write (2026-09-18).
+    ("citations are scoped to this turn", "only from a tool call you made in THIS turn"),
 )
 
 

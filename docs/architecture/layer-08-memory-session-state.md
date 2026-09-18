@@ -450,6 +450,22 @@ therefore be a transcript wearing the app's clothes, and the alternative — sto
 presentation per turn — would put note text and prediction scores in this database, which is
 the thing the retention policy refuses.
 
+**A citation is scoped to the turn that retrieved it**, and this was settled by using the
+product rather than by design: a follow-up answered from the replayed turn came back with its
+citation removed, because the markers an answer carries are resolved against the passages THAT
+turn retrieved, and a turn that retrieved nothing has nothing to resolve against. Two readings
+were possible and the honest one is the narrower: a citation is an attribution, and attributing
+a claim to a passage the current turn never fetched is a claim the caller cannot check — the
+passage is re-derived on demand and the canvas shows what this turn drew, so a re-presented
+citation would point at evidence the answer did not read in this turn. The decision is
+therefore that note evidence is retrieved in the turn that cites it, and the prompt says so
+(`services/agent/prompts.py`, the citation rule) exactly as the guardrail enforces it
+(`services/agent/guardrail.py`, `check_citations` over this turn's passages). A follow-up that
+needs the notes re-runs the retrieval; a follow-up that repeats a stored prediction needs no
+citation at all, because a model result is not a note claim. What the user loses is the
+citation on a note claim the model answered from memory; what the user is spared is a footnote
+whose target the system cannot produce.
+
 The conversation store was built on 2026-09-18 and is where a conversation lives. Two models hold it: a conversation belongs to one account and
 one patient, carrying the window it was opened under and the number of turns spent
 (`danielmherman/demo/models.py` 196–267), and a turn carries the question, the answer, the

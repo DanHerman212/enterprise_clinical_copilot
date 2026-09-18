@@ -49,6 +49,39 @@ def test_failing_metric_flags_and_csv():
     assert [f["query_id"] for f in failures] == [1]
 
 
+def test_an_unmeasured_threshold_refuses_without_being_called_a_failure():
+    """The report a reviewer opens must not read as a corpus verdict.
+
+    A threshold whose number is absent is neither satisfied nor breached. It
+    used to be evaluated as infinity and reported as a failed metric, so the
+    gate said "the corpus failed" about a corpus that was never measured — the
+    measurement component was in a stale image (2026-09-18).
+    """
+    result = _passing_result()
+    del result.metrics["empty_result_rate"]
+
+    passed, failing = result.verdict()
+    assert passed is False, "fail-closed: an unevaluated threshold cannot pass"
+    assert failing == [], "nothing was measured, so nothing was breached"
+    assert result.unmeasured() == ["empty_result_rate"]
+
+
+def test_the_html_gives_an_unmeasured_threshold_a_row(tmp_path):
+    """A missing metric used to vanish from the table, not appear in it.
+
+    The rows were built from the measured metrics, so a threshold with no
+    measurement was invisible: the reader saw a shorter table rather than a
+    missing number, and nothing said a threshold had never been evaluated.
+    """
+    result = _passing_result()
+    del result.metrics["empty_result_rate"]
+
+    html = render_html(result)
+    assert "not measured" in html
+    assert "empty_result_rate" in html, "the row has to name the threshold"
+    assert "FAIL" in html, "the run still refuses"
+
+
 def test_write_artifacts_produces_all_three(tmp_path):
     result = _passing_result()
     paths = write_artifacts(result, tmp_path)
@@ -62,6 +95,7 @@ def test_write_artifacts_produces_all_three(tmp_path):
     payload = json.loads((tmp_path / "eval_results.json").read_text())
     assert payload["passed"] is True
     assert payload["failing_metrics"] == []
+    assert payload["unmeasured_metrics"] == []
 
     # failures.csv has a header even when there are no failures.
     with (tmp_path / "failures.csv").open(newline="", encoding="utf-8") as fh:

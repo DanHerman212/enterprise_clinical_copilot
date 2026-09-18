@@ -185,8 +185,22 @@ def main() -> int:
 
     if not passed:
         _undeploy(c, ep_name, STAGING_ID)
-        print(f"ROLLED BACK — refused on {failing}; {LIVE_ID} still serving. "
-              f"Evidence: {evidence_dir}")
+        # Which of the two refusals this is decides where the operator looks.
+        # "refused on ['empty_result_rate']" sent one to the corpus when the
+        # corpus was fine and the measuring component was stale (2026-09-18),
+        # so the two are now said differently.
+        unmeasured = result.unmeasured()
+        if unmeasured:
+            print(f"ROLLED BACK — not measured: {unmeasured}. The report at "
+                  f"{evidence_dir} carries no value for "
+                  f"{'these thresholds' if len(unmeasured) > 1 else 'this threshold'}, "
+                  f"so nothing was evaluated and nothing may be promoted. This is "
+                  f"a gap in the measurement, not a verdict on the corpus: check "
+                  f"that the recall job's image is current before reading it as a "
+                  f"result. {LIVE_ID} still serving.")
+        else:
+            print(f"ROLLED BACK — refused on {failing}; {LIVE_ID} still serving. "
+                  f"Evidence: {evidence_dir}")
         return 1
 
     # Green: promote, carrying the measurement on the deployment itself.

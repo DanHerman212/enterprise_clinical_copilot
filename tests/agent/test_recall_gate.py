@@ -144,15 +144,40 @@ def test_a_threshold_the_job_did_not_measure_fails_the_gate():
     This is how the gate used to behave when it was asked at all: the recall
     job reported no empty-result rate, so a threshold for one failed every
     promotion. The measurement now exists; the fail-closed reading stays.
+
+    What changed on 2026-09-18 is which refusal this is. The missing metric used
+    to be reported as a FAILED metric, so a deploy that could not measure the
+    empty-result rate printed "refused on ['empty_result_rate']" and sent the
+    operator to the corpus — while the corpus was fine and the component doing
+    the measuring was in an image four weeks older than the source. It is not a
+    breach, it is not a pass: it is its own state, and it is named as such.
     """
     report = _report(0.999)
     del report["empty_result_rate"]
 
-    passed, _result, failing = recall_gate.judge(
+    passed, result, failing = recall_gate.judge(
         report, corpus="demo", index_name="rag-tree-ah-test")
 
+    assert not passed, "nothing measured must not authorise a promotion"
+    assert result.unmeasured() == ["empty_result_rate"]
+    assert failing == [], "a threshold nobody measured has not been breached"
+
+
+def test_a_measured_threshold_that_missed_is_the_only_thing_called_failing():
+    """The two refusals must stay distinguishable in both directions.
+
+    A report that carries the empty-result rate and breaks the ceiling is a
+    verdict on the corpus, and it lands in `failing`. A report that carries no
+    rate has nothing to answer with, and it lands in `unmeasured`. Collapsing
+    either into the other is how the wrong conclusion got drawn.
+    """
+    passed, result, failing = recall_gate.judge(
+        _report(0.999, empty_rate=0.9), corpus="demo",
+        index_name="rag-tree-ah-test")
+
     assert not passed
-    assert "empty_result_rate" in failing
+    assert failing == ["empty_result_rate"]
+    assert result.unmeasured() == []
 
 
 def test_a_report_with_an_empty_result_rate_above_the_maximum_fails():

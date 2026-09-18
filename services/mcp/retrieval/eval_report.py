@@ -51,17 +51,41 @@ class EvalResult:
     # else is a raw count/dimension and renders as a plain number.
     ratio_metrics: tuple[str, ...] = ()
 
+    def unmeasured(self) -> list[str]:
+        """Thresholds this report carries no measurement for.
+
+        A configured threshold with no number behind it is not a breached
+        threshold, and the difference matters operationally: the gate used to
+        read a missing measurement as a value of infinity, so a deploy that
+        could not measure something refused with "the corpus failed". That
+        message sent an operator to the corpus, and the corpus was fine — the
+        component doing the measuring was in an image four weeks older than the
+        source. Absence of a measurement is its own state, and it is named here
+        so a refusal can say which of the two it is.
+        """
+        return sorted(
+            name for name in {*self.thresholds, *self.max_thresholds}
+            if name not in self.metrics
+        )
+
     def verdict(self) -> tuple[bool, list[str]]:
-        """(passed, failing metrics)."""
+        """(passed, failing metrics).
+
+        `failing` holds metrics that WERE measured and missed. A threshold with
+        no measurement is not one of them: it is not passed either — the gate
+        stays fail-closed — so it is reported by `unmeasured()` and the caller
+        is expected to say which it is. Reading absence as a breach is what made
+        an unmeasurable deploy look like a bad corpus.
+        """
         failing = [
             name for name, minimum in self.thresholds.items()
-            if self.metrics.get(name, -1.0) < minimum
+            if name in self.metrics and self.metrics[name] < minimum
         ]
         failing += [
             name for name, maximum in self.max_thresholds.items()
-            if self.metrics.get(name, float("inf")) > maximum
+            if name in self.metrics and self.metrics[name] > maximum
         ]
-        return (not failing), failing
+        return (not failing and not self.unmeasured()), failing
 
     def failures(self) -> list[dict[str, Any]]:
         """Per-query rows that missed the primary threshold."""
@@ -103,15 +127,29 @@ def render_html(result: EvalResult) -> str:
         if passed else '<span class="badge fail">FAIL</span>'
     )
     rows = ""
-    for name in result.metrics:
+    unmeasured = set(result.unmeasured())
+    # Every configured threshold gets a row, including the ones with no
+    # measurement: a metric that is absent from the report used to be absent
+    # from the table too, so the reader saw a shorter table rather than a
+    # missing number, and nothing said a threshold had never been evaluated.
+    ordered = list(result.metrics) + sorted(
+        name for name in {*result.thresholds, *result.max_thresholds}
+        if name not in result.metrics
+    )
+    for name in ordered:
         if name in result.thresholds:
             op, limit = "&ge;", result.thresholds[name]
         elif name in result.max_thresholds:
             op, limit = "&le;", result.max_thresholds[name]
         else:
             op, limit = None, None
-        status = ("✅" if name not in failing else "❌") if op else "·"
-        cell_cls = ("ok" if name not in failing else "bad") if op else ""
+        if name in unmeasured:
+            status, cell_cls = "not measured", "bad"
+        elif op:
+            status = ("✅" if name not in failing else "❌")
+            cell_cls = ("ok" if name not in failing else "bad")
+        else:
+            status, cell_cls = "·", ""
         is_rate = name in result.ratio_metrics
         fmt = _pct if is_rate else _num
         thr = f"{op} {fmt(limit)}" if op else "—"
@@ -180,6 +218,10 @@ def write_report_files(
 
     payload = asdict(result)
     payload["passed"], payload["failing_metrics"] = result.verdict()
+    # Kept separate from `failing_metrics` so a reader of the JSON, like a
+    # reader of the HTML, can tell a breached threshold from one that was never
+    # evaluated. Both refuse the gate; only one of them is about the corpus.
+    payload["unmeasured_metrics"] = result.unmeasured()
     Path(results_path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
     failures = result.failures()

@@ -95,7 +95,13 @@ def main() -> int:
     if passed:
         print(f"PASS against the configured thresholds; evidence in {out_dir}")
         return 0
-    print(f"FAIL on {failing}; evidence in {out_dir}")
+    unmeasured = result.unmeasured()
+    if unmeasured:
+        print(f"NOT MEASURED: {unmeasured} — the report carries no value for "
+              f"{'these thresholds' if len(unmeasured) > 1 else 'this threshold'}, "
+              f"so no verdict on the corpus was reached. Evidence in {out_dir}")
+    else:
+        print(f"FAIL on {failing}; evidence in {out_dir}")
     return 1
 
 

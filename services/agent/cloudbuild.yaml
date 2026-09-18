@@ -51,7 +51,13 @@ steps:
           --no-allow-unauthenticated \
           --service-account "agent-sa@$PROJECT_ID.iam.gserviceaccount.com" \
           --set-env-vars "^@^PROJECT_ID=$PROJECT_ID@LOCATION=${_REGION}@MCP_TRANSPORT=http@MCP_URL=$${MCP_URL}" \
-          --min-instances 0 --max-instances 3 --memory 1Gi
+          --min-instances 1 --max-instances 3 --memory 1Gi
+          # min-instances 1, measured 2026-09-18: scale-to-zero cost the first
+          # call of every session 8.4s of container start (agent) which the user
+          # waits through before the answer starts. One warm instance removes it;
+          # reverting is `gcloud run services update agent --min-instances=0`.
+          # The trade is deliberate against "minimise billable resources": about
+          # $0.07/hour while the demo is being used.
 
 images: ["${_IMAGE}"]
 

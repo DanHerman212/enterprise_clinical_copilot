@@ -42,7 +42,12 @@ steps:
       - --no-allow-unauthenticated
       - --service-account=mcp-server-sa@$PROJECT_ID.iam.gserviceaccount.com
       - --set-env-vars=^@^PROJECT_ID=$PROJECT_ID@LOCATION=${_REGION}@FEATURE_SOURCE=bigquery
-      - --min-instances=0
+      # min-instances 1, measured 2026-09-18: this service's cold start is the
+      # largest single component of a first call — 18.4s measured cold against
+      # 0.076s warm — because its start is import-bound (google-cloud-aiplatform
+      # and its pandas/pyarrow/IPython tree). Reverting is
+      # `gcloud run services update mcp-server --min-instances=0`.
+      - --min-instances=1
       - --max-instances=3
       - --memory=512Mi
 

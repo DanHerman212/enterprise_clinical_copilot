@@ -383,7 +383,7 @@ def test_the_record_carries_the_identity_and_the_steps(caplog):
             duration_ms=910,
             outcome="ok",
             tool_calls=["rag_search"],
-            guardrail_flags=2,
+            guardrail_flags=["med_dose_mismatch:5 mg", "risk_number_unsupported:0.14"],
         )
 
     assert record["code_revision"] == chain.CODE_REVISION
@@ -394,7 +394,10 @@ def test_the_record_carries_the_identity_and_the_steps(caplog):
     assert record["duration_ms"] == 910
     assert [stage["stage"] for stage in record["stages"]] == ["planning", "tool"]
     assert record["tool_calls"] == ["rag_search"]
-    assert record["guardrail_flags"] == 2
+    # The names, so the line says which guard acted and not only that one did.
+    assert record["guardrail_flags"] == [
+        "med_dose_mismatch:5 mg", "risk_number_unsupported:0.14",
+    ]
     assert "error" not in record
     # One line, and it is JSON: queryable by whatever storage layer 10 picks.
     assert len(caplog.records) == 1
@@ -417,7 +420,7 @@ def test_a_failed_execution_still_records_what_it_had(caplog):
     assert record["outcome"] == "timeout"
     assert record["error"] == "timeout"
     assert record["tool_calls"] == []
-    assert record["guardrail_flags"] == 0
+    assert record["guardrail_flags"] == []
 
 
 def test_the_record_carries_no_question_or_answer_text(caplog):

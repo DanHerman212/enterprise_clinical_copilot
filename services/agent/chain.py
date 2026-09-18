@@ -27,7 +27,7 @@ that is what is reported here (`resolve_code_revision`).
 import json
 import logging
 import os
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 
 from services.mcp.config import GEMINI_MODEL
 
@@ -97,7 +97,7 @@ def record_execution(
     tokens: dict | None = None,
     tool_calls=(),
     tool_errors=(),
-    guardrail_flags: int = 0,
+    guardrail_flags: Iterable[str] = (),
     error: str | None = None,
     model: str = MODEL_ID,
     code_revision: str = CODE_REVISION,
@@ -137,6 +137,14 @@ def record_execution(
     `tool_errors` carries the stable codes of the tool calls that failed, and is
     always present for the same reason: an isolation refusal is an incident, and
     an incident that only exists inside a model's prompt cannot be alerted on.
+
+    `guardrail_flags` names the guardrails that fired, not how many fired. The
+    count was recorded and the names were not, so the line said a guard had
+    acted without saying which one: on 2026-09-18 a follow-up logged
+    `"guardrail_flags":1` and the answer it served had a number deleted, and
+    the name that would have identified the guard in one reading was the one
+    field the record did not keep. A count is `len` of the names, so nothing is
+    lost by keeping the names instead.
     """
     record = {
         "event": "agent_execution",
@@ -153,7 +161,7 @@ def record_execution(
         "stages": list(stages),
         "tool_calls": [name for name in tool_calls],
         "tool_errors": list(tool_errors),
-        "guardrail_flags": guardrail_flags,
+        "guardrail_flags": sorted(guardrail_flags),
     }
     if error:
         record["error"] = error

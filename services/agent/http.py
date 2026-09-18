@@ -416,7 +416,9 @@ async def ask_route(request: Request) -> JSONResponse:
         finish_reason=model_turn.finish_reason(final_message(state)),
         **_response_fields(state),
         tool_calls=[call["name"] for call in payload["tool_calls"]],
-        guardrail_flags=len(payload["guardrail_flags"]),
+        # The names, because which guard fired is the whole diagnostic: a count
+        # of 1 cannot distinguish a rewritten dose from a deleted citation.
+        guardrail_flags=payload["guardrail_flags"],
     )
     return JSONResponse(payload)
 
@@ -589,7 +591,7 @@ async def _stream_chain(
             finish_reason=model_turn.finish_reason(final_message(state)),
             **_response_fields(state),
             tool_calls=[call["name"] for call in payload["tool_calls"]],
-            guardrail_flags=len(payload["guardrail_flags"]),
+            guardrail_flags=payload["guardrail_flags"],
         )
         yield _sse(stages.STAGE_ANSWER, payload)
     finally:

@@ -63,6 +63,80 @@ def _stream_count(client_s: storage.Client, uri: str) -> tuple[int, int]:
     return total, unique
 
 
+def _ingest_exists(client_s: storage.Client, uri: str) -> bool:
+    """True if the reuse candidate is actually there."""
+    bucket_name, obj = uri.replace("gs://", "", 1).split("/", 1)
+    return client_s.bucket(bucket_name).blob(obj).exists()
+
+
+def _manifest_candidates(previous_ingest_uri: str) -> list[str]:
+    """GCS locations that may describe a previous ingest artifact.
+
+    Two conventions exist and both must be looked for. The standalone driver
+    writes ``embed_ingest.jsonl.gz`` beside ``embed_ingest.manifest.json``; a
+    pipeline run writes its ingest artifact beside a sibling named ``manifest``.
+    """
+    bucket, obj = previous_ingest_uri.replace("gs://", "", 1).split("/", 1)
+    directory = obj.rsplit("/", 1)[0] if "/" in obj else ""
+    stem = obj.rsplit("/", 1)[-1]
+    for suffix in (".jsonl.gz", ".gz", ".json"):
+        if stem.endswith(suffix):
+            stem = stem[: -len(suffix)]
+            break
+    return [f"gs://{bucket}/{directory}/{name}" for name in (
+        f"{stem}.manifest.json", "embed_ingest.manifest.json", "manifest"
+    )]
+
+
+def _verified_reuse_source(client_s: storage.Client, previous_ingest_uri: str) -> dict:
+    """Read the manifest describing the reuse source, or refuse to reuse.
+
+    Reuse is keyed on the datapoint id, and those ids are derived from the note,
+    the section and an ordinal, so they are stable across runs, across corpora
+    and across embedding models. An id match therefore says nothing about the
+    vector that carries it: reuse an artifact built in a different vector space
+    and the index holds two incompatible geometries, every count and dimension
+    check still passes, and ranking degrades with no error anywhere. So the
+    manifest is required, and a missing one is a refusal rather than a warning.
+    """
+    from services.mcp.retrieval.embed import (
+        DOCUMENT_TASK_TYPE,
+        EMBEDDING_MODEL,
+        OUTPUT_DIMENSIONALITY,
+    )
+
+    wanted = (EMBEDDING_MODEL, OUTPUT_DIMENSIONALITY, DOCUMENT_TASK_TYPE)
+    for candidate in _manifest_candidates(previous_ingest_uri):
+        bucket_name, obj = candidate.replace("gs://", "", 1).split("/", 1)
+        blob = client_s.bucket(bucket_name).blob(obj)
+        if not blob.exists():
+            continue
+        described = json.loads(blob.download_as_text())
+        recorded = (
+            described.get("model"),
+            described.get("output_dimensionality", described.get("dimensions")),
+            described.get("task_type"),
+        )
+        if recorded != wanted:
+            raise SystemExit(
+                f"refusing to reuse {previous_ingest_uri}: its manifest at "
+                f"{candidate} describes model/dimension/task_type {recorded}, "
+                f"and this run embeds with {wanted}. Reusing it would mix two "
+                f"vector spaces in one index. Pass PREVIOUS_INGEST_URI=\"\" to "
+                f"embed the corpus from scratch, or point at an artifact built "
+                f"in the same vector space."
+            )
+        print(f"reuse source verified: {candidate} describes {recorded}")
+        return described
+
+    raise SystemExit(
+        f"refusing to reuse {previous_ingest_uri}: no manifest found beside it "
+        f"(looked for {_manifest_candidates(previous_ingest_uri)}), so the vector "
+        f"space it was built in cannot be established. Pass "
+        f"PREVIOUS_INGEST_URI=\"\" for a full embed, or restore its manifest."
+    )
+
+
 def run_embed_chunks(
     *,
     project_id: str,
@@ -72,6 +146,7 @@ def run_embed_chunks(
     ingest_path: str,
     manifest_path: str,
     workers: int,
+    data_fingerprint: str = "",
 ) -> None:
     from services.mcp.retrieval.embed import (
         DOCUMENT_TASK_TYPE,
@@ -97,24 +172,33 @@ def run_embed_chunks(
     reused = 0
 
     if previous_ingest_uri:
-        # Stream-decompress from GCS: the previous ingest is ~7-8 GB
-        # decompressed, so loading it whole OOMs the component (hit on run 2).
         client_s = storage.Client(project=project_id)
-        parts = previous_ingest_uri.replace("gs://", "").split("/", 1)
-        blob = client_s.bucket(parts[0]).blob(parts[1])
-        with blob.open("rb") as src:
-            reader = gzip.open(src, "rt", encoding="utf-8") \
-                if parts[1].endswith(".gz") else io.TextIOWrapper(src, encoding="utf-8")
-            with reader as text:
-                with open(base_path, "w", encoding="utf-8") as out:
-                    for line in text:
-                        record = json.loads(line)
-                        if record["id"] in done:
-                            continue
-                        done.add(record["id"])
-                        out.write(line)
-                        reused += 1
-        print(f"reused {reused} embeddings from {previous_ingest_uri}")
+        if not _ingest_exists(client_s, previous_ingest_uri):
+            # The default reuse path is a hint, not a promise: a corpus's first
+            # ingest has nothing to reuse, and that is a full embed rather than
+            # an error.
+            print(f"no ingest at {previous_ingest_uri}: embedding from scratch")
+        else:
+            # The vector space is established BEFORE a single record is reused:
+            # an id match alone does not make a stored embedding usable here.
+            _verified_reuse_source(client_s, previous_ingest_uri)
+            # Stream-decompress from GCS: the previous ingest is ~7-8 GB
+            # decompressed, so loading it whole OOMs the component (hit on run 2).
+            parts = previous_ingest_uri.replace("gs://", "").split("/", 1)
+            blob = client_s.bucket(parts[0]).blob(parts[1])
+            with blob.open("rb") as src:
+                reader = gzip.open(src, "rt", encoding="utf-8") \
+                    if parts[1].endswith(".gz") else io.TextIOWrapper(src, encoding="utf-8")
+                with reader as text:
+                    with open(base_path, "w", encoding="utf-8") as out:
+                        for line in text:
+                            record = json.loads(line)
+                            if record["id"] in done:
+                                continue
+                            done.add(record["id"])
+                            out.write(line)
+                            reused += 1
+            print(f"reused {reused} embeddings from {previous_ingest_uri}")
 
     pending = [c for c in chunks if datapoint_id(c["chunk_id"]) not in done]
     print(f"pending embed: {len(pending)}")
@@ -143,9 +227,14 @@ def run_embed_chunks(
         manifest = {
             "chunks": n_total,
             "ingest": total,
-            "unique_ids": len(unique),
-            "reused": total,
             "new_embedded": 0,
+            "data_fingerprint": data_fingerprint,
+            "vector_space": {
+                "model": EMBEDDING_MODEL,
+                "dimensions": OUTPUT_DIMENSIONALITY,
+                "task_type": DOCUMENT_TASK_TYPE,
+            },
+            "reuse_source": previous_ingest_uri,
             "retries": 0,
             "dimensions": OUTPUT_DIMENSIONALITY,
             "elapsed_seconds": round(elapsed_fast, 1),
@@ -270,6 +359,13 @@ def run_embed_chunks(
         "unique_ids": len(unique),
         "reused": reused,
         "new_embedded": embedded,
+        "data_fingerprint": data_fingerprint,
+        "vector_space": {
+            "model": EMBEDDING_MODEL,
+            "dimensions": OUTPUT_DIMENSIONALITY,
+            "task_type": DOCUMENT_TASK_TYPE,
+        },
+        "reuse_source": previous_ingest_uri,
         "retries": retries,
         "dimensions": OUTPUT_DIMENSIONALITY,
         "elapsed_seconds": round(elapsed, 1),
@@ -291,6 +387,7 @@ def embed_chunks(
     workers: int,
     ingest: dsl.Output[dsl.Artifact],
     manifest: dsl.Output[dsl.Artifact],
+    data_fingerprint: str = "",
 ) -> None:
     """KFP component: embed chunks and emit the Vector Search ingest artifact."""
     from pipelines.components.embed_chunks import run_embed_chunks
@@ -303,4 +400,5 @@ def embed_chunks(
         ingest_path=ingest.path,
         manifest_path=manifest.path,
         workers=workers,
+        data_fingerprint=data_fingerprint,
     )

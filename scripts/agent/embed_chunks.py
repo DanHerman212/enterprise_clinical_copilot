@@ -35,10 +35,23 @@ from services.mcp.retrieval.embed import (  # noqa: E402
     vector_search_record,
 )
 from services.mcp.retrieval.notes import CACHE_DIR, iter_chunks  # noqa: E402
+from services.mcp.retrieval.source_fingerprint import (  # noqa: E402
+    source_fingerprint,
+)
 
 PROJECT = "trim-icon-498815-a0"
 LOCATION = "us-east1"
 BUCKET = "trim-icon-498815-a0-mlops"
+
+# The corpus this driver embeds, and the two tables whose state keys the
+# artifact. The ingest pipeline looks for a reuse candidate under
+# rag/embeddings/<corpus>/<fingerprint>/, so the upload has to land on the same
+# key or the pipeline will embed the corpus from scratch every time.
+CORPUS = "mimic"
+SOURCE_TABLES = (
+    "trim-icon-498815-a0.mimiciv_note.discharge",
+    "trim-icon-498815-a0.readmission.analytics_dataset_encoded",
+)
 
 INPUT_PATH = CACHE_DIR / "embed_input.jsonl.gz"
 INGEST_PATH = CACHE_DIR / "embed_ingest.jsonl.gz"
@@ -205,6 +218,7 @@ def run_embedding(limit: int | None, workers: int) -> int:
         "model": EMBEDDING_MODEL,
         "output_dimensionality": OUTPUT_DIMENSIONALITY,
         "task_type": DOCUMENT_TASK_TYPE,
+        "data_fingerprint": source_fingerprint(PROJECT, SOURCE_TABLES),
         "this_run_written": written,
         "ingest_total": total,
         "failed_batches": failed,
@@ -217,6 +231,8 @@ def run_embedding(limit: int | None, workers: int) -> int:
     print(f"  this run: {written} in {elapsed/60:.1f} min; "
           f"failed batches: {failed}; retries: {retries}")
     print(f"  manifest: {INGEST_MANIFEST}")
+    print(f"  data version: {result['data_fingerprint']}")
+
     if failed:
         print(f"ERROR: {failed} batch(es) failed — NOT uploading to GCS. "
               "The run is resumable; fix and re-run (ECC-39).")
@@ -236,7 +252,10 @@ def upload_ingest() -> None:
 
     client = storage.Client(project=PROJECT)
     bucket = client.bucket(BUCKET)
-    prefix = f"rag/embeddings/ingest/"
+    # Keyed by corpus and by the state of the source tables, matching the path
+    # the ingest pipeline reads a previous ingest from.
+    fingerprint = source_fingerprint(PROJECT, SOURCE_TABLES)
+    prefix = f"rag/embeddings/{CORPUS}/{fingerprint}/"
     for path in (INGEST_PATH, INGEST_MANIFEST):
         if not path.exists():
             continue

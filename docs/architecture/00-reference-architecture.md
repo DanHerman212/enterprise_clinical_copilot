@@ -124,7 +124,9 @@ architecture gap. This list exists so the bar does not move mid-review.
 - "Done" for a layer means every MUST is met and verified live. SHOULDs are
   recorded as decisions. Nothing from section 4 is added unless chosen.
 - Fixed decisions: keep LangGraph (framework is a library inside layer 3);
-  minimise billable resources — spin up, verify, scale to zero or tear down.
+  minimise billable resources — spin up, verify, scale to zero or tear down; and
+  the demonstration environment has no event stream, so data ingestion is a
+  deliberate manual step rather than event-driven or scheduled.
 
 ## 6. Layer documents
 
@@ -136,7 +138,7 @@ architecture gap. This list exists so the bar does not move mid-review.
 | 4 Model runtime & gateway | `layer-04-model-runtime.md` | Audited 2026-09-15, rewritten shorter and independently reviewed 2026-09-16. Gaps 1 to 8 and 10 closed; gap 9 partly addressed and open (caching cannot apply at this prompt size). Model swapped to `gemini-3.1-flash-lite` on 2026-09-16. |
 | 5 Tools & grounding | `layer-05-tools-mcp.md` | Audited 2026-09-16 and independently reviewed the same day. Six gaps recorded; all six closed 2026-09-17. |
 | 6 Your own models | `layer-06-own-models.md` | Audited 2026-09-17 and independently reviewed the same day. Twelve gaps recorded; gaps 1 to 10 and 12 closed, gap 1 confirmed by a completed pipeline run, gap 11 carries its options and awaits a decision. Each gap carries its own decision and outcome in section 5. |
-| 7 Data & indexes | `layer-07-data-and-indexes.md` | Audited 2026-09-17 and independently reviewed the same day. Eight gaps recorded, none closed; B3 met, B1 and E1 partly, B2 and B6 not met. Gap 1 was found live: the demo index exists but no index endpoint did, so free-text retrieval returned `search_failed` while section summaries still answered. |
+| 7 Data & indexes | `layer-07-data-and-indexes.md` | Audited 2026-09-17, reviewed the same day and again on 2026-09-18, and reformatted to the four-section shape on 2026-09-18. Eight entries, all settled the same day: entry 1 withdrawn (the hourly-billed endpoints are deployed only for live tests) and entries 2 to 8 closed (no event stream by decision, each artifact records the data version it read, embedding reuse is refused unless the recorded vector space matches, the embedding manifest names the model the serving path imports, one gated script is the deploy path, that deploy measures the index before promoting it, the authorised cohort is derived from the corpus the tools serve, and the corpus descriptions say what the data is). B3 met, B1 and E1 partly, B2 and B6 not met by decision. |
 | 8 Memory / session state | — | |
 | 9 Evaluation | — | |
 | 10 Observability | — | Langfuse stack torn down 2026-09-12; to be rebuilt from a written design. |

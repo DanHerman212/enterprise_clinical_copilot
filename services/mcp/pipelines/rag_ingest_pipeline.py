@@ -11,7 +11,6 @@ developer machine. `embed_chunks` can reuse embeddings from a previous ingest
 chunks instead of paying for the whole corpus again.
 """
 
-import hashlib
 import os
 import sys
 from datetime import datetime, timezone
@@ -30,6 +29,9 @@ from services.mcp.config import PROJECT as PROJECT_ID  # noqa: E402
 from services.mcp.retrieval.chunking import DEFAULT_PACK_TO  # noqa: E402
 from services.mcp.retrieval.config import load as load_rag_config  # noqa: E402
 from services.mcp.retrieval.embed import OUTPUT_DIMENSIONALITY  # noqa: E402
+from services.mcp.retrieval.source_fingerprint import (  # noqa: E402
+    source_fingerprint,
+)
 
 PIPELINE_NAME = "rag-ingest"
 LOCATION = "us-east1"
@@ -87,6 +89,7 @@ def rag_ingest_pipeline(
         chunks=chunks_task.outputs["chunks"],
         previous_ingest_uri=previous_ingest_uri,
         workers=embed_workers,
+        data_fingerprint=data_fingerprint,
     )
     # Defaults sized for the real corpus: downloads the previous ingest
     # (~4-8 GB, streamed) and holds ~560k chunk records plus file-I/O page
@@ -117,16 +120,36 @@ def rag_ingest_pipeline(
         approximate_neighbors=approximate_neighbors,
         expected=expected_vectors,
         shard_size=shard_size,
+        data_fingerprint=data_fingerprint,
     ).after(eval_task)
     index_task.set_cpu_limit(index_cpu).set_memory_limit(index_mem)
 
 
-def compile_pipeline(package_path: str = "rag_ingest_pipeline.yaml") -> str:
-    """Compile the pipeline to a KFP IR YAML and return the path."""
+def compile_pipeline(
+    package_path: str = str(Path(__file__).with_name("rag_ingest_pipeline.yaml"))
+) -> str:
+    """Compile the pipeline to a KFP IR YAML and return the path.
+
+    The IR is written beside the source that compiles it.
+    """
     compiler.Compiler().compile(
         pipeline_func=rag_ingest_pipeline, package_path=package_path
     )
     return package_path
+
+
+def reuse_uri(project_id: str, corpus: str, fingerprint: str) -> str:
+    """The embedding artifact a run of this corpus may reuse, if it exists.
+
+    Keyed by corpus and by the state of the source tables, so the artifact a run
+    reads is a specific one rather than a shared object that every run
+    overwrites. The embed step verifies the vector space recorded beside it
+    before reusing a single record; an absent artifact means a full embed.
+    """
+    return (
+        f"gs://{project_id}-mlops/rag/embeddings/{corpus}/{fingerprint}/"
+        "embed_ingest.jsonl.gz"
+    )
 
 
 def _source_fingerprint(project_id: str, refs: tuple[str, str]) -> str:
@@ -136,17 +159,10 @@ def _source_fingerprint(project_id: str, refs: tuple[str, str]) -> str:
     this, a re-submission after the source tables change would silently reuse
     stale chunks/embeddings and build an index that does not match the data.
     Folding each table's modified time + row count into the chunk_notes input
-    makes a data change re-run the DAG.
+    makes a data change re-run the DAG. The same value names the reuse path, so
+    the definition is shared with the standalone driver rather than copied.
     """
-    from google.cloud import bigquery
-
-    client = bigquery.Client(project=project_id)
-    parts = []
-    for ref in refs:
-        table = client.get_table(ref)
-        modified = table.modified.timestamp() if table.modified else 0
-        parts.append(f"{ref}:{int(modified)}:{table.num_rows}")
-    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
+    return source_fingerprint(project_id, tuple(refs))
 
 
 def submit() -> None:
@@ -158,6 +174,11 @@ def submit() -> None:
     ``PREVIOUS_INGEST_URI``, ``EMBED_WORKERS``.
     """
     cfg = load_rag_config()
+    # Computed once and used twice: as the chunk step's cache key, and as the
+    # key of the reuse path, so both name the same version of the data.
+    fingerprint = _source_fingerprint(
+        cfg.project, (cfg.corpus.notes_table_ref, cfg.corpus.split_table_ref)
+    )
 
     package_path = compile_pipeline()
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -173,14 +194,16 @@ def submit() -> None:
             "notes_table_ref": cfg.corpus.notes_table_ref,
             "split_table_ref": cfg.corpus.split_table_ref,
             "split_name": cfg.corpus.split_name,
-            "data_fingerprint": _source_fingerprint(
-                cfg.project,
-                (cfg.corpus.notes_table_ref, cfg.corpus.split_table_ref),
-            ),
+            "data_fingerprint": fingerprint,
             "corpus": cfg.corpus.name,
+            # The reuse source is keyed by corpus and by the fingerprint of the
+            # data it was built from, rather than being one shared object every
+            # run overwrites. "Reuse the previous embeddings" then names a
+            # specific artifact, and the embed step can check the vector space
+            # it describes before reusing a single record (gap 3).
             "previous_ingest_uri": os.environ.get(
                 "PREVIOUS_INGEST_URI",
-                f"gs://{cfg.project}-mlops/rag/embeddings/ingest/embed_ingest.jsonl.gz",
+                reuse_uri(cfg.project, cfg.corpus.name, fingerprint),
             ),
             "embed_workers": int(os.environ.get("EMBED_WORKERS", "1")),
             "pack_to": cfg.pack_to,

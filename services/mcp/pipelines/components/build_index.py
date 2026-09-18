@@ -32,6 +32,7 @@ def run_build_index(
     expected: int,
     shard_size: str = "SHARD_SIZE_MEDIUM",
     manifest_path: str,
+    data_fingerprint: str = "",
 ) -> None:
     client_s = storage.Client(project=project_id)
     bucket = client_s.bucket(f"{project_id}-mlops")
@@ -97,6 +98,10 @@ def run_build_index(
                 "tree_ah_index": tree.resource_name,
                 "tree_ah_vectors": tree_vectors,
                 "ingest_dir": f"gs://{bucket.name}/{full_dir}",
+                # Which version of the source data this index was built from:
+                # without it an index cannot be told apart from one built
+                # against a different corpus state (gap 3).
+                "data_fingerprint": data_fingerprint,
             },
             handle,
             indent=2,
@@ -117,6 +122,7 @@ def build_index(
     expected: int,
     manifest: dsl.Output[dsl.Artifact],
     shard_size: str = "SHARD_SIZE_MEDIUM",
+    data_fingerprint: str = "",
 ) -> None:
     """KFP component: build BRUTE_FORCE + TREE_AH Vector Search indexes."""
     from pipelines.components.build_index import run_build_index
@@ -131,4 +137,5 @@ def build_index(
         expected=expected,
         shard_size=shard_size,
         manifest_path=manifest.path,
+        data_fingerprint=data_fingerprint,
     )

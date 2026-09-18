@@ -103,6 +103,7 @@ def run_chunk_notes(
                 "unique_chunk_ids": len(seen),
                 "sections": dict(section_counts),
                 "pack_to": pack_to,
+                "data_fingerprint": data_fingerprint,
             },
             handle,
             indent=2,

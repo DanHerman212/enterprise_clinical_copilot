@@ -8,8 +8,10 @@ Design (D1, decided 2026-08-06):
   * gemini-embedding-001, truncated to 768 dims via output_dimensionality
   * task_type RETRIEVAL_DOCUMENT at index time (queries use RETRIEVAL_QUERY)
   * datapoint ids are chunk_ids with ':' folded to '_': Vector Search ids only
-    allow [A-Za-z0-9_-]. The chunk store keys by datapoint_id, so rag_search
-    maps a returned id to its chunk row in BigQuery and never reverse-parses.
+    allow [A-Za-z0-9_-]. There is no chunk table: serving parses the note and
+    section back out of the returned id and recomputes the passage text by
+    re-running the same deterministic chunker that built the index, so a
+    citation always resolves to text the index actually contains.
 """
 
 from __future__ import annotations

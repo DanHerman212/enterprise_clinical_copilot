@@ -76,7 +76,7 @@ DATASET = "readmission"
 # Defaults to the HYBRID features table — the eval/demo cohort is the hybrid
 # admissions (90000001+), whose feature rows live in readmission.hybrid_features.
 # The real MIMIC-derived analytics_dataset_encoded table is out of scope for
-# the demo and never carries the synthetic/hybrid admissions.
+# the demo and never carries the hybrid admissions.
 TABLE = _validated_table_ref(
     os.environ.get("FEATURE_TABLE", f"{DATASET}.hybrid_features"),
     "FEATURE_TABLE", parts=(2,),
@@ -84,14 +84,25 @@ TABLE = _validated_table_ref(
 TABLE_FQN = f"{PROJECT}.{TABLE}"
 ENTITY_ID_COLUMN = "hadm_id"
 
-# The hand-picked demo cohort. Built by scripts/build_demo_cohort.py.
+# The authorisation boundary for the demonstration.
+#
+# Written by scripts/agent/authorise_demo_cohort.py, which derives this table
+# from the corpus the tools actually serve rather than selecting a cohort
+# beside it: two selections of the same thing drift, and this one had. It held
+# 24 admissions while the served corpus held 89, so 69 admissions were
+# reachable by anything that reached the tools without passing the site's
+# allowlist below (fixed 2026-09-18; the served corpus is authoritative).
 #
 # Authorization boundary (ECC-22): the demo site enforces cohort membership —
 # it rejects any hadm_id not in its DemoPatient allowlist BEFORE calling the
 # agent (S1-09). The tables the MCP tools read (hybrid_features/hybrid_notes)
-# hold ONLY the synthetic hybrid cohort (hadm_id 90000001+, MT-* notes) by
-# construction, so even a request that bypassed the site can only ever reach
-# synthetic demo rows — never real MIMIC data.
+# hold ONLY the demonstration cohort by construction — public MTSamples
+# transcriptions re-keyed to demonstration admission ids (90000001+, MT-*
+# notes), with the features derived from the note and the label derived from
+# the model — so even a request that bypassed the site can only ever reach
+# that cohort and never real MIMIC data. That argument covers the PHI risk and
+# does not cover cohort membership, which is why the boundary has to be the
+# same set as the data rather than a subset of it.
 COHORT_TABLE = f"{DATASET}.demo_cohort"
 COHORT_TABLE_FQN = f"{PROJECT}.{COHORT_TABLE}"
 

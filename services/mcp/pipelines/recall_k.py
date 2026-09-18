@@ -9,7 +9,9 @@ Plan (guide §12):
   4. Exact top-k per query via dot-product over all 555,770 vectors.
   5. Query the deployed tree-AH index with the same query embeddings.
   6. recall@k = |exact_top_k ∩ approx_top_k| / k, reported at k=1,5,10.
-  7. Write a report JSON + plain-text summary to GCS.
+  7. Write a report JSON + plain-text summary to GCS. The report carries the
+     recall at k, the empty-result rate (a query the index answered with
+     nothing) and the per-query rows the gate reads.
 
 Usage (from inside the image):
     python /app/scripts/recall_k.py \
@@ -115,6 +117,19 @@ def approx_topk(ep, deployed_id: str, queries: np.ndarray,
     return out
 
 
+def empty_result_rate(approx: list[list[str]]) -> float:
+    """Share of queries the index answered with no neighbour at all.
+
+    The serving path reports this as the rate of requests that come back with
+    nothing to cite. A configured maximum for it exists, and a threshold with
+    no measurement fails every gate that applies it, so it is measured here,
+    where the queries are already being asked.
+    """
+    if not approx:
+        return 0.0
+    return sum(1 for neighbours in approx if not neighbours) / len(approx)
+
+
 def recall_k(exact: list[str], approx: list[str], k: int) -> float:
     exact_set = set(exact[:k])
     hits = sum(1 for a in approx[:k] if a in exact_set)
@@ -162,6 +177,7 @@ def main() -> int:
 
     ks = sorted({1, 5, args.top_k})
     report = {"num_queries": len(texts), "top_k": args.top_k, "seed": args.seed,
+              "empty_result_rate": round(empty_result_rate(approx), 4),
               "recall": {f"@{k}": round(float(np.mean(
                   [recall_k(e, a, k) for e, a in zip(exact, approx)])), 4)
                   for k in ks},
@@ -175,6 +191,7 @@ def main() -> int:
 
     lines = ["=== recall@k (exact vs tree-AH) ===",
              f"queries: {len(texts)}  top_k: {args.top_k}  seed: {args.seed}",
+             f"empty results: {report['empty_result_rate']:.4f}",
              f"elapsed: {elapsed}s"]
     for k, v in report["recall"].items():
         lines.append(f"  mean {k} = {v}")

@@ -34,5 +34,8 @@ never treats an embedding score as clinical evidence.
 
 ## Data boundary
 
-The public demonstration uses synthetic notes and synthetic structured features. MIMIC-IV
-records are used for training and evaluation only under the applicable data use agreement.
+The public demonstration runs on public MTSamples transcriptions, re-keyed to demonstration
+admission identifiers, with the structured features derived from the note and the outcome
+label derived from the model. The text was not invented for the demo and no MIMIC-IV record
+or MIMIC-derived note text reaches the demonstration path. MIMIC-IV records are used for
+training and evaluation only under the applicable data use agreement.

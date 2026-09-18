@@ -246,6 +246,7 @@ implementation. No gap remains open.
 | 6 | The runbook and the endpoint launcher name different deploy scripts, and the one they name is not the gated path. | Settle on one deploy path and let the launcher and the runbook name it, with the others removed. | Closed 2026-09-18. `deploy_rag.py` is the only path that attaches an index to the endpoint; the four scripts it superseded are deleted and the launcher calls it. |
 | 7 | The cohort that authorises the demonstration holds 24 admissions while the corpus the tools serve holds 89, and two fixtures hold 89 and 108 respectively. | Settle which cohort is authoritative, derive the boundary and the fixtures from it, and point the configuration comment at the script that actually writes the table. | Closed 2026-09-18. The served corpus is authoritative: the boundary table is derived from it and the fixtures are trimmed to it. |
 | 8 | Two artifacts describe the corpus as synthetic when the text is public MTSamples material, and one docstring describes a chunk table that does not exist. | Correct each description where the claim is made, in the configuration comment, the operations summary and the module docstring. | Closed 2026-09-18. Four descriptions now say what the data is and keep the claim that matters; the chunk-store docstring describes what serving actually does. |
+| 9 | The command that rebuilds the ingest image had been broken since the ingest subtree moved from `services/{rag,pipelines}` to `services/mcp/{retrieval,pipelines}`: `build_rag_image.sh` named `<repo>/scripts` as its build context, where no pipeline config exists, and the Dockerfile still `COPY`'d `rag/`, a directory that no longer existed. The image the recall gate measures an index WITH was therefore four weeks older than the source, and predated the `empty_result_rate` metric the gate enforces (B6). | Repair the build path, then stop relying on someone remembering to run it: the launcher runs the rebuild to completion before the RAG deploy and stops that half if the build fails, so the gate always measures with the checkout it is deploying. | Closed 2026-09-18. The context is `services/mcp`, the Dockerfile carries `pipelines/` plus `services/mcp/retrieval` and the corpus config, and the launcher rebuilds before it deploys. The consequence is recorded because it is the expensive half: the gate refused a promotion with a message about the corpus, and the corpus was fine — nothing had been measured. |
 
 **Record of change.** Entry 1 was withdrawn on 2026-09-18: it had been recorded as a defect
 because no index endpoint existed and free-text retrieval failed, but the absence is the
@@ -362,3 +363,21 @@ that has been left to the owner.
 No entry remains open. The layer was audited on 2026-09-17, reviewed the same day and again on
 2026-09-18, and every entry is now either closed or withdrawn, each with the reasoning that
 settled it recorded beside it.
+
+Entry 9 was added and closed on 2026-09-18, after that review, because the review had asked
+whether the gate could ever pass and the answer exposed something the review had not looked
+for. Entry 4 recorded that the configured ceiling on empty results had no measurement anywhere,
+and closed by making the recall job report that rate. What it did not ask was whether the thing
+that reports it could have been rebuilt at all. It could not: the rebuild command had pointed at
+a directory with no pipeline config in it since the ingest subtree moved, and the Dockerfile it
+invoked still `COPY`'d a directory that had been deleted, so the image serving the gate was four
+weeks older than the source and knew nothing about the metric the gate had started enforcing.
+The first attempt to promote the demo index after that change refused, and the refusal named the
+metric — so it read as a verdict on the corpus. The corpus had recall@10 0.992 and no empty
+results at all; the measurement had simply never been taken. Closing entry 4 by making the job
+report a rate is not the same change as making the job able to carry the code that reports it,
+and the difference is a broken build path that nothing in this document mentioned. The repair is
+in the build path and the launcher (`scripts/agent/build_rag_image.sh`,
+`scripts/launch_endpoints.sh`), and the lesson this document keeps is the one an operator needed
+that day: a measurement that is absent is not a measurement that failed — the gate now says so
+in those words, and prints the gap in the measurement rather than a verdict on the corpus.

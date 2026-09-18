@@ -85,6 +85,85 @@ def test_guard_answer_strips_fabricated_risk_with_no_tools():
     assert any(f.startswith("risk_number_unsupported:") for f in out["flags"])
 
 
+# --- A follow-up is answered against the whole conversation -------------------
+
+_REPLAYED_PREDICTION = [{
+    "name": "predict_readmission", "args": {"hadm_id": 90000003},
+    "response": {"probability": 0.206685, "threshold": 0.11, "prediction": 1},
+}]
+
+
+def test_a_replayed_prediction_supports_the_numbers_it_published():
+    """The live defect (2026-09-18), reduced.
+
+    A follow-up that repeats the stored score made no tool call of its own, so
+    the risk guard saw no prediction and struck both numbers out of a correct
+    answer: "the risk for this patient is, which is above the operating
+    threshold." The replayed turn's prediction is the evidence for it.
+    """
+    answer = ("The 30-day unplanned readmission risk for this patient is 0.206685, "
+              "which is above the 0.11 operating threshold.")
+
+    alone = g.guard_answer(answer, [])
+    # The doubled space is the removal's own artifact, kept as the guard really
+    # produces it: the browser collapses it, so the page rendered the sentence as
+    # "the risk for this patient is, which is above the operating threshold."
+    assert alone["answer"] == ("The 30-day unplanned readmission risk for this "
+                               "patient is, which is above the  operating threshold.")
+    assert alone["flags"] == ["risk_number_unsupported:0.11",
+                              "risk_number_unsupported:0.206685"]
+
+    replayed = g.guard_answer(answer, [], _REPLAYED_PREDICTION)
+    assert replayed["answer"] == answer
+    assert replayed["flags"] == []
+
+
+def test_a_replayed_turn_does_not_license_a_different_number():
+    """The guard still has to catch what the conversation never produced."""
+    out = g.guard_answer("The risk is 0.14.", [], _REPLAYED_PREDICTION)
+
+    assert "0.14" not in out["answer"]
+    assert out["flags"] == ["risk_number_unsupported:0.14"]
+
+
+def test_a_note_value_quoted_from_a_replayed_passage_is_supported():
+    """The med guard reads the notes the conversation retrieved, not only this
+    turn's: a dose quoted from an earlier turn's discharge section is still
+    quoted from the note."""
+    replayed = [{
+        "name": "rag_search", "args": {"hadm_id": 90000003, "query": "discharge meds"},
+        "response": {"passages": [{
+            "section": "discharge_medications",
+            "text": "Discharge Medications:\n1. Warfarin 2.5 mg PO DAILY",
+        }]},
+    }]
+
+    out = g.guard_answer("Continue warfarin 2.5 mg daily.", [], replayed)
+
+    assert out["answer"] == "Continue warfarin 2.5 mg daily."
+    assert out["flags"] == []
+
+
+def test_citations_stay_scoped_to_the_turn_that_composed_them():
+    """`^[1]` addresses a slot in THIS turn's presentation.
+
+    The presentation is composed from this turn's calls, so a marker counted
+    against a replayed turn's passages would validate a citation the caller
+    cannot resolve. Replayed passages are evidence for what the answer may
+    claim, never for how it numbers what it cites.
+    """
+    replayed = [{
+        "name": "rag_search", "args": {},
+        "response": {"passages": [{"section": "brief_hospital_course",
+                                   "text": "Admitted with hip pain."}]},
+    }]
+
+    out = g.guard_answer("He was admitted with hip pain ^[1].", [], replayed)
+
+    assert "^[1]" not in out["answer"]
+    assert out["flags"] == ["citation_out_of_range:^1"]
+
+
 # --- dose removal by span (ECC-11) --------------------------------------------
 
 def test_dropping_a_dose_does_not_corrupt_a_similar_dose():

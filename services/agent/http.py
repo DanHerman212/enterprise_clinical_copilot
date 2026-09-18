@@ -188,7 +188,18 @@ def _compose_success(question: str, state: dict, trace: str) -> dict:
         )
         raise AgentAnswerUnavailable(sentence, code=code, finish_reason=reason)
 
-    guarded = guard_answer(text, state["tool_calls"])
+    # The guardrails see this turn's calls AND the replayed turns' calls, because
+    # a follow-up is answered against both: the earlier turns are in the
+    # transcript, so they are evidence for what the answer may say. Judging it by
+    # this turn alone deleted the number a follow-up was repeating — a replayed
+    # "risk is 0.206685, above the 0.11 threshold" was served as "the risk for
+    # this patient is, which is above the operating threshold" (2026-09-18).
+    # Citations stay scoped to this turn inside `guard_answer`: their numbering
+    # addresses this turn's presentation, which is composed below from
+    # `trimmed_calls`.
+    guarded = guard_answer(
+        text, state["tool_calls"], state.get("replayed_tool_calls") or []
+    )
 
     # tool_calls carry name, arguments, response and whether the response can be
     # produced again. The arguments used to be dropped here on the grounds that

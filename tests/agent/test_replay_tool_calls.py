@@ -53,6 +53,11 @@ def _turn(**overrides):
 
 
 def _replay(turns, toolbox=None):
+    messages, _ = _replay_with_evidence(turns, toolbox)
+    return messages
+
+
+def _replay_with_evidence(turns, toolbox=None):
     return asyncio.run(graph.replay_messages(toolbox or _Toolbox(), turns))
 
 
@@ -141,6 +146,39 @@ def test_a_turn_with_no_tool_calls_replays_as_dialogue_only():
     messages = _replay([_turn()])
 
     assert [type(m) for m in messages] == [HumanMessage, AIMessage]
+
+
+def test_the_replayed_calls_come_back_as_the_evidence_they_are():
+    """Messages and evidence are two views of one replay.
+
+    The guardrails judge the answer against the evidence the model was given, and
+    for a follow-up that includes the earlier turns. So the replay has to hand the
+    resolved calls forward — the stored payload as it was, and the re-resolved one
+    as it came back — in the `{name, args, response}` shape a live call is
+    recorded in. Resolving here and returning nothing is what let a follow-up's
+    correct score be struck out as an unsupported number.
+    """
+    messages, calls = _replay_with_evidence([
+        _turn(tool_calls=[PREDICTION]),
+        _turn(question="And the potassium?", answer="3.2.", tool_calls=[RETRIEVAL]),
+    ])
+
+    assert calls == [
+        {"name": "predict_readmission", "args": {"hadm_id": 90000017},
+         "response": PREDICTION["payload"]},
+        {"name": "rag_search", "args": {"hadm_id": 90000017, "query": "potassium"},
+         "response": {"passages": [{"id": "90000017:hospital_course:1",
+                                    "text": "Potassium 3.2."}]}},
+    ]
+    # The same evidence, and no second trip to the tool: the stored call is not
+    # re-resolved, so a replayed prediction is still the score that was shown.
+    assert len(messages) == 8
+
+
+def test_a_replay_with_no_calls_yields_no_evidence():
+    _, calls = _replay_with_evidence([_turn()])
+
+    assert calls == []
 
 
 def test_a_replayed_call_may_not_carry_an_unknown_field():

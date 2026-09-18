@@ -66,6 +66,11 @@ class AgentState(TypedDict):
 
     messages: Annotated[list[BaseMessage], operator.add]
     tool_calls: Annotated[list[RecordedToolCall], operator.add]
+    # The replayed turns' calls, seeded before the run and never written by a
+    # node: they are evidence the answer is guarded against, not a record of what
+    # this turn did. Kept out of `tool_calls` so the caller's stored turn stays
+    # exactly this turn's calls, which is what the site replays back next time.
+    replayed_tool_calls: list[RecordedToolCall]
 
 
 # Spend bounds (ECC-02). One question is one tool call in every designed flow;
@@ -381,14 +386,22 @@ async def ask(
     if tags:
         config["tags"] = list(tags)
 
+    replayed, replayed_calls = await replay_messages(toolbox, turns)
+
     return await graph.ainvoke(
         {
             "messages": [
                 SystemMessage(content=SYSTEM_PROMPT),
-                *await replay_messages(toolbox, turns),
+                *replayed,
                 HumanMessage(content=question),
             ],
             "tool_calls": [],
+            # The replayed turns' calls travel with the run so the answer can be
+            # guarded against the evidence it was actually given. Without them a
+            # follow-up reusing the stored score is served with the score
+            # stripped as unsupported, which is a correct answer destroyed by a
+            # guardrail that could only see this turn.
+            "replayed_tool_calls": replayed_calls,
         },
         config=config,
     )
@@ -445,7 +458,7 @@ def _replayed_tool_messages(
 
 async def replay_messages(
     toolbox: MCPToolbox, turns: list[dict[str, Any]] | None
-) -> list[BaseMessage]:
+) -> tuple[list[BaseMessage], list[RecordedToolCall]]:
     """The earlier conversation, as the messages the model would have seen.
 
     A turn is replayed in the order it happened: the question, then each tool
@@ -458,8 +471,17 @@ async def replay_messages(
     for the calls that did not store a payload. Nothing is emitted as a progress
     stage: this happens before the run, and a stage describing work the caller
     did not ask for in this turn would be a line about someone else's question.
+
+    The calls come back alongside the messages, in the same `{name, args,
+    response}` shape a live call is recorded in, because they are evidence the
+    answer will be judged against: a follow-up answered from a replayed
+    prediction quotes that prediction's score, and a guardrail that knew only
+    this turn's calls would strike the score out of a correct answer. Returning
+    them here is what keeps one resolution of a payload — messages and evidence
+    are two views of the same replay, never two trips to the tool.
     """
     messages: list[BaseMessage] = []
+    calls: list[RecordedToolCall] = []
     for turn_index, turn in enumerate(turns or []):
         messages.append(HumanMessage(content=turn["question"]))
         for call_index, call in enumerate(turn.get("tool_calls") or []):
@@ -474,8 +496,13 @@ async def replay_messages(
             messages.extend(
                 _replayed_tool_messages(call, f"replay-{turn_index}-{call_index}", payload)
             )
+            calls.append({
+                "name": call["name"],
+                "args": dict(call.get("args") or {}),
+                "response": payload if isinstance(payload, dict) else {"result": payload},
+            })
         messages.append(AIMessage(content=turn["answer"]))
-    return messages
+    return messages, calls
 
 
 def final_message(state: dict) -> AIMessage | None:

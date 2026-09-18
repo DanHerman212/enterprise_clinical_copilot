@@ -514,14 +514,39 @@ def verify_med_freqs_per_med(answer: str, med_text: str) -> tuple[str, list[str]
     return cleaned.strip(), flags
 
 
-def guard_answer(answer: str, tool_calls: list[dict]) -> dict:
-    """Apply all guardrails. Returns {'answer': str, 'flags': [str]}."""
-    passages, med_source = _passage_sections(tool_calls)
+def guard_answer(
+    answer: str,
+    tool_calls: list[dict],
+    conversation_calls: list[dict] | None = None,
+) -> dict:
+    """Apply all guardrails. Returns {'answer': str, 'flags': [str]}.
+
+    `tool_calls` are the calls this turn made. `conversation_calls` are the
+    earlier turns' calls as the replay restored them — same shape, and the same
+    evidence the model was handed for this answer.
+
+    Both are evidence, because a follow-up is answered against both. Judging a
+    replayed answer by this turn's calls alone deleted the number it was asked
+    about: a follow-up reusing the stored score was served as "the risk for this
+    patient is, which is above the operating threshold", with the probability and
+    the threshold stripped as unsupported (observed live 2026-09-18). The risk
+    guard reads the predictions the CONVERSATION made, since a stored score is
+    exactly as much a prediction the system produced as a fresh one, and the note
+    guards read the notes the conversation retrieved, since a lab value quoted
+    from an earlier turn's passage is still a quoted lab value.
+
+    Citations are the one exception, and they are scoped to `tool_calls` on
+    purpose: `^[n]` addresses a slot in THIS turn's presentation, which is
+    composed from this turn's calls, so a marker counted against the replayed
+    turn's passages would validate a citation the caller cannot resolve.
+    """
+    evidence = [*(tool_calls or []), *(conversation_calls or [])]
+    passages, med_source = _passage_sections(evidence)
     full_text = "\n".join(p.get("text") or "" for p in passages)
     flags: list[str] = []
 
     # Risk numbers first — the one guard that must act even with zero evidence.
-    answer, f = verify_risk_numbers(answer, tool_calls, full_text)
+    answer, f = verify_risk_numbers(answer, evidence, full_text)
     flags += f
     answer, f = redact_invented_age(answer, passages)
     flags += f
@@ -532,7 +557,8 @@ def guard_answer(answer: str, tool_calls: list[dict]) -> dict:
     answer, f = verify_med_freqs_per_med(answer, med_source)
     flags += f
     flags += flag_invented_dates(answer, passages)
-    answer, f = check_citations(answer, passages)
+    turn_passages, _ = _passage_sections(tool_calls)
+    answer, f = check_citations(answer, turn_passages)
     flags += f
 
     return {"answer": answer, "flags": sorted(set(flags))}

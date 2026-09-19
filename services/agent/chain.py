@@ -64,8 +64,12 @@ def resolve_code_revision(env: Mapping[str, str] | None = None) -> str:
 
 CODE_REVISION = resolve_code_revision()
 
-# The fields the record carries. Named here so a test can assert the shape
-# without duplicating the list.
+# The fields the record carries, so a test can assert the shape without
+# duplicating the list. It is meant to be exhaustive, and it drifted: `tool_errors`
+# and `langfuse_trace_id` were written to the record and never added here, which
+# left a reader comparing the two and finding a discrepancy with no way to tell
+# whether the record or the list was wrong. `error` is the one conditional field
+# and is deliberately not listed — it is added only when the run failed.
 RECORD_FIELDS = (
     "event",
     "trace",
@@ -80,7 +84,9 @@ RECORD_FIELDS = (
     "duration_ms",
     "stages",
     "tool_calls",
+    "tool_errors",
     "guardrail_flags",
+    "langfuse_trace_id",
 )
 
 

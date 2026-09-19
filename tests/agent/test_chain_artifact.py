@@ -398,6 +398,11 @@ def test_the_record_carries_the_identity_and_the_steps(caplog):
     assert record["guardrail_flags"] == [
         "med_dose_mismatch:5 mg", "risk_number_unsupported:0.14",
     ]
+    # The declared field list is the record's shape, not an approximation of it.
+    # A field written to the record and missing from the list is how the list
+    # went stale twice: nothing failed, and a reader could not tell which of the
+    # two was wrong.
+    assert set(record) == set(chain.RECORD_FIELDS)
     assert "error" not in record
     # One line, and it is JSON: queryable by whatever storage layer 10 picks.
     assert len(caplog.records) == 1
@@ -421,6 +426,8 @@ def test_a_failed_execution_still_records_what_it_had(caplog):
     assert record["error"] == "timeout"
     assert record["tool_calls"] == []
     assert record["guardrail_flags"] == []
+    # `error` is the one field a failure adds, and it is the only difference.
+    assert set(record) == set(chain.RECORD_FIELDS) | {"error"}
 
 
 def test_the_record_carries_no_question_or_answer_text(caplog):

@@ -1,0 +1,56 @@
+# Mirror the Langfuse images into our own Artifact Registry.
+#
+# Why this exists rather than deploying straight from `docker.langfuse.com`:
+#
+#   1. Cloud Run refuses an image whose host is not gcr.io, docker.io or
+#      Artifact Registry, so the upstream registry is not directly deployable.
+#   2. The documented bridge — an Artifact Registry *remote* repository that
+#      pulls through on demand — worked for the worker image and failed for the
+#      web image: `gcloud run deploy` against
+#      `…/langfuse/langfuse/langfuse:4` returned HTTP 500 INTERNAL from the Cloud
+#      Run API on service creation, reproducibly, while the same flags with a
+#      stock image and with the worker image both succeeded.
+#   3. A deploy that reaches a third-party registry at cold start is a dependency
+#      on someone else's uptime and on an anonymous pull rate limit. A mirrored
+#      image is ours: pinned by digest, and still there if upstream is not.
+#
+# Run from the repository root:
+#   gcloud builds submit --no-source --config infra/langfuse/mirror-images.yaml
+#
+# The build prints the upstream version labels and the pushed digests. Record
+# the digests in deploy.sh when they change: a tag can be moved, a digest cannot.
+
+substitutions:
+  _REGISTRY: us-east1-docker.pkg.dev/trim-icon-498815-a0/langfuse-images
+  _UPSTREAM: docker.langfuse.com/langfuse
+  _TAG: "4"
+
+serviceAccount: 'projects/$PROJECT_ID/serviceAccounts/cicd-deployer@$PROJECT_ID.iam.gserviceaccount.com'
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        for pair in "langfuse:langfuse-web" "langfuse-worker:langfuse-worker"; do
+          upstream="${pair%%:*}"
+          local_name="${pair##*:}"
+          src="$_UPSTREAM/$upstream:$_TAG"
+          dst="$_REGISTRY/$local_name:$_TAG"
+
+          echo "=== $src -> $dst ==="
+          docker pull "$src"
+          echo "upstream version label: $(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$src")"
+          docker tag "$src" "$dst"
+          docker push "$dst"
+          echo "pushed digest: $(docker inspect --format '{{index .RepoDigests 0}}' "$dst")"
+        done
+
+# No `images:` block: the push happens in the step above, and naming the images
+# here as well would have Cloud Build push them a second time.
+options:
+  machineType: E2_HIGHCPU_8
+  logging: CLOUD_LOGGING_ONLY
+timeout: 1800s

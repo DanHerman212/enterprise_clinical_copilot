@@ -31,15 +31,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from services.agent.graph import ask, final_text  # noqa: E402
 from services.agent.mcp_client import toolbox  # noqa: E402
+from prompt_set import PROMPT_NAMES, question_for  # noqa: E402
 
 SAMPLE = RESULTS / "golden_sample.json"
 OUT = RESULTS / "traces.jsonl"
 
-PROMPTS = {
-    "risk": lambda h: f"What is the 30-day readmission risk for admission {h}?",
-    "meds": lambda h: f"What medications were they discharged on? For admission {h}.",
-    "summarize": lambda h: f"Summarize the recent discharge notes. For admission {h}.",
-}
+# The wording lives in `prompt_set.py` because a second collector sends the same
+# questions against the deployed service, and two copies of a prompt are two
+# prompts: the pass rates they produce are not comparable, which is a claim
+# nobody would notice was false until the numbers disagreed.
 
 
 # A single agent run can hang forever on a stuck Vertex/Gemini call (observed
@@ -90,7 +90,7 @@ async def main() -> int:
     sample = json.loads(Path(args.sample).read_text())["patients"]
     if args.max_cases:
         sample = sample[: args.max_cases]
-    prompts = list(PROMPTS) if args.prompt == "all" else [args.prompt]
+    prompts = list(PROMPT_NAMES) if args.prompt == "all" else [args.prompt]
 
     total = len(sample) * len(prompts)
     print(f"Running {len(sample)} cases x {len(prompts)} prompts = {total} agent runs")
@@ -116,7 +116,7 @@ async def main() -> int:
             for ptype in prompts:
                 if (patient["hadm_id"], ptype) in done:
                     continue
-                q = PROMPTS[ptype](patient["hadm_id"])
+                q = question_for(ptype, patient["hadm_id"])
                 hadm = patient["hadm_id"]
                 try:
                     state = await _run_async(

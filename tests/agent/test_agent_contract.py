@@ -303,6 +303,7 @@ def _success_payload():
                      "text": "warfarin 4 mg QD", "query": "medications"}],
         "model": "gemini-2.5-flash",
         "code_revision": "rev-1",
+        "langfuse_trace_id": "a84f7e9903ab13d86b6ee075f2a91f60",
         "mcp_transport": "http",
     }
 
@@ -351,6 +352,30 @@ def test_validate_agent_success_requires_a_code_revision():
 
     payload = _success_payload()
     payload["code_revision"] = ""
+
+    assert validate_agent_success(payload) is payload
+
+
+def test_validate_agent_success_requires_a_trace_id_field():
+    """The trace id is the pointer a stored turn uses to reach its run, so the
+    field is part of the response contract. An empty string is legitimate and is
+    the normal state when tracing is off; an absent field is not, because a
+    caller stores whatever it is sent and would have to guess otherwise."""
+    payload = _success_payload()
+    del payload["langfuse_trace_id"]
+
+    with pytest.raises(AgentResponseError):
+        validate_agent_success(payload)
+
+    payload = _success_payload()
+    payload["langfuse_trace_id"] = None
+
+    with pytest.raises(AgentResponseError):
+        validate_agent_success(payload)
+
+    # Tracing is a sink: off is a supported state, and it says so with "".
+    payload = _success_payload()
+    payload["langfuse_trace_id"] = ""
 
     assert validate_agent_success(payload) is payload
 

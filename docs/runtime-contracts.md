@@ -17,9 +17,19 @@ answer, optionally with the tool calls it made). The agent composes the wording,
 question against a 2,000-character maximum, and refuses any other field by name — a
 conversation-named field is refused as a product decision made visible rather than dropped in
 silence. Success returns `question`, `answer`, `guardrail_flags`, `tool_calls`, `a2ui`,
-`sources`, `model`, `code_revision`, and `mcp_transport`. Failures use stable codes for invalid
-input, timeout, unavailable answer, and internal failure. See `services/agent/contracts.py`
-and `services/agent/http.py`.
+`sources`, `model`, `code_revision`, `langfuse_trace_id`, and `mcp_transport`. Failures use
+stable codes for invalid input, timeout, unavailable answer, and internal failure. See
+`services/agent/contracts.py` and `services/agent/http.py`.
+
+`langfuse_trace_id` is the pointer from an answer to the run that produced it. The stores answer
+different questions — the trace holds what the model was shown and which tools ran, the
+conversation row holds the answer after the tracing stack is swept or torn down — and the id is
+the only bridge between them, so it travels with the answer rather than living only in the
+agent's execution log. It is empty when tracing is off, which is a supported state and not an
+error (see `services/agent/observability.py`); a caller stores the empty string and renders no
+link rather than a link to nowhere. The field is required on this side and optional on the
+site's, because the two deploy from separate triggers and a site revision that lands first must
+keep answering.
 
 The presentation contract — the renumbered `answer`, the resolved `sources`, and the
 composed `a2ui` canvas — is produced by the agent (`services/agent/a2ui.py` +

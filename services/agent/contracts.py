@@ -395,6 +395,14 @@ def validate_agent_success(payload: Any) -> AgentSuccess:
     if not isinstance(payload.get("code_revision"), str):
         raise AgentResponseError("Agent produced no code revision.")
 
+    # The same rule as the revision, with the same legitimacy for an empty
+    # string: tracing is a sink, so a run with Langfuse unconfigured has no trace
+    # to point at and says so by sending an empty id. What is not legitimate is
+    # the field being absent or of another type — a caller stores this value, and
+    # a caller that has to guess the type of a pointer guesses wrong.
+    if not isinstance(payload.get("langfuse_trace_id"), str):
+        raise AgentResponseError("Agent produced no langfuse trace id.")
+
     if payload.get("a2ui") is not None and not isinstance(payload["a2ui"], dict):
         raise AgentResponseError("Agent produced malformed A2UI data.")
 

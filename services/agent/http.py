@@ -244,6 +244,16 @@ def _compose_success(question: str, state: dict, trace: str) -> dict:
         # without it cannot be explained once the code has moved on, which is
         # what the conversation store exists to prevent.
         "code_revision": chain.CODE_REVISION,
+        # The pointer from this answer to the run that produced it. The trace
+        # holds what the store cannot: which tools ran, what the model was
+        # shown, how long each step took. The store holds what the trace cannot:
+        # the answer, after the tracing stack has been swept or torn down. An
+        # operator looking at a stored turn needs to reach the run rather than
+        # match it by timestamp and memory, so the id travels with the answer.
+        # Empty when tracing is off, which is a supported state
+        # (see `observability.py`); the caller stores the empty string and
+        # renders no link rather than a link to nowhere.
+        "langfuse_trace_id": state.get("langfuse_trace_id") or "",
         "mcp_transport": MCP_TRANSPORT,
     }
     try:

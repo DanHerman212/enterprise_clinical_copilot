@@ -272,6 +272,9 @@ def test_stream_sends_stages_then_one_answer_frame():
     assert set(answer) == {
         "question", "answer", "guardrail_flags", "tool_calls",
         "a2ui", "sources", "model", "code_revision", "mcp_transport",
+        # The pointer to the run, streamed with the answer rather than only
+        # recorded in the agent's log, so the site can store it beside the turn.
+        "langfuse_trace_id",
     }
     assert answer["answer"].strip()
 

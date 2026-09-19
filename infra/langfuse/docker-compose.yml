@@ -93,6 +93,73 @@ services:
       timeout: 5s
       retries: 12
 
+  cloud-sql-proxy:
+    # Cloud SQL Auth Proxy, so the worker can reach the managed Postgres without
+    # the database being exposed: the proxy opens an outbound authenticated
+    # connection and serves it on this compose network. The VM's service account
+    # needs roles/cloudsql.client on the instance and a cloud-platform scope —
+    # a VM created with the default scopes cannot mint the token, and the proxy
+    # fails with a scope error that reads like a permissions error.
+    image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2
+    container_name: langfuse-cloud-sql-proxy
+    restart: unless-stopped
+    command:
+      - "--address=0.0.0.0"
+      - "--port=5432"
+      - "trim-icon-498815-a0:us-east1:danielmherman-db"
+
+  worker:
+    # The worker runs HERE, not on Cloud Run, and that is a fix for a real failure
+    # rather than a preference. On Cloud Run it could not keep its BullMQ blocking
+    # connections to Redis alive: every long-lived idle connection across the
+    # Cloud Run egress boundary timed out after exactly 30s (`Socket timeout.
+    # Expecting data, but didn't receive any in 30000ms`), so the queue never
+    # drained and no trace ever reached ClickHouse. The web service was
+    # unaffected — its Redis use is short commands, and its ingestion POSTs
+    # returned 200 — so events were accepted and then sat in a queue nothing
+    # could consume. Beside Redis the worker is also simply less to run: it is a
+    # consumer with no need for a public hostname.
+    image: docker.langfuse.com/langfuse/langfuse-worker:4
+    container_name: langfuse-worker
+    restart: unless-stopped
+    depends_on:
+      - redis
+      - clickhouse
+      - minio
+      - cloud-sql-proxy
+    environment:
+      NODE_ENV: production
+      TELEMETRY_ENABLED: "false"
+      DATABASE_URL: ${WORKER_DATABASE_URL:?WORKER_DATABASE_URL is required}
+      SALT: ${SALT:?SALT is required}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD is required}
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: ${REDIS_AUTH:?REDIS_AUTH is required}
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9100
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${MINIO_ROOT_USER:?MINIO_ROOT_USER is required}
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://minio:9100
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: ${MINIO_ROOT_USER:?MINIO_ROOT_USER is required}
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
+    ports:
+      # The worker's HTTP health endpoint, for a local check. Not published beyond
+      # the VM's interface: the firewall admits nothing here from outside the subnet.
+      - "3030:3030"
+
 volumes:
   clickhouse-data:
   clickhouse-logs:

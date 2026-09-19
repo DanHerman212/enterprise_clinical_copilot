@@ -1,11 +1,20 @@
 #!/usr/bin/env bash
-# Deploy Langfuse's stateless half (web + worker) to Cloud Run.
+# Deploy Langfuse's web service to Cloud Run.
 #
 # The data plane lives on the `langfuse-data` VM (see docker-compose.yml in this
-# directory) and Postgres on the existing Cloud SQL instance. These two services
-# are the only part that benefits from Cloud Run: they are stateless, they should
-# scale to zero when nobody is looking, and they need to be reachable at a
-# hostname.
+# directory) and Postgres on the existing Cloud SQL instance. The web service is
+# the only part that belongs on Cloud Run: it is stateless, it should scale to
+# zero when nobody is looking, and it needs to be reachable at a hostname.
+#
+# The worker is deliberately NOT here. It ran here and did not work: its BullMQ
+# blocking reads of Redis are long-lived idle connections, and every one of them
+# timed out after exactly 30s across the Cloud Run egress boundary (`Socket
+# timeout. Expecting data, but didn't receive any in 30000ms`). Events were
+# accepted (the web ingestion POSTs returned 200) and then sat in the queue
+# forever because no consumer could keep a connection open to read them. The
+# web service is fine here precisely because its Redis use is short commands.
+# The worker now runs beside Redis on the VM, where blocking reads are just a
+# socket read, and there is nothing to scale: it is a queue consumer.
 #
 # Connections:
 #   * ClickHouse, Redis and MinIO are on the VM's private address, reached with
@@ -33,10 +42,10 @@ VM_IP=10.142.0.3
 SQL_CONNECTION="$PROJECT:$REGION:danielmherman-db"
 # Mirrored from `docker.langfuse.com` by `mirror-images.yaml`, and referenced by
 # DIGEST rather than by the `4` tag: a major tag is a moving target, and what a
-# revision ran should be answerable a month later. Re-mirror and update these two
-# values together — the build prints the digests.
+# revision ran should be answerable a month later. Re-mirror and update this
+# value together — the build prints the digests. The worker image is mirrored too
+# but consumed by the VM, which can reach the public registry itself.
 WEB_IMAGE=us-east1-docker.pkg.dev/$PROJECT/langfuse-images/langfuse-web@sha256:5c0a19ef70e6d8a896150f9b23d1e3eecb4a9d4f206185199e870729a6ec9c89
-WORKER_IMAGE=us-east1-docker.pkg.dev/$PROJECT/langfuse-images/langfuse-worker@sha256:a5b42c6194ee4434de90f18fcdc49cf00e63e3b6d7fda93f4816d0e7dd6bc73f
 DOMAIN=observability.danielmherman.com
 DNS_ZONE=danielmherman
 SA=langfuse-sa@$PROJECT.iam.gserviceaccount.com
@@ -111,16 +120,15 @@ deploy() { # service image port cpu memory extra_env extra_secrets
     --set-secrets "$COMMON_SECRETS$extra_secrets"
     --quiet
   )
-  # The worker serves an HTTP health endpoint rather than a UI, so it needs its
-  # port stated for the same reason: Cloud Run routes to a port, and a service
-  # with no listening port is marked unhealthy however hard the worker is working.
+  # The port is stated rather than left to Cloud Run's default of 8080: a
+  # service is only healthy if something is listening where Cloud Run looks, so
+  # getting this wrong reports a working container as unhealthy.
   [ -n "$port" ] && args+=(--port "$port")
   gcloud "${args[@]}" 2>&1 | tail -3
 }
 
-deploy langfuse-worker "$WORKER_IMAGE" 3030 1 1Gi "" \
-  ",SALT=langfuse-salt:latest\
-,ENCRYPTION_KEY=langfuse-encryption-key:latest"
+# The worker is not deployed here; it runs on the VM (see the header and
+# docker-compose.yml). `infra/langfuse/vm_stack.sh` brings the whole VM stack up.
 
 # 2 vCPU / 2Gi and an explicit heap ceiling, because 1Gi is not enough and the
 # failure was not obvious from the outside: the revision reported Ready, then the

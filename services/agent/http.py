@@ -419,6 +419,10 @@ async def ask_route(request: Request) -> JSONResponse:
         # The names, because which guard fired is the whole diagnostic: a count
         # of 1 cannot distinguish a rewritten dose from a deleted citation.
         guardrail_flags=payload["guardrail_flags"],
+        # The log line and the trace describe the same run, so the line carries
+        # the id that joins them: without it, "the answer looked wrong" is a
+        # question about a log line or about a trace, and never about both.
+        langfuse_trace_id=state.get("langfuse_trace_id") or "",
     )
     return JSONResponse(payload)
 
@@ -592,6 +596,7 @@ async def _stream_chain(
             **_response_fields(state),
             tool_calls=[call["name"] for call in payload["tool_calls"]],
             guardrail_flags=payload["guardrail_flags"],
+            langfuse_trace_id=state.get("langfuse_trace_id") or "",
         )
         yield _sse(stages.STAGE_ANSWER, payload)
     finally:

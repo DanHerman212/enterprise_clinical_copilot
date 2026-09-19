@@ -17,3 +17,8 @@ langchain-core==1.6.0
 langchain-google-genai==4.3.5
 google-auth==2.50.0
 uvicorn==0.47.0
+# Tracing, through the official callback handler (services/agent/observability.py).
+# Pinned to the version this integration was built and tested against: the SDK's
+# surface for reading the current trace id has moved between minor versions, which
+# is exactly why observability.py reads it with a fallback instead of assuming.
+langfuse==4.14.4

@@ -98,6 +98,7 @@ def record_execution(
     tool_calls=(),
     tool_errors=(),
     guardrail_flags: Iterable[str] = (),
+    langfuse_trace_id: str = "",
     error: str | None = None,
     model: str = MODEL_ID,
     code_revision: str = CODE_REVISION,
@@ -162,6 +163,12 @@ def record_execution(
         "tool_calls": [name for name in tool_calls],
         "tool_errors": list(tool_errors),
         "guardrail_flags": sorted(guardrail_flags),
+        # Empty when tracing is off, which is a supported state: the field is
+        # always present so "no trace" reads as no trace rather than as a
+        # missing key, and so a log line can be joined to a trace when there is
+        # one. This is the join the eval loop uses — a score attaches to a trace
+        # id, and the record is where that id is durable.
+        "langfuse_trace_id": langfuse_trace_id,
     }
     if error:
         record["error"] = error

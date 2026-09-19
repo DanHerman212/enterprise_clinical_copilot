@@ -45,12 +45,21 @@ steps:
         set -euo pipefail
         MCP_URL=$$(gcloud run services describe mcp-server \
           --region "${_REGION}" --format='value(status.url)')
+        # The Langfuse endpoint is looked up rather than written down, and a
+        # failure to find it is swallowed on purpose. Observability is a sink:
+        # the agent's job is answering clinical questions, and a missing or
+        # renamed UI must not be able to stop a deploy or an answer. An empty
+        # host is also exactly the off switch — see
+        # services/agent/observability.py, where unconfigured means disabled.
+        LANGFUSE_HOST=$$(gcloud run services describe langfuse-web \
+          --region "${_REGION}" --format='value(status.url)' 2>/dev/null || true)
         gcloud run deploy agent \
           --image "${_IMAGE}" \
           --region "${_REGION}" \
           --no-allow-unauthenticated \
           --service-account "agent-sa@$PROJECT_ID.iam.gserviceaccount.com" \
-          --set-env-vars "^@^PROJECT_ID=$PROJECT_ID@LOCATION=${_REGION}@MCP_TRANSPORT=http@MCP_URL=$${MCP_URL}" \
+          --set-env-vars "^@^PROJECT_ID=$PROJECT_ID@LOCATION=${_REGION}@MCP_TRANSPORT=http@MCP_URL=$${MCP_URL}@LANGFUSE_HOST=$${LANGFUSE_HOST}" \
+          --set-secrets "^@^LANGFUSE_PUBLIC_KEY=langfuse-project-public-key:latest@LANGFUSE_SECRET_KEY=langfuse-project-secret-key:latest" \
           --min-instances 0 --max-instances 3 --memory 1Gi
           # min-instances 0, restored 2026-09-18 after the demo window closed.
           # Set to 1 for the live end-to-end test: scale-to-zero cost the first

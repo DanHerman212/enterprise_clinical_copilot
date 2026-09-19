@@ -10,19 +10,18 @@ Messages are LangChain `BaseMessage` objects (`SystemMessage` for the prompt,
 calls, `ToolMessage` for tool results). LangGraph is LangChain-native, so the
 graph consumes these directly with no translation layer.
 
-Tracing is not implemented here, and that is a decision rather than an omission.
-The Langfuse stack was torn down on 2026-09-12 and its scaffolding removed on
-2026-09-15. Observability is layer 10's deliverable and evaluation is layer 9's,
-both to be rebuilt from a written design (00-reference-architecture.md, 6). What
-this layer contributes in the meantime is the execution record in `chain.py`: one
-structured line per execution carrying the revision, model, stages, tool names
-and timings, which Cloud Logging already collects.
+Tracing attaches as one callback in `ask` (see `observability.py`). It is off
+unless the environment carries Langfuse configuration, and the two properties
+that make it cheap to attach are worth keeping: the model is
+`ChatGoogleGenerativeAI`, so every model call is a LangChain LLM run; and MCP
+tools are wrapped as LangChain `BaseTool` subclasses, so every tool call is a
+LangChain tool run. A callback handler therefore sees the whole chain, and this
+module needed one line rather than an instrumentation layer.
 
-Two properties of this module make that replacement cheap when it comes, and they
-are worth keeping: the model is `ChatGoogleGenerativeAI`, so every model call is
-a LangChain LLM run; and MCP tools are wrapped as LangChain `BaseTool`
-subclasses, so every tool call is a LangChain tool run. A callback handler would
-therefore see the whole chain without any code here changing.
+The durable record is still `chain.py`: one structured line per execution,
+carrying the revision, model, stages, tool names, timings and the names of the
+guardrails that fired. Tracing is the working surface; the record is the
+evidence of record, and it survives the tracing stack being torn down.
 """
 
 import json
@@ -56,6 +55,7 @@ from services.agent.chain import MODEL_ID
 from services.agent.mcp_client import MCPToolbox, _clean_schema
 from services.agent.contracts import RecordedToolCall, validate_recorded_tool_call
 from services.agent.prompts import SYSTEM_PROMPT
+from services.agent import observability
 from services.agent import stages
 
 logger = logging.getLogger(__name__)
@@ -386,9 +386,19 @@ async def ask(
     if tags:
         config["tags"] = list(tags)
 
+    # Tracing is attached HERE, as one callback, rather than by instrumenting the
+    # nodes: every model call is a LangChain LLM run and every tool call a
+    # LangChain tool run, so the handler sees the whole chain and this function is
+    # the only place that had to know. `observability.handler()` returns None when
+    # the environment carries no Langfuse configuration, which is a supported
+    # state and not a degraded one.
+    tracing = observability.handler()
+    if tracing is not None:
+        config["callbacks"] = [tracing]
+
     replayed, replayed_calls = await replay_messages(toolbox, turns)
 
-    return await graph.ainvoke(
+    state = await graph.ainvoke(
         {
             "messages": [
                 SystemMessage(content=SYSTEM_PROMPT),
@@ -405,6 +415,13 @@ async def ask(
         },
         config=config,
     )
+
+    # The trace id leaves with the state so the layers that need to point back at
+    # a run can: `collect.py` stores it per case, and `judge.py` attaches rubric
+    # scores to it. Empty when tracing is off, which is why every reader of this
+    # field treats "" as "no trace", not as an error.
+    state["langfuse_trace_id"] = observability.trace_id(tracing)
+    return state
 
 
 def replayed_turns(turns: list[dict[str, str]] | None) -> list[BaseMessage]:

@@ -1,0 +1,78 @@
+%% The lifecycle of one question asked through the website.
+%% Rendered to assets/diagrams/request-flow.png by scripts/render_diagrams.sh.
+%% Referenced by docs/architecture_deep_dive_2026-09-19.md.
+%%
+%% Editing note: no semicolons anywhere in labels. Mermaid treats ';' as a
+%% statement terminator, so one inside a Note kills the parse at that character and
+%% the diagram silently renders as nothing. This file had exactly that bug on its
+%% first render, in the Note over the MCP server.
+sequenceDiagram
+    autonumber
+    participant U as Clinician<br/>(browser)
+    participant S as Site<br/>Django · Cloud Run · public
+    participant A as Agent<br/>LangGraph · Cloud Run · private
+    participant M as MCP server<br/>tools · Cloud Run · private
+    participant X as Vertex AI<br/>index · predict endpoint
+    participant B as BigQuery<br/>features · notes
+    participant G as Gemini<br/>pinned model
+    participant O as Observability<br/>Cloud Logging · Langfuse
+
+    U->>S: POST /demo/a2ui/ask/ with chip+hadm_id, or a free-text question
+    activate S
+    Note over S: session cookie + CSRF checked,<br/>quota credit claimed (refunded on our failure)
+
+    S->>S: resolve conversation<br/>pin the patient, check TTL and turn ceiling
+    opt follow-up turn
+        S->>S: assemble the turns array from stored Turn rows<br/>(most recent 6, answers clamped)
+    end
+
+    S->>A: POST /ask (or /ask/stream, Accept: text/event-stream)<br/>Authorization: Bearer ID token, audience = agent URL
+    activate A
+    Note over A: the service is IAM-private:<br/>an unauthenticated call never reaches this code
+
+    A->>A: contract check<br/>closed field set, question capped at 2000 chars
+    A->>A: LangGraph run starts<br/>state carries the question and replayed turns
+
+    A->>M: tool call over the HTTP MCP transport<br/>its own ID token, audience = MCP URL
+    activate M
+    Note over M: every call carries the admission it is about,<br/>and the cohort table is the authorisation boundary
+
+    par grounding lookups
+        M->>X: predict_readmission
+        X-->>M: probability, threshold, decision, top factors
+    and
+        M->>B: feature row for the admission
+        B-->>M: 49 features, 23 parent groups
+    and
+        M->>X: rag_search / rag_search_sections
+        X-->>M: cited passages from the discharge notes
+    end
+    M-->>A: typed results (or a stable tool error)
+    deactivate M
+
+    A->>G: model call (bounded at 60s)
+    G-->>A: answer + tool requests or a finish reason
+    opt the model asks for more evidence
+        A->>M: further tool calls (step-capped loop)
+        M-->>A: results
+        A->>G: model call with the new evidence
+        G-->>A: answer
+    end
+
+    A->>A: deterministic guardrails (post-hoc, not the model)<br/>numbers must match tool output, citations must be in range
+    A->>A: compose the presentation<br/>renumber citations, resolve sources, build the A2UI canvas
+    A->>A: validate the success contract
+
+    A--)O: execution record, one JSON line<br/>revision, model, tokens, stages, tool names,<br/>guardrail flags, trace id
+    A--)O: Langfuse spans (graph, route, tools, model)
+
+    A-->>S: 200 with the answer payload<br/>answer, guardrail_flags, tool_calls, a2ui,<br/>sources, model, code_revision, langfuse_trace_id
+    deactivate A
+
+    S->>S: store the turn pair in one transaction<br/>question row + answer row, with the trace id
+    S-->>U: JSON, or SSE frames: planning, tool, result, verify, answer
+    deactivate S
+    U->>U: render the canvas, citations and risk bands
+
+    Note over A,O: out of band: the evaluation harness
+    Note over A,O: runs the same endpoint over many cases and attaches<br/>judge scores to each trace by id, so a failure is browsable

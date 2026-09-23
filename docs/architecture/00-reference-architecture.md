@@ -13,15 +13,15 @@ The full requirement list, with MUST/SHOULD levels, is in
 
 ## 1. Sources
 
-| Document (Google Cloud Architecture Center) | Last reviewed |
-|---|---|
-| Deploy and operate generative AI applications | 2024-11-19 |
-| Well-Architected Framework, AI/ML perspective: Operational excellence | 2025-04-28 |
-| Well-Architected Framework, AI/ML perspective: Security | 2025-11-26 |
-| RAG infrastructure for generative AI (Agent Platform + AlloyDB) | 2026-02-04 |
-| Choose your agentic AI architecture components | 2026-04-21 |
-| Choose a design pattern for your agentic AI system | 2026-05-28 |
-| Single-agent AI system using ADK and Cloud Run | 2025-12-09 |
+| Document (Google Cloud Architecture Center)                           | Last reviewed |
+| --------------------------------------------------------------------- | ------------- |
+| Deploy and operate generative AI applications                         | 2024-11-19    |
+| Well-Architected Framework, AI/ML perspective: Operational excellence | 2025-04-28    |
+| Well-Architected Framework, AI/ML perspective: Security               | 2025-11-26    |
+| RAG infrastructure for generative AI (Agent Platform + AlloyDB)       | 2026-02-04    |
+| Choose your agentic AI architecture components                        | 2026-04-21    |
+| Choose a design pattern for your agentic AI system                    | 2026-05-28    |
+| Single-agent AI system using ADK and Cloud Run                        | 2025-12-09    |
 
 ---
 

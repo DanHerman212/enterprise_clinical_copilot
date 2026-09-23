@@ -1,8 +1,10 @@
 # Enterprise Clinical Copilot
 
-Enterprise Clinical Copilot is a full-stack clinical decision-support application that
-estimates 30-day readmission risk at discharge, attributes the estimate with TreeSHAP, and
-lets a clinician question the result against retrieved discharge-note evidence.
+Enterprise Clinical Copilot (ECC) is a full-stack AI application.  The application is designed to help healthcare professional assess unplanned readmission risk at discharge time for patients who have been admitted to the hospital for at least 24 hrs.
+
+The application is built thoughtfully using [trusted AI Architecture](docs/architecture/00-reference-architecture.md) patterns.  While the application itself is a prototype, the software is architected to run at enterprise scale, currently deployed on GCP.
+
+The user interface to the application is built using django on my personal website.  You can view the [companion repo](https://github.com/DanHerman212/danielmherman) , to look at the source code for the web app.
 
 The system is separated into deployable services and offline ML workflows:
 

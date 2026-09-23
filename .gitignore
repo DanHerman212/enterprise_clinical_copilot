@@ -76,3 +76,6 @@ evaluation/agent/results/
 # The features-only hybrid_cohort.json IS tracked; the notes artifact is not. ---
 projects/agent-harness/eval/results/hybrid_notes.json
 evaluation/agent/results/hybrid_notes.json
+
+# don't sync obsidian json files
+docs/.obsidian 

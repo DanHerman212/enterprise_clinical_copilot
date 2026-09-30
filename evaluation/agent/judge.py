@@ -16,6 +16,7 @@ import queue
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from google import genai
@@ -144,9 +145,17 @@ def _attach_scores(client, trace_id: str, j: dict) -> int:
     flags = " | ".join(j.get("flags") or []) or (j.get("reason") or "")[:300]
     n = 0
     for dim in DIMS:
-        if dim in dims:
-            client.create_score(trace_id=trace_id, name=dim, value=dims[dim], comment=flags)
-            n += 1
+        value = dims.get(dim)
+        # `in dims` is the wrong test: the rubric scores `context` only when a
+        # preceding turn exists, so on every first turn the key is present and
+        # null. Null means "not scored", not "scored zero". Langfuse rejects it
+        # (ScoreBody takes a float or a string, not None) and the raise aborted
+        # the loop, which also cost every first-turn trace its verdict score.
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            continue
+        client.create_score(trace_id=trace_id, name=dim, value=float(value),
+                            comment=flags)
+        n += 1
     client.create_score(trace_id=trace_id, name="verdict",
                         value=1 if j.get("verdict") == "PASS" else 0, comment=flags)
     return n + 1
@@ -201,20 +210,59 @@ def _judge(client, system: str, user: str) -> dict:
     thread and waiting on a queue. On timeout the daemon thread is abandoned
     (it never blocks process exit) and the attempt is retried, then flagged.
     """
-    for attempt in range(4):
+    # A 429 is the quota window expiring, not a broken call. Retrying after one
+    # second does nothing for it, and the row then lands in the file as a
+    # failure — so a rate-limited attempt waits long enough for the window to
+    # roll over, and gets more attempts than a plain failure. Measured
+    # 2026-09-30: eight concurrent judge calls exceeded the project's limit and
+    # the short backoff turned those into recorded failures.
+    attempts = 6
+    for attempt in range(attempts):
         q: queue.Queue[dict] = queue.Queue(maxsize=1)
-        t = threading.Thread(
-            target=lambda: q.put(_judge_once(client, system, user)), daemon=True)
-        t.start()
+
+        def _call() -> None:
+            """Run one attempt and always report something to the queue.
+
+            An exception used to kill this thread before it put anything, so the
+            wait below timed out and the real cause was recorded as the word
+            "timeout" — a 429 and a genuinely stuck call became the same string.
+            """
+            try:
+                q.put(_judge_once(client, system, user))
+            except Exception as exc:  # noqa: BLE001
+                q.put({"error": f"{type(exc).__name__}: {exc}"})
+
+        threading.Thread(target=_call, daemon=True).start()
         try:
-            return q.get(timeout=_JUDGE_TIMEOUT_SECONDS)
+            out = q.get(timeout=_JUDGE_TIMEOUT_SECONDS)
         except queue.Empty:
-            last = "timeout"
-        except Exception as e:
-            last = f"{type(e).__name__}: {e}"
-        if attempt < 3:
-            time.sleep(2 ** attempt)
-    return {"error": str(last)}
+            out = {"error": f"no response within {_JUDGE_TIMEOUT_SECONDS}s"}
+        if "error" not in out:
+            return out
+        last = out["error"]
+        quota = "429" in last or "RESOURCE_EXHAUSTED" in last
+        if attempt >= attempts - 1 or (quota and attempt >= 4):
+            break
+        time.sleep(min(60, (10 * 2 ** attempt) if quota else (2 ** attempt)))
+    return {"error": last}
+
+
+def _retriable(rec: dict) -> bool:
+    """True when a judged row is a failure of this script, not a verdict.
+
+    A row is final when it holds a verdict, or when there was nothing to judge:
+    the agent itself failed, or the service returned no answer. Any other error
+    is this harness failing — a 429 from the model, a timeout, an unparseable
+    verdict — and must be judged again. Treating those as done on resume drops
+    the answer from the results without saying so, which is the one outcome an
+    evaluation must never produce (observed 2026-09-30: six concurrent judge
+    calls exceeded the model quota, and the 429s landed as rows reading
+    "timeout", which a resume would then have skipped for good).
+    """
+    err = (rec.get("judge") or {}).get("error")
+    if not err:
+        return False
+    return not (err == "agent run failed" or err.startswith("no answer"))
 
 
 def _adversarial_system(criteria: dict) -> str:
@@ -312,38 +360,56 @@ def _main_adversarial(args, client) -> int:
         for line in judged_path.read_text().splitlines():
             if line.strip():
                 try:
-                    done.add(json.loads(line).get("id"))
+                    rec = json.loads(line)
+                    if not _retriable(rec):
+                        done.add(rec.get("id"))
                 except json.JSONDecodeError:
                     pass
     print(f"Resuming: {len(done)} already judged, {len(traces) - len(done)} to go")
 
+    def _judge_one(t: dict) -> tuple[dict, int]:
+        """Judge one probe and attach its scores. Runs in a worker thread.
+
+        Decided by code, not by a model, wherever the outcome is structural:
+        asking a judge whether a 400 is a refusal invites it to find something to
+        say about an answer that does not exist.
+        """
+        if t.get("contract_refusal"):
+            # The service refused the request at the contract boundary. That is
+            # the bounded, non-crashing outcome `must_fail_cleanly` asks for.
+            j = {"verdict": "PASS", "violations": [], "by": "contract",
+                 "reason": f"refused at the contract boundary: "
+                           f"{t.get('error')} — {t.get('error_message') or ''}"}
+        elif t.get("transport_error") or t.get("status") != 200:
+            j = {"error": f"no answer: {t.get('error') or t.get('status')}"}
+        elif "error" in t:
+            j = {"error": "agent run failed"}
+        else:
+            j = _judge(client, system, _adversarial_user(t, criteria))
+        n = 0
+        if "error" not in j:
+            n = _attach_adversarial_scores(
+                lf, t.get("langfuse_trace_id") or "", j)
+        return {**t, "judge": j}, n
+
+    pending = [t for t in traces if t.get("id") not in done]
     attached = 0
-    with judged_path.open("a") as fh:
-        for i, t in enumerate(traces, 1):
-            if t.get("id") in done:
-                continue
-            if t.get("contract_refusal"):
-                # The service refused the request at the contract boundary. That
-                # is the bounded, non-crashing outcome `must_fail_cleanly` asks
-                # for, and it is decided by code rather than by a model: asking a
-                # judge whether a 400 is a refusal invites it to find something to
-                # say about an answer that does not exist.
-                j = {"verdict": "PASS", "violations": [], "by": "contract",
-                     "reason": f"refused at the contract boundary: "
-                               f"{t.get('error')} — {t.get('error_message') or ''}"}
-            elif t.get("transport_error") or t.get("status") != 200:
-                j = {"error": f"no answer: {t.get('error') or t.get('status')}"}
-            elif "error" in t:
-                j = {"error": "agent run failed"}
-            else:
-                j = _judge(client, system, _adversarial_user(t, criteria))
-            rec = {**t, "judge": j}
+    finished = 0
+    with judged_path.open("a") as fh, \
+            ThreadPoolExecutor(max_workers=args.workers) as pool:
+        futures = {pool.submit(_judge_one, t): t for t in pending}
+        for fut in as_completed(futures):
+            t = futures[fut]
+            finished += 1
+            try:
+                rec, n = fut.result()
+            except Exception as exc:  # noqa: BLE001
+                rec, n = {**t, "judge": {"error": f"judge failed: {exc}"}}, 0
             fh.write(json.dumps(rec) + "\n")
             fh.flush()
-            if "error" not in j:
-                attached += _attach_adversarial_scores(
-                    lf, t.get("langfuse_trace_id") or "", j)
-            print(f"[{i}/{len(traces)}] {t.get('id')}: "
+            attached += n
+            j = rec["judge"]
+            print(f"[{finished}/{len(pending)}] {t.get('id')}: "
                   f"{j.get('verdict') or j.get('error') or '?'}", flush=True)
 
     if lf is not None:
@@ -411,6 +477,11 @@ def main() -> int:
                     help="judged JSONL to append (default: depends on --mode)")
     ap.add_argument("--report", dest="report_path", type=str, default=None,
                     help="report JSON to write (default: depends on --mode)")
+    ap.add_argument("--workers", type=int, default=4,
+                    help="answers judged at once. Both the model call and the "
+                         "score write are network-bound, so this divides the "
+                         "waiting rather than adding capacity: 1 restores the "
+                         "strictly sequential pass.")
     args = ap.parse_args()
 
     if args.mode == "adversarial":
@@ -438,8 +509,10 @@ def main() -> int:
     print(f"Judging {len(traces)} traces (model {JUDGE_MODEL})")
     print(f"Langfuse score attachment: {'ON' if lf else 'OFF (no LANGFUSE_* env)'}")
 
-    # Resumable: skip (hadm_id, prompt) pairs already scored in judged.jsonl and
-    # append, so a re-run after a crash continues instead of restarting.
+    # Resumable: skip answers already scored in judged.jsonl and append, so a
+    # re-run after a crash continues instead of restarting. Keyed by turn as well
+    # as by case, because a two-turn case is two answers, and a key on the case
+    # alone would skip a conversation's second turn as already done.
     done: set[tuple] = set()
     if judged_path.exists():
         for line in judged_path.read_text().splitlines():
@@ -447,35 +520,96 @@ def main() -> int:
                 continue
             try:
                 rec = json.loads(line)
-                done.add((rec.get("hadm_id"), rec.get("prompt")))
+                if _retriable(rec):
+                    continue
+                done.add((rec.get("hadm_id"), rec.get("prompt"),
+                          rec.get("turn", 1)))
             except json.JSONDecodeError:
                 pass
     print(f"Resuming: {len(done)} already judged, {len(traces) - len(done)} to go")
 
-    attached = 0
-    with judged_path.open("a") as fh:
-        for i, t in enumerate(traces, 1):
-            if (t.get("hadm_id"), t.get("prompt")) in done:
-                continue
-            if "error" in t:
-                fh.write(json.dumps({**t, "judge": {"error": "agent run failed"}}) + "\n")
-                print(f"[{i}/{len(traces)}] {t.get('hadm_id')}/{t.get('prompt')}: AGENT-ERROR", flush=True)
-                continue
+    def _judge_one(t: dict) -> tuple[dict, int]:
+        """Judge one answer and attach its scores. Runs in a worker thread.
 
-            evidence = [_evidence(tc) for tc in (t.get("tool_calls") or [])]
-            user = (
-                f"QUESTION:\n{t['question']}\n\n"
-                f"ANSWER:\n{t['answer']}\n\n"
-                f"EVIDENCE (tool outputs + retrieved passages the agent had):\n"
-                f"{json.dumps(evidence, indent=2)[:EVIDENCE_CAP]}"
+        Both halves are network-bound — the model call and the score write — so
+        threads suffice and a process pool would buy nothing. This deliberately
+        does not touch the judged file: the main thread owns it, so concurrent
+        workers cannot interleave half-written lines into it.
+        """
+        if "error" in t:
+            return {**t, "judge": {"error": "agent run failed"}}, 0
+        evidence = [_evidence(tc) for tc in (t.get("tool_calls") or [])]
+        # The earlier turn, when there is one. Dimension 6 asks whether the
+        # answer used the context it was given, and the conversation exists
+        # only in the request the caller sent, so the rater has to be handed
+        # it — without this the dimension would be scored blind, on an answer
+        # whose referent it has never seen.
+        prior = t.get("prior") or {}
+        earlier = ""
+        if prior:
+            earlier = (
+                "EARLIER TURN OF THIS CONVERSATION:\n"
+                f"QUESTION:\n{prior.get('question')}\n\n"
+                f"ANSWER:\n{prior.get('answer')}\n\n"
             )
-            j = _judge(client, RUBRIC, user)
-            rec = {**t, "judge": j}
+            # The tool results that earlier turn was answered from, where they
+            # were carried back with the follow-up. A follow-up such as "what is
+            # driving that?" is about the earlier answer, so its support lives in
+            # the earlier turn. Judged against this turn's evidence alone, that
+            # answer scored 0 for fidelity and grounding on an empty evidence set
+            # — every risk follow-up failed for that reason and not for anything
+            # the agent did (measured 2026-09-30: 22 of 22, while turn 1 of the
+            # same chip passed 22 of 23). The prediction is the part that
+            # survives: retrieval payloads are deliberately not replayed, since
+            # the corpus can reproduce them, so they are absent here.
+            prior_evidence = [
+                {"tool": c.get("name"), "result": c.get("payload")}
+                for c in (prior.get("tool_calls") or [])
+                if isinstance(c, dict) and c.get("payload") is not None
+            ]
+            if prior_evidence:
+                earlier += (
+                    "EVIDENCE FROM THAT EARLIER TURN (replayed with this request, "
+                    "so it was available to the answer under review):\n"
+                    + json.dumps(prior_evidence, indent=2)[:EVIDENCE_CAP]
+                    + "\n\n"
+                )
+        user = (
+            earlier
+            + f"TURN {t.get('turn', 1)} — QUESTION:\n{t['question']}\n\n"
+            + f"ANSWER:\n{t['answer']}\n\n"
+            + "EVIDENCE (tool outputs + retrieved passages the agent had):\n"
+            + json.dumps(evidence, indent=2)[:EVIDENCE_CAP]
+        )
+        j = _judge(client, RUBRIC, user)
+        n = 0
+        if "error" not in j:
+            n = _attach_scores(lf, t.get("langfuse_trace_id") or "", j)
+        return {**t, "judge": j}, n
+
+    pending = [t for t in traces
+               if (t.get("hadm_id"), t.get("prompt"), t.get("turn", 1)) not in done]
+
+    attached = 0
+    finished = 0
+    with judged_path.open("a") as fh, \
+            ThreadPoolExecutor(max_workers=args.workers) as pool:
+        futures = {pool.submit(_judge_one, t): t for t in pending}
+        for fut in as_completed(futures):
+            t = futures[fut]
+            finished += 1
+            try:
+                rec, n = fut.result()
+            except Exception as exc:  # noqa: BLE001
+                # One answer failing must not take the run down with it: record
+                # the failure against that answer and let the rest finish.
+                rec, n = {**t, "judge": {"error": f"judge failed: {exc}"}}, 0
             fh.write(json.dumps(rec) + "\n")
             fh.flush()
-            if "error" not in j:
-                attached += _attach_scores(lf, t.get("langfuse_trace_id") or "", j)
-            print(f"[{i}/{len(traces)}] {t['hadm_id']}/{t['prompt']}: {j.get('verdict') or '?'}", flush=True)
+            attached += n
+            j = rec["judge"]
+            print(f"[{finished}/{len(pending)}] {t.get('hadm_id')}/{t.get('prompt')}: "
+                  f"{j.get('verdict') or j.get('error') or '?'}", flush=True)
 
     if lf is not None:
         lf.flush()
@@ -488,12 +622,20 @@ def main() -> int:
     # a 3-trace test run reported 285/300 from the old eval/results/judged.jsonl).
     scored = [json.loads(l) for l in judged_path.read_text().splitlines() if l.strip()]
     agg = {d: {"pass": 0, "fail": 0, "total": 0} for d in DIMS}
-    verdict = {"pass": 0, "fail": 0, "agent_error": 0}
+    verdict = {"pass": 0, "fail": 0, "agent_error": 0, "judge_error": 0}
     flags: list[dict] = []
     for rec in scored:
         j = rec.get("judge", {})
         if "error" in rec or j.get("error"):
-            verdict["agent_error"] += 1
+            # Two different failures, and only one of them is the agent's. An
+            # answer the agent never produced is an agent error; a 429 or a
+            # timeout was this harness failing, and reporting it as the agent's
+            # error would blame the system under test for the measurement.
+            err = j.get("error") or "agent run failed"
+            if err == "agent run failed" or err.startswith("no answer"):
+                verdict["agent_error"] += 1
+            else:
+                verdict["judge_error"] += 1
             continue
         dims = j.get("dimensions", {})
         for d in DIMS:
@@ -518,6 +660,7 @@ def main() -> int:
         "traces": len(traces),
         "scored": total,
         "agent_errors": verdict["agent_error"],
+        "judge_errors": verdict["judge_error"],
         "verdict": {
             "pass": verdict["pass"], "fail": verdict["fail"],
             "pass_rate": round(verdict["pass"] / total, 4) if total else None,

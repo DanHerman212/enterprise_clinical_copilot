@@ -130,13 +130,32 @@ def ids_from_file(path: Path) -> list[str]:
     return ids
 
 
-def _lookup(client, trace_id: str):
-    """(trace_id, existing_tags) if the trace exists, else (trace_id, None)."""
-    try:
-        trace = client.api.trace.get(trace_id)
-        return trace_id, list(trace.tags or [])
-    except Exception:
-        return trace_id, None
+def _lookup(client, trace_id: str, attempts: int = 3) -> tuple[str, list | None, str]:
+    """(trace_id, tags, state), where state is `ok`, `absent` or the failure.
+
+    The three outcomes are separated because one of them is a claim about the
+    system and the others are not. This function decides whether a trace id is
+    reported as never having arrived, and a read that timed out is not evidence
+    of absence — collapsing the two would report tracing as broken on the
+    strength of a slow afternoon. A 404 is the service saying the trace is not
+    there, which is the claim worth making.
+
+    Retried, because the store answered a single-trace read in fourteen seconds
+    when measured and does not enjoy being read concurrently.
+    """
+    last: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            trace = client.api.trace.get(
+                trace_id, request_options={"timeout_in_seconds": 90})
+            return trace_id, list(trace.tags or []), "ok"
+        except Exception as exc:
+            if getattr(exc, "status_code", None) == 404:
+                return trace_id, None, "absent"
+            last = exc
+            if attempt < attempts - 1:
+                time.sleep(2 + 2 * attempt)
+    return trace_id, None, f"unreadable: {type(last).__name__}"
 
 
 def _write(client, trace_ids: list[str], tag: str, batch_size: int) -> dict:
@@ -156,7 +175,8 @@ def _write(client, trace_ids: list[str], tag: str, batch_size: int) -> dict:
             )
             for trace_id in chunk
         ]
-        response = client.api.ingestion.batch(batch=events)
+        response = client.api.ingestion.batch(
+            batch=events, request_options={"timeout_in_seconds": 180})
         written += len(response.successes or [])
         for error in response.errors or []:
             failed += 1
@@ -171,8 +191,8 @@ def _verify(client, trace_ids: list[str], tag: str, attempts: int) -> int:
     for attempt in range(attempts):
         tagged = 0
         for trace_id in sample:
-            _, tags = _lookup(client, trace_id)
-            if tags and tag in tags:
+            _, tags, state = _lookup(client, trace_id, attempts=1)
+            if state == "ok" and tags and tag in tags:
                 tagged += 1
         if tagged == len(sample):
             break
@@ -188,7 +208,9 @@ def main() -> int:
                     help="the single tag to write, e.g. eval-093026")
     ap.add_argument("--traces", nargs="*", default=[str(p) for p in DEFAULT_TRACES])
     ap.add_argument("--batch-size", type=int, default=50)
-    ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument("--workers", type=int, default=4,
+                    help="concurrent trace reads; the store answers a single "
+                         "read slowly when read concurrently")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--verify-attempts", type=int, default=6)
     args = ap.parse_args()
@@ -213,27 +235,48 @@ def main() -> int:
         return 1
 
     client = _client()
-    if not client.auth_check():
-        print("authentication failed; nothing written")
-        return 1
+    # No `auth_check()`. It reads a different endpoint from the one this script
+    # uses, and against this deployment that call follows a redirect and then
+    # stalls until it times out — measured 2026-09-30, while the site itself
+    # answered in 0.1s and a single-trace read answered normally. It is also
+    # redundant: reading a trace exercises the same credential against the
+    # endpoint the work actually needs, so the classification below is the
+    # readiness check.
 
     # Existence first: a write to an id with no trace creates an empty one.
-    print(f"\nchecking {len(ordered)} traces exist …")
+    print(f"\nchecking {len(ordered)} traces …")
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         looked_up = list(pool.map(lambda t: _lookup(client, t), ordered))
-    missing = [t for t, tags in looked_up if tags is None]
-    already = [t for t, tags in looked_up if tags is not None and args.tag in tags]
-    todo = [t for t, tags in looked_up if tags is not None and args.tag not in tags]
 
-    print(f"  present            {len(looked_up) - len(missing):>4}")
-    print(f"  already carry it   {len(already):>4}")
-    print(f"  to tag             {len(todo):>4}")
-    print(f"  NO TRACE IN LANGFUSE {len(missing):>4}")
-    if missing:
+    present = [(t, tags) for t, tags, state in looked_up if state == "ok"]
+    absent = [t for t, tags, state in looked_up if state == "absent"]
+    unreadable = [(t, state) for t, tags, state in looked_up
+                  if state not in ("ok", "absent")]
+    already = [t for t, tags in present if args.tag in tags]
+    todo = [t for t, tags in present if args.tag not in tags]
+
+    print(f"  present              {len(present):>4}")
+    print(f"  already carry it     {len(already):>4}")
+    print(f"  to tag               {len(todo):>4}")
+    print(f"  NO TRACE IN LANGFUSE {len(absent):>4}")
+    if absent:
         print("  ^ tracing did not deliver these — the tag cannot reach them, and")
         print("    writing anyway would create an empty trace for each id")
-        for trace_id in missing[:5]:
+        for trace_id in absent[:5]:
             print(f"    {trace_id}")
+    if unreadable:
+        print(f"  could not be read    {len(unreadable):>4}")
+        print("  ^ a read that did not complete is not evidence that a trace is")
+        print("    absent. Re-run to tag these: a trace already carrying the tag is")
+        print("    skipped, so a re-run is safe.")
+        for trace_id, state in unreadable[:5]:
+            print(f"    {trace_id}  ({state})")
+
+    if unreadable and not present:
+        print("\nno trace could be read at all. A credential or a store fault "
+              "looks like this, and neither is a missing trace; nothing was "
+              "written.")
+        return 1
 
     if args.dry_run:
         print("\ndry run: nothing written")
@@ -253,6 +296,13 @@ def main() -> int:
         print(f"\nverified: {tagged} of the first {min(5, len(todo))} carry "
               f"'{args.tag}' (the write is asynchronous, so a low count now may "
               f"rise shortly)")
+
+    # A non-zero exit when anything is left untagged, so this step fails visibly
+    # rather than reporting success over a partial tag.
+    if absent or unreadable:
+        print(f"\n{len(absent)} trace(s) absent and {len(unreadable)} "
+              f"unreadable: the tag is incomplete. Re-run this step.")
+        return 1
     return 0
 
 

@@ -64,7 +64,7 @@ ADV_OUT = RESULTS / "adversarial_http.jsonl"
 
 # The site's mark for an answer it had to shorten for a replay. The same string
 # for the same reason: an answer shortened silently would tell the model that a
-truncated answer is the whole of what the clinician was told.
+# truncated answer is the whole of what the clinician was told.
 TRUNCATION_MARK = "\n[earlier answer truncated for replay]"
 
 # A single answer took 7.4s against the deployed service when the container was
@@ -250,13 +250,13 @@ def _record_from_response(case: dict, status: int, payload: dict,
     return rec
 
 
-def _load_done(path: Path, key_fields: tuple[str, ...]) -> set[tuple]:
-    """The keys already traced, so a restart continues instead of redoing a run.
+def _load_done(path: Path, key_fields: tuple[str, ...]) -> dict[tuple, dict]:
+    """The records already written, by key, so a restart continues.
 
-    A record whose transport failed is deliberately not counted as done: the
-    question was never put to the agent, and treating it as answered is how a
-    re-run reports a verdict on a case the service never saw.
-    """
+    A record whose transport failed is deliberately left out: the question was
+    never put to the agent, and treating it as answered is how a re-run reports a
+    verdict on a case the service never saw.
+
     The records themselves are returned rather than only their keys, because a
     half-finished case has to be resumed from its first answer: the second turn
     cannot be built without it, and posting the first turn again would leave two
@@ -495,7 +495,14 @@ async def _run_set(client, cases, out_path: Path, args, label: str,
 
 
 async def _preflight(client, args) -> int:
-    """Six smoke questions through the deployed path, before the long run."""
+    """Smoke the deployed path before the long run.
+
+    Two gates, because they fail differently. The smoke questions establish that
+    retrieval answers from the corpus the deployment serves; when it does not,
+    the serving configuration is wrong. The conversation establishes that the
+    service accepts a replayed turn; when it does not, the harness is wrong, and
+    every second turn of the run would be refused at the same step.
+    """
     payload = json.loads(CASES.read_text())
     patients = payload["patients"][: args.preflight_n]
     cases = [{"hadm_id": p["hadm_id"], "prompt": "meds",
@@ -505,14 +512,8 @@ async def _preflight(client, args) -> int:
 
     recs = []
     for case in cases:
-        try:
-            status, body = await _with_retries(client, {"question": case["question"],
-                                                        "hadm_id": case["hadm_id"]})
-            rec = _record_from_response(case, status, body)
-        except Exception as exc:
-            rec = _record_from_response(
-                case, 0, {"error": f"{type(exc).__name__}: {exc}"})
-            rec["transport_error"] = True
+        rec = await _answer(client, case, 1, case["question"],
+                            _body(case["question"], case))
         flags = classify_trace(rec)
         recs.append(rec)
         detail = rec.get("error") or ""
@@ -539,7 +540,52 @@ async def _preflight(client, args) -> int:
         print("PREFLIGHT: FAIL — retrieval is unhealthy against the deployment. "
               "Not starting the run.", flush=True)
         return 1
-    print("PREFLIGHT: PASS", flush=True)
+
+    # One whole conversation, with the risk chip, so the turn that gets replayed
+    # is the turn that answers the follow-up. A second turn the service refuses is
+    # a harness fault, and finding it here costs two requests instead of five
+    # hundred and fifty.
+    conv = {
+        "hadm_id": patients[0]["hadm_id"],
+        "prompt": "risk",
+        "question": question_for("risk", patients[0]["hadm_id"]),
+        "follow_up": follow_up_for("risk"),
+    }
+    print("PREFLIGHT: one whole conversation, to check the service accepts a "
+          "replayed turn …", flush=True)
+    first = await _answer(client, conv, 1, conv["question"],
+                          _body(conv["question"], conv))
+    if first.get("transport_error") or first.get("status") != 200:
+        print(f"PREFLIGHT: FAIL — the first turn did not answer "
+              f"(status {first.get('status')}: "
+              f"{first.get('error') or 'no answer'}), so there is nothing to "
+              f"replay and the second turn cannot be tested. Not starting the "
+              f"run.", flush=True)
+        return 1
+
+    replayed = replay_turn(conv["question"], first)
+    second = await _answer(
+        client, conv, 2, conv["follow_up"],
+        {"question": conv["follow_up"], "hadm_id": conv["hadm_id"],
+         "turns": [replayed]},
+        prior=replayed)
+    print(f"  turn 1: status={first.get('status')} "
+          f"tools={[c.get('name') for c in first.get('tool_calls') or []]} | "
+          f"replay carries {len(replayed['tool_calls'])} tool calls | "
+          f"turn 2: status={second.get('status')} "
+          f"tools={[c.get('name') for c in second.get('tool_calls') or []]}",
+          flush=True)
+    if second.get("transport_error") or second.get("status") != 200:
+        print(f"PREFLIGHT: FAIL — the service did not accept the second turn "
+              f"(status {second.get('status')}: "
+              f"{second.get('error') or 'no answer'}). The replayed shape this "
+              f"harness builds is not the shape the service accepts, so every "
+              f"case would fail at its second turn. Not starting the run.",
+              flush=True)
+        return 1
+
+    print("PREFLIGHT: PASS — retrieval is healthy and a replayed turn is "
+          "accepted.", flush=True)
     return 0
 
 

@@ -54,12 +54,11 @@ sys.path.insert(0, str(HERE))
 
 RESULTS = HERE / "results"
 
-# Every trace file a run produces. A follow-up sequence puts one trace id per
-# turn, so those files are searched recursively rather than at the top level.
+# Every trace file a run produces. Searched recursively, because a two-turn case
+# writes one record per answer and each carries its own trace identifier.
 DEFAULT_TRACES = (
     RESULTS / "traces_http.jsonl",
     RESULTS / "adversarial_http.jsonl",
-    RESULTS / "followup_http.jsonl",
 )
 
 PROJECT = "trim-icon-498815-a0"

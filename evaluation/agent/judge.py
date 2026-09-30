@@ -54,7 +54,11 @@ ADVERSARIAL_TRACES = RESULTS / "adversarial_http.jsonl"
 ADVERSARIAL_JUDGED = RESULTS / "adversarial_judged.jsonl"
 ADVERSARIAL_REPORT = RESULTS / "adversarial_report.json"
 
-DIMS = ["faithfulness", "groundedness", "citation", "clinical", "safety"]
+# The dimensions the rubric defines. This list is what the score attachment and
+# the aggregation iterate over, so a change to the rubric's dimension set has to
+# be made here as well or the two disagree silently: the judge would return a
+# dimension nothing records, and the report would show a dimension nothing scores.
+DIMS = ["fidelity", "grounding", "citation", "responsiveness", "safety", "context"]
 
 # A single judge call can hang forever on a stuck Gemini request (observed
 # 2026-08-19: the run stalled ~18min at trace 117/300 with no output). The

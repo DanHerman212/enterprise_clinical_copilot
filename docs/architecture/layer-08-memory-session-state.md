@@ -75,11 +75,11 @@ than in isolation from them.
 
 ## 2. Requirements
 
-| # | Requirement | Level | Status |
-|---|---|---|---|
-| A1 (conversation-state clause) | A production front end reaches the agent over an API and keeps conversation state externalised. | MUST | **Met.** The interface never calls the model. Conversation state is external to the agent and external to the page: the site stores each answered turn, the browser carries only the conversation's identifier, and the site supplies the agent the turns it is asked to consider. What the page holds is a rendering copy, and the interface states that the thread belongs to the page. |
-| A3 | The agent is stateless and session state lives in an external store, so any instance may serve any request and a restart loses nothing. | MUST | **Met.** The agent holds nothing between requests: the services run without session affinity, the tool server is stateless, and no transcript is retained in the process. Session state lives in the site's database, behind an authorisation boundary, with the retention window and the ceiling read from settings and enforced. |
-| A7 | Long-term, cross-session memory in an external store, existing only if the product needs personalisation across sessions. | SHOULD | **Not applicable, declined on the record.** The requirement's own condition is that the product need personalisation across sessions, and it does not: a clinician's question about an admission is answered from that admission's evidence, and nothing about a previous session would improve it. Declining a SHOULD whose condition is unmet leaves nothing unresolved. |
+| # | Requirement | Level |
+|---|---|---|
+| A1 (conversation-state clause) | A production front end reaches the agent over an API and keeps conversation state externalised. | MUST |
+| A3 | The agent is stateless and session state lives in an external store, so any instance may serve any request and a restart loses nothing. | MUST |
+| A7 | Long-term, cross-session memory in an external store, existing only if the product needs personalisation across sessions. | SHOULD |
 
 One requirement outside this group governs the retention question and is named here so that the
 policy was not written without it: no personal or confidential data in logs, and data minimisation.

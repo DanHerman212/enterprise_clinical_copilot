@@ -80,18 +80,18 @@ Emitting telemetry is this layer's duty; collecting, storing and querying it bel
 
 ## 2. Requirements
 
-| # | Requirement | Level | Status |
-|---|---|---|---|
-| A2 | The agent is built with an agent framework and deployed on an agent runtime. | MUST | **Met.** LangGraph and LangChain on Cloud Run, deployed by a build pipeline that a push to the main branch triggers. |
-| A1 (streaming) | A production front end supports streaming, so the user sees output as it is produced rather than awaiting the whole answer. | MUST | **Met in part, deliberately.** `POST /ask/stream` relays progress stages while the chain runs and delivers the answer as a terminal frame; `/ask` is unchanged and a caller that does not request a stream is served exactly as before. What does not stream is the answer *text*, because the guardrails rewrite it after the model finishes. |
-| A3 | The agent is stateless, so any instance may serve any request and a restart loses nothing. | MUST | **Met.** Each request builds its own graph and opens its own MCP session; nothing is retained between requests. Externalised session state is layer 8's requirement and is met there. |
-| C1 | Prompt template, chain definition, tool wiring and model pin are versioned together as one artifact with its own revision history. | MUST | **Met.** All four reside in one service and share one identity. The question wording was moved out of the website so that half the prompt can no longer ship without touching the chain, and the model is a constant in code rather than an environment default. |
-| C2 | Prompt parts are classified: prompt-as-code, reviewed and tested, against prompt-as-data, validated and monitored for drift. | MUST | **Met.** The classification is recorded and enforced: the question is validated and length-capped at the boundary, and retrieved content is wrapped by the code that produces it and declared as data by the prompt. The two couplings the classification depends on — the delimiter emitted in one file and named in another, and the tool names registered in the server and referenced in the prompt — are now pinned by tests, because renaming either side previously broke the rule invisibly. |
-| C3 | Every execution logs its inputs, its outputs, the intermediate state of each step, and the chain configuration used. | MUST | **Met.** One structured record per turn, from both routes and on failure as well as success, carrying the chain identity, the model actually served, question length, per-stage timings, tool names, tool error codes, guardrail flags, token usage, finish reason and outcome. Question and answer text are excluded by construction, being patient-derived; the record keeps their shape. |
-| C5 | A step cap on any agent loop, to prevent runaway cost. | MUST | **Met.** Three independent bounds: ten supersteps, five tool calls per turn, and a wall-clock deadline. |
-| I1 | Requirements are defined before a pattern is chosen. | MUST | **Met.** The layer documents exist before the layer is built, and each decision records the alternatives it rejected. |
-| I2 | Start with a single agent; adopt multi-agent only when one agent measurably fails. | MUST | **Met.** One agent, with no multi-agent structure either present or pending. |
-| I3 | Every loop pattern has an explicit exit condition. | MUST | **Met.** The loop terminates when the model stops requesting tools, and each of the three caps above can terminate it independently. |
+| # | Requirement | Level |
+|---|---|---|
+| A2 | The agent is built with an agent framework and deployed on an agent runtime. | MUST |
+| A1 (streaming) | A production front end supports streaming, so the user sees output as it is produced rather than awaiting the whole answer. | MUST |
+| A3 | The agent is stateless, so any instance may serve any request and a restart loses nothing. | MUST |
+| C1 | Prompt template, chain definition, tool wiring and model pin are versioned together as one artifact with its own revision history. | MUST |
+| C2 | Prompt parts are classified: prompt-as-code, reviewed and tested, against prompt-as-data, validated and monitored for drift. | MUST |
+| C3 | Every execution logs its inputs, its outputs, the intermediate state of each step, and the chain configuration used. | MUST |
+| C5 | A step cap on any agent loop, to prevent runaway cost. | MUST |
+| I1 | Requirements are defined before a pattern is chosen. | MUST |
+| I2 | Start with a single agent; adopt multi-agent only when one agent measurably fails. | MUST |
+| I3 | Every loop pattern has an explicit exit condition. | MUST |
 
 ---
 

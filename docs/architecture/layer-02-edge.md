@@ -64,14 +64,14 @@ Layer 10 owns alerting on the volume and shape of that traffic, which this layer
 
 ## 2. Requirements
 
-| # | Requirement | Level | Status |
-|---|---|---|---|
-| G5 (a) | Controlled ingress for the public service: an external Application Load Balancer in front, with the default `run.app` URL disabled. | MUST | **Met in code; not present in the running system.** The edge exists as reviewed Terraform and was verified serving live on 2026-09-13 and again on 2026-09-14. It is destroyed today: no forwarding rules, no backend services, no security policies exist, the site's ingress is `all`, and its default hostname answers. |
-| G5 (b) | Cloud Armor on that load balancer for filtering, DDoS protection and rate limiting. | MUST | **Met in code; not present in the running system.** The policy `danielmherman-edge` is defined with two path-scoped `throttle` rules and a default allow, and was verified enforcing when the edge was last up. No policy exists at present. |
-| G5 (c) | User authentication at the door: IAP for internal users, Identity Platform or Firebase for external users. | MUST | **Met in the application; not at the edge.** Authentication is Django's, with issued accounts, no self-registration, and a username-keyed lockout after five failures. The reference arrangement — an identity service at the edge — is not present. |
-| G4 | Service-to-service calls authenticated with identity tokens, with least privilege on who may invoke each private service. | MUST | **Met, with a documented gap between the binding list and the effective permission set.** The agent mints and verifies a per-request identity token, and its IAM policy names exactly one invoker, `website-sa`. IAM's Owner and Editor roles nonetheless contain the invoke permission, so identities holding project-wide roles can call it regardless of the binding list. |
-| G5 (d) / F4 | Rate limiting and throttling per address or user; monitor request volume; alert on spikes and on unusual geographic or temporal patterns. | MUST | **Unmet in the running system.** The throttle rules exist in code and were verified enforcing; with the edge down, the only limits are the per-user quota and the per-username lockout, neither of which applies to anonymous traffic. No volume alerting exists anywhere. |
-| G1 | Request validation at the boundary: reject malformed or oversized input before it reaches the model. | MUST | **Met.** Both boundaries validate independently: the site requires a JSON object with an approved field set, bounds the question length, and checks the admission against the served cohort; the agent re-parses a closed contract with its own length bound. All of this precedes any spend. |
+| # | Requirement | Level |
+|---|---|---|
+| G5 (a) | Controlled ingress for the public service: an external Application Load Balancer in front, with the default `run.app` URL disabled. | MUST |
+| G5 (b) | Cloud Armor on that load balancer for filtering, DDoS protection and rate limiting. | MUST |
+| G5 (c) | User authentication at the door: IAP for internal users, Identity Platform or Firebase for external users. | MUST |
+| G4 | Service-to-service calls authenticated with identity tokens, with least privilege on who may invoke each private service. | MUST |
+| G5 (d) / F4 | Rate limiting and throttling per address or user; monitor request volume; alert on spikes and on unusual geographic or temporal patterns. | MUST |
+| G1 | Request validation at the boundary: reject malformed or oversized input before it reaches the model. | MUST |
 
 ---
 

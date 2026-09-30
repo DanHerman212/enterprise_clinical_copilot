@@ -73,9 +73,9 @@ be recorded, and this layer inherits it: error detail is logged server-side and 
 
 ## 2. Requirements
 
-| # | Requirement (Google, MUST) | Status |
-|---|---|---|
-| A1 | The frontend never calls the model directly; it talks to the agent over an API. A production frontend supports streaming, presents a stateless API, and keeps conversation state externalized. | **Met, all four clauses.** |
+| # | Requirement (Google, MUST) |
+|---|---|
+| A1 | The frontend never calls the model directly; it talks to the agent over an API. A production frontend supports streaming, presents a stateless API, and keeps conversation state externalized. |
 
 The four clauses separately, since they were not satisfied together:
 

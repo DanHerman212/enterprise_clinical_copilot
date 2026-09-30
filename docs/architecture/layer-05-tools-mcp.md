@@ -76,14 +76,14 @@ token it is enforced with.
 
 ## 2. Requirements
 
-| # | Requirement | Level | Status |
-|---|---|---|---|
-| A4 | Tools exposed through MCP, each with typed input and output schemas. | MUST | **Met.** One server exposes three focused tools. Input schemas are derived from the signatures and keep their types through to the model. The output contract is declared by annotation, and enforced twice — by the tool before it returns, and by the client before anything downstream sees the result. |
-| A5 | Tool definitions kept small: primitive types, fewer than five parameters, enums in preference to free text; focused toolsets rather than a monolithic server. | MUST | **Met.** One, three and one parameter; all primitive; one focused server with one job per tool; the two retrieval tools are separate rather than merged behind a mode flag; and the single bounded parameter declares its range in the schema, so the SDK refuses an out-of-range call before the tool body runs. No parameter is an enum, and that clause is unexercised rather than violated: the only free text is a search phrase, which cannot be enumerated. |
-| B3 | Serving uses the same embedding model and parameters as ingestion. | MUST | **Met in code, unverifiable from the repository for the deployment.** The embedding space has a single definition, imported by the serving path and the pipeline loader, with a test asserting identity rather than equality so that a copy which agrees today still fails. Which space the *deployed* index was built in is a deployment fact the repository cannot evidence. |
-| G1 | All inputs treated as untrusted, including tool results; external content validated before it enters a prompt. | MUST | **Met in part.** Provenance is enforced twice — the subject restriction constrains the query, and every resolved row is re-checked, so a mismatch refuses to serve the text. What may enter the prompt is bounded in size and escaped at the wrapper, and every failure path returns a stable code with a sentence while the detail goes to the log. What is absent is any screening of the text itself: a passage can still read as an instruction. That policy belongs to layer 11, recorded there as an open gap. |
-| F2 | Structured logging of which tools were called, with inputs and outputs and per-step latency; distributed tracing across the services. | MUST | **Met in part.** Tool names, their stable error codes and per-step latency appear on every execution record, and the progress stream emits tool and result events as they occur. Inputs and payloads are absent by decision, for the same reason the record carries no question or answer text: note content is patient-derived and a log store is a different privacy regime. No trace identifier crosses into the MCP server; that clause belongs to layer 10. |
-| G4 | Least-privilege service accounts, with service-to-service authentication by workload identity. | MUST | **Met in part.** The agent authenticates with a per-audience identity token, and the server refuses a request carrying no authorization header, while the token itself is verified by the platform's IAM rather than in-process. Whether the accounts are least-privilege, and who may invoke the service, is layer 11's assessment; the binding list is not assembled in this repository. |
+| # | Requirement | Level |
+|---|---|---|
+| A4 | Tools exposed through MCP, each with typed input and output schemas. | MUST |
+| A5 | Tool definitions kept small: primitive types, fewer than five parameters, enums in preference to free text; focused toolsets rather than a monolithic server. | MUST |
+| B3 | Serving uses the same embedding model and parameters as ingestion. | MUST |
+| G1 | All inputs treated as untrusted, including tool results; external content validated before it enters a prompt. | MUST |
+| F2 | Structured logging of which tools were called, with inputs and outputs and per-step latency; distributed tracing across the services. | MUST |
+| G4 | Least-privilege service accounts, with service-to-service authentication by workload identity. | MUST |
 
 ---
 

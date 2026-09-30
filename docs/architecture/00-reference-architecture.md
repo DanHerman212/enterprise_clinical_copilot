@@ -1,31 +1,9 @@
 # Reference Architecture — Full-Stack AI Application on Google Cloud
 
-This is the baseline mental model for the review. Every layer document in this
-folder audits one row of the table below against the two repositories
-(`enterprise_clinical_copilot` and `danielmherman`) and records what was
-found, what changed, and how to explain it.
-
 Derived from Google Cloud Architecture Center guidance, compiled 2026-09-11.
-The full requirement list, with MUST/SHOULD levels, is in
-`../google-cloud-ai-architecture-requirements.html`.
 
----
 
-## 1. Sources
-
-| Document (Google Cloud Architecture Center)                           | Last reviewed |
-| --------------------------------------------------------------------- | ------------- |
-| Deploy and operate generative AI applications                         | 2024-11-19    |
-| Well-Architected Framework, AI/ML perspective: Operational excellence | 2025-04-28    |
-| Well-Architected Framework, AI/ML perspective: Security               | 2025-11-26    |
-| RAG infrastructure for generative AI (Agent Platform + AlloyDB)       | 2026-02-04    |
-| Choose your agentic AI architecture components                        | 2026-04-21    |
-| Choose a design pattern for your agentic AI system                    | 2026-05-28    |
-| Single-agent AI system using ADK and Cloud Run                        | 2025-12-09    |
-
----
-
-## 2. The architecture
+## 1. The architecture
 
 ```mermaid
 flowchart TB
@@ -59,19 +37,10 @@ flowchart TB
   SERVE -.- PLANES
 ```
 
-Two governing rules run through everything:
-
-1. **The chain is the deployable artifact.** Prompt template, orchestration
-   code, tool wiring, and model version are versioned together and every run
-   logs its inputs, outputs, and intermediate states. Frameworks (LangGraph,
-   ADK) are libraries *inside* layer 3, not the layer itself.
-2. **Nothing non-deterministic is trusted.** Model output, retrieved documents,
-   and tool results are all validated before they are acted on or shown. The
-   layers exist to put explicit boundaries around the parts that can be wrong.
-
 ---
 
-## 3. The twelve layers
+## 2. The twelve layers
+Individual layers can be found in the [Architecture](https://github.com/DanHerman212/enterprise_clinical_copilot/tree/main/docs/architecture) directory.
 
 Layers 1–8 are the request path and its dependencies; 9–12 are planes that
 touch every box. Layers 6 and 7 are also fed by the offline loop.
@@ -92,54 +61,3 @@ touch every box. Layers 6 and 7 are also fed by the offline loop.
 | 12 | **Delivery (CI/CD)** | Get changes to production safely and reversibly. | CI tests prompts, chain, and retrieval, not just code; CD with production-like and load tests; canary; documented rollback. | Cloud Build, Cloud Deploy |
 
 ---
-
-## 4. What Google marks as optional or scale-dependent
-
-VPC Service Controls perimeter · customer-managed encryption keys ·
-Confidential Computing · Apigee / API Gateway · GKE instead of Cloud Run ·
-Provisioned Throughput · Memory Bank / long-term memory · multi-agent patterns ·
-fine-tuning / continuous tuning · Terraform-managed infrastructure ·
-multi-region.
-
-A reviewer may ask about any of these, but Google does not require them for a
-defensible production system. Including one is a product decision, not an
-architecture gap. This list exists so the bar does not move mid-review.
-
----
-
-## 5. How the review works
-
-- One document per layer, in request-path order: 1 → 12.
-- Each document follows the same shape: what the layer is · what Google
-  requires · how this application implements it (verified file and line) ·
-  current state against the requirement · gaps · interview questions the layer
-  answers.
-- Sections 1 to 3 stay brief and carry no gaps. A gap is described once, not
-  restated per section, and it lives only in the gaps section: section 5 in the
-eight-section layers 1–5, which are converted when they are next opened, and
-  section 4 in the four-section layers from 6 onward, which carry the gap table
-  and the record of change together. An entry states the defect and its evidence,
-  the remediation, and, once it lands, the outcome and how it was checked.
-- "Done" for a layer means every MUST is met and verified live. SHOULDs are
-  recorded as decisions. Nothing from section 4 is added unless chosen.
-- Fixed decisions: keep LangGraph (framework is a library inside layer 3);
-  minimise billable resources — spin up, verify, scale to zero or tear down; and
-  the demonstration environment has no event stream, so data ingestion is a
-  deliberate manual step rather than event-driven or scheduled.
-
-## 6. Layer documents
-
-| Layer | Document | Status |
-|---|---|---|
-| 1 Client | `layer-01-client.md` | Audited and refactored 2026-09-11. Streaming deferred to layer 3. |
-| 2 Edge | `layer-02-edge.md` | Implemented and verified live 2026-09-13 (decision D: Terraform load balancer + Cloud Armor, torn down between uses). Gaps 2 and 3 closed. |
-| 3 Orchestrator | `layer-03-orchestrator.md` | Audited 2026-09-13, all seven gaps closed 2026-09-15 and verified live. |
-| 4 Model runtime & gateway | `layer-04-model-runtime.md` | Audited 2026-09-15, rewritten shorter and independently reviewed 2026-09-16. Gaps 1 to 8 and 10 closed; gap 9 partly addressed and open (caching cannot apply at this prompt size). Model swapped to `gemini-3.1-flash-lite` on 2026-09-16. |
-| 5 Tools & grounding | `layer-05-tools-mcp.md` | Audited 2026-09-16 and independently reviewed the same day. Six gaps recorded; all six closed 2026-09-17. |
-| 6 Your own models | `layer-06-own-models.md` | Audited 2026-09-17 and independently reviewed the same day. Twelve gaps recorded; gaps 1 to 10 and 12 closed, gap 1 confirmed by a completed pipeline run, gap 11 carries its options and awaits a decision. Each gap carries its own decision and outcome in section 5. |
-| 7 Data & indexes | `layer-07-data-and-indexes.md` | Audited 2026-09-17, reviewed the same day and again on 2026-09-18, and reformatted to the four-section shape on 2026-09-18. Eight entries, all settled the same day: entry 1 withdrawn (the hourly-billed endpoints are deployed only for live tests) and entries 2 to 8 closed (no event stream by decision, each artifact records the data version it read, embedding reuse is refused unless the recorded vector space matches, the embedding manifest names the model the serving path imports, one gated script is the deploy path, that deploy measures the index before promoting it, the authorised cohort is derived from the corpus the tools serve, and the corpus descriptions say what the data is). B3 met, B1 and E1 partly, B2 and B6 not met by decision. |
-| 8 Memory / session state | `layer-08-memory-session-state.md` | Audited 2026-09-18, rewritten the same day after an independent review, and written in the four-section shape. Five entries, all closed 2026-09-18: the thread is transmitted rather than only displayed (the site stores each answered turn and sends the earlier ones back, the browser carries the conversation identifier, and a session is a page load that the interface states), the site's request boundary is closed alongside the agent's, the retention policy is twenty-four hours swept by a job with citation identity only, the replay is structural (dialogue as messages, tool calls rebuilt through the same wrapper and delimiter guard, retrieval re-resolved rather than stored), and the money and continuity rules are enforced in the ask path. A1 and A3 are met; A7 is not applicable and declined on the record. The thirteen decisions are in the strategy session beside it, `layer-08-memory-and-ux-strategy.md`. This row also adjudicates the client layer's deferred finding: the client keeps state, and this layer owns it. |
-| 9 Evaluation | `layer-09-evaluation.md` | First audit 2026-09-19, written in the four-section shape. Five entries recorded and none closed: no adversarial case set (D3), no gate in the delivery path (D5), nothing sampling or scoring production (D4), judge scores not attached to traces (the v4 scoring path), and the model-swap comparison the model layer is waiting on. The apparatus itself is real and its numbers are reported: D1 and D2 are met, D3, D4 and D5 are not. |
-| 10 Observability | — | Langfuse stack torn down 2026-09-12; to be rebuilt from a written design. |
-| 11 Security & identity | — | |
-| 12 Delivery | — | |

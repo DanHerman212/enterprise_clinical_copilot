@@ -75,11 +75,11 @@ model pin is the one artifact its pipeline registers.
 
 ## 2. Requirements
 
-| # | Requirement | Level | Status |
-|---|---|---|---|
-| E5 | Own models go through a pipeline: train, evaluate, Model Registry, endpoint, with lineage in ML Metadata. | MUST | **Met.** The chain exists and runs: a pipeline that fits the model, four gates that fail the run and whose thresholds are code or a versioned artifact rather than submission inputs, a registry entry naming the run, the revision and the data, and an endpoint reached by one guarded deploy script. The lineage is in ML Metadata, with the dataset artifact an input of the load step and the registered model an output of registration, inside the run's own context. Verified by a completed run on 2026-09-17. |
-| E6 | Retraining or re-tuning triggered by monitoring, not by hand. | SHOULD | **Not met, awaiting a decision.** No monitoring job, schedule, topic or trigger exists anywhere in the repository or its deploy scripts; retraining is a person running the pipeline. The environment script enables the messaging and scheduling APIs and grants the pipeline account publish rights, which is scaffolding for a loop rather than a loop. |
-| E1 | Version control for weights, datasets and images — the model's own half. | MUST | **Met, with one residual.** Weights are one bundle per run in object storage, with digests verified at load against a partially written file, a non-executable format, and the gate numbers travelling with the artifact. The dataset has a recorded reference and a lineage artifact. The training image is named by build tag on every submission, and the serving image is now recorded by digest, with the mutable tag removed from every place it existed. The residual is that the deployment serving today was uploaded before that change, so its record names a tag; the next deploy records a digest. |
+| # | Requirement | Level |
+|---|---|---|
+| E5 | Own models go through a pipeline: train, evaluate, Model Registry, endpoint, with lineage in ML Metadata. | MUST |
+| E6 | Retraining or re-tuning triggered by monitoring, not by hand. | SHOULD |
+| E1 | Version control for weights, datasets and images — the model's own half. | MUST |
 
 ---
 

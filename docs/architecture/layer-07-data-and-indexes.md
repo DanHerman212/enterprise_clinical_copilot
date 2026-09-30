@@ -82,13 +82,13 @@ is unmet by decision.
 
 ## 2. Requirements
 
-| # | Requirement | Level | Status |
-|---|---|---|---|
-| B1 | Three separate subsystems — ingestion, serving, evaluation — sharing the database layer but not code paths. | MUST | **Met in part.** They are separate processes, separate images and separate entry points, and no serving request executes ingestion code. The shared surface is the retrieval package's definitions, which are imported by both sides deliberately, because B3 requires the two to embed in one space and a second definition is the failure B3 names. The deviation is narrow, reasoned, and recorded rather than presented as compliance. |
-| B2 | Ingestion is event-driven and offline, and a live request never mutates the index. | MUST | **Not met, by decision.** The second clause is satisfied absolutely: nothing on the request path writes to the corpus or the index. The first clause is not: ingestion is submitted deliberately, because a demonstration environment has no event stream and embedding cost should be incurred by an act rather than by an arrival. The production mechanism is recorded for release planning. The verdict stays *not met* so that a reviewer sees the deviation rather than an argument that the clause does not apply. |
-| B3 | Serving uses the same embedding model and parameters as ingestion. | MUST | **Met.** One definition, in one module, imported by the serving path and resolved by the pipeline loader, with a test asserting identity rather than equality so that a copy which agrees today still fails. The manifests now record the model, dimensionality and task type, and a test resolves those recorded values to the same constants the serving module defines, so the artifact states what it was built in rather than only what it counted. |
-| B6 | Index maintenance is a scheduled operational task, versioned alongside the dataset. | MUST | **Not met, by decision.** The versioning half is now satisfied: every artifact an ingest writes records the data state it read, and reuse is refused where the recorded space disagrees with the current one. The scheduling half is not: there is no schedule, and the refresh is an operator's act. The verdict stays *not met* for the same reason as B2. |
-| E1 (data half) | Version control for the external datasets and stored objects. | MUST | **Met in part.** The analytical tables are produced from versioned transformations, and the corpus and cohort artifacts are in version control. The tables themselves are not versioned snapshots, which is what the data fingerprint compensates for rather than cures: an artifact now says which state of the table it read, but a past state cannot be reconstructed from the repository. |
+| # | Requirement | Level |
+|---|---|---|
+| B1 | Three separate subsystems — ingestion, serving, evaluation — sharing the database layer but not code paths. | MUST |
+| B2 | Ingestion is event-driven and offline, and a live request never mutates the index. | MUST |
+| B3 | Serving uses the same embedding model and parameters as ingestion. | MUST |
+| B6 | Index maintenance is a scheduled operational task, versioned alongside the dataset. | MUST |
+| E1 (data half) | Version control for the external datasets and stored objects. | MUST |
 
 ---
 

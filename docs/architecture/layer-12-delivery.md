@@ -72,13 +72,13 @@ audited there rather than here.
 
 ## 2. Requirements
 
-| # | Requirement (Google) | Status |
-|---|---|---|
-| E1 | Version control for prompt templates, chain code, external datasets, adapter weights and container images. | **Met.** Prompts and chain code are one versioned artifact in Git, and its revision is stamped into every execution record. Images are tagged and referenced by commit digest rather than by a floating tag. Runtime configuration for all three services is declared in the build configurations, including the fail-closed environment setting, so a service recreated from the repository cannot come up in a permissive mode. Datasets are versioned by the data layer's own artifacts. |
-| E2 | CI runs unit and integration tests on prompts, chain logic, embedded models and retrieval — not only application code. | **Unmet.** Neither the agent's pipeline nor the MCP server's pipeline contains a test step; both build, push and deploy. The site's pipeline runs `check --deploy --fail-level WARNING`, which is a genuine gate but a gate on framework configuration, not a test of behaviour. Test suites exist for all three components and are run by hand, which is what makes this a wiring gap rather than a gap in the tests. |
-| E3 | CD tests the API in a production-like environment, including load tests, before release. | **Unmet.** No production-like environment exists, no load test exists, and no capacity figure has been established against which a release could be judged. |
-| E4 | Canary or gradual release to a subset of users; documented rollback to the last known-good version. | **Met in part.** The site's pipeline deploys a revision with no traffic, runs migrations and the cohort seed, and only then promotes — a staged release with a designed safety property: if any step fails, the previous revision keeps serving and rollback is "do not promote". The index deployment is stronger still, being Blue/Green with a measurement taken before promotion. Absent are the two clauses the requirement names: no gradual traffic split with analysis, and no documented rollback procedure for a revision that was promoted and then found faulty. |
-| E6 | Retraining or re-tuning triggered by monitoring, not by hand. (SHOULD) | **Not met.** Retraining is a person running a pipeline. Layer 6 records this as an unmet SHOULD awaiting a product decision, and notes that the operations document describes the loop as if it ran. |
+| # | Requirement (Google) |
+|---|---|
+| E1 | Version control for prompt templates, chain code, external datasets, adapter weights and container images. |
+| E2 | CI runs unit and integration tests on prompts, chain logic, embedded models and retrieval — not only application code. |
+| E3 | CD tests the API in a production-like environment, including load tests, before release. |
+| E4 | Canary or gradual release to a subset of users; documented rollback to the last known-good version. |
+| E6 | Retraining or re-tuning triggered by monitoring, not by hand. (SHOULD) |
 
 E1 is satisfied, and E4 is partly satisfied in a way that is more careful than the requirement
 demands. E2 and E3 are absent, which is the significant fact: the artifact that ships is not

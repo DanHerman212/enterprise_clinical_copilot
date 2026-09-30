@@ -78,14 +78,14 @@ is why the execution record carries the *shape* of a question rather than its te
 
 ## 2. Requirements
 
-| # | Requirement (Google, MUST) | Status |
-|---|---|---|
-| F1 | End-to-end lineage: a bad answer traceable to the exact prompt version, model version, index version and tool results. | **Met in part.** The execution record carries the code revision, the model, the served model, and the trace id; prompt and code revision are the same artifact, which is the design the orchestrator layer settled. The retrieval index version is resolved at query time and is not represented in the record, and the record carries tool *names* rather than results — the results live in the trace. |
-| F2 | Structured logging in the agent — tools called, inputs and outputs, latency per step — and distributed tracing across frontend, agent, tools and model. | **Met in part.** One structured JSON record per execution carries the tool names, per-stage timings and the overall duration. The Cloud Trace context is propagated from the BFF to the agent, so both services' logs join on a single id. Langfuse holds the spans. Cloud Trace is not configured as a tracing backend in its own right. |
-| F3 | Monitor at the application level first, then per component. | **Met.** The unit of record is one answered question, emitted for failures as well as successes. |
-| F4 | Track latency, error rate, 429 rate, token usage and request volume; alert on thresholds. | **Unmet.** The record contains every quantity an alert would need — duration in milliseconds, token usage, outcome, `finish_reason`, content-filter categories, tool error codes, guardrail flags — and nothing turns any of them into a series. No log-based metric, no dashboard and no alert policy is defined anywhere in the repository. |
-| F5 | Skew and drift detection on inputs against the eval set: text length, token counts, embedding distance, topic shifts. | **Unmet.** Nothing compares production input against the evaluation distribution. The `question_chars` field is the one input statistic recorded, and it is recorded, not monitored. |
-| F6 | No PII or confidential data in logs. | **Met.** The record omits question and answer text by construction, keeping their shape instead; the docstring states that adding the text is a decision requiring a retention policy rather than a side effect of a log line. Raw note text and evaluation traces are gitignored. |
+| # | Requirement (Google, MUST) |
+|---|---|
+| F1 | End-to-end lineage: a bad answer traceable to the exact prompt version, model version, index version and tool results. |
+| F2 | Structured logging in the agent — tools called, inputs and outputs, latency per step — and distributed tracing across frontend, agent, tools and model. |
+| F3 | Monitor at the application level first, then per component. |
+| F4 | Track latency, error rate, 429 rate, token usage and request volume; alert on thresholds. |
+| F5 | Skew and drift detection on inputs against the eval set: text length, token counts, embedding distance, topic shifts. |
+| F6 | No PII or confidential data in logs. |
 
 F1, F2, F3 and F6 concern what is recorded, and the recording is careful. F4 and F5 concern what
 is done with the record, and nothing is done with it.

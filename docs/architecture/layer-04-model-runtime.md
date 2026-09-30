@@ -78,15 +78,15 @@ embedding is a second Vertex call outside this door and belongs to layers 5 and 
 
 ## 2. Requirements
 
-| # | Requirement | Level | Status |
-|---|---|---|---|
-| A6 | The model is served from a managed model runtime; serving it is a dependency, not something the application hosts. | MUST | **Met.** Vertex, reached with application default credentials, with no model hosted here. |
-| H1 | Retries, timeouts, exception handling and 429 handling on model calls. | MUST | **Met in part.** A single call is bounded, the bounds nest coherently with the chain deadline and the caller's wait, and the response's own reason for stopping is recorded and acted upon — so a deterministic refusal no longer reaches the caller as advice to retry. What remains absent is observation: retries, including those caused by 429 and by timeout, occur without being counted, because the policy is the SDK's. |
-| H2 | Establish baseline QPS and tokens per second before launch; monitor afterwards. | MUST | **Met in part.** Every execution records what it was billed for — input, output, thinking and cached tokens, and the model that served it — so a baseline is derivable from the records. No baseline has been written down, and the monitoring half belongs to layer 10, which records that no metric or alert exists. |
-| H3 | Start with the cheapest model that passes evaluation, then escalate; control the thinking budget; route simple work to smaller models. | MUST | **Met in part.** The pin is the entry tier of its family and thinking is bounded by a chosen effort level rather than left to the model's default, with the measurements that informed the level recorded beside it. What is missing is the evidence: the comparison has not been run, there is no escalation path, and the judge that would apply it is the model under test. |
-| H4 | Concise prompts; context caching for repeated high-token context. | SHOULD | **Met in part.** Caching was decided by measurement rather than assumption: the prompt is 3,088 input tokens and the family's minimum cacheable prefix is 4,096, so nothing this system sends can be cached at the size it sends it. The requirement's other half has not been addressed: the prompt's own size, resent on every turn, has never been reviewed. |
-| H5 | Simulate failures and load before production. | MUST | **Met in part.** Failure is exercised: a model that raises, stalls, or returns nothing is driven through the route, and each outcome is asserted on both the caller's response and the execution record, including the chain's own deadline, which previously had no test of any kind. Load is not simulated. |
-| G2, B4 | Layered defence: screen prompts and responses for injection, jailbreak and harmful content, applying responsible-AI filters before returning to the user. | MUST | **Met in part.** The four configurable categories are pinned to a chosen threshold rather than left at the platform default, and a filtered response records which category flagged it, so a refusal can be counted rather than merely experienced. Injection and jailbreak are unaddressed at this door by decision: that policy belongs to layer 11, which carries it as an open gap. |
+| # | Requirement | Level |
+|---|---|---|
+| A6 | The model is served from a managed model runtime; serving it is a dependency, not something the application hosts. | MUST |
+| H1 | Retries, timeouts, exception handling and 429 handling on model calls. | MUST |
+| H2 | Establish baseline QPS and tokens per second before launch; monitor afterwards. | MUST |
+| H3 | Start with the cheapest model that passes evaluation, then escalate; control the thinking budget; route simple work to smaller models. | MUST |
+| H4 | Concise prompts; context caching for repeated high-token context. | SHOULD |
+| H5 | Simulate failures and load before production. | MUST |
+| G2, B4 | Layered defence: screen prompts and responses for injection, jailbreak and harmful content, applying responsible-AI filters before returning to the user. | MUST |
 
 ---
 

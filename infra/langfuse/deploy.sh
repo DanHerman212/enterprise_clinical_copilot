@@ -137,9 +137,17 @@ deploy() { # service image port cpu memory extra_env extra_secrets
 # The web image applies 438 Prisma migrations on boot and then runs Next.js; the
 # heap ceiling is set below the container limit so Node fails its own allocation
 # with a message rather than being killed by the kernel with none.
+#
+# `LANGFUSE_MIGRATION_V4_WRITE_MODE=dual` is the other half of the pair set on the
+# worker in `docker-compose.yml`, where the reason is written out at length. In
+# short: v4's `events_only` write mode restricts the legacy ingestion endpoint to
+# score events, so the eval harness cannot tag a trace after collecting it.
+# Setting it on one service and not the other means an event is accepted by one
+# and dropped by the other.
 deploy langfuse-web "$WEB_IMAGE" 3000 2 2Gi \
   "|NODE_OPTIONS=--max-old-space-size=1536\
 |NEXTAUTH_URL=https://$DOMAIN\
+|LANGFUSE_MIGRATION_V4_WRITE_MODE=dual\
 |LANGFUSE_INIT_ORG_ID=ecc-observability\
 |LANGFUSE_INIT_ORG_NAME=Enterprise Clinical Copilot\
 |LANGFUSE_INIT_PROJECT_ID=ecc-agent\

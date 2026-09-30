@@ -157,6 +157,24 @@ GEMINI_MODEL = "gemini-3.1-flash-lite"
 # to be reached through also names the vector index and the prediction endpoint, which
 # do live in us-east1.
 
+# The JUDGE. A different model from the one under test, reached on a different
+# endpoint, and pinned here for the same reason everything else on this page is pinned.
+#
+# Why it must differ: a judge that loads the agent's own model cannot be relied on to
+# detect a failure mode the two share, so its verdicts would rest on the agent's blind
+# spots and measure agreement with itself. `gemini-2.5-pro` is independent on two axes
+# at once — a different model generation from the pinned `gemini-3.1-flash-lite`, and a
+# higher tier — which is as much separation as one vendor provides. It is not family
+# independence; a model from another vendor would be, and that remains a recorded
+# limitation rather than a claim.
+#
+# Availability was measured rather than assumed (2026-09-30): `gemini-2.5-pro` and
+# `gemini-2.5-flash` answer on the regional endpoint and are NOT_FOUND on the global
+# one, which is the reverse of the pinned model's arrangement. Hence a location
+# constant of its own.
+JUDGE_MODEL = "gemini-2.5-pro"
+JUDGE_LOCATION = LOCATION  # us-east1 — the region the 2.5 models are served from
+
 # Thinking and the answer share this allowance, and the model stops when it runs out
 # without raising: the call returns 200 with empty text and finish_reason=MAX_TOKENS.
 # A level bounds effort rather than tokens, so what thinking will spend is known only

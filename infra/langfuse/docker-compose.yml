@@ -130,6 +130,17 @@ services:
     environment:
       NODE_ENV: production
       TELEMETRY_ENABLED: "false"
+      # Paired with the same setting on the web service in `deploy.sh`, and the
+      # pair is deliberate. Under v4's `events_only` write mode the legacy
+      # ingestion endpoint accepts score events and nothing else, which is why
+      # the judge's scores land on traces while a trace update is refused with
+      # `Event type not accepted`. The eval harness tags traces after collecting
+      # them, and that is a trace update, so it needs this. `dual` is the bridge
+      # Langfuse documents for the transition; it only widens what the old
+      # endpoint accepts, so the SDK and OTLP writes the agent already makes are
+      # unaffected. Setting it on one service and not the other means an event is
+      # accepted by one and dropped by the other.
+      LANGFUSE_MIGRATION_V4_WRITE_MODE: "dual"
       DATABASE_URL: ${WORKER_DATABASE_URL:?WORKER_DATABASE_URL is required}
       SALT: ${SALT:?SALT is required}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}

@@ -33,7 +33,7 @@ RESULTS = HERE / "results"
 sys.path.insert(0, str(HARNESS))
 sys.path.insert(0, str(HERE))
 
-from services.mcp.config import GEMINI_LOCATION, GEMINI_MODEL, PROJECT  # noqa: E402
+from services.mcp.config import JUDGE_LOCATION, JUDGE_MODEL, PROJECT  # noqa: E402
 
 TRACES = RESULTS / "traces.jsonl"
 RUBRIC = (HERE / "rubric.md").read_text()
@@ -175,7 +175,7 @@ def _evidence(tc: dict) -> dict:
 def _judge_once(client, system: str, user: str) -> dict:
     """One synchronous judge call to Gemini (no timeout on this client API)."""
     resp = client.models.generate_content(
-        model=GEMINI_MODEL,
+        model=JUDGE_MODEL,
         contents=user,
         config=types.GenerateContentConfig(
             system_instruction=system,
@@ -298,7 +298,7 @@ def _main_adversarial(args, client) -> int:
     traces_path = Path(args.traces_path)
     judged_path = Path(args.judged_path)
     traces = [json.loads(l) for l in traces_path.read_text().splitlines() if l.strip()]
-    print(f"Judging {len(traces)} adversarial probes (model {GEMINI_MODEL})")
+    print(f"Judging {len(traces)} adversarial probes (model {JUDGE_MODEL})")
 
     lf = _langfuse_client()
     print(f"Langfuse score attachment: {'ON' if lf else 'OFF (no LANGFUSE_* env)'}")
@@ -371,7 +371,7 @@ def _main_adversarial(args, client) -> int:
                                    "langfuse_trace_id": rec.get("langfuse_trace_id")})
     total = verdict["pass"] + verdict["fail"]
     report = {
-        "model": GEMINI_MODEL,
+        "model": JUDGE_MODEL,
         "probes": len(scored),
         "scored": total,
         "unjudged": verdict["unjudged"],
@@ -424,14 +424,14 @@ def main() -> int:
     _load_env_file(HARNESS / ".env.langfuse")
     # The model's endpoint, not the project's region: the pinned model is not served in
     # us-east1, so this client answered 404 from the day of the swap until it was fixed.
-    client = genai.Client(vertexai=True, project=PROJECT, location=GEMINI_LOCATION)
+    client = genai.Client(vertexai=True, project=PROJECT, location=JUDGE_LOCATION)
 
     if args.mode == "adversarial":
         return _main_adversarial(args, client)
 
     lf = _langfuse_client()
     traces = [json.loads(l) for l in traces_path.read_text().splitlines() if l.strip()]
-    print(f"Judging {len(traces)} traces (model {GEMINI_MODEL})")
+    print(f"Judging {len(traces)} traces (model {JUDGE_MODEL})")
     print(f"Langfuse score attachment: {'ON' if lf else 'OFF (no LANGFUSE_* env)'}")
 
     # Resumable: skip (hadm_id, prompt) pairs already scored in judged.jsonl and
@@ -510,7 +510,7 @@ def main() -> int:
 
     total = verdict["pass"] + verdict["fail"]
     report = {
-        "model": GEMINI_MODEL,
+        "model": JUDGE_MODEL,
         "traces": len(traces),
         "scored": total,
         "agent_errors": verdict["agent_error"],

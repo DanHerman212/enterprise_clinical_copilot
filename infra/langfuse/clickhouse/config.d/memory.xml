@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<!--
+  ClickHouse memory ceiling for the Langfuse data plane.
+
+  Why this file exists. On 2026-10-02 the kernel OOM killer terminated
+  clickhouse-server on a 3.9 GB VM shared with Redis, MinIO, the worker and the
+  Cloud SQL proxy. Docker did not mark the container exited, so it stayed listed
+  as "Up" with a failing healthcheck for five days; because langfuse-web runs
+  ClickHouse migrations at startup and exits on failure, the outage reached the
+  front door as a 503. Nothing alerted.
+
+  What this changes. The server now refuses work under pressure instead of
+  growing until the kernel kills it. The limit is 1.6 GB, a little over 40% of
+  the host, leaving room for the other four services and the page cache. The
+  merge scheduler is the main consumer to be throttled, which is the intended
+  trade: delayed merges degrade performance, whereas an OOM kill is an outage.
+
+  Change this with the host size, not independently of it.
+-->
+<clickhouse>
+    <max_server_memory_usage>1600000000</max_server_memory_usage>
+
+    <!-- Keep the caches small relative to the ceiling above: together they
+         would otherwise be allowed to occupy most of it. -->
+    <mark_cache_size>268435456</mark_cache_size>
+    <uncompressed_cache_size>134217728</uncompressed_cache_size>
+</clickhouse>

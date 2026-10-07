@@ -30,6 +30,9 @@ services:
     image: clickhouse/clickhouse-server:25.12
     container_name: langfuse-clickhouse
     restart: unless-stopped
+    # Safety net below the server's own cap: a runaway contained here cannot
+    # starve Redis, MinIO and the worker, which share this 4 GB host.
+    mem_limit: 2g
     environment:
       CLICKHOUSE_DB: default
       CLICKHOUSE_USER: default
@@ -37,6 +40,12 @@ services:
     volumes:
       - clickhouse-data:/var/lib/clickhouse
       - clickhouse-logs:/var/log/clickhouse-server
+      # ClickHouse is told to limit itself rather than be limited by the kernel.
+      # On 2026-10-02 the host's OOM killer terminated the server; the container
+      # was then left listed as "Up" with a failing healthcheck for five days,
+      # and the failure only surfaced when someone opened the UI. A server-level
+      # cap turns that into a refused query, which is loud and survivable.
+      - ./clickhouse/config.d/memory.xml:/etc/clickhouse-server/config.d/memory.xml:ro
     ports:
       - "8123:8123"
       - "9000:9000"

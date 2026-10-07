@@ -1,0 +1,14 @@
+[Unit]
+Description=Run the Langfuse self-heal check every five minutes
+
+[Timer]
+# First check shortly after boot, then every five minutes. Not Persistent: a
+# missed run while the host is down is not worth replaying, because the check
+# acts on current state rather than accumulating history.
+OnBootSec=3min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

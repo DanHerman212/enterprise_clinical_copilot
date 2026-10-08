@@ -20,6 +20,12 @@ CHIP_QUESTIONS = {
     "risk": "Assess the 30-day readmission risk for this patient.",
     "meds": "What medications was this patient discharged on?",
     "summarize": "Summarize the recent discharge notes for this patient.",
+    # The literature chip. The wording says "this condition" and the admission is
+    # appended below, so the model knows which patient to reduce to search terms
+    # while the tool call itself carries none — `search_literature` takes no hadm_id,
+    # which is what stops note text reaching a third party. See
+    # docs/literature-tool-plan.md.
+    "literature": "Search PubMed for recent literature on this condition.",
 }
 
 # Appended when a patient is in scope, so the model never has to ask which

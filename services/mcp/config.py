@@ -127,6 +127,40 @@ DISCHARGE_TABLE = _validated_table_ref(
 )
 DEFAULT_TOP_K = positive_int_env("RAG_TOP_K", 5)
 
+# PubMed literature search (NCBI E-utilities).
+#
+# Read from the environment rather than pinned, unlike the model and the region
+# above, and for the opposite reason: these are not properties of the world that must
+# not drift, they are facts about who is calling. NCBI's usage policy asks every
+# caller to identify itself, so the contact address belongs to the deployment.
+#
+# `NCBI_API_KEY` is recommended rather than required, and this comment has now been
+# wrong in both directions. It first said the key "buys headroom rather than
+# capability"; measurement on 2026-10-08 was that without a key the first search
+# answered and the second was refused with 429. It then said the key was "NOT optional
+# in practice", which the retry added the same day disproved — a bounded retry carried
+# an unpaced burst of three searches.
+#
+# What is true: NCBI allows 3 requests per second per source address without a key and
+# 10 with one, and a search is two requests. The limit is per ADDRESS, and Cloud Run
+# presents one egress address for every instance, so the budget is shared across
+# clinicians rather than granted to each. The retry covers an isolated burst; it does
+# not cover sustained or concurrent load, where its pause becomes a visible wait.
+# Register a key and set it here: it is free and takes minutes.
+#
+# An absent address must still not stop the service booting: the same process serves
+# prediction and retrieval, and those must keep working on a deployment where nobody
+# configured a literature contact. So it fails only this tool, at call time, with a
+# structured error the caller can read.
+NCBI_EUTILS_BASE = os.environ.get(
+    "NCBI_EUTILS_BASE", "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+)
+NCBI_EMAIL = os.environ.get("NCBI_EMAIL", "")
+NCBI_API_KEY = os.environ.get("NCBI_API_KEY", "")
+# Per request, and there are two of them. Both finish well inside
+# MCP_TOOL_TIMEOUT_SECONDS, which is the outermost of the three timeouts.
+NCBI_TIMEOUT_SECONDS = positive_int_env("NCBI_TIMEOUT_SECONDS", 10)
+
 # Gemini. PINNED, not read from the environment: an environment default lets a
 # deploy change the model the chain uses with no commit anywhere, which is exactly
 # what makes an answer unreproducible. Changing the model is now a reviewed change,

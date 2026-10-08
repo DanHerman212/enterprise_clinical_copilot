@@ -21,7 +21,12 @@ from starlette.responses import JSONResponse
 from .config import LOCATION, PROJECT
 from .dependencies.features import FEATURE_SOURCE
 from .runtime import requires_cloud_run_auth
-from .tools import predict_readmission, rag_search, rag_search_sections
+from .tools import (
+    predict_readmission,
+    rag_search,
+    rag_search_sections,
+    search_literature,
+)
 
 server = MCPServer(
     name="readmission",
@@ -32,12 +37,15 @@ server = MCPServer(
         "feature attributions behind the score. Use rag_search to retrieve "
         "cited passages from a patient's discharge notes for a free-text "
         "question. Use rag_search_sections to retrieve one cited passage per "
-        "major discharge-note section for summarization."
+        "major discharge-note section for summarization. Use search_literature "
+        "to find recent published evidence on a clinical question; it takes "
+        "de-identified search terms and no patient identifier."
     ),
 )
 server.add_tool(predict_readmission)
 server.add_tool(rag_search)
 server.add_tool(rag_search_sections)
+server.add_tool(search_literature)
 
 
 @server.custom_route("/health", methods=["GET"])

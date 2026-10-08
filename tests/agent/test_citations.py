@@ -14,12 +14,72 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from services.agent.citations import (  # noqa: E402
     SECTION_ALIASES,
     citation_remap,
+    cited_numbers,
     extract_section,
     first_citation,
     intent_sections,
     renumber_citations,
 )
 from services.mcp.retrieval.sections import KNOWN_HEADINGS  # noqa: E402
+
+
+class TestLiteratureCitations:
+    r"""`^[PMID: 31234567]` must be invisible to the note-citation pipeline.
+
+    Two citation schemes travel in one answer: note passages by number, and
+    published articles by PMID badge. The renumberer rewrites `^[n]` to
+    first-appearance order against the resolved note sources, and a PMID badge is
+    not one of those.
+
+    What keeps them apart is the prefix, not luck: `_CITATION_RE` is
+    `\^\[(\d+...)\]`, so it requires a DIGIT where a badge has a letter. The tests
+    below pin both halves — that a badge is skipped, and that the skipping is the
+    prefix's doing rather than an accident of the digits involved.
+
+    The failure this guards against is quiet and convincing: a renumbered or
+    stripped PMID still renders as a plausible citation, and it points at the wrong
+    paper rather than at nothing at all.
+    """
+
+    def test_a_pmid_badge_survives_renumbering(self):
+        answer = "Ceftriaxone remains first line.^[PMID: 31234567]"
+
+        assert renumber_citations(answer) == answer
+
+    def test_several_pmids_in_one_badge_are_also_skipped(self):
+        answer = "Two trials support this.^[PMID: 31234567, 39156338]"
+
+        assert renumber_citations(answer) == answer
+
+    def test_a_pmid_badge_contributes_no_note_citation(self):
+        answer = "The note documents this^[1] and a trial agrees.^[PMID: 31234567]"
+
+        assert cited_numbers(answer) == [1]
+        assert citation_remap(answer) == {"1": 1}
+
+    def test_a_pmid_badge_does_not_disturb_note_numbering(self):
+        """The note citation keeps its own sequence; the badge is not in it.
+
+        The `^[3]` here belongs to a note passage the model numbered third, so it
+        renumbers to `^[1]` on its own terms. If the badge were being counted, the
+        numbering would come out differently — which is the point of asserting the
+        exact string rather than just "the badge survived".
+        """
+        answer = "Published work^[PMID: 99] and the note^[3]."
+
+        assert renumber_citations(answer) == (
+            "Published work^[PMID: 99] and the note^[1]."
+        )
+
+    def test_a_bare_pmid_number_would_be_mistaken_for_a_note_citation(self):
+        """Why the prefix is load-bearing rather than decorative.
+
+        Drop `PMID:` and the digits parse as an n-numbered note citation, to be
+        renumbered against passages that do not support them. This is the failing
+        case the prompt rule exists to prevent, asserted so the rule is not
+        mistaken for a style preference.
+        """
+        assert cited_numbers("See ^[31234567].") == [31234567]
 
 
 class TestAliasConsolidation:

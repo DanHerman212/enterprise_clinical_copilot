@@ -128,7 +128,7 @@ def _error(
     """
     if detail:
         _LOG.warning("%s refused for hadm %s: %s", code, hadm_id, detail)
-    return tool_error(hadm_id, code, message)
+    return tool_error(code, message, hadm_id=hadm_id)
 
 
 @lru_cache(maxsize=1)

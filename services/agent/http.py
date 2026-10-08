@@ -239,6 +239,13 @@ def _compose_success(question: str, state: dict, trace: str) -> dict:
         "tool_calls": trimmed_calls,
         "a2ui": presentation["a2ui"],
         "sources": presentation["sources"],
+        # Published records the answer rests on, if it rests on any. Carried beside
+        # `sources` rather than inside it: that list is the note-citation channel —
+        # numbered, renumbered, and resolved against retrieved note passages — and a
+        # journal article has no passage to resolve against. The canvas renders the
+        # articles, so they have to cross this boundary or the swap has nothing to
+        # draw.
+        "literature": presentation["literature"],
         "model": chain.MODEL_ID,
         # The revision that produced this answer travels with it. A stored turn
         # without it cannot be explained once the code has moved on, which is

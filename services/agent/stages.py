@@ -98,6 +98,7 @@ QUESTION_KIND_LABELS = {
     "risk": "Reading the Risk Question",
     "meds": "Reading the Medication Question",
     "summarize": "Reading the Summary Request",
+    "literature": "Reading the Literature Request",
 }
 
 # One label per tool the MCP server advertises (`services/mcp/server.py`).
@@ -108,6 +109,7 @@ TOOL_LABELS = {
     "predict_readmission": "Reading the Risk Model",
     "rag_search": "Searching the Discharge Notes",
     "rag_search_sections": "Reading the Note Sections",
+    "search_literature": "Searching the Literature",
 }
 
 # Used when the MCP server advertises a tool this table has not been taught.
@@ -123,11 +125,13 @@ LABEL_RESULT_FAILED = "The Tool Did Not Respond"
 LABEL_RESULT_RISK = "Read the Risk Score"
 LABEL_RESULT_PASSAGES = "Read the Note Passages"
 LABEL_RESULT_SECTIONS = "Read the Note Sections"
+LABEL_RESULT_LITERATURE = "Read the Articles"
 
 RESULT_LABELS = {
     "predict_readmission": LABEL_RESULT_RISK,
     "rag_search": LABEL_RESULT_PASSAGES,
     "rag_search_sections": LABEL_RESULT_SECTIONS,
+    "search_literature": LABEL_RESULT_LITERATURE,
 }
 
 

@@ -1,9 +1,18 @@
 # Local development dependencies for the whole harness (MCP server + agent).
-# The container installs the narrower mcp_server/requirements.txt instead.
+# The container installs THIS file: services/mcp/Dockerfile copies
+# services/mcp/requirements.txt. Until 2026-10-08 the line here pointed at a
+# mcp_server/requirements.txt that does not exist — it described the archived
+# projects/agent-harness/ layout, and sent anyone changing a dependency to a file
+# nothing installs.
 # Pinned to the versions verified locally on 2026-07-30 — an unpinned
 # google-cloud-aiplatform is how a working image starts failing on a rebuild.
 
 mcp==2.0.0
+# Declared directly rather than left to arrive transitively via mcp. The literature
+# tool imports httpx by name, and a direct import on a transitive dependency breaks
+# the day the intermediary drops it — the reason pydantic and jsonschema are listed
+# here too. Version as installed and verified on 2026-10-08.
+httpx==0.28.1
 # Imported directly by the tool signatures: `Annotated[int, Field(ge=..., le=...)]` is how a
 # parameter's range reaches the advertised schema. It arrives transitively via mcp, and a
 # direct import on a transitive dependency breaks the day the intermediary drops it.

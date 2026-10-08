@@ -51,7 +51,7 @@ def _error(
     """
     if detail:
         _LOG.warning("%s refused for hadm %s: %s", code, hadm_id, detail)
-    return tool_error(hadm_id, code, message, feature_source=FEATURE_SOURCE)
+    return tool_error(code, message, hadm_id=hadm_id, feature_source=FEATURE_SOURCE)
 
 
 def _model_identity(pred: dict[str, Any], deployed_model_id: str) -> str:

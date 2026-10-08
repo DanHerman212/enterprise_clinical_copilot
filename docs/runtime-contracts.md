@@ -53,16 +53,20 @@ crosses the boundary: the arguments are the caller's own question and admission,
 passages the call returned already do. A caller that stores a turn needs both fields, because a
 replayed call without its arguments misstates what was asked, and a result that can be
 re-derived must not be kept: retrieval returns discharge-note text, so the site stores the
-prediction payloads and leaves the retrieval results to be resolved again
+prediction payloads and leaves the retrieval and literature results to be resolved again
 (`services/agent/contracts.py`, `RE_DERIVABLE_TOOLS`).
 
 ## MCP tools
 
-The MCP service exposes three tools:
+The MCP service exposes four tools:
 
 - `predict_readmission(hadm_id)`: structured features to probability, decision, and factors.
 - `rag_search(hadm_id, query, top_k)`: admission-filtered vector retrieval with scored passages.
 - `rag_search_sections(hadm_id)`: deterministic section passages for summary requests.
+- `search_literature(query, max_results)`: recent published evidence from PubMed, with the
+  title, journal, publication date and abstract of each article. The one tool with no
+  admission among its arguments, and therefore the one that cannot read the patient it is
+  being asked about.
 
 Tool failures are returned as data with `error` and `message`; they are not silently
 converted into plausible clinical content. Contracts are defined in

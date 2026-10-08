@@ -50,19 +50,69 @@ class RetrievalResult(TypedDict):
     note: NotRequired[str]
 
 
+class LiteratureArticle(TypedDict):
+    """One PubMed record, as the console renders it and the model cites it."""
+
+    pmid: str
+    title: str
+    journal: str
+    # As the record states it — "2025 Mar 12", or "2025 Jan-Feb" when the issue has
+    # no month. Deliberately not normalised into a date type: the reader is judging
+    # whether the paper is current, and the record's own precision is the honest one.
+    pub_date: str
+    abstract: str
+    url: str
+
+
+class LiteratureResult(TypedDict):
+    """A literature search. Not scoped to an admission, unlike every other result here.
+
+    There is no `hadm_id`, and its absence is load-bearing rather than an omission:
+    this tool is the only one that sends anything to a third party, so what it can
+    send is bounded by what it is given. See `services/mcp/tools/literature.py`.
+    """
+
+    query: str
+    returned: int
+    articles: list[LiteratureArticle]
+    # Present when a search legitimately matched nothing, so an empty result can say
+    # why instead of looking like a failure. Declared for the same reason as `note`
+    # above: a key the schema does not declare is dropped from the payload the client
+    # receives.
+    note: NotRequired[str]
+    # True when the search could not be performed at all — a rate limit, a timeout, a
+    # network failure — as opposed to being performed and matching nothing. The
+    # distinction is the whole point: an empty list alone cannot say whether anything
+    # was ever looked for, and reporting an unexamined thing as absent invents a fact.
+    degraded: NotRequired[bool]
+
+
 class ToolContractError(ValueError):
     """An MCP tool returned a payload outside its declared contract."""
 
 
 def tool_error(
-    hadm_id: int,
     code: str,
     message: str,
     *,
+    hadm_id: int | None = None,
     feature_source: str | None = None,
 ) -> ToolError:
-    """Create the common structured error payload used by MCP tools."""
-    payload: ToolError = {"hadm_id": hadm_id, "error": code, "message": message}
+    """Create the common structured error payload used by MCP tools.
+
+    `hadm_id` is keyword-only and optional because not every tool is scoped to an
+    admission. This signature used to lead with it, which wrote "every tool belongs
+    to a patient" into the shared contract — true while the only tools were
+    prediction and retrieval, and false now that one searches the literature. A tool
+    with no admission omits the field rather than inventing one to satisfy a shape.
+
+    The absence is also the privacy boundary. A tool that was never handed an
+    admission cannot look the patient up, so the only thing it is able to put on the
+    wire is the query it received. See docs/literature-tool-plan.md.
+    """
+    payload: ToolError = {"error": code, "message": message}
+    if hadm_id is not None:
+        payload["hadm_id"] = hadm_id
     if feature_source is not None:
         payload["feature_source"] = feature_source
     return payload
@@ -144,6 +194,34 @@ def validate_retrieval_result(payload: Any) -> RetrievalResult | ToolError:
     return payload
 
 
+def validate_literature_result(payload: Any) -> LiteratureResult | ToolError:
+    if not isinstance(payload, dict):
+        raise ToolContractError("Literature payload is not an object.")
+    if "error" in payload:
+        return _validate_error(payload)
+    required = ("query", "returned", "articles")
+    if any(field not in payload for field in required):
+        raise ToolContractError("Literature payload is missing a required field.")
+    if not isinstance(payload["query"], str) or not isinstance(payload["returned"], int):
+        raise ToolContractError("Literature metadata is invalid.")
+    articles = payload["articles"]
+    if not isinstance(articles, list) or payload["returned"] != len(articles):
+        raise ToolContractError("Literature articles are inconsistent.")
+    for article in articles:
+        if not isinstance(article, dict) or any(
+            not isinstance(article.get(field), str)
+            for field in ("pmid", "title", "journal", "pub_date", "abstract", "url")
+        ):
+            raise ToolContractError("Literature article is malformed.")
+        # A record with no identifier cannot be cited or linked, which is the whole
+        # use of it, so it is rejected here rather than rendered as a blank badge.
+        if not article["pmid"]:
+            raise ToolContractError("Literature article has no pmid.")
+    if "degraded" in payload and not isinstance(payload["degraded"], bool):
+        raise ToolContractError("Literature degraded flag is invalid.")
+    return payload
+
+
 # Which validator applies to which tool. Keyed by the name the server advertises, because
 # that is all a client has when a result arrives — the payload does not say what it is meant
 # to be. Both sides of the boundary import this, so a tool and its contract cannot ship apart.
@@ -151,6 +229,7 @@ TOOL_CONTRACTS = {
     "predict_readmission": validate_prediction_result,
     "rag_search": validate_retrieval_result,
     "rag_search_sections": validate_retrieval_result,
+    "search_literature": validate_literature_result,
 }
 
 

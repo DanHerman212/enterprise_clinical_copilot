@@ -109,14 +109,19 @@ def test_every_advertised_tool_has_a_progress_label():
         predict_readmission,
         rag_search,
         rag_search_sections,
+        search_literature,
     )
 
     advertised = {
         predict_readmission.__name__,
         rag_search.__name__,
         rag_search_sections.__name__,
+        search_literature.__name__,
     }
-    assert advertised == set(stages.TOOL_LABELS)
+    assert advertised == set(stages.TOOL_LABELS), (
+        "a label is missing for a tool the server advertises, or a label names a "
+        "tool that no longer exists"
+    )
 
 
 def test_an_unknown_tool_falls_back_to_a_true_generic_label():
@@ -275,6 +280,10 @@ def test_stream_sends_stages_then_one_answer_frame():
         # The pointer to the run, streamed with the answer rather than only
         # recorded in the agent's log, so the site can store it beside the turn.
         "langfuse_trace_id",
+        # Published records the answer rests on, carried beside the note citations
+        # rather than inside them. Added 2026-10-08 with the literature tool; the
+        # canvas renders these, so a frame that omitted them would draw nothing.
+        "literature",
     }
     assert answer["answer"].strip()
 

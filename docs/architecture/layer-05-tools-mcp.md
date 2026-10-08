@@ -55,12 +55,15 @@ flowchart LR
   S --> T1["predict_readmission<br/>1 parameter"]
   S --> T2["rag_search<br/>3 parameters"]
   S --> T3["rag_search_sections<br/>1 parameter, bounded in the schema"]
+  S --> T4["search_literature<br/>2 parameters, no patient identifier"]
   T1 --> FS["feature source"]
   T2 --> IDX["vector index<br/>subject restriction applied inside the query"]
   T3 --> IDX
+  T4 --> EXT["NCBI E-utilities<br/>the only egress from this layer"]
   T1 --> V["validated against the declared output contract"]
   T2 --> V
   T3 --> V
+  T4 --> V
   V -->|"bounded and escaped,<br/>framed as data"| M
   V -->|"stable code and a sentence;<br/>detail to the log"| M
 ```

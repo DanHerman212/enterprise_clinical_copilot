@@ -1,6 +1,6 @@
 """Validated request contract for the private agent HTTP service."""
 
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 from services.agent.questions import UnknownChip, compose_question
 
@@ -29,6 +29,37 @@ class ResolvedSource(TypedDict):
     query: str
 
 
+class LiteratureArticle(TypedDict):
+    """One PubMed record as it arrives from the MCP tool.
+
+    Declared here rather than imported from `services.mcp.contracts`: the agent and
+    the MCP server are separate images, and this is the agent's view of a payload
+    that crossed a network boundary — the same reason `AgentToolCall` is declared
+    here rather than shared.
+    """
+
+    pmid: str
+    title: str
+    journal: str
+    pub_date: str
+    abstract: str
+    url: str
+
+
+class LiteratureResult(TypedDict):
+    query: str
+    returned: int
+    articles: list[LiteratureArticle]
+    # Present when a search legitimately matched nothing. Absent when it matched
+    # something, which is why the whole result is carried rather than only the
+    # articles: an empty list cannot say whether a search happened.
+    note: NotRequired[str]
+    # True when the search could not be made at all. The agent is told to report this
+    # as unavailability rather than as absence, because claiming a thing does not
+    # exist when nobody looked for it invents a fact.
+    degraded: NotRequired[bool]
+
+
 # Whether a tool's result can be produced again by asking the same tool the same
 # question, and therefore whether a caller that stores a turn needs to keep it.
 #
@@ -43,7 +74,14 @@ class ResolvedSource(TypedDict):
 # The two sets are exhaustive over the tools the MCP server registers, and a test
 # holds them to that: a tool that is added without being classified makes the
 # suite fail rather than quietly deciding by default.
-RE_DERIVABLE_TOOLS = frozenset({"rag_search", "rag_search_sections"})
+# `search_literature` is derivable in the ordinary sense the comment above means:
+# asking PubMed the same question again produces the same articles, so a stored turn
+# gains nothing by holding on to them. It is also the one tool with no admission
+# attached, so there is no note text among its results for the store to be careful
+# with in the first place.
+RE_DERIVABLE_TOOLS = frozenset(
+    {"rag_search", "rag_search_sections", "search_literature"}
+)
 RESULT_KEPT_TOOLS = frozenset({"predict_readmission"})
 
 
@@ -54,6 +92,7 @@ class AgentSuccess(TypedDict):
     tool_calls: list[AgentToolCall]
     a2ui: dict[str, Any] | None
     sources: list[ResolvedSource]
+    literature: LiteratureResult | None
     model: str
     code_revision: str
     mcp_transport: str
@@ -388,6 +427,28 @@ def validate_agent_success(payload: Any) -> AgentSuccess:
             raise AgentResponseError("Agent produced malformed tool calls.")
         if not isinstance(call.get("derivable"), bool):
             raise AgentResponseError("Agent produced malformed tool calls.")
+
+    # Published literature travels beside the note citations and is validated for
+    # the same reason they are: the browser renders it directly, so a malformed
+    # record is a broken card rather than a bad number somewhere downstream.
+    literature = payload.get("literature")
+    if literature is not None:
+        if not isinstance(literature, dict):
+            raise AgentResponseError("Agent produced malformed literature.")
+        articles = literature.get("articles")
+        if not isinstance(articles, list) or not isinstance(
+            literature.get("returned"), int
+        ):
+            raise AgentResponseError("Agent produced malformed literature.")
+        if literature["returned"] != len(articles):
+            raise AgentResponseError("Agent produced inconsistent literature.")
+        for article in articles:
+            if not isinstance(article, dict) or not isinstance(
+                article.get("pmid"), str
+            ):
+                raise AgentResponseError("Agent produced malformed literature.")
+        if "degraded" in literature and not isinstance(literature["degraded"], bool):
+            raise AgentResponseError("Agent produced malformed literature.")
 
     # The revision is what makes a stored turn explainable after a deploy. An
     # empty string is legitimate (a local run with no revision), a missing field

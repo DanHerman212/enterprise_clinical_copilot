@@ -86,6 +86,87 @@ def _usable_estimate(predict) -> dict | None:
     return predict
 
 
+# The fields a literature card renders, in the order the card shows them.
+_LITERATURE_FIELDS = ("pmid", "title", "journal", "pub_date", "abstract", "url")
+
+
+def _usable_articles(literature) -> list[dict]:
+    """The articles from a literature payload, each shaped for the canvas.
+
+    A record with no pmid is dropped: it cannot be cited or linked, which is the
+    whole use of it. The remaining fields are coerced to strings rather than
+    passed through, because the console's component schema is strict — one
+    missing key drops the entire card, and a card that fails to draw is worse
+    than a card with a blank journal.
+
+    An empty list is the answer for three different situations — no search was
+    run, the search failed, or it matched nothing — which the canvas treats the
+    same and the answer text and provenance caption distinguish between.
+    """
+    if not isinstance(literature, dict):
+        return []
+    articles = literature.get("articles")
+    if not isinstance(articles, list):
+        return []
+    usable = []
+    for article in articles:
+        if not isinstance(article, dict) or not article.get("pmid"):
+            continue
+        usable.append({
+            field: article.get(field) if isinstance(article.get(field), str) else ""
+            for field in _LITERATURE_FIELDS
+        })
+    return usable
+
+
+# Shown when a search ran, matched nothing, and the tool offered no wording of its own.
+_LITERATURE_EMPTY_NOTE = "No matching literature was found for this query."
+
+# Shown when the search could not be performed at all. Deliberately a different
+# sentence from the one above: that one says the evidence does not exist, this one says
+# nobody looked, and a clinician deciding whether to trust an answer needs to know which
+# of those they are being told.
+_LITERATURE_UNAVAILABLE_NOTE = "PubMed literature search is temporarily unavailable."
+
+
+def _literature_view(literature) -> tuple[list[dict], str, bool] | None:
+    """The articles, the note, and whether the search was degraded — or None.
+
+    None means no search happened and the canvas keeps its usual behaviour. A triple
+    with an EMPTY article list means a search ran and produced nothing to draw, and the
+    note says which of two very different things that was: matched nothing, or could
+    not be made at all.
+
+    Three states, and the canvas needs all three. Collapsing any pair of them is what
+    would leave the clinician unable to tell "no results" from "nothing happened" —
+    the ambiguity the wrapper object on the wire exists to prevent, and throwing it
+    away one layer further down would be the same defect somewhere new.
+
+    A tool error can still arrive for one case: a blank query, which is a defect in
+    our own pipeline rather than anyone else's service. It is treated as degraded
+    rather than as no-search, because a payload did cross the boundary and the canvas
+    has to account for it.
+    """
+    if not isinstance(literature, dict):
+        return None
+    if "error" in literature:
+        return [], _LITERATURE_UNAVAILABLE_NOTE, True
+    degraded = bool(literature.get("degraded"))
+    articles = _usable_articles(literature)
+    if articles:
+        return articles, "", degraded
+    note = literature.get("note")
+    if isinstance(note, str) and note.strip():
+        return [], note.strip(), degraded
+    # The fallback has to respect the flag. Defaulting a degraded search to the
+    # "found nothing" sentence would state that something was searched for and absent
+    # when in fact nothing was ever examined — the precise claim this whole path
+    # exists to avoid making. The tool always sends a note today; this is what keeps
+    # that guarantee from being the only thing holding the sentence up.
+    fallback = _LITERATURE_UNAVAILABLE_NOTE if degraded else _LITERATURE_EMPTY_NOTE
+    return [], fallback, degraded
+
+
 def _unavailable_text(section: str) -> str:
     """The deterministic message for a question whose target section the note
     does not have. Never mine the content from unrelated narrative."""
@@ -179,7 +260,8 @@ def resolve_sources(answer: str, citation_map: dict[str, int],
 
 def compose_risk_canvas(predict: dict | None, rag: dict | None,
                         cite: int = 1, sections: tuple[str, ...] = (),
-                        source: dict | None = None) -> dict:
+                        source: dict | None = None,
+                        literature: dict | None = None) -> dict:
     """Turn one predict (+ rag) payload into the A2UI risk-canvas envelope.
 
     predict is None when the question did not request a readmission estimate
@@ -192,6 +274,12 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
     it is the SourceCard verbatim, so the canvas and the click-through list
     can never disagree. Without it the card is resolved here from `cite` and
     `sections`.
+
+    `literature` is the `search_literature` response. When a search ran, its records
+    take the canvas in place of the risk widgets — including when it matched nothing or
+    when it could not be made, in which case the record list is empty, the note says
+    which happened, and `degraded` marks the second for the browser. `None` means no
+    search ran and the risk path is untouched.
     """
     components: list[dict] = [
         {"id": "root", "component": "Card", "child": "body"},
@@ -200,7 +288,39 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
     children = components[1]["children"]
 
     estimate = _usable_estimate(predict)
-    if predict is not None and estimate is None:
+    literature_view = _literature_view(literature)
+    if literature_view is not None:
+        articles, note, degraded = literature_view
+    else:
+        articles, note, degraded = [], "", False
+
+    if literature_view is not None:
+        # Literature takes the canvas. This is the swap the feature exists for: the
+        # question was about published evidence, so the risk widgets are not merely
+        # absent — they are the wrong thing to be looking at. The records are shown
+        # as the tool returned them, unedited, which is what lets the clinician
+        # check the summary instead of trusting it.
+        #
+        # An empty result keeps the swap and carries a note instead. Leaving the
+        # previous view standing would be worse than showing nothing: the clinician
+        # clicked a chip, and a canvas that did not change reads as a click that did
+        # not work.
+        children += ["literature"]
+        components.append({"id": "literature", "component": "LiteratureList",
+                           "articles": articles,
+                           "note": note,
+                           "degraded": degraded})
+        query_text = (literature or {}).get("query") or ""
+        if articles:
+            fallback = (
+                f"{len(articles)} PubMed record"
+                f"{'s' if len(articles) != 1 else ''} retrieved"
+                + (f" for \"{query_text}\"" if query_text else "")
+                + "."
+            )
+        else:
+            fallback = note
+    elif predict is not None and estimate is None:
         # The predict tool ran but returned no usable estimate (e.g. the
         # serving endpoint was unreachable). Honest note — never a 500, never
         # a made-up number.
@@ -249,7 +369,16 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
     # source (the two facts a reviewer checks). For a non-risk question there
     # is no estimate, so we say so plainly instead of rendering bare dashes
     # that read as a rendering bug.
-    if estimate:
+    if literature_view is not None:
+        query_text = (literature or {}).get("query") or ""
+        if degraded:
+            prov_text = "PubMed · unavailable · A2UI canvas"
+        else:
+            prov_text = f"PubMed · {len(articles)} record(s)"
+            if query_text:
+                prov_text += f" for \"{query_text[:80]}\""
+            prov_text += " · A2UI canvas"
+    elif estimate:
         model = estimate.get('model_version', 'unknown')
         feature_source = estimate.get('feature_source', 'unknown')
         prov_text = f"Model {model} · features from {feature_source} · A2UI canvas"
@@ -266,21 +395,26 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
     # gets.
     passages = (rag or {}).get("passages") or []
     query = (rag or {}).get("query") or "discharge note"
-    children.append("source")
     if source is not None:
+        children.append("source")
         components.append({"id": "source", "component": "SourceCard",
                            "cite": source["cite"],
                            "section": source["section"],
                            "text": source["text"],
                            "query": source.get("query", query)})
     elif passages:
+        children.append("source")
         resolved = resolve_source(passages, cite, sections)
         components.append({"id": "source", "component": "SourceCard",
                            "cite": max(cite, 1),
                            "section": resolved["section"],
                            "text": resolved["text"],
                            "query": query})
-    else:
+    elif literature_view is None:
+        # Not on a literature turn. There the articles above are the evidence, and a
+        # card saying no note passage was found would read as the search having
+        # failed rather than as the answer citing no note.
+        children.append("source")
         components.append({"id": "source", "component": "SourceCard",
                            "cite": 1, "section": "not found",
                            "text": "No supporting note passage was found for this "
@@ -325,6 +459,23 @@ def rag_payload(tool_calls: list[dict]) -> dict | None:
     return None
 
 
+def literature_payload(tool_calls: list[dict]) -> dict | None:
+    """The `search_literature` response for this run, or None.
+
+    First match rather than last, unlike `predict_payload`: a run normally makes one
+    search, and if a model made two the answer was written against the first.
+
+    A failed search is returned as it stands. Its `error` key is what tells the
+    composer and the caption that the tool did not answer, which is a different
+    statement from "nothing was found" — and dropping it here would collapse the
+    two into the same empty canvas.
+    """
+    for call in tool_calls or []:
+        if call.get("name") == "search_literature":
+            return call.get("response") or None
+    return None
+
+
 def compose_presentation(question: str, answer: str,
                          tool_calls: list[dict]) -> dict:
     """The full presentation contract for an answered question.
@@ -349,17 +500,24 @@ def compose_presentation(question: str, answer: str,
     remap = citation_remap(answer)
     intent = intent_sections(question)
     rag = rag_payload(tool_calls)
+    literature = literature_payload(tool_calls)
     sources = resolve_sources(renumbered, remap, rag, intent)
     return {
         "answer": renumbered,
         "citation_map": remap,
         "intent_sections": list(intent),
         "sources": sources,
+        # The published records the answer rests on, passed through whole. Kept
+        # separate from `sources` on purpose: that list is the discharge-note
+        # citation channel — numbered, renumbered, and resolved against retrieved
+        # passages — and an article has no passage to resolve against.
+        "literature": literature,
         "a2ui": compose_risk_canvas(
             predict_payload(tool_calls),
             rag,
             cite=first_citation(renumbered),
             sections=intent,
             source=sources[0] if sources else None,
+            literature=literature,
         ),
     }

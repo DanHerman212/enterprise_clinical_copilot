@@ -17,7 +17,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HARNESS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"            # services
+HARNESS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"            # services/mcp
 REPO_ROOT="$(cd "$HARNESS_DIR/../.." && pwd)"          # repo root
 VENV_PY="$REPO_ROOT/.venv/bin/python"
 
@@ -30,7 +30,14 @@ export RAG_IMAGE_URI="${RAG_IMAGE_URI:-us-east1-docker.pkg.dev/trim-icon-498815-
 export PREVIOUS_INGEST_URI="${PREVIOUS_INGEST_URI:-gs://trim-icon-498815-a0-mlops/rag/embeddings/ingest/embed_ingest.jsonl.gz}"
 export EMBED_WORKERS="${EMBED_WORKERS:-1}"
 
-export PYTHONPATH="$HARNESS_DIR${PYTHONPATH:+:$PYTHONPATH}"
+# The pipeline imports from TWO roots and needs both on the path:
+#   pipelines.*     resolved from services/mcp (HARNESS_DIR, the cwd)
+#   services.mcp.*  resolved from the repo root
+# Only HARNESS_DIR was exported, so every submit died with
+# ModuleNotFoundError: No module named 'services'. REPO_ROOT was computed and
+# never used. The import that failed is chunk_notes.py's
+# `from services.mcp.retrieval.chunking import INDEX_SECTIONS`.
+export PYTHONPATH="$HARNESS_DIR:$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
 echo "=== Submitting RAG ingest pipeline ==="
 echo "  PROJECT_ID          : $PROJECT_ID"

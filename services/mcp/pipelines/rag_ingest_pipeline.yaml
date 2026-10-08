@@ -192,7 +192,7 @@ deploymentSpec:
           \        brute_sample=brute_sample,\n        approximate_neighbors=approximate_neighbors,\n\
           \        expected=expected,\n        shard_size=shard_size,\n        manifest_path=manifest.path,\n\
           \        data_fingerprint=data_fingerprint,\n    )\n\n"
-        image: python:3.12-slim
+        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/rag-ingest:latest
         resources:
           resourceCpuLimit: '{{$.inputs.parameters[''pipelinechannel--index_cpu'']}}'
           resourceMemoryLimit: '{{$.inputs.parameters[''pipelinechannel--index_mem'']}}'
@@ -233,7 +233,7 @@ deploymentSpec:
           \        split_name=split_name,\n        data_fingerprint=data_fingerprint,\n\
           \        pack_to=pack_to,\n        sections_csv=sections_csv,\n        chunks_path=chunks.path,\n\
           \        manifest_path=manifest.path,\n    )\n\n"
-        image: python:3.12-slim
+        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/rag-ingest:latest
         resources:
           resourceCpuLimit: '{{$.inputs.parameters[''pipelinechannel--chunk_cpu'']}}'
           resourceMemoryLimit: '{{$.inputs.parameters[''pipelinechannel--chunk_mem'']}}'
@@ -274,7 +274,7 @@ deploymentSpec:
           \        previous_ingest_uri=previous_ingest_uri,\n        ingest_path=ingest.path,\n\
           \        manifest_path=manifest.path,\n        workers=workers,\n      \
           \  data_fingerprint=data_fingerprint,\n    )\n\n"
-        image: python:3.12-slim
+        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/rag-ingest:latest
         resources:
           resourceCpuLimit: '{{$.inputs.parameters[''pipelinechannel--embed_cpu'']}}'
           resourceMemoryLimit: '{{$.inputs.parameters[''pipelinechannel--embed_mem'']}}'
@@ -316,7 +316,7 @@ deploymentSpec:
           \        expected=expected,\n        dimensions=dimensions,\n        report_path=report.path,\n\
           \        results_path=results.path,\n        failures_path=failures.path,\n\
           \        corpus=corpus,\n        index_name=index_name,\n    )\n\n"
-        image: python:3.12-slim
+        image: us-east1-docker.pkg.dev/trim-icon-498815-a0/readmission/rag-ingest:latest
         resources:
           memoryLimit: 4.294967296
           resourceCpuLimit: '{{$.inputs.parameters[''pipelinechannel--chunk_cpu'']}}'

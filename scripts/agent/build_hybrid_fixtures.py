@@ -31,14 +31,23 @@ from pathlib import Path
 
 HARNESS_ROOT = Path(__file__).resolve().parents[2]
 COHORT_SOURCE = HARNESS_ROOT / "evaluation" / "agent" / "results" / "hybrid_cohort.json"
-OUT_DIR = HARNESS_ROOT / "data" / "demo_fixtures"
-SITE_FIXTURES = Path(os.environ.get(
-    "SITE_FIXTURES",
-    HARNESS_ROOT.parents[1].parent / "danielmherman" / "demo" / "data" / "demo_fixtures",
-))
+OUT_DIR = HARNESS_ROOT / "data" / "agent" / "demo_fixtures"
+# The cohort list test_cohort_authority.py treats as authoritative. It is
+# written from the SAME payload as the fixtures copy and the site seed, because
+# that test asserts the fixtures cover exactly this set — the three are one
+# fact, so they are written as one.
+AUTHORITATIVE_COHORT = HARNESS_ROOT / "data" / "agent" / "demo_cohort.json"
+# The site repo is a SIBLING of this one, so the base is HARNESS_ROOT.parent.
+# This read `parents[1].parent`, which resolves to /Users and aimed every site
+# write at /Users/danielmherman/... — a path that does not exist, so the script
+# died at mkdir before it ever wrote the site cohort. Still overridable.
 SITE_DATA = Path(os.environ.get(
     "SITE_DATA",
-    HARNESS_ROOT.parents[1].parent / "danielmherman" / "demo" / "data",
+    HARNESS_ROOT.parent / "danielmherman" / "demo" / "data",
+))
+SITE_FIXTURES = Path(os.environ.get(
+    "SITE_FIXTURES",
+    SITE_DATA / "demo_fixtures",
 ))
 PROJECT = "trim-icon-498815-a0"
 LOCATION = "us-east1"
@@ -156,8 +165,11 @@ def _bundle() -> tuple[str, str]:
 
 
 def _run_predictions(feature_rows: dict[int, dict], version: str) -> dict[int, dict]:
+    # The CPR predictor module lives at mlops/serving/cpr. This read
+    # mlops/pipelines/serving/cpr, which does not exist, so `import predictor`
+    # raised ModuleNotFoundError before any fixture was written.
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]
-                           / "mlops" / "pipelines" / "serving" / "cpr"))
+                           / "mlops" / "serving" / "cpr"))
     from predictor import ReadmissionPredictor  # noqa: E402
     uri, _ = _bundle()
     results = {}
@@ -216,8 +228,12 @@ def _seed_demo_cohort(cohort: dict) -> None:
     SITE_DATA.mkdir(parents=True, exist_ok=True)
     payload = json.dumps({"patients": patients}, indent=2) + "\n"
     (OUT_DIR / "demo_cohort.json").write_text(payload)
+    AUTHORITATIVE_COHORT.parent.mkdir(parents=True, exist_ok=True)
+    AUTHORITATIVE_COHORT.write_text(payload)
     (SITE_DATA / "demo_cohort.json").write_text(payload)
-    print(f"demo_cohort: {len(patients)} patients -> site demo/data/demo_cohort.json")
+    print(f"demo_cohort: {len(patients)} patients -> "
+          f"{AUTHORITATIVE_COHORT.name}, fixtures copy, "
+          f"and site demo/data/demo_cohort.json")
 
 
 def main() -> int:

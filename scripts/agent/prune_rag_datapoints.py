@@ -27,8 +27,12 @@ from scripts.agent.prune_inclusion_violations import REMOVE  # noqa: E402
 
 PROJECT = "trim-icon-498815-a0"
 LOCATION = "us-east1"
-INDEX_RESOURCE = ("projects/trim-icon-498815-a0/locations/us-east1/"
-                  "indexes/2805052074549575680")
+# The index to prune is the one the LIVE index endpoint has deployed — the one
+# retrieval actually reads. This was a hardcoded index resource id, which went
+# stale: on 2026-10-08 the prune targeted a deleted index and died with a 404
+# before removing anything, while the real index kept serving both patients.
+# Resolving from the endpoint cannot drift that way.
+INDEX_ENDPOINT_NAME = "readmission-rag-index"
 DATASET = "readmission"
 NOTES = f"{PROJECT}.{DATASET}.hybrid_notes"
 SPLIT = f"{PROJECT}.{DATASET}.hybrid_split"
@@ -66,7 +70,19 @@ def main() -> int:
     #    Only possible if the index was created with StreamUpdate enabled; a
     #    batch-mode index rejects it (400 "StreamUpdate is not enabled").
     aiplatform.init(project=PROJECT, location=LOCATION)
-    index = aiplatform.MatchingEngineIndex(INDEX_RESOURCE)
+    endpoints = [e for e in aiplatform.MatchingEngineIndexEndpoint.list()
+                 if e.display_name == INDEX_ENDPOINT_NAME]
+    if not endpoints:
+        print(f"ERROR: no index endpoint named {INDEX_ENDPOINT_NAME!r}.")
+        return 1
+    deployed = endpoints[0].gca_resource.deployed_indexes
+    if not deployed:
+        print(f"ERROR: {INDEX_ENDPOINT_NAME} has no deployed index — nothing "
+              f"is serving, so there is no index to prune.")
+        return 1
+    index_resource = deployed[0].index
+    print(f"live index: {index_resource}")
+    index = aiplatform.MatchingEngineIndex(index_resource)
     try:
         print("calling index.remove_datapoints…")
         index.remove_datapoints(datapoint_ids=sorted(dp_ids))

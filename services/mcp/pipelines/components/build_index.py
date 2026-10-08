@@ -78,6 +78,14 @@ def run_build_index(
         dimensions=dimensions,
         approximate_neighbors_count=approximate_neighbors,
         shard_size=shard_size,
+        # STREAM_UPDATE, not the default BATCH_UPDATE. A batch index rejects
+        # remove_datapoints ("StreamUpdate is not enabled on this Index"), so a
+        # later inclusion prune cannot be applied incrementally — the whole
+        # index must be rebuilt instead, which is what blocked the 2026-10-08
+        # removal of the expired patients. Called for in the 2026-08-25 UAT
+        # remediation plan; the 2026-09-03 build still omitted it. The SDK
+        # takes the string name here, not the proto enum.
+        index_update_method="STREAM_UPDATE",
         # SDK defaults are None; without these the tree-AH algorithmConfig is
         # empty and Vertex rejects the build ("algorithmConfig required").
         leaf_node_embedding_count=1000,

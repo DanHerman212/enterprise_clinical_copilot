@@ -68,7 +68,9 @@ REDACTION = re.compile(
 # The risk model was trained on a cohort that EXCLUDED:
 #   (a) patients discharged against medical advice (AMA), and
 #   (b) elective admissions where the patient had a planned return to
-#       hospital by appointment (planned readmissions, not unplanned ones).
+#       hospital by appointment (planned readmissions, not unplanned ones),
+#   (c) patients who died during the admission (added 2026-10-08 — see
+#       EXPIRED_TEXT for why the feature row cannot carry this one).
 
 # AMA — the feature already encodes it (discharge_location_ama). Text used as
 # a cross-check to catch any note that reads AMA even if the feature missed it.
@@ -89,6 +91,24 @@ PLANNED_RETURN = re.compile(
     r"\bwill\s+be\s+(?:re-?)?admitted\b|"
     r"\breturn\s+to\s+the\s+hospital\b|"
     r"\breturn\s+for\s+(?:a|an)\s+(?:scheduled|planned)\b",
+    re.I,
+)
+
+# Expired in hospital. The same objection as hospice — terminal care is not a
+# readmission cohort — but it has to be read from the NOTE, because the feature
+# row cannot state it: the generator omits `discharge_location` for a patient
+# who died (see generate_hybrid_features_v2.py), so every
+# discharge_location_* flag is 0 and _hospice_check finds nothing to match.
+# That omission is exactly how this slipped through on 2026-10-08.
+EXPIRED_TEXT = re.compile(
+    r"\bpronounced\s+(?:expired|dead)\b|"
+    r"\bexpired\s+during\s+(?:this|the)\s+(?:admission|hospitalization)\b|"
+    r"\b(?:the\s+)?patient\s+expired\b|"
+    r"\bexpired\s+(?:at|on)\b|"
+    r"\b(?:date|time)\s+of\s+death\b|"
+    r"\bdied\s+during\s+(?:this|the)\s+(?:admission|hospitalization)\b|"
+    r"\bdied\s+in\s+(?:the\s+)?hospital\b|"
+    r"\bdischarge\s+disposition\s*:?\s*(?:died|expired|death)\b",
     re.I,
 )
 
@@ -155,6 +175,25 @@ def _hospice_check(features: dict) -> list[str]:
     return []
 
 
+def _expired_check(text: str) -> list[str]:
+    """Expired-in-hospital exclusion: the patient died during this admission,
+    so there is no discharge to be readmitted from.
+
+    Note-anchored on purpose. The feature row CANNOT carry this signal in the
+    hybrid corpus: the generator omits `discharge_location` when the patient
+    died, so no discharge_location_* flag is set and the hospice check (which
+    is the closest existing criterion) finds nothing to match.
+    """
+    m = EXPIRED_TEXT.search(text)
+    if not m:
+        return []
+    return [
+        "REMOVE expired in hospital — patient died during this admission; "
+        "terminal care is not a readmission cohort "
+        f"…{text[max(0, m.start()-60):m.end()+60]!r}"
+    ]
+
+
 def _planned_return_check(text: str) -> list[str]:
     """Elective-with-planned-return exclusion: elective admission where the
     patient plans to return to hospital by appointment (a planned
@@ -193,6 +232,7 @@ def main() -> int:
         issues += _redaction_check(text)
         issues += _ama_check(feats, text)
         issues += _hospice_check(feats)
+        issues += _expired_check(text)
         issues += _planned_return_check(text)
 
         if issues:

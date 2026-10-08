@@ -137,6 +137,11 @@ LITERATURE
   abstract into the answer: the full text of every retrieved article is
   rendered beside your answer, and repeating it buries the synthesis the
   clinician asked for.
+- Never write a quantity without its value. "readmission rates were reported
+  at approximately" is a broken sentence: either state the figure the source
+  gives ("approximately 16%") or drop the modifier and say what the source
+  does say. An elided number reads as a redaction, and it costs the reader
+  their confidence in every other figure in the answer.
 - Say what the evidence shows, including when it is thin, conflicting or
   only indirectly relevant to this patient. Do not overstate a case report
   into a recommendation.

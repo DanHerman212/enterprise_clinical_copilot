@@ -11,7 +11,9 @@ corrupts the JSON-RPC stream, so diagnostics must go to stderr.
 """
 
 import argparse
+import logging
 import os
+import re
 import sys
 
 from mcp.server import MCPServer
@@ -27,6 +29,43 @@ from .tools import (
     rag_search_sections,
     search_literature,
 )
+
+# Query parameters whose values must never appear in a log line.
+_REDACTED_QUERY_KEYS = ("api_key", "email")
+_REDACTION = re.compile(r"\b(" + "|".join(_REDACTED_QUERY_KEYS) + r")=[^&\s\"]+")
+
+
+class _RedactRequestSecrets(logging.Filter):
+    """Strip credentials out of httpx's request logs.
+
+    httpx logs every request at INFO — `HTTP Request: GET <url> "<proto>" <code>` —
+    and the URL is where the credential lives: NCBI's E-utilities takes its API key as
+    a query parameter and accepts nothing else. So on every literature search the key,
+    and the contact address that was made a secret rather than committed, were written
+    to Cloud Logging, where they sit for the retention period and are readable by
+    anything holding log access. Found in the log of the first live search,
+    2026-10-08 — which is the argument for reading the logs of a new integration rather
+    than only checking that it returned 200.
+
+    Redacted on the way to the log rather than suppressing the log. The request line
+    earns its keep: it is what showed both NCBI calls answering 200, and a filter keeps
+    that while removing the secret. Silencing httpx would also have "fixed" it, and
+    would have cost the evidence.
+
+    Attached at import rather than in `main`, so it holds for both transports and for
+    any other path that starts this module.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        redacted = _REDACTION.sub(lambda match: f"{match.group(1)}=<redacted>", message)
+        if redacted != message:
+            record.msg = redacted
+            record.args = ()
+        return True
+
+
+logging.getLogger("httpx").addFilter(_RedactRequestSecrets())
 
 server = MCPServer(
     name="readmission",

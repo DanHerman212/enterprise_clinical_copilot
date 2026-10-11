@@ -1,14 +1,19 @@
 # `services/mcp` — the clinical copilot's tool server
 
-One tool call in, one result out. The agent asks a question of the patient data; this
-service answers it from the warehouse, the deployed prediction model, or PubMed. It holds no
-conversation state and makes no claims of its own — every result it returns is validated
-against a contract before it leaves.
+The diagram represents the tool calls and boundaries for 4 tools:
+1. Calling a risk model
+2. Deterministic EHR notes retrieval
+3. RAG EHR notes retrieval
+4. Integration with Pubmed for retrieval of medical literature<br>
+<br>
+Risk model was developed in house using [MLOPs](../../mlops/README.md) pipeline on `Gemini Enterprise` (formerly Vertex AI)  
+Data ingestion, chunking, embeddings, automated through pipelines on `Gemini Enterprise`<br>
+Vector db, vector index and index endpoints are built and deployed using on `Gemini Enterprise`<br>
+Integration with Pubmed is initated through `langchain-community` library<br>
+ML Training dataset and rag corpus used for Vector Search was developed using `mimic-iv` dataset<br>
+Public consumption of the dataset is prohibited, so a demo dataset from `MTSamples` was used with real EHR clinical discharge notes<br>
+Structured data for the demo cohort is synthetic
 
-The diagram is the serving path. Each band reads left to right and the bands stack vertically,
-so no row is wide enough to be scaled down and the labels stay at full size. The build path is
-separate: the RAG index this service queries is produced offline by `pipelines/`, so an ingest
-run and a question are never in the same flow.
 
 ```mermaid
 flowchart TD

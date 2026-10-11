@@ -6,6 +6,7 @@ The diagram represents the tool calls and boundaries for 4 tools:
 3. RAG EHR notes retrieval
 4. Integration with Pubmed for retrieval of medical literature<br>
 <br>
+
 Risk model was developed in house using [MLOPs](../../mlops/README.md) pipeline on `Gemini Enterprise` (formerly Vertex AI)  
 Data ingestion, chunking, embeddings, automated through pipelines on `Gemini Enterprise`<br>
 Vector db, vector index and index endpoints are built and deployed using on `Gemini Enterprise`<br>

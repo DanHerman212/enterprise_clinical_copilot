@@ -1,21 +1,24 @@
 # Reference Architecture — Full-Stack AI Application on Google Cloud
 
-Derived from Google Cloud Architecture Center guidance, compiled 2026-09-11.
+Derived from Google Cloud Architecture Center guidance.
 
 
 ## 1. The architecture
 
+Each band reads left to right, and the bands stack rather than run on: the widest row sets
+the rendered width, which is what keeps the labels legible. The table below carries the
+detail each box names.
+
 ```mermaid
 flowchart TB
   subgraph SERVE["SERVING SUBSYSTEM  (request path)"]
-    direction TB
-    FE["1  Client<br/>browser + web server that renders it"] --> EDGE["2  Edge<br/>load balancer · WAF · auth · rate limit · request ID"]
-    EDGE --> AG["3  Orchestrator — the chain<br/>prompt template + state + tool routing + step caps<br/>versioned as ONE artifact"]
-    AG --> MODEL["4  Model runtime & gateway<br/>foundation model behind one door:<br/>retries · 429s · model pin · screening"]
-    AG --> MCP["5  Tools & grounding<br/>typed contracts both ways (MCP)"]
-    AG --> STATE["8  Memory / session state<br/>external store · agent is stateless"]
-    MCP --> OWN["6  Your own models<br/>trained → registered → endpoint"]
-    MCP --> VEC["7  Data & indexes<br/>vector index · features · documents"]
+    direction LR
+    FE["1 Client"] --> EDGE["2 Edge"] --> AG["3 Orchestrator"]
+    AG --> MODEL["4 Model runtime"]
+    AG --> MCP["5 Tools & grounding"]
+    AG --> STATE["8 Memory / state"]
+    MCP --> OWN["6 Your own models"]
+    MCP --> VEC["7 Data & indexes"]
   end
 
   subgraph INGEST["OFFLINE LOOP  (feeds layers 6 and 7)"]
@@ -28,10 +31,10 @@ flowchart TB
 
   subgraph PLANES["CROSS-CUTTING PLANES  (apply to every box above)"]
     direction LR
-    EV["9  Evaluation<br/>golden set · judge · CI gate · production sampling"]
-    OBS["10  Observability<br/>trace every step · lineage to versions"]
-    SEC["11  Security & identity<br/>least privilege · inputs untrusted · prompts as code"]
-    CICD["12  Delivery (CI/CD)<br/>test prompts + chain · canary · rollback"]
+    EV["9 Evaluation"]
+    OBS["10 Observability"]
+    SEC["11 Security & identity"]
+    CICD["12 Delivery (CI/CD)"]
   end
 
   SERVE -.- PLANES

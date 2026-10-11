@@ -4,33 +4,27 @@ One question in, one answer out. It receives a question from the website, runs a
 against the patient's own notes and prediction tools, checks the answer deterministically,
 and returns the answer with the evidence it rests on.
 
-The diagram is the request path. Read it left to right: **request** → **run** → **answer** →
-**record**. The record is off the main path on purpose — it is written for every run,
-including the ones that fail.
+The diagram is the request path, read top to bottom: **request** → **run** → **answer**, with
+the **record** written alongside it. The record sits off the main path on purpose — one line
+is written for every run, including the ones that never reach an answer.
 
 ```mermaid
-flowchart LR
+flowchart TD
   caller["Django site"]
 
   subgraph req["Request"]
-    http["http.py"]
-    contracts["contracts.py"]
-    questions["questions.py"]
+    http["http.py"] --> contracts["contracts.py"] --> questions["questions.py"]
   end
 
   subgraph run["Run"]
-    flow["graph.py"]
-    prompts["prompts.py"]
-    mcp["mcp_client.py"]
-    stages["stages.py"]
+    prompts["prompts.py"] --> flow["graph.py"]
+    flow <--> mcp["mcp_client.py"]
+    flow --> stages["stages.py"]
   end
 
   subgraph ans["Answer"]
-    turn["model_turn.py"]
-    guard["guardrail.py"]
-    cites["citations.py"]
-    canvas["a2ui.py"]
-    labels["feature_labels.py"]
+    turn["model_turn.py"] --> guard["guardrail.py"] --> cites["citations.py"] --> canvas["a2ui.py"]
+    labels["feature_labels.py"] --> canvas
   end
 
   subgraph rec["Record"]
@@ -40,19 +34,13 @@ flowchart LR
 
   tools["MCP server"]
 
-  caller -->|"POST /ask or /ask/stream"| http
-  http --> contracts --> questions --> flow
-  prompts --> flow
-  flow <--> mcp
+  caller --> http
+  questions --> flow
+  flow --> turn
   mcp <--> tools
-  flow --> stages
-  stages -->|"progress while it works"| caller
-  flow --> turn --> guard --> cites --> canvas --> http
-  labels --> canvas
-  http -->|"answer, canvas, sources"| caller
-  stages --> chain
-  http --> chain
+  canvas --> chain
   flow -.-> obs
+```
 ```
 
 ## Modules

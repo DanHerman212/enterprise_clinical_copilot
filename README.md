@@ -4,7 +4,7 @@ Enterprise Clinical Copilot (ECC) is a full-stack AI application.  The applicati
 
 The application is built thoughtfully using [trusted AI Architecture](docs/architecture/00-reference-architecture.md) patterns.  While the application itself is a prototype, the software is architected to run at enterprise scale, currently deployed on GCP.
 
-This repo represents the backend system, where the agent, tools and automation to create those tools lives.  The presentation layer is built using Django and is deployed through an app on my personal website.  You can view the [companion repo](https://github.com/DanHerman212/danielmherman) , to look at the source code for the web app.
+This repo represents the backend system, where the [agent](services/agent/README.md), [tools](services/mcp/README.md) and automation to create those tools lives.  The presentation layer is built using Django and is deployed through an app on my personal website.  You can view the [companion repo](https://github.com/DanHerman212/danielmherman) , to look at the source code for the web app.
 
 The system is separated into deployable services and offline ML workflows:
 

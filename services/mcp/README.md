@@ -7,13 +7,13 @@ The diagram represents the tool calls and boundaries for 4 tools:
 4. Integration with Pubmed for retrieval of medical literature<br>
 <br>
 
-Risk model was developed in house using [MLOPs](../../mlops/README.md) pipeline on `Gemini Enterprise` (formerly Vertex AI)  
-Data ingestion, chunking, embeddings, automated through pipelines on `Gemini Enterprise`<br>
-Vector db, vector index and index endpoints are built and deployed using on `Gemini Enterprise`<br>
-Integration with Pubmed is initated through `langchain-community` library<br>
-ML Training dataset and rag corpus used for Vector Search was developed using `mimic-iv` dataset<br>
-Public consumption of the dataset is prohibited, so a demo dataset from `MTSamples` was used with real EHR clinical discharge notes<br>
-Structured data for the demo cohort is synthetic
+- Risk model was developed in house using [MLOPs](../../mlops/README.md) pipeline on `Gemini Enterprise` (formerly Vertex AI)  
+- Data ingestion, chunking, embeddings, automated through pipelines on `Gemini Enterprise`<br>
+- Vector db, vector index and index endpoints are built and deployed using on `Gemini Enterprise`<br>
+- Integration with Pubmed is initated through `langchain-community` library<br>
+- ML Training dataset and rag corpus used for Vector Search was developed using `mimic-iv` dataset<br>
+- Public consumption of the dataset is prohibited, so a demo dataset from `MTSamples` was used with real EHR clinical discharge notes<br>
+- Structured data for the demo cohort is synthetic
 
 
 ```mermaid

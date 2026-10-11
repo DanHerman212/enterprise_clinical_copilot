@@ -1,9 +1,5 @@
 # `services/agent` — the clinical copilot's reasoning service
 
-One question in, one answer out. It receives a question from the website, runs a model
-against the patient's own notes and prediction tools, checks the answer deterministically,
-and returns the answer with the evidence it rests on.
-
 The diagram is the request path. Each band reads left to right — **request** → **run** →
 **answer** — and the bands stack vertically, so no row is wide enough to be scaled down. That
 is what keeps the labels at full size. The **record** is written alongside, off the main path

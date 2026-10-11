@@ -4,30 +4,34 @@ One question in, one answer out. It receives a question from the website, runs a
 against the patient's own notes and prediction tools, checks the answer deterministically,
 and returns the answer with the evidence it rests on.
 
-The diagram is the request path, read top to bottom: **request** → **run** → **answer**, with
-the **record** written alongside it. The record sits off the main path on purpose — one line
-is written for every run, including the ones that never reach an answer.
+The diagram is the request path. Each band reads left to right — **request** → **run** →
+**answer** — and the bands stack vertically, so no row is wide enough to be scaled down. That
+is what keeps the labels at full size. The **record** is written alongside, off the main path
+on purpose: one line for every run, including the ones that never reach an answer.
 
 ```mermaid
 flowchart TD
   caller["Django site"]
 
   subgraph req["Request"]
+    direction LR
     http["http.py"] --> contracts["contracts.py"] --> questions["questions.py"]
   end
 
   subgraph run["Run"]
-    prompts["prompts.py"] --> flow["graph.py"]
-    flow <--> mcp["mcp_client.py"]
+    direction LR
+    prompts["prompts.py"] --> flow["graph.py"] <--> mcp["mcp_client.py"]
     flow --> stages["stages.py"]
   end
 
   subgraph ans["Answer"]
+    direction LR
     turn["model_turn.py"] --> guard["guardrail.py"] --> cites["citations.py"] --> canvas["a2ui.py"]
     labels["feature_labels.py"] --> canvas
   end
 
   subgraph rec["Record"]
+    direction LR
     chain["chain.py"]
     obs["observability.py"]
   end
@@ -40,7 +44,6 @@ flowchart TD
   mcp <--> tools
   canvas --> chain
   flow -.-> obs
-```
 ```
 
 ## Modules

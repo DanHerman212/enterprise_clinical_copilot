@@ -5,33 +5,29 @@ service answers it from the warehouse, the deployed prediction model, or PubMed.
 conversation state and makes no claims of its own — every result it returns is validated
 against a contract before it leaves.
 
-The diagram is the serving path, read top to bottom. The build path is separate: the RAG
-index this service queries is produced offline by `pipelines/`, so an ingest run and a
-question are never in the same flow.
+The diagram is the serving path. Each band reads left to right and the bands stack vertically,
+so no row is wide enough to be scaled down and the labels stay at full size. The build path is
+separate: the RAG index this service queries is produced offline by `pipelines/`, so an ingest
+run and a question are never in the same flow.
 
 ```mermaid
 flowchart TD
   caller["Agent service"]
 
   subgraph srv["Serving"]
+    direction LR
     server["server.py"] --> tools["tools/"]
     tools -.-> contracts["contracts.py"]
     runtime["runtime.py"] -.-> server
     config["config.py"] -.-> tools
   end
 
-  subgraph deps["Dependencies"]
-    features["dependencies/features/"]
-    endpoint["dependencies/model_endpoint.py"]
-  end
-
-  subgraph ret["Retrieval"]
-    retrieval["retrieval/"]
-  end
-
-  subgraph cloud["Google Cloud"]
-    bigquery["BigQuery"]
-    vertex["Vertex AI"]
+  subgraph data["Data and models"]
+    direction LR
+    features["dependencies/features/"] --> bigquery["BigQuery"]
+    endpoint["dependencies/model_endpoint.py"] --> vertex["Vertex AI"]
+    retrieval["retrieval/"] --> bigquery
+    retrieval --> vertex
   end
 
   build["pipelines/"]
@@ -40,10 +36,6 @@ flowchart TD
   tools --> features
   tools --> endpoint
   tools --> retrieval
-  features --> bigquery
-  endpoint --> vertex
-  retrieval --> bigquery
-  retrieval --> vertex
   build -.-> retrieval
 ```
 

@@ -6,40 +6,68 @@ from pathlib import Path
 
 import pytest
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
 if str(HARNESS_ROOT) not in sys.path:
     sys.path.insert(0, str(HARNESS_ROOT))
 
-# config.py requires PROJECT_ID (fail-closed); unit tests stay hermetic.
-os.environ.setdefault("PROJECT_ID", "unit-test-project")
+
+def _project_id_from_repo_env() -> str | None:
+    """PROJECT_ID out of the repo-root `.env`, where the services read it too.
+
+    `config.py` fails closed without a project, so a default is needed to keep the
+    unit tests importable. It must not be a default that SHADOWS the real one: the
+    live tests spawn the MCP server, the subprocess inherits this environment, and a
+    placeholder project makes every BigQuery call fail — which the stdio tests then
+    reported as "MCP stdio session failed", blaming the transport for a setting
+    (2026-10-12).
+
+    Parsed here rather than imported from `services.mcp.runtime`, because this runs
+    before anything downstream is importable. Same shape of read.
+    """
+    env_file = REPO_ROOT / ".env"
+    if not env_file.exists():
+        return None
+    for line in env_file.read_text().splitlines():
+        stripped = line.strip()
+        if stripped.startswith("PROJECT_ID="):
+            value = stripped.split("=", 1)[1].strip()
+            if value:
+                return value
+    return None
+
+
+os.environ.setdefault("PROJECT_ID", _project_id_from_repo_env() or "unit-test-project")
 
 
 @pytest.fixture(scope="session")
 def require_served():
     """A served tool response, or a skip that says why there is none.
 
-    `tests/agent/fixtures/expected.json` records admission 20924467, and the predict
-    path no longer holds it: `services/mcp/config.py` reads
-    `readmission.hybrid_features` by default — the demo cohort, 90000001+ — and the
-    MIMIC-derived table the fixture was generated from is out of scope for the
-    demonstration. So the live tests that assert a VALUE cannot assert one, and the
-    difference is not a regression: the anchor moved out from under them.
+    A guard against anchor drift rather than a workaround. The fixture
+    (`tests/agent/fixtures/expected.json`) declares its admission in
+    `anchor_hadm_id` and the live tests assert values against it, which is only
+    possible while the served feature source holds that admission.
 
-    They say that rather than passing on a comparison they never made, or failing
-    on a number that was never served. Re-anchoring is what turns them back into
-    assertions, and it is small but not a command: the fixture's writer
-    (`mlops/training/smoke_test.py --write-fixture`) still reads the MIMIC-derived
-    `analytics_dataset_encoded` table, and the recorded `model_version` has moved on
-    as well.
+    It did not, until 2026-10-12: the anchor was 20924467, a MIMIC-derived
+    admission, and the predict path serves `readmission.hybrid_features` — the demo
+    cohort. The chain was two stale paths after the test tree moved into
+    `tests/agent/`: the cohort builder stopped pinning fixture patients (it read
+    `tests/fixtures/`), so the cohort was rebuilt without them, and the tests kept
+    measuring a patient the service could not find.
+
+    So when the anchor is missing they say so, rather than passing on a comparison
+    they cannot make or failing on a number nobody served.
     """
     def _require(run: dict) -> dict:
         calls = run.get("tool_calls") or []
         response = calls[0].get("response") if calls else None
         if isinstance(response, dict) and response.get("error") == "unknown_patient":
             pytest.skip(
-                "the fixture's admission is not in the served feature source: "
-                f"{response.get('message') or 'unknown_patient'} — the live value "
-                "assertions need a re-anchored fixture"
+                "the fixture's anchor admission is not in the served feature source: "
+                f"{response.get('message') or 'unknown_patient'} — re-anchor the "
+                "fixture (mlops/training/smoke_test.py <hadm_id> --write-fixture)"
             )
         return response
 

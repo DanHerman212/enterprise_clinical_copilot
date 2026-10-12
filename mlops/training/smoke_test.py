@@ -2,18 +2,21 @@
 smoke_test.py — Test the deployed readmission CPR endpoint with a real patient.
 
 Usage (from repo root):
-    .venv/bin/python mlops/scripts/smoke_test.py [hadm_id]
-    .venv/bin/python mlops/scripts/smoke_test.py 20924467 --write-fixture
+    .venv/bin/python mlops/training/smoke_test.py [hadm_id]
+    .venv/bin/python mlops/training/smoke_test.py 90000064 --write-fixture
 
-If no hadm_id is given, picks a random one from the encoded dataset.
+If no hadm_id is given, picks an arbitrary row from the feature table the predict
+path serves.
 
 The Custom Prediction Routine (CPR) endpoint returns, in a single response, the
 calibrated probability, the threshold decision, and native-TreeSHAP feature
 attributions aggregated to parent features. Missing values are sent as JSON null.
 
---write-fixture records the observed values into the agent-harness Tier 1 fixture
-(tests/fixtures/expected.json) so those tests never hardcode a probability. Re-run
-it after any retraining pass; existing patients in the fixture are preserved.
+--write-fixture records the observed values into the Tier 1 fixture
+(tests/agent/fixtures/expected.json) so those tests never hardcode a probability,
+and records that admission as the fixture's anchor — the patient the live tests are
+measured against. Re-run it after any retraining pass; existing patients in the
+fixture are preserved.
 """
 
 import argparse
@@ -25,14 +28,21 @@ from pathlib import Path
 
 from google.cloud import aiplatform, bigquery, storage
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# The repo root, so `mlops.*` and `services.*` both import. `parents[1]` put
+# `mlops/` on the path instead, leaving this script un-importable from anywhere but
+# the repo root (fixed 2026-10-12).
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from mlops.data.config import get_project_id  # noqa: E402
+# The table the predict path reads, imported rather than repeated: the demo serves
+# the hybrid cohort (90000001+), and a smoke test pointed at the MIMIC-derived
+# analytics table validates a row no live request can reach. That is how this
+# script's fixture and the serving path drifted apart, and the tests with them.
+from services.mcp.config import TABLE  # noqa: E402
 
 PROJECT = get_project_id()
 LOCATION = "us-east1"
 ENDPOINT_NAME = "readmission-endpoint"
-TABLE = "readmission.analytics_dataset_encoded"
 
 # Serving bundle is discovered from the newest pipeline-registered provenance
 # record; set BUNDLE_URI to override (e.g. to pin a specific run).
@@ -42,8 +52,12 @@ BUNDLE_URI_OVERRIDE = os.environ.get("BUNDLE_URI")
 FINAL_MODEL_PREFIX = "readmission-final-"
 PIPELINE_STAGE = "final"
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-FIXTURE_PATH = REPO_ROOT / "projects" / "agent-harness" / "tests" / "fixtures" / "expected.json"
+# Both paths were one directory stale after the test tree moved into tests/agent/,
+# which is why the last recorded fixture was dated 2026-07-30: this script wrote to
+# a path that does not exist, and the fixture was never regenerated (fixed
+# 2026-10-12).
+REPO_ROOT = Path(__file__).resolve().parents[2]
+FIXTURE_PATH = REPO_ROOT / "tests" / "agent" / "fixtures" / "expected.json"
 
 # Never assert float equality against a served model — serving-side numeric drift
 # is real, and an exact-match failure reads like an integration bug.
@@ -128,7 +142,11 @@ def _write_fixture(
     fixture["model_version"] = model_version
     fixture["threshold"] = threshold
     fixture["generated_at"] = date.today().isoformat()
-    fixture["generated_by"] = "mlops/scripts/smoke_test.py --write-fixture"
+    fixture["generated_by"] = "mlops/training/smoke_test.py --write-fixture"
+    # The patient this run recorded becomes the anchor: the live tests read the
+    # admission from here rather than sorting the patient keys, so an admission that
+    # stops being served cannot be selected silently (2026-10-12).
+    fixture["anchor_hadm_id"] = str(hadm_id)
     fixture.setdefault("patients", {})[str(hadm_id)] = {
         "probability": round(probability, 6),
         "decision": decision,

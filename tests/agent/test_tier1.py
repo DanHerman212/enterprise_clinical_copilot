@@ -20,9 +20,9 @@ Transport-agnostic, so the same suite gates the deployed service:
     pytest tests/test_tier1.py -v
     MCP_TRANSPORT=http MCP_URL=https://... pytest tests/test_tier1.py -v
 
-Expected values come from tests/fixtures/expected.json and are compared within
-its tolerance. Nothing here hardcodes a probability: retraining rewrites the
-fixture (section 20), and a hardcoded number would turn every post-retrain run
+Expected values come from tests/agent/fixtures/expected.json and are compared
+within its tolerance. Nothing here hardcodes a probability: retraining rewrites
+the fixture (section 20), and a hardcoded number would turn every post-retrain run
 into what looks like an integration bug.
 """
 
@@ -41,7 +41,8 @@ from services.agent.graph import ask, final_text  # noqa: E402
 from services.agent.mcp_client import toolbox  # noqa: E402
 
 FIXTURE = json.loads((Path(__file__).resolve().parent / "fixtures" / "expected.json").read_text())
-KNOWN_HADM_ID = 20924467
+# Declared by the fixture, not repeated here: see `test_agent_local.py`.
+KNOWN_HADM_ID = int(FIXTURE["anchor_hadm_id"])
 UNKNOWN_HADM_ID = 1
 EXPECTED = FIXTURE["patients"][str(KNOWN_HADM_ID)]
 

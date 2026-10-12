@@ -44,7 +44,13 @@ from services.mcp.dependencies.model_endpoint import endpoint  # noqa: E402
 from services.mcp.dependencies.features import to_vector  # noqa: E402
 from services.mcp.dependencies.features.manifest import feature_order  # noqa: E402
 
-FIXTURE_PATH = HARNESS_ROOT / "tests" / "fixtures" / "expected.json"
+# The fixture patients are pinned into every cohort so the Tier 1 anchor always
+# exists in the served feature source. This path was one directory stale after the
+# test tree moved into tests/agent/ (2026-10-12): `_pinned()` returned [], the run
+# printed "Pinned from fixture: none", the guard at the end found nothing missing,
+# and the cohort was rebuilt without the anchor — which is how admission 20924467
+# left the served table and the live value assertions lost their subject.
+FIXTURE_PATH = HARNESS_ROOT / "tests" / "agent" / "fixtures" / "expected.json"
 OUTPUT_PATH = HARNESS_ROOT / "data" / "demo_cohort.json"
 
 # Bands are expressed against the operating threshold rather than hardcoded, so

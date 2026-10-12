@@ -37,7 +37,11 @@ from services.agent.graph import ask, final_text  # noqa: E402
 from services.agent.mcp_client import toolbox  # noqa: E402
 
 FIXTURE = json.loads((Path(__file__).resolve().parent / "fixtures" / "expected.json").read_text())
-KNOWN_HADM_ID = 20924467
+# The anchor is declared by the fixture rather than repeated here, so re-anchoring
+# is one edit in the file that holds the values — and the suite cannot keep
+# selecting an admission the served feature source no longer holds, which is what
+# sorting the patient keys used to do (2026-10-12).
+KNOWN_HADM_ID = int(FIXTURE["anchor_hadm_id"])
 UNKNOWN_HADM_ID = 1
 EXPECTED = FIXTURE["patients"][str(KNOWN_HADM_ID)]
 

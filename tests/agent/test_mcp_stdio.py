@@ -23,8 +23,17 @@ from pathlib import Path
 import pytest
 from mcp import ClientSession, StdioServerParameters, stdio_client
 
-HARNESS_ROOT = Path(__file__).resolve().parents[1]
-FIXTURE_PATH = HARNESS_ROOT / "tests" / "fixtures" / "expected.json"
+HARNESS_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(HARNESS_ROOT))
+
+# The production spawner, imported rather than re-implemented, so this file cannot
+# drift from it: a child started without `env` gets the SDK's six-key allow-list,
+# the server's config fails closed without PROJECT_ID, and the session dies at
+# import — which is what this file reported as "MCP stdio session failed" for as
+# long as the skip has been hiding it (2026-10-12).
+from services.agent.mcp_client import _mcp_child_environment, _unwrap  # noqa: E402
+
+FIXTURE_PATH = HARNESS_ROOT / "tests" / "agent" / "fixtures" / "expected.json"
 
 # A cold call does Model.list + GCS manifest + BigQuery + Vertex predict.
 CALL_TIMEOUT = 120.0
@@ -33,10 +42,16 @@ UNKNOWN_HADM_ID = 1
 
 
 def _payload(result) -> dict:
-    """The tool's JSON, however this SDK version chose to carry it."""
+    """The tool's JSON, however this SDK version chose to carry it.
+
+    Unwrapped because a tool annotated `-> Result | Error` is advertised as
+    returning `{"result": …}`, and the SDK puts that envelope in the structured
+    payload: without this, every assertion below reads a dict whose only key is
+    "result" (see `mcp_client._unwrap`, the agent's copy of the same rule).
+    """
     if getattr(result, "structured_content", None):
-        return result.structured_content
-    return json.loads(result.content[0].text)
+        return _unwrap(result.structured_content)
+    return _unwrap(json.loads(result.content[0].text))
 
 
 async def _converse() -> dict:
@@ -45,8 +60,10 @@ async def _converse() -> dict:
         command=sys.executable,
         args=["-m", "services.mcp.server", "--transport", "stdio"],
         # The package dir has a hyphen, so it is not importable by path; the
-        # server must be started with the harness root as cwd.
+        # server must be started with the repo root as cwd, and with the parent's
+        # environment so PROJECT_ID reaches it.
         cwd=str(HARNESS_ROOT),
+        env=_mcp_child_environment(),
     )
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
@@ -79,10 +96,38 @@ def _fixture() -> dict:
 
 
 def _fixture_hadm_id() -> str:
-    patients = _fixture().get("patients", {})
-    if not patients:
-        pytest.skip("Fixture has no patients")
-    return sorted(patients)[0]
+    """The admission the fixture is anchored to, by its own declaration.
+
+    Read from `anchor_hadm_id` rather than by sorting the patient keys. The old
+    anchor, "20924467", sorted first, so the suite kept selecting it long after the
+    demo cohort stopped serving it and every value assertion here was measuring a
+    patient the service could not find (2026-10-12).
+    """
+    fixture = _fixture()
+    anchor = fixture.get("anchor_hadm_id")
+    patients = fixture.get("patients", {})
+    if not anchor or str(anchor) not in patients:
+        pytest.skip(
+            "Fixture declares no anchor admission it holds values for; run "
+            "mlops/training/smoke_test.py <hadm_id> --write-fixture"
+        )
+    return str(anchor)
+
+
+def _innermost(exc: BaseException) -> str:
+    """Name the exception at the bottom of a task-group wrapper.
+
+    A failure inside a task group is reported as an ExceptionGroup whose message is
+    "unhandled errors in a TaskGroup (1 sub-exception)" — which says nothing about
+    what went wrong. Five tests in this file stayed dead behind that sentence: the
+    cause was one level down (a subprocess with no environment, and later a project
+    id that does not exist) and was never printed (2026-10-12).
+    """
+    seen = 0
+    while (subs := getattr(exc, "exceptions", None)) and seen < 10:
+        exc = subs[0]
+        seen += 1
+    return f"{type(exc).__name__}: {exc}"
 
 
 @pytest.fixture(scope="module")
@@ -91,7 +136,7 @@ def session_results() -> dict:
     try:
         return asyncio.run(_converse())
     except Exception as exc:  # no endpoint, no credentials, no network
-        pytest.skip(f"MCP stdio session failed: {type(exc).__name__}: {exc}")
+        pytest.skip(f"MCP stdio session failed: {_innermost(exc)}")
 
 
 def test_tool_is_advertised(session_results):
@@ -123,7 +168,6 @@ def test_response_carries_provenance(session_results):
     got = session_results["known"]
     assert got["model_version"]
     assert got["feature_source"] in {"bigquery", "feature_store"}
-
 
 def test_top_factors_are_well_formed(session_results):
     factors = session_results["known"]["top_factors"]

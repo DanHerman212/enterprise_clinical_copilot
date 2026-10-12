@@ -109,6 +109,7 @@ def test_every_advertised_tool_has_a_progress_label():
         predict_readmission,
         rag_search,
         rag_search_sections,
+        discharge_medications,
         search_literature,
     )
 
@@ -116,6 +117,7 @@ def test_every_advertised_tool_has_a_progress_label():
         predict_readmission.__name__,
         rag_search.__name__,
         rag_search_sections.__name__,
+        discharge_medications.__name__,
         search_literature.__name__,
     }
     assert advertised == set(stages.TOOL_LABELS), (
@@ -256,7 +258,8 @@ def test_a_failing_listener_does_not_take_the_answer_down():
 # --- the streaming route ----------------------------------------------------
 
 def test_stream_sends_stages_then_one_answer_frame():
-    async def fake_ask(box, question, on_event=None, question_kind=None, turns=None):
+    async def fake_ask(box, question, on_event=None, question_kind=None,
+                       hadm_id=None, topic=None, turns=None):
         on_event(stages.planning_event())
         on_event(stages.tool_event("rag_search"))
         return _state()
@@ -284,8 +287,16 @@ def test_stream_sends_stages_then_one_answer_frame():
         # rather than inside them. Added 2026-10-08 with the literature tool; the
         # canvas renders these, so a frame that omitted them would draw nothing.
         "literature",
+        # The strict payload (UX Phase 1). Additive: the fields above still carry
+        # what the console renders, and these three are what the Phase 2
+        # components are built against.
+        "narrative_text", "citations", "ui_components",
     }
     assert answer["answer"].strip()
+    # The narrative and the citations are the legacy fields under the contract's
+    # names, not a second copy that could disagree with them.
+    assert answer["narrative_text"] == answer["answer"]
+    assert answer["citations"] == answer["sources"]
 
     # The streamed frame is what the site stores and later replays, so it has to
     # carry the same tool-call detail the single-response route carries.
@@ -305,7 +316,8 @@ def test_the_answer_does_not_wait_for_a_keepalive_after_the_chain_finishes():
     streaming at all. The timer here is the test: if the loop regresses, this
     takes a keepalive interval instead of milliseconds.
     """
-    async def fake_ask(box, question, on_event=None, question_kind=None, turns=None):
+    async def fake_ask(box, question, on_event=None, question_kind=None,
+                       hadm_id=None, topic=None, turns=None):
         on_event(stages.planning_event())
         return _state()
 
@@ -347,7 +359,8 @@ def test_stream_reports_a_mid_stream_failure_as_a_terminal_event():
     """Once the first byte is out the status code is spent, so a failure that
     happens after that arrives as an error frame carrying the same code and
     correlation id the single-response route would have put in its body."""
-    async def boom(box, question, on_event=None, question_kind=None, turns=None):
+    async def boom(box, question, on_event=None, question_kind=None,
+                   hadm_id=None, topic=None, turns=None):
         on_event(stages.tool_event("rag_search"))
         raise RuntimeError("https://secret-mcp-url/ask audience=projects/12345")
 
@@ -371,7 +384,8 @@ def test_stream_refuses_to_ship_an_empty_answer():
     """The MAX_TOKENS failure raises nothing, so it is caught downstream: the
     final turn is empty and the caller gets answer_unavailable, not a blank
     frame that looks like a real answer."""
-    async def empty_final_turn(box, question, on_event=None, question_kind=None, turns=None):
+    async def empty_final_turn(box, question, on_event=None, question_kind=None,
+                               hadm_id=None, topic=None, turns=None):
         state = _state()
         state["messages"] = [AIMessage(content="")]
         return state
@@ -459,7 +473,8 @@ def test_the_planning_label_follows_the_chip_in_the_request():
     """The chip survives from the request contract to the first progress frame."""
     seen = {}
 
-    async def capture(box, question, on_event=None, question_kind=None, turns=None):
+    async def capture(box, question, on_event=None, question_kind=None,
+                      hadm_id=None, topic=None, turns=None):
         seen["kind"] = question_kind
         on_event(stages.planning_event(question_kind))
         return _state()

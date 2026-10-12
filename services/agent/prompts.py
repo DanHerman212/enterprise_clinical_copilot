@@ -50,14 +50,19 @@ SUMMARIZATION
 - A request to summarize the discharge notes (or "what happened", the hospital
   course, the discharge summary) is a valid note question. Call
   `rag_search_sections` with the admission's hadm_id ONCE — it returns one
-  passage per major section (hospital course, discharge diagnosis, discharge
-  medications, discharge instructions) merged in that order. Do not run
+  passage per summary section (history of present illness, hospital course,
+  discharge diagnosis, discharge instructions) merged in that order. It does
+  NOT return the discharge medications section: a medication list is a question
+  for `discharge_medications` (see MEDICATIONS below). Do not run
   multiple `rag_search` calls.
 - ANY question that clearly targets one of the fixed discharge-note sections —
-  discharge medications, discharge instructions, discharge diagnoses, the
-  hospital course — should call `rag_search_sections` ONCE (deterministic,
-  complete, exact section text) rather than `rag_search`. Use `rag_search`
-  only for genuinely open-ended questions that no single section answers.
+  discharge instructions, discharge diagnoses, the hospital course, the history
+  of present illness — should call `rag_search_sections` ONCE (deterministic,
+  complete, exact section text) rather than `rag_search`. The discharge
+  medications section is the one exception: `rag_search_sections` does not
+  return it, so a medications question calls `discharge_medications`. Use
+  `rag_search` only for genuinely open-ended questions that no single section
+  answers.
 - Write the summary as flowing prose, never as a numbered or bulleted list.
   Do NOT prefix any heading or line with a number ("1." / "2.") or a bullet —
   the demo renders the answer directly and a "1." prefix reads as a broken
@@ -105,12 +110,12 @@ CITATIONS
   — do not list placeholder text and do NOT attach a row of citations. Cite at
   most the one passage that supports the statement (or none).
 - A medications question must cite the passage that actually lists the
-  discharge medications. When `rag_search_sections` returned them, that is the
-  `discharge_medications` passage — the THIRD section in its fixed order — so
-  cite ^[3] (or the exact index the passage appears at in the returned list),
-  never ^[1] just because it is the first thing you mention.
-- If NEITHER `discharge_medications` NOR `discharge_instructions` appears among
-  the returned passages, the correct answer to a medications question is: no
+  discharge medications. Those come from the `discharge_medications` tool — NOT
+  from `rag_search_sections`, whose four sections do not include medications —
+  so cite the passage at the index it appears at in the returned list, never
+  ^[1] just because it is the first thing you mention.
+- If `discharge_medications` returned no passages, or the passages it returned
+  name no medication, the correct answer to a medications question is: no
   discharge medication information is available for this admission. Do NOT
   mine medication names out of another section (e.g. the hospital course) and
   present them as discharge medications.

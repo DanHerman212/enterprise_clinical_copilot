@@ -45,7 +45,7 @@ from services.agent.citations import (
     intent_sections,
     renumber_citations,
 )
-from services.agent.feature_labels import humanize
+from services.agent.feature_labels import display_probability, humanize
 
 # Read off the site's registered catalog: the vendored renderer resolves the
 # custom components against this exact id, and a mismatch means nothing draws.
@@ -340,7 +340,11 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
     else:
         probability = float(estimate["probability"])
         threshold = float(estimate["threshold"])
+        # The band is a decision, so it reads the served value; the number is a
+        # display, so it is rounded. Rounding before the comparison would let the
+        # display precision move a threshold call.
         band = _band(probability, threshold)
+        shown = display_probability(probability)
         factors = estimate.get("top_factors") or []
         # Post-process the SHAP names for visual consumption: each factor gets
         # a human label (feature_labels.humanize) so the bars never show a raw
@@ -355,14 +359,17 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
         # demo.
         children += ["risk", "factors"]
         components.append({"id": "risk", "component": "RiskBar",
-                           "probability": probability, "threshold": threshold,
+                           "probability": shown, "threshold": threshold,
                            "band": band})
         components.append({"id": "factors", "component": "FactorBars",
                            "factors": factors})
 
+        # Both forms come from the rounded value, so the caption and the bar show
+        # one number at one precision. Whole percent is the same precision as two
+        # decimals of a probability — 0.09 is 9%, not 9.0%.
         fallback = (
-            f"Admission {estimate.get('hadm_id')}: {probability:.1%} 30-day readmission "
-            f"probability ({probability:.4f}), {band} at a {threshold:.2f} threshold."
+            f"Admission {estimate.get('hadm_id')}: {shown:.0%} 30-day readmission "
+            f"probability ({shown:.2f}), {band} at a {threshold:.2f} threshold."
         )
 
     # Provenance caption. For a risk estimate it names the model + feature

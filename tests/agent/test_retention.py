@@ -11,8 +11,10 @@ counted, and a truncated line is kept rather than silently treated as rubbish.
 """
 
 import json
+import os
 import sys
 from datetime import datetime, timedelta, timezone
+from fnmatch import fnmatch
 from pathlib import Path
 
 import pytest
@@ -32,9 +34,34 @@ def _record(at=None, prompt="risk"):
 
 
 def _archive(tmp_path, lines):
-    path = tmp_path / "traces.jsonl"
+    """One archive at the current collector's filename.
+
+    Named for the collector rather than for `traces.jsonl`, which is the exempt
+    baseline: a fixture that wrote that name would be writing the one file the
+    sweep is not allowed to touch.
+    """
+    return _write(tmp_path / "traces_http.jsonl", lines)
+
+
+def _write(path, lines):
     path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
     return path
+
+
+# The clock the archive-age tests use. Given rather than read, so a test about a
+# ninety-day window does not change meaning with the calendar.
+ARCHIVE_NOW = datetime(2026, 10, 12, 12, 0, tzinfo=timezone.utc)
+
+
+def _dated(path, days_ago):
+    """Backdate an archive, and return the clock the sweep should be given.
+
+    The file is what is dated because the file's age is what the window acts on
+    when its records cannot be aged.
+    """
+    written = (ARCHIVE_NOW - timedelta(days=days_ago)).timestamp()
+    os.utime(path, (written, written))
+    return ARCHIVE_NOW
 
 
 def test_a_recent_record_is_kept_and_an_old_one_is_dropped(tmp_path):
@@ -136,7 +163,7 @@ def test_the_collector_writes_the_timestamp_it_will_be_pruned_by():
     """The archive's lifetime is enforced through this field, so the writer and
     the pruner are checked against each other rather than assumed to agree."""
     source = (Path(__file__).resolve().parents[2] / "evaluation" / "agent"
-              / "collect.py").read_text(encoding="utf-8")
+              / "collect_http.py").read_text(encoding="utf-8")
 
     assert '"at": datetime.now(timezone.utc).isoformat()' in source
     assert retention._record_time({"at": "2026-09-18T12:00:00+00:00"}) is not None
@@ -148,18 +175,129 @@ def test_the_pruner_and_the_collector_point_at_the_same_file():
     The collector computes its output path from its own location, and this
     module keeps its own copy of that path rather than importing the collector
     (which imports the agent graph to be read). That is a drift surface, and it
-    had already drifted once: the collector's `parents[1]` resolved to a path
-    that did not exist after the file moved, so a run would have written the
-    archive somewhere .gitignore does not cover.
+    has now drifted twice: the collector's `parents[1]` resolved to a path that
+    did not exist after the file moved, and then the collector was replaced by an
+    HTTP-only one writing a different filename while this path stayed put. The
+    second drift is the harder one — the path remained valid, so nothing failed;
+    the window simply stopped covering the archive being written to.
     """
     source = (Path(__file__).resolve().parents[2] / "evaluation" / "agent"
-              / "collect.py").read_text(encoding="utf-8")
+              / "collect_http.py").read_text(encoding="utf-8")
 
-    assert 'RESULTS = Path(__file__).resolve().parent / "results"' in source
-    assert 'OUT = RESULTS / "traces.jsonl"' in source
+    assert 'HERE = Path(__file__).resolve().parent' in source
+    assert 'RESULTS = HERE / "results"' in source
+    assert 'OUT = RESULTS / "traces_http.jsonl"' in source
     assert retention.DEFAULT_TRACE_FILE == (
         Path(__file__).resolve().parents[2] / "evaluation" / "agent" / "results"
-        / "traces.jsonl")
+        / "traces_http.jsonl")
+    # And the file it writes is inside the swept set, which is the property that
+    # actually matters now that the window is applied by pattern: a collector
+    # writing a name the pattern misses is outside the window on the day it ships.
+    assert fnmatch(retention.DEFAULT_TRACE_FILE.name, retention.TRACE_GLOB)
+    assert retention.DEFAULT_TRACE_FILE.name not in retention.EXEMPT_TRACES
+
+
+def test_the_sweep_reaches_every_archive_and_leaves_the_baseline_alone(tmp_path):
+    """One window, every archive — and the one archive that is meant to survive.
+
+    The failure this prevents was live: the window named a single file, so sixteen
+    archives of clinical text sat outside it while the report said the holding was
+    covered.
+    """
+    recent = (NOW - timedelta(days=5)).isoformat()
+    old = (NOW - timedelta(days=120)).isoformat()
+    sweepable = ("traces_http.jsonl", "traces_http_2026-07-01.jsonl",
+                 "traces_hybrid_108.s3.jsonl")
+    for name in sweepable:
+        _write(tmp_path / name, [_record(old), _record(recent)])
+    # The immutable baseline: old, and not the window's to touch.
+    _write(tmp_path / "traces.jsonl", [_record(old)])
+
+    entries = retention.prune_trace_archives(
+        tmp_path, days=90, now=NOW, apply=True)
+
+    by_file = {entry["file"]: entry for entry in entries}
+    assert set(by_file) == set(sweepable) | {"traces.jsonl"}
+    for name in sweepable:
+        assert by_file[name]["dropped"] == 1, name
+        assert by_file[name]["kept"] == 1, name
+        assert by_file[name]["exempt"] is False, name
+    # Exempt means untouched: not read, not rewritten, still both records.
+    assert by_file["traces.jsonl"]["exempt"] is True
+    assert by_file["traces.jsonl"]["dropped"] == 0
+    assert (tmp_path / "traces.jsonl").read_text(encoding="utf-8").count("\n") == 1
+
+
+def test_an_undated_archive_older_than_the_window_is_purged_whole(tmp_path):
+    """Compliance does not grant amnesty to a format.
+
+    An archive whose records carry no timestamp cannot be kept indefinitely by
+    default: the file's own date is the age that is enforced, and the archive goes
+    as a unit rather than record by record.
+    """
+    path = _write(tmp_path / "traces_hybrid_108.jsonl", [_record(), _record()])
+    now = _dated(path, 200)
+
+    entries = retention.prune_trace_archives(
+        tmp_path, days=90, now=now, apply=True)
+
+    entry = entries[0]
+    assert entry["undated"] == 2
+    assert entry["records"] == 2
+    assert entry["age_days"] == 200
+    assert entry["purged"] is True
+    assert not path.exists()
+
+
+def test_an_undated_archive_inside_the_window_is_kept_and_its_clock_is_reported(
+    tmp_path,
+):
+    """Inside the window it is kept whole — and the report says how long is left,
+    because a purge an operator did not see coming is one they cannot prevent."""
+    path = _write(tmp_path / "traces_hybrid_108.jsonl", [_record(), _record()])
+    now = _dated(path, 49)
+
+    entries = retention.prune_trace_archives(
+        tmp_path, days=90, now=now, apply=True)
+
+    entry = entries[0]
+    assert entry["purged"] is False
+    assert entry["undated"] == 2
+    assert entry["kept"] == 2
+    assert entry["age_days"] == 49
+    assert path.exists()
+
+
+def test_a_dry_run_purges_nothing(tmp_path):
+    """The deletion is gated on --apply, and the dry run still reports it: a sweep
+    that deleted before its report would be a sweep nobody could review."""
+    path = _write(tmp_path / "traces_hybrid_108.jsonl", [_record()])
+    now = _dated(path, 200)
+
+    entries = retention.prune_trace_archives(
+        tmp_path, days=90, now=now, apply=False)
+
+    assert entries[0]["purged"] is True   # what a run would do
+    assert path.exists()                  # and what this one did not
+
+
+def test_an_exempt_archive_survives_the_file_clock(tmp_path):
+    """The exemption has to outrank the file clock, or it is not an exemption.
+
+    The baseline is both undated and old, which is exactly the combination the
+    window now acts on — so this is the case the exemption exists for, and the
+    case where getting the order of checks wrong destroys an audit trail.
+    """
+    path = _write(tmp_path / "traces.jsonl", [_record()])
+    now = _dated(path, 400)
+
+    entries = retention.prune_trace_archives(
+        tmp_path, days=90, now=now, apply=True)
+
+    assert entries[0]["exempt"] is True
+    assert entries[0]["purged"] is False
+    assert entries[0]["age_days"] == 400
+    assert path.exists()
 
 
 def test_the_archive_path_the_collector_uses_is_ignored_by_git():
@@ -172,7 +310,7 @@ def test_the_archive_path_the_collector_uses_is_ignored_by_git():
     import subprocess
 
     repo = Path(__file__).resolve().parents[2]
-    path = "evaluation/agent/results/traces.jsonl"
+    path = "evaluation/agent/results/traces_http.jsonl"
     result = subprocess.run(
         ["git", "check-ignore", "-v", path], cwd=repo,
         capture_output=True, text=True)

@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from services.agent import guardrail as g  # noqa: E402
+from services.agent.feature_labels import display_probability  # noqa: E402
 
 
 # --- risk-number guard (ECC-04) ----------------------------------------------
@@ -61,6 +62,41 @@ def test_truncated_but_honest_decimal_passes():
     cleaned, flags = g.verify_risk_numbers("About 0.13.", _PREDICT_CALL)
     assert cleaned == "About 0.13."
     assert flags == []
+
+
+def test_the_number_the_interface_shows_is_always_supported():
+    """The display precision and the guardrail's tolerance are checked against
+    each other, because they are two independent constants that have to agree.
+
+    The prose is written from the SHOWN value — the interface rounds the score to
+    two decimals, and the narrative describes the same number. If the tolerance
+    were ever tighter than half a unit in that last displayed place, the guardrail
+    would strip the number the widget was drawing, and the sentence would arrive
+    with a hole in it. That failure is invisible in a diff and silent at runtime.
+    """
+    # Served values across the range the demo cohort produces, including the
+    # half-way cases where rounding moves the digit.
+    for served in (0.090459, 0.131398, 0.135729, 0.316788, 0.3443, 0.125, 0.115,
+                   0.0049, 0.985):
+        shown = display_probability(served)
+        answer = f"The readmission risk score is {shown:.2f}."
+
+        cleaned, flags = g.verify_risk_numbers(
+            answer,
+            [{"name": "predict_readmission",
+              "response": {"probability": served, "threshold": 0.11}}],
+        )
+
+        assert cleaned == answer, f"{served} -> {shown} was rewritten"
+        assert flags == [], f"{served} -> {shown} was flagged"
+
+
+def test_a_display_value_that_is_not_a_number_is_not_rounded_to_zero():
+    """Absence is not a score: a rounded 0.0 would be the most confident wrong
+    number in the payload."""
+    assert display_probability(None) is None
+    assert display_probability("0.13") is None
+    assert display_probability(True) is None
 
 
 def test_quoted_lab_value_from_evidence_is_not_a_risk_number():

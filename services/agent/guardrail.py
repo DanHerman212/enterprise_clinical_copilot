@@ -264,13 +264,20 @@ def verify_risk_numbers(
     numbers followed by a dose unit, and numbers quoted verbatim from the
     retrieved passages (lab values like "creatinine 0.9") — those are med/note
     facts, owned by the other guardrails.
+
+    The half-unit tolerance carries a hair of slack for floating point. A served
+    value that sits EXACTLY half a unit from the number written (0.125 written as
+    "0.12") subtracts to a few ulps more than the tolerance, because neither
+    decimal is exact in binary, and the number would be stripped from the prose
+    describing it. The slack is 1e-12 against representation error of order 1e-17,
+    and it is far below any difference that could hide a fabricated value.
     """
     flags: list[str] = []
     values = _predict_values(tool_calls)
     spans: list[tuple[int, int]] = []
 
     def supported(x: float, tol: float) -> bool:
-        return any(abs(x - v) <= tol for v in values)
+        return any(abs(x - v) <= tol + 1e-12 for v in values)
 
     for m in _RISK_DECIMAL.finditer(answer):
         token = m.group(0)

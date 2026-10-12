@@ -2,11 +2,29 @@
 
 from typing import Any, NotRequired, TypedDict
 
+from services.agent import routing
 from services.agent.questions import UnknownChip, compose_question
 
 
 class AgentRequest(TypedDict):
+    """What a validated request resolves to.
+
+    `kind` is the command the caller sent, or None for free text, and it selects
+    the path: a command runs deterministically, free text goes to the reasoning
+    loop. `hadm_id` travels beside it because a command passes the admission to
+    its tool as an argument, and re-reading it back out of the composed question
+    would turn a validated value into parsed text.
+
+    `topic` is the same argument-fed value for the one command that needs the
+    caller's own words: it is the search string the literature tool is called
+    with, and it travels here for the same reason the admission does.
+    """
+
     question: str
+    kind: str | None
+    hadm_id: int | None
+    topic: str | None
+    turns: list[dict[str, Any]]
 
 
 class AgentToolCall(TypedDict):
@@ -80,7 +98,8 @@ class LiteratureResult(TypedDict):
 # attached, so there is no note text among its results for the store to be careful
 # with in the first place.
 RE_DERIVABLE_TOOLS = frozenset(
-    {"rag_search", "rag_search_sections", "search_literature"}
+    {"rag_search", "rag_search_sections", "discharge_medications",
+     "search_literature"}
 )
 RESULT_KEPT_TOOLS = frozenset({"predict_readmission"})
 
@@ -316,12 +335,15 @@ def _unsupported_field_error(unknown: list[str]) -> AgentRequestError:
 def parse_agent_request(body: Any, *, max_question_chars: int) -> AgentRequest:
     """Validate JSON-decoded input and return the agent request contract.
 
-    Three shapes, each of which the caller used to resolve itself before
+    Four shapes, each of which the caller used to resolve itself before
     composing the question on its side:
 
         {"question": "..."}                  free text
         {"question": "...", "hadm_id": 123}  free text about one patient
         {"chip": "risk", "hadm_id": 123}     a starter chip
+        {"chip": "literature", "hadm_id": 123,
+         "question": "dual antiplatelet therapy"}
+                                             a command that needs a topic
 
     The wording is composed here (`questions.compose_question`) rather than by the
     caller, so half the prompt no longer lives in another repository. The result
@@ -333,10 +355,18 @@ def parse_agent_request(body: Any, *, max_question_chars: int) -> AgentRequest:
     state says why. There is no conversation state to send, and the contract is
     where that stops being implicit.
 
-    The result carries one more field than it used to: `kind`, the chip the
-    question came from, or None for free text. The progress stream labels its
-    first stage from it (`stages.planning_label`). The question the model is
-    asked is still a single string, so no downstream consumer changed.
+    The result carries more fields than it used to: `kind`, the command the
+    question came from, or None for free text; `hadm_id`, the validated
+    admission; and `topic`, the caller's own words for a command that takes them.
+    Both of the latter are tool arguments rather than question text, which is why
+    they travel as values instead of being read back out of the composed string.
+    The question the model is asked is still a single string, so no downstream
+    consumer changed.
+
+    Text beside a command is the command's own input when the command takes one,
+    and a refusal when it does not. The contract decides that, not the route and
+    not the browser, because the vocabulary is the agent's (`routing.py`) and two
+    layers deciding it is how the two ends up disagreeing.
 
     `turns` carries the earlier turns of the conversation the caller is having,
     when there is one: the caller owns that state, this service holds none, and
@@ -372,10 +402,42 @@ def parse_agent_request(body: Any, *, max_question_chars: int) -> AgentRequest:
     if question is not None and not isinstance(question, str):
         raise AgentRequestError("invalid_request", "'question' must be a string", 400)
 
+    # A command that takes the caller's own words is the one case where text
+    # arriving beside a command is the command's own input rather than a second
+    # intention. For every other command it is two intentions, and the request can
+    # only be answered as one of them. This used to be resolved the quiet way —
+    # the command won and the question was dropped — which served a repeat of the
+    # previous answer to a clinician who had asked something new. Refusing is the
+    # honest answer, and it keeps the deterministic boundary a boundary rather
+    # than a preference (UX Phase 1).
+    topic: str | None = None
+    if chip is not None and routing.is_command(chip):
+        command = routing.command_for(chip)
+        typed = question.strip() if isinstance(question, str) else ""
+        if command.topic_arg is not None:
+            # No defensible default exists, and inventing one would mean reading
+            # the patient's chart to fill it in — the implicit retrieval step
+            # this phase removes. The refusal carries the prompt the clinician
+            # needs, composed beside the command it names.
+            if not typed:
+                raise AgentRequestError(
+                    "topic_required", routing.MissingTopic(command).message, 400
+                )
+            topic = typed
+        elif typed:
+            raise AgentRequestError(
+                "ambiguous_intent",
+                "A command and a question arrived together. Send the command on its own, "
+                "or ask your question without the command.",
+                400,
+            )
+
     turns = _parse_turns(body.get("turns"), max_question_chars)
 
     try:
-        composed = compose_question(chip=chip, question=question, hadm_id=hadm_id)
+        composed = compose_question(
+            chip=chip, question=question, hadm_id=hadm_id, topic=topic
+        )
     except UnknownChip as exc:
         # Raised before UnknownChip's parent ValueError: it is the more specific
         # answer and the caller can act on it.
@@ -393,7 +455,13 @@ def parse_agent_request(body: Any, *, max_question_chars: int) -> AgentRequest:
             f"Limit is {max_question_chars} characters.",
             413,
         )
-    return {"question": composed, "kind": chip, "turns": turns}
+    return {
+        "question": composed,
+        "kind": chip,
+        "hadm_id": hadm_id,
+        "topic": topic,
+        "turns": turns,
+    }
 
 
 def validate_agent_success(payload: Any) -> AgentSuccess:
@@ -466,6 +534,35 @@ def validate_agent_success(payload: Any) -> AgentSuccess:
 
     if payload.get("a2ui") is not None and not isinstance(payload["a2ui"], dict):
         raise AgentResponseError("Agent produced malformed A2UI data.")
+
+    # The strict payload (UX Phase 1). Required rather than optional, unlike the
+    # site's copy of this contract: the agent is the only producer of these
+    # fields, so an agent revision that omitted one is a bug rather than a
+    # deployment-order question. The site can be lenient about them precisely
+    # because they are additive on its side.
+    narrative = payload.get("narrative_text")
+    if not isinstance(narrative, str) or not narrative.strip():
+        raise AgentResponseError("Agent produced no narrative text.")
+
+    citations = payload.get("citations")
+    if not isinstance(citations, list) or not all(
+        isinstance(citation, dict) for citation in citations
+    ):
+        raise AgentResponseError("Agent produced malformed citations.")
+
+    components = payload.get("ui_components")
+    if not isinstance(components, list):
+        raise AgentResponseError("Agent produced malformed UI components.")
+    for component in components:
+        if not isinstance(component, dict):
+            raise AgentResponseError("Agent produced malformed UI components.")
+        if not isinstance(component.get("component"), str):
+            raise AgentResponseError("Agent produced malformed UI components.")
+        # `props` is the component's whole input, so it has to be an object even
+        # when it is empty: a list would be read as positional arguments by a
+        # caller that spreads it, which is a failure mode with no upside.
+        if not isinstance(component.get("props", {}), dict):
+            raise AgentResponseError("Agent produced malformed UI components.")
 
     sources = payload.get("sources")
     if not isinstance(sources, list):

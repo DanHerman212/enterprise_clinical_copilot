@@ -24,7 +24,8 @@ def test_parse_agent_request_canonicalises_the_question():
     """
     assert parse_agent_request(
         {"question": " assess risk "}, max_question_chars=20
-    ) == {"question": "assess risk", "kind": None, "turns": []}
+    ) == {"question": "assess risk", "kind": None, "hadm_id": None,
+          "topic": None, "turns": []}
 
 
 # The shape of a request is a decision, not an accident. These pin the refusal,
@@ -87,7 +88,8 @@ def test_the_closed_contract_still_accepts_the_three_shapes():
     """Closing the field set must not narrow what already worked."""
     assert parse_agent_request(
         {"question": "why?"}, max_question_chars=2000
-    ) == {"question": "why?", "kind": None, "turns": []}
+    ) == {"question": "why?", "kind": None, "hadm_id": None,
+          "topic": None, "turns": []}
     assert parse_agent_request(
         {"chip": "risk", "hadm_id": 90000009}, max_question_chars=2000
     )
@@ -179,6 +181,8 @@ def test_a_chip_and_admission_compose_what_the_website_used_to_build():
             "For admission 90000009."
         ),
         "kind": "risk",
+        "hadm_id": 90000009,
+        "topic": None,
         "turns": [],
     }
 
@@ -190,6 +194,8 @@ def test_free_text_with_an_admission_gets_the_same_suffix_the_website_added():
     ) == {
         "question": "Why was this patient flagged? For admission 90000009.",
         "kind": None,
+        "hadm_id": 90000009,
+        "topic": None,
         "turns": [],
     }
 
@@ -206,6 +212,8 @@ def test_an_admission_alone_asks_the_default_question():
     ) == {
         "question": "Assess the 30-day readmission risk for admission 90000009.",
         "kind": None,
+        "hadm_id": 90000009,
+        "topic": None,
         "turns": [],
     }
 
@@ -301,6 +309,14 @@ def _success_payload():
         "a2ui": None,
         "sources": [{"cite": 1, "section": "discharge_medications",
                      "text": "warfarin 4 mg QD", "query": "medications"}],
+        # The strict payload (UX Phase 1). `narrative_text` and `citations` are
+        # the contract's names for the two fields above, so the fixture mirrors
+        # them rather than inventing different content for them.
+        "narrative_text": "The estimate is below threshold.",
+        "citations": [{"cite": 1, "section": "discharge_medications",
+                       "text": "warfarin 4 mg QD", "query": "medications"}],
+        "ui_components": [{"component": "risk_visualizer",
+                           "props": {"probability": 0.11}}],
         "model": "gemini-2.5-flash",
         "code_revision": "rev-1",
         "langfuse_trace_id": "a84f7e9903ab13d86b6ee075f2a91f60",
@@ -428,6 +444,77 @@ def test_validate_agent_success_rejects_malformed_source_entry():
 
     with pytest.raises(AgentResponseError):
         validate_agent_success(payload)
+
+
+# The strict payload (UX Phase 1). Required here and merely tolerated on the
+# site's side, which is the asymmetry the two contracts are meant to have: the
+# agent is the only producer, so an agent revision that omitted one of these is a
+# bug, whereas a site revision that lands first must keep answering.
+
+def test_validate_agent_success_requires_a_narrative():
+    payload = _success_payload()
+    del payload["narrative_text"]
+
+    with pytest.raises(AgentResponseError):
+        validate_agent_success(payload)
+
+    # An empty narrative is the same failure as a missing one: the field exists
+    # so a component can render prose, and there is none.
+    payload = _success_payload()
+    payload["narrative_text"] = "   "
+
+    with pytest.raises(AgentResponseError):
+        validate_agent_success(payload)
+
+
+def test_validate_agent_success_requires_citations():
+    payload = _success_payload()
+    del payload["citations"]
+
+    with pytest.raises(AgentResponseError):
+        validate_agent_success(payload)
+
+    payload = _success_payload()
+    payload["citations"] = ["^[1]"]
+
+    with pytest.raises(AgentResponseError):
+        validate_agent_success(payload)
+
+    # No citations is a legitimate answer — a question the notes do not support.
+    payload = _success_payload()
+    payload["citations"] = []
+
+    assert validate_agent_success(payload) is payload
+
+
+def test_validate_agent_success_requires_ui_components():
+    payload = _success_payload()
+    del payload["ui_components"]
+
+    with pytest.raises(AgentResponseError):
+        validate_agent_success(payload)
+
+    for component in ["risk_visualizer", {}, {"props": {}}]:
+        payload = _success_payload()
+        payload["ui_components"] = [component]
+
+        with pytest.raises(AgentResponseError):
+            validate_agent_success(payload)
+
+
+def test_validate_agent_success_rejects_positional_component_props():
+    """`props` is a component's whole input. A list would be read as positional
+    arguments by a caller that spreads it, which is a failure with no upside."""
+    payload = _success_payload()
+    payload["ui_components"] = [{"component": "risk_visualizer", "props": [1, 2]}]
+
+    with pytest.raises(AgentResponseError):
+        validate_agent_success(payload)
+
+    payload = _success_payload()
+    payload["ui_components"] = [{"component": "risk_visualizer"}]
+
+    assert validate_agent_success(payload) is payload
 
 
 def test_validate_recorded_tool_call_requires_internal_arguments():

@@ -38,6 +38,14 @@ ADMISSION_TEMPLATE = " For admission {hadm_id}."
 # change what the model is asked.
 DEFAULT_TEMPLATE = "Assess the 30-day readmission risk for admission {hadm_id}."
 
+# A command that takes the caller's own words as a tool argument needs a wording
+# that names what was searched. `CHIP_QUESTIONS["literature"]` says "on this
+# condition", which describes a retrieval step the command does not take: the
+# topic is the clinician's, and the agent does not read the chart to invent one.
+TOPIC_QUESTIONS = {
+    "literature": "Search PubMed for recent literature on {topic}.",
+}
+
 
 class UnknownChip(ValueError):
     """The caller asked for a chip this chain does not define."""
@@ -47,17 +55,27 @@ class UnknownChip(ValueError):
         self.chip = chip
 
 
-def compose_question(*, chip=None, question=None, hadm_id=None) -> str:
+def compose_question(*, chip=None, question=None, hadm_id=None, topic=None) -> str:
     """Build the question the model is asked, from the caller's intent.
 
     Mirrors exactly what the website used to compose, including the default that
     applies when only a patient is given. Raises `UnknownChip` for a chip that is
     not in the table, and `ValueError` when there is nothing to ask.
+
+    `topic` is the caller's own words for a command that takes them, and it is
+    separate from `question` because the two are not interchangeable: a question
+    is what the model is asked, a topic is what the tool is called with, and a
+    command may have the second without the first.
     """
     if chip is not None:
         wording = CHIP_QUESTIONS.get(chip)
         if wording is None:
             raise UnknownChip(chip)
+        template = TOPIC_QUESTIONS.get(chip)
+        if template is not None:
+            if not (topic or "").strip():
+                raise ValueError(f"{chip} was asked with no topic")
+            wording = template.format(topic=topic.strip())
     elif isinstance(question, str) and question.strip():
         wording = question.strip()
     elif hadm_id is not None:

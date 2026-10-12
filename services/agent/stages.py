@@ -109,6 +109,7 @@ TOOL_LABELS = {
     "predict_readmission": "Reading the Risk Model",
     "rag_search": "Searching the Discharge Notes",
     "rag_search_sections": "Reading the Note Sections",
+    "discharge_medications": "Reading the Discharge Medications",
     "search_literature": "Searching the Literature",
 }
 
@@ -125,12 +126,14 @@ LABEL_RESULT_FAILED = "The Tool Did Not Respond"
 LABEL_RESULT_RISK = "Read the Risk Score"
 LABEL_RESULT_PASSAGES = "Read the Note Passages"
 LABEL_RESULT_SECTIONS = "Read the Note Sections"
+LABEL_RESULT_MEDICATIONS = "Read the Discharge Medications"
 LABEL_RESULT_LITERATURE = "Read the Articles"
 
 RESULT_LABELS = {
     "predict_readmission": LABEL_RESULT_RISK,
     "rag_search": LABEL_RESULT_PASSAGES,
     "rag_search_sections": LABEL_RESULT_SECTIONS,
+    "discharge_medications": LABEL_RESULT_MEDICATIONS,
     "search_literature": LABEL_RESULT_LITERATURE,
 }
 

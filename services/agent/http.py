@@ -35,6 +35,7 @@ from services.agent.contracts import (
 from services.agent.graph import ask, final_message, final_text
 from services.agent.guardrail import guard_answer
 from services.agent.mcp_client import MCP_TRANSPORT, toolbox
+from services.agent.payload import build_ui_components
 from services.mcp.runtime import requires_cloud_run_auth, timeout_chain
 
 logger = logging.getLogger(__name__)
@@ -89,21 +90,29 @@ def _trace(request: Request) -> str:
 
 async def _question_or_error(
     request: Request,
-) -> tuple[str, str | None, list[dict[str, str]], JSONResponse | None]:
-    """The validated question, its kind and any replayed turns, or the response."""
+) -> tuple[dict | None, JSONResponse | None]:
+    """The validated request, or the response that refuses it.
+
+    The whole parsed request is returned rather than its fields positionally: the
+    shape has grown twice (the command, then the admission, now the command's
+    topic), and a tuple unpacked in two routes is where the next field gets
+    dropped by whichever unpack was not updated.
+    """
     try:
         body = await request.json()
     except Exception:
-        return "", None, [], JSONResponse({"error": "invalid_json"}, status_code=400)
+        return None, JSONResponse(
+            {"error": "invalid_json"}, status_code=400
+        )
 
     try:
         parsed = parse_agent_request(body, max_question_chars=MAX_QUESTION_CHARS)
     except AgentRequestError as exc:
-        return "", None, [], JSONResponse(
+        return None, JSONResponse(
             {"error": exc.code, "message": exc.message},
             status_code=exc.status_code,
         )
-    return parsed["question"], parsed["kind"], parsed["turns"], None
+    return parsed, None
 
 
 class AgentAnswerUnavailable(Exception):
@@ -175,7 +184,11 @@ def _compose_success(question: str, state: dict, trace: str) -> dict:
     # Deterministic post-hoc guardrails (P4): the LLM proposes, code disposes.
     # The served answer is the guarded one; flags are returned for observability
     # and so a client can choose to render a note.
-    text = final_text(state)
+    # A command may bring its own answer text. `/meds` extracts a structured
+    # list, and what the guardrails and the citation layer must see is the
+    # narrative beside that list, not the JSON the extraction returned — the
+    # extraction is payload, the narrative is the answer (see deterministic.py).
+    text = state.get("deterministic_answer") or final_text(state)
     if not text:
         # An empty turn is not one thing. The response says which it was, and the
         # cases need different words: a truncated answer is worth retrying, a
@@ -246,6 +259,19 @@ def _compose_success(question: str, state: dict, trace: str) -> dict:
         # articles, so they have to cross this boundary or the swap has nothing to
         # draw.
         "literature": presentation["literature"],
+        # The strict payload (UX Phase 1): the narrative, the citations that
+        # narrative's markers resolve against, and the components to draw it
+        # with. Additive on purpose — every field above still carries what the
+        # console renders today, so the site, the renderer and the new
+        # components can each move on their own revision (see payload.py).
+        "narrative_text": presentation["answer"],
+        # The same list as `sources`, under the contract's name. One source of
+        # truth, two names: the console looks a footnote up in `sources`, and the
+        # Phase 2 components were specified against `citations`.
+        "citations": presentation["sources"],
+        "ui_components": build_ui_components(
+            state.get("command"), trimmed_calls, state.get("command_payload")
+        ),
         "model": chain.MODEL_ID,
         # The revision that produced this answer travels with it. A stored turn
         # without it cannot be explained once the code has moved on, which is
@@ -319,10 +345,8 @@ class _StageLog:
 
 
 async def _run_chain(
-    question: str,
-    question_kind: str | None = None,
+    parsed: dict,
     on_event=None,
-    turns: list[dict[str, str]] | None = None,
 ) -> dict:
     """Run the graph under the wall-clock deadline, inside one MCP session.
 
@@ -330,18 +354,20 @@ async def _run_chain(
     spend control (ECC-02), and a second copy of it is a second place for the
     two routes to disagree about how long a question may take.
 
-    `turns` is passed through rather than resolved here: the caller owns the
-    conversation, this service holds none, and the chain turns what it is given
-    into messages.
+    The request arrives whole rather than as arguments. Everything in it is
+    something the chain needs, and a caller that unpacks it into positionals is a
+    caller that silently drops the field added after it was written.
     """
     async with asyncio.timeout(ASK_TIMEOUT_SECONDS):
         async with toolbox() as box:
             return await ask(
                 box,
-                question,
-                question_kind=question_kind,
+                parsed["question"],
+                question_kind=parsed["kind"],
+                hadm_id=parsed["hadm_id"],
+                topic=parsed["topic"],
                 on_event=on_event,
-                turns=turns,
+                turns=parsed["turns"],
             )
 
 
@@ -372,7 +398,7 @@ async def ask_route(request: Request) -> JSONResponse:
     if error is not None:
         return error
     trace = _trace(request)
-    question, question_kind, turns, error = await _question_or_error(request)
+    parsed, error = await _question_or_error(request)
     if error is not None:
         return error
 
@@ -380,12 +406,10 @@ async def ask_route(request: Request) -> JSONResponse:
     # emits exactly one execution record.
     log = _StageLog()
     try:
-        state = await _run_chain(
-            question, question_kind, on_event=log, turns=turns
-        )
+        state = await _run_chain(parsed, on_event=log)
     except TimeoutError:
         logger.error("agent /ask timed out after %.0fs trace=%s", ASK_TIMEOUT_SECONDS, trace)
-        log.record(trace, question, "timeout", error="timeout")
+        log.record(trace, parsed["question"], "timeout", error="timeout")
         return JSONResponse(
             {"error": "timeout",
              "message": f"The agent did not answer within {ASK_TIMEOUT_SECONDS:.0f}s."},
@@ -406,7 +430,7 @@ async def ask_route(request: Request) -> JSONResponse:
         # gets a stable code + correlation id that pairs with the log line.
         correlation_id = uuid.uuid4().hex[:12]
         logger.error("agent /ask failed [%s] trace=%s", correlation_id, trace, exc_info=cause)
-        log.record(trace, question, "error", error="agent_failed")
+        log.record(trace, parsed["question"], "error", error="agent_failed")
         return JSONResponse(
             {"error": "agent_failed",
              "message": "The agent failed to answer. Please retry.",
@@ -415,12 +439,12 @@ async def ask_route(request: Request) -> JSONResponse:
         )
 
     try:
-        payload = _compose_success(question, state, trace)
+        payload = _compose_success(parsed["question"], state, trace)
     except AgentAnswerUnavailable as exc:
         # The record says which of the three it was, in the code and in the
         # model's own finish reason.
         log.record(
-            trace, question, "error",
+            trace, parsed["question"], "error",
             error=exc.code, finish_reason=exc.finish_reason,
             **_response_fields(state),
         )
@@ -429,7 +453,7 @@ async def ask_route(request: Request) -> JSONResponse:
             status_code=502,
         )
     log.record(
-        trace, question, "ok",
+        trace, parsed["question"], "ok",
         finish_reason=model_turn.finish_reason(final_message(state)),
         **_response_fields(state),
         tool_calls=[call["name"] for call in payload["tool_calls"]],
@@ -490,12 +514,12 @@ async def ask_stream_route(request: Request) -> Response:
     if error is not None:
         return error
     trace = _trace(request)
-    question, question_kind, turns, error = await _question_or_error(request)
+    parsed, error = await _question_or_error(request)
     if error is not None:
         return error
 
     return StreamingResponse(
-        _stream_chain(question, trace, question_kind, turns),
+        _stream_chain(parsed, trace),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -509,10 +533,8 @@ async def ask_stream_route(request: Request) -> Response:
 
 
 async def _stream_chain(
-    question: str,
+    parsed: dict,
     trace: str,
-    question_kind: str | None = None,
-    turns: list[dict[str, str]] | None = None,
 ):
     """Yield stage frames as they happen, then exactly one terminal frame.
 
@@ -526,9 +548,7 @@ async def _stream_chain(
     # The events the caller sees are also the record of what ran: the sink relays
     # them, the log timestamps them.
     log = _StageLog(sink=queue.put_nowait)
-    task = asyncio.create_task(
-        _run_chain(question, question_kind, on_event=log, turns=turns)
-    )
+    task = asyncio.create_task(_run_chain(parsed, on_event=log))
 
     def _finished(finished: asyncio.Task) -> None:
         # Reading the exception marks it retrieved: it is logged where it
@@ -568,7 +588,7 @@ async def _stream_chain(
                 "agent /ask/stream timed out after %.0fs trace=%s",
                 ASK_TIMEOUT_SECONDS, trace,
             )
-            log.record(trace, question, "timeout", error="timeout")
+            log.record(trace, parsed["question"], "timeout", error="timeout")
             yield _error_frame(
                 "timeout",
                 f"The agent did not answer within {ASK_TIMEOUT_SECONDS:.0f}s.",
@@ -586,7 +606,7 @@ async def _stream_chain(
             logger.error(
                 "agent /ask/stream failed [%s] trace=%s", correlation_id, trace, exc_info=cause
             )
-            log.record(trace, question, "error", error="agent_failed")
+            log.record(trace, parsed["question"], "error", error="agent_failed")
             yield _error_frame(
                 "agent_failed", "The agent failed to answer. Please retry.", correlation_id
             )
@@ -597,10 +617,10 @@ async def _stream_chain(
         yield _sse(stages.STAGE_VERIFY, stages.verify_event())
 
         try:
-            payload = _compose_success(question, state, trace)
+            payload = _compose_success(parsed["question"], state, trace)
         except AgentAnswerUnavailable as exc:
             log.record(
-                trace, question, "error",
+                trace, parsed["question"], "error",
                 error=exc.code, finish_reason=exc.finish_reason,
                 **_response_fields(state),
             )
@@ -608,7 +628,7 @@ async def _stream_chain(
             return
 
         log.record(
-            trace, question, "ok",
+            trace, parsed["question"], "ok",
             finish_reason=model_turn.finish_reason(final_message(state)),
             **_response_fields(state),
             tool_calls=[call["name"] for call in payload["tool_calls"]],

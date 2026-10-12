@@ -447,6 +447,18 @@ _MEDS_NOTE = ("HOSPITAL COURSE: The patient recovered well.\n\n"
               "MEDICATIONS: Tylenol 650 mg q.6h., Lasix 80 mg daily.")
 
 
+# Every section the summary is made of, so the fixed order and the exact-text
+# property can both be asserted. The headings are deliberately the document's
+# words rather than the storage names: the mapping between the two is part of
+# what this pins.
+_SUMMARY_NOTE = (
+    "HISTORY OF PRESENT ILLNESS: The patient presented with a cough.\n\n"
+    "HOSPITAL COURSE: The patient recovered well.\n\n"
+    "DISCHARGE DIAGNOSES: 1. Pneumonia.\n\n"
+    "DISCHARGE INSTRUCTIONS: Complete the antibiotic course."
+)
+
+
 def test_passage_text_is_the_section_chunk_not_the_whole_note():
     """rag_search returns the exact chunk text for the matched id."""
     endpoint = _FakeEndpoint([
@@ -466,26 +478,45 @@ def test_passage_text_is_the_section_chunk_not_the_whole_note():
 
 
 def test_search_sections_is_deterministic_and_complete():
-    """_search_sections returns every present section in fixed order, with the
-    exact chunk text — 100% recall by construction, no whole-note leakage."""
+    """_search_sections returns the summary's four sections in fixed order, with
+    the exact chunk text — 100% recall by construction, no whole-note leakage.
+
+    The storage spellings (`brief_hospital_course`, `discharge_diagnosis`) are
+    asserted rather than the document's, because a section name is part of every
+    chunk id in the search index: changing one costs a re-index.
+    """
     with patch.object(rs, "_fetch_note_row",
-                      lambda hadm: ("MT-1-DS", _MEDS_NOTE)):
+                      lambda hadm: ("MT-1-DS", _SUMMARY_NOTE)):
         result = rs._search_sections(90000015)
 
-    assert result["returned"] == 3
+    assert result["returned"] == 4
     sections = [p["section"] for p in result["passages"]]
     assert sections == [
-        "brief_hospital_course", "discharge_diagnosis", "discharge_medications"]
-    meds = result["passages"][2]
-    assert meds["id"].startswith("MT-1-DS_discharge_medications_")
-    assert "Tylenol" in meds["text"]
-    assert "HOSPITAL COURSE" not in meds["text"]
-    assert "Pneumonia" not in meds["text"]
+        "history_of_present_illness", "brief_hospital_course",
+        "discharge_diagnosis", "discharge_instructions"]
+    # Each passage is that one section and nothing else: the hospital course
+    # passage must not carry the diagnosis, and the diagnosis passage must not
+    # carry the instructions.
+    by_section = {p["section"]: p["text"] for p in result["passages"]}
+    assert "recovered well" in by_section["brief_hospital_course"]
+    assert "Pneumonia" not in by_section["brief_hospital_course"]
+    assert "Pneumonia" in by_section["discharge_diagnosis"]
+    assert "antibiotic" not in by_section["discharge_diagnosis"]
+    # The medications section is deliberately not part of a summary — it has its
+    # own command, and its own tool that returns every chunk rather than one.
+    assert "discharge_medications" not in sections
 
 
 def test_search_sections_honest_empty_when_no_summary_sections():
-    """A note with no summary sections is an honest empty, not a guess."""
-    note = "HISTORY: The patient is a 45-year-old male.\n\nREVIEW OF SYSTEMS: Negative."
+    """A note with none of the summary's four sections is an honest empty, not a
+    guess — and not a parse failure.
+
+    The note below does have sections the index holds; they are simply not the
+    ones a summary is made of, which is the case this distinguishes from a note
+    that failed to parse at all.
+    """
+    note = ("SOCIAL HISTORY: The patient lives alone.\n\n"
+            "PHYSICAL EXAM: Alert and oriented.")
     with patch.object(rs, "_fetch_note_row", lambda hadm: ("MT-2-DS", note)):
         result = rs._search_sections(90000016)
     assert result["returned"] == 0

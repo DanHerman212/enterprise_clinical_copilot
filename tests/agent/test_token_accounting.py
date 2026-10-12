@@ -72,7 +72,8 @@ async def _fake_toolbox():
 
 
 def _replying(state):
-    async def fake_ask(box, question, on_event=None, question_kind=None, turns=None):
+    async def fake_ask(box, question, on_event=None, question_kind=None,
+                       hadm_id=None, topic=None, turns=None):
         return state
     return fake_ask
 

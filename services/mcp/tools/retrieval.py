@@ -48,11 +48,12 @@ from services.mcp.dependencies.features import (
     FeatureSource,
     get_feature_source,
 )
-from services.mcp.retrieval.sections import parse_note
+from services.mcp.retrieval.sections import DISCHARGE_MEDICATIONS, parse_note
 from services.mcp.retrieval.chunking import (
     DEFAULT_MAX_CHARS,
     DEFAULT_PACK_TO,
     INDEX_SECTIONS,
+    SUMMARY_SECTIONS,
     chunk_note,
 )
 
@@ -462,18 +463,10 @@ async def rag_search(
         return _error(hadm_id, "invalid_tool_response", "Retrieval response was malformed.")
 
 
-# Discharge-note sections a summary should cite, in the order a summary
-# should cite them. Queries are anchored to each section's ACTUAL text (see
-# _search_sections): short free-text phrases embed far from the stored chunks
-# for some patients (query-side drift, root-caused 2026-08-17 on hadm
-# 23613002), so we query with the section body itself instead.
-SUMMARY_SECTIONS = (
-    "brief_hospital_course",
-    "discharge_diagnosis",
-    "discharge_medications",
-    "discharge_instructions",
-    "discharge_summary",
-)
+# The sections a summary cites come from the retrieval vocabulary rather than
+# being declared here — `services.mcp.retrieval.chunking` owns both the indexed
+# section set and this subset, because the agent's routing table reads the same
+# tuple and a local copy could drift from it.
 
 
 def _fetch_note(hadm_id: int) -> str | None:
@@ -527,12 +520,12 @@ def _section_for_query(query: str) -> str | None:
 
 
 def _search_sections(hadm_id: int) -> dict[str, Any]:
-    """One passage per major note section, merged in a fixed order.
+    """One passage per summary section, merged in a fixed order.
 
     Deterministic section coverage for summary questions WITHOUT relying on the
     embedding index: re-parse the note and re-chunk it with the same
-    deterministic chunker that built the index, so every section present in the
-    note is returned with its exact chunk text. The agent cites ^[n] in this
+    deterministic chunker that built the index, so every summary section present
+    in the note is returned with its exact chunk text. The agent cites ^[n] in this
     fixed order, so each section maps to a distinct citation number and recall
     is 100% by construction — no top-k luck, no whole-note leakage, no
     dropped sections.
@@ -580,11 +573,61 @@ def _search_sections(hadm_id: int) -> dict[str, Any]:
             "returned": len(merged), "passages": merged}
 
 
+def _search_section_chunks(hadm_id: int, section: str) -> dict[str, Any]:
+    """EVERY chunk of ONE discharge-note section, in ordinal order.
+
+    `_search_sections` returns one passage per section — the FIRST chunk — which is
+    right for a summary and wrong for a list. A discharge medication list that
+    rolls onto a second chunk loses its tail there, and a silently truncated
+    medication list is a clinical safety problem rather than a cosmetic one.
+
+    Deterministic in the same sense as its sibling: the note is re-parsed and
+    re-chunked with the chunker that built the index, so each passage is exact
+    section text and no embedding is consulted.
+    """
+    if not valid_hadm_id(hadm_id):
+        return _error(hadm_id, "bad_request", "hadm_id must be a positive integer")
+    note_id, text = _fetch_note_row(hadm_id)
+    if not text:
+        unknown = _unknown_if_absent(hadm_id)
+        if unknown:
+            return unknown
+        return {"hadm_id": hadm_id, "query": section, "returned": 0, "passages": [],
+                "note": "no discharge note found for this admission"}
+
+    picks: list[tuple[str, str]] = []
+    for cid, ctext in _chunk_texts_for(note_id, text).items():
+        match = _SECTION_RE.search(cid)
+        if match and match.group("section") == section:
+            picks.append((cid, ctext))
+    # The chunk id ends in the ordinal, and sorting those as strings would put
+    # chunk 10 before chunk 2 — reordering the medication list, which is the one
+    # thing this function exists to keep in order.
+    picks.sort(key=lambda pair: int(pair[0].rsplit("_", 1)[-1]))
+
+    if not picks:
+        return {"hadm_id": hadm_id, "query": section, "returned": 0, "passages": [],
+                "note": f"the note has no {section} section"}
+
+    return {
+        "hadm_id": hadm_id,
+        "query": section,
+        "returned": len(picks),
+        "passages": [
+            {"id": cid, "section": section, "text": ctext,
+             "retrieval": "deterministic"}
+            for cid, ctext in picks
+        ],
+    }
+
+
 async def rag_search_sections(hadm_id: int) -> RetrievalResult | ToolError:
-    """Retrieve one cited passage per major discharge-note section (hospital
-    course, discharge diagnosis, discharge medications, discharge
-    instructions), merged in that fixed order. Use for summarization questions
-    so the answer can cite each section distinctly.
+    """Retrieve one cited passage per summary section (history of present
+    illness, hospital course, discharge diagnosis, discharge instructions),
+    merged in that fixed order. Use for summarization questions so the answer
+    can cite each section distinctly. The discharge medications section is not
+    among them — call `discharge_medications` for a medication list, which
+    returns every chunk of that section rather than its first.
 
     Args:
         hadm_id: MIMIC-IV hospital admission id.
@@ -594,4 +637,22 @@ async def rag_search_sections(hadm_id: int) -> RetrievalResult | ToolError:
         return validate_retrieval_result(payload)
     except ToolContractError:
         _LOG.error("rag_search_sections: produced payload outside its tool contract")
+        return _error(hadm_id, "invalid_tool_response", "Retrieval response was malformed.")
+
+
+async def discharge_medications(hadm_id: int) -> RetrievalResult | ToolError:
+    """Retrieve every cited passage of the discharge medications section, in
+    order. Use when the medication list must be complete: a tool that returns one
+    passage per section gives only that section's first chunk.
+
+    Args:
+        hadm_id: MIMIC-IV hospital admission id.
+    """
+    payload = await asyncio.to_thread(
+        _search_section_chunks, hadm_id, DISCHARGE_MEDICATIONS
+    )
+    try:
+        return validate_retrieval_result(payload)
+    except ToolContractError:
+        _LOG.error("discharge_medications: produced payload outside its tool contract")
         return _error(hadm_id, "invalid_tool_response", "Retrieval response was malformed.")

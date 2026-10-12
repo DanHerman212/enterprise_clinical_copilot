@@ -108,9 +108,12 @@ class TestRiskComposition:
     def test_risk_bar_carries_probability_threshold_and_band(self):
         canvas = compose_risk_canvas(GOOD_PAYLOAD, GOOD_RAG)
         risk = _by_id(canvas)["risk"]
-        assert risk["probability"] == pytest.approx(0.131398)
+        # Two decimals: what the prose is written at, so the widget and the
+        # narrative cannot show one score two ways. The served value is 0.131398.
+        assert risk["probability"] == pytest.approx(0.13)
         assert risk["threshold"] == pytest.approx(0.12)
-        # 0.1314 >= 0.12 and < 0.20 -> borderline.
+        # 0.1314 >= 0.12 and < 0.20 -> borderline. The band reads the served
+        # value, so display rounding can never soften a threshold call.
         assert risk["band"] == "borderline"
 
     def test_provenance_names_model_and_feature_source(self):
@@ -120,7 +123,11 @@ class TestRiskComposition:
     def test_fallback_text_carries_the_number_and_band(self):
         """R8 — if the renderer never boots the user still gets the answer."""
         fallback = compose_risk_canvas(GOOD_PAYLOAD, GOOD_RAG)["fallback_text"]
-        assert "13.1%" in fallback
+        # Whole percent, which is the same precision as two decimals of a
+        # probability: 0.13 is 13%, not 13.1%.
+        assert "13%" in fallback
+        assert "0.13" in fallback
+        assert "13.1%" not in fallback
         assert "borderline" in fallback
 
     def test_audience_hides_the_payload_from_the_model(self):

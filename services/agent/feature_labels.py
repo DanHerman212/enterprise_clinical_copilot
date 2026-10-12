@@ -18,6 +18,34 @@ Keys are the aggregated PARENT features returned by predict_readmission
 
 import re
 
+# The risk score is shown to two decimals everywhere it is shown: the widget, the
+# component payload, and the prose. Six decimals — what the service returns —
+# implies a precision the model does not have, and it made the same score read as
+# two different numbers depending on which surface you looked at (found live
+# 2026-10-12: prose said 0.09, the card said 0.090459).
+#
+# This is the same hazard the label map exists to prevent, one field over: not two
+# NAMES for one factor, but two NUMBERS for one score. It lives beside the map for
+# that reason.
+RISK_DECIMALS = 2
+
+
+def display_probability(value):
+    """The risk score at the precision it is displayed and described at.
+
+    Returns None for anything that is not a number, so a caller holding no
+    estimate renders "unavailable" rather than 0.0. A rounded absence would be
+    the most confident wrong number in the payload.
+
+    Callers round for DISPLAY only. A threshold decision reads the served value:
+    rounding first would let presentation precision move a clinical call, and it
+    would move it in the direction of looking safer at the boundary.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return round(float(value), RISK_DECIMALS)
+
+
 FEATURE_LABELS: dict[str, str] = {
     "age": "age",
     "gender": "sex",

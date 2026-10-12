@@ -24,6 +24,7 @@ from .config import LOCATION, PROJECT
 from .dependencies.features import FEATURE_SOURCE
 from .runtime import requires_cloud_run_auth
 from .tools import (
+    discharge_medications,
     predict_readmission,
     rag_search,
     rag_search_sections,
@@ -76,7 +77,10 @@ server = MCPServer(
         "feature attributions behind the score. Use rag_search to retrieve "
         "cited passages from a patient's discharge notes for a free-text "
         "question. Use rag_search_sections to retrieve one cited passage per "
-        "major discharge-note section for summarization. Use search_literature "
+        "major discharge-note section for summarization. Use "
+        "discharge_medications to retrieve the WHOLE discharge medication "
+        "section, every chunk of it, when the complete list matters. Use "
+        "search_literature "
         "to find recent published evidence on a clinical question; it takes "
         "de-identified search terms and no patient identifier."
     ),
@@ -84,6 +88,7 @@ server = MCPServer(
 server.add_tool(predict_readmission)
 server.add_tool(rag_search)
 server.add_tool(rag_search_sections)
+server.add_tool(discharge_medications)
 server.add_tool(search_literature)
 
 

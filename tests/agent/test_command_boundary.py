@@ -1,0 +1,508 @@
+"""The command boundary: one tool per command, and nothing else runs.
+
+UX Phase 1. A slash command is deterministic, and "deterministic" is a property
+of the path rather than a promise in a prompt:
+
+  - the tool and its arguments come from `routing.py`, so the model is not asked
+    which tool to call;
+  - the formatting turn is made with no tools bound, so a secondary search is
+    impossible rather than forbidden.
+
+Both are asserted here against the code, because the failure they prevent is
+invisible in the answer. A secondary search that succeeds, or a risk score the
+model produced itself instead of reading, both look like a good answer.
+
+Offline: a recording stub toolbox and a stub model, so no Vertex credentials and
+no MCP server are involved.
+"""
+
+import asyncio
+import json
+import sys
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from langchain_core.messages import SystemMessage  # noqa: E402
+
+from services.agent import graph  # noqa: E402
+from services.agent import routing  # noqa: E402
+from services.agent import payload as payload_module  # noqa: E402
+from services.agent.deterministic import (  # noqa: E402
+    medication_narrative,
+    parse_medications,
+    run_command,
+)
+from services.agent.contracts import parse_agent_request  # noqa: E402
+from services.agent.contracts import AgentRequestError  # noqa: E402
+from services.agent.payload import build_ui_components  # noqa: E402
+from services.mcp.tools import __all__ as REGISTERED_TOOLS  # noqa: E402
+
+
+class _RecordingToolbox:
+    """Records every call, and answers with a payload the caller sets."""
+
+    def __init__(self, payload=None):
+        self.calls: list[tuple[str, dict]] = []
+        self.payload = payload if payload is not None else {"returned": 0,
+                                                            "passages": []}
+
+    async def call(self, name, args):
+        self.calls.append((name, dict(args)))
+        return self.payload
+
+
+class _NoToolsModel:
+    """A model that fails loudly if anything binds tools to it.
+
+    `_build_llm` binds nothing, so the real object has no tools either. This
+    stands in for it and turns the property into an assertion: if the formatting
+    turn ever grows a `bind_tools` call, the test says so rather than passing
+    while the model quietly gains the ability to search again.
+    """
+
+    def __init__(self, reply='{"medications": []}'):
+        self.reply = reply
+        self.seen: list[list] = []
+
+    def bind_tools(self, *args, **kwargs):  # pragma: no cover - must not run
+        raise AssertionError(
+            "the formatting turn was given tools; it must be unable to call any"
+        )
+
+    async def ainvoke(self, messages, config=None):
+        self.seen.append(messages)
+        from langchain_core.messages import AIMessage
+
+        return AIMessage(content=self.reply)
+
+
+# The component each command is drawn as, written out longhand from the design
+# document and keyed by the WIRE name. Both halves matter: the left column is the
+# vocabulary the request carries, and the right column is what the document asks
+# for.
+EXPECTED_COMPONENTS = {
+    "risk": "risk_visualizer",
+    "meds": "medication_table",
+    "summarize": "narrative_with_sources",
+    "literature": "literature_cards",
+}
+
+# The caller's own words, for the one command that needs them.
+TOPIC = "a clinical topic"
+
+
+def _topic_for(command):
+    return TOPIC if command.topic_arg else None
+
+
+def _run_command(command, hadm_id=90000023, *, payload=None, reply=None,
+                 model=None):
+    """Run one command against stubs, and return (state, toolbox, model)."""
+    box = _RecordingToolbox(payload)
+    if model is None:
+        model = _NoToolsModel(reply) if reply is not None else _NoToolsModel()
+    with patch.object(graph, "_build_llm", lambda name: model):
+        state = asyncio.run(run_command(
+            box, command, hadm_id, topic=_topic_for(command),
+            question="a command", model="test-model",
+        ))
+    return state, box, model
+
+
+# --- the table ---------------------------------------------------------------
+
+def test_every_command_names_a_tool_the_server_registers():
+    """A command that names a tool the server does not serve is a 500 at the
+    moment a clinician presses the button, not a wrong answer."""
+    unknown = {c.tool for c in routing.COMMANDS} - set(REGISTERED_TOOLS)
+    assert not unknown, f"commands name unregistered tools: {sorted(unknown)}"
+
+
+def test_every_command_forbids_every_other_tool():
+    """The declaration and the server's tool set are checked against each other.
+
+    Written as the complement rather than as a literal list on purpose: a tool
+    added to the server is then forbidden to every command until someone says
+    otherwise here, which is the safe direction. The other direction fails
+    silently — a new tool that no command forbids is a command that may call it.
+    """
+    for command in routing.COMMANDS:
+        assert command.forbidden == set(REGISTERED_TOOLS) - {command.tool}, (
+            f"{command.slash} does not forbid every tool but its own"
+        )
+
+
+def test_the_admission_is_an_argument_only_where_a_tool_takes_one():
+    for command in routing.COMMANDS:
+        if command.wire == "literature":
+            assert routing.tool_arguments(command, 90000023, TOPIC) == {
+                "query": TOPIC}
+            continue
+        assert routing.tool_arguments(command, 90000023) == {"hadm_id": 90000023}
+
+
+def test_the_literature_command_will_not_run_without_the_callers_words():
+    """There is no defensible default, and inventing one would mean reading the
+    patient's chart to fill it in."""
+    command = routing.command_for("literature")
+
+    with pytest.raises(routing.MissingTopic) as caught:
+        routing.tool_arguments(command, None)
+
+    # The refusal a clinician reads names the command and gives the shape of the
+    # answer, because a refusal without an example is a dead end.
+    assert command.slash in caught.value.message
+    assert "clinical topic" in caught.value.message
+
+
+def test_a_command_that_takes_no_topic_refuses_the_callers_words():
+    """Text beside a command that does not take any is a second intention. The
+    contract refuses it before this, and this refuses it again for a caller that
+    reached the tool layer directly."""
+    with pytest.raises(ValueError):
+        routing.tool_arguments(routing.command_for("risk"), 90000023, "a question")
+
+
+def test_a_command_that_needs_an_admission_refuses_to_run_without_one():
+    """Calling the tool with hadm_id=None would report the tool's complaint as
+    the answer, which reads like a fact about the patient."""
+    for command in routing.COMMANDS:
+        if command.wire == "literature":
+            continue
+        with pytest.raises(ValueError):
+            routing.tool_arguments(command, None)
+
+
+def test_the_summary_command_carries_the_storage_spellings_of_its_sections():
+    """Four sections, spelled as the index spells them.
+
+    The document names `hospital_course` and `discharge_diagnoses`; storage calls
+    them `brief_hospital_course` and `discharge_diagnosis`. A section name is part
+    of every chunk id, so the document's spelling would retrieve nothing without
+    a re-index — hence the storage spelling, pinned here so a future edit that
+    "corrects" it fails loudly instead.
+    """
+    summary = routing.command_for("summarize")
+    assert summary.sections == (
+        "history_of_present_illness", "brief_hospital_course",
+        "discharge_diagnosis", "discharge_instructions")
+    assert "discharge_medications" not in summary.sections
+    assert "discharge_summary" not in summary.sections
+
+
+def test_an_unknown_wire_value_is_not_a_command():
+    """The caller's allowlist and this table must agree about the vocabulary. A
+    value that reaches here and is not a command is a disagreement, and the
+    honest answer is a refusal rather than a fall back to the reasoning loop."""
+    assert routing.is_command(None) is False
+    assert routing.is_command("summarize") is True
+    assert routing.is_command("not_a_command") is False
+    with pytest.raises(routing.UnknownCommand):
+        routing.command_for("not_a_command")
+
+
+# --- one call, and only one --------------------------------------------------
+
+@pytest.mark.parametrize("command", routing.COMMANDS, ids=lambda c: c.wire)
+def test_a_command_runs_exactly_its_own_tool_once(command):
+    state, box, _ = _run_command(command)
+
+    assert len(box.calls) == 1, box.calls
+    name, args = box.calls[0]
+    assert name == command.tool
+    assert name not in command.forbidden
+    assert args == routing.tool_arguments(command, 90000023, _topic_for(command))
+
+    # The record the answer is stored with names the same single call, so a
+    # replayed turn shows what actually ran.
+    assert [call["name"] for call in state["tool_calls"]] == [command.tool]
+
+
+@pytest.mark.parametrize("command", routing.COMMANDS, ids=lambda c: c.wire)
+def test_the_formatting_turn_cannot_call_anything(command):
+    state, _, model = _run_command(command)
+
+    assert len(model.seen) == 1, "the formatting turn ran more than once"
+    system = model.seen[0][0]
+    assert isinstance(system, SystemMessage)
+    # The command's own formatting instruction is what the model is given, not
+    # the tool-choosing system prompt.
+    assert command.formatting in system.content
+
+
+@pytest.mark.parametrize("command", routing.COMMANDS, ids=lambda c: c.wire)
+def test_a_command_reports_the_tool_before_the_review_stage(command):
+    """The run reads as: plan, run the one tool, review. A command that listed
+    stages in another order would be narrating work it did not do."""
+    seen = []
+    box = _RecordingToolbox()
+    model = _NoToolsModel()
+    with patch.object(graph, "_build_llm", lambda name: model):
+        asyncio.run(run_command(
+            box, command, 90000023, topic=_topic_for(command),
+            question="a command", model="test-model",
+            on_event=seen.append,
+        ))
+
+    assert [event["stage"] for event in seen] == [
+        "planning", "tool", "result", "reviewing"]
+    assert seen[1]["tool"] == command.tool
+
+
+def test_the_topic_reaches_the_tool_exactly_as_the_caller_wrote_it():
+    """A search string the agent rewrote is a search nobody asked for."""
+    state, box, _ = _run_command(
+        routing.command_for("literature"), hadm_id=None)
+
+    assert box.calls == [("search_literature", {"query": TOPIC})]
+    assert state["command"] == "literature"
+
+
+# --- the medication extraction ----------------------------------------------
+
+_NOTE = ("MEDICATIONS: Tylenol 650 mg q.6h., Lasix 80 mg daily, "
+         "Metformin 500 mg twice daily.")
+
+
+def test_a_medication_the_note_does_not_mention_is_dropped():
+    """The one failure a clinician cannot see: a medication the note does not
+    contain, rendered in a table beside the ones it does."""
+    reply = json.dumps({"medications": [
+        {"medication": "Tylenol", "dosage": "650 mg", "frequency": "q.6h."},
+        {"medication": "Warfarin", "dosage": "5 mg", "frequency": "daily"},
+    ]})
+
+    verified, dropped = parse_medications(reply, _NOTE)
+
+    assert [row["medication"] for row in verified] == ["Tylenol"]
+    assert len(dropped) == 1
+    assert dropped[0]["medication"] == "Warfarin"
+    assert "not present" in dropped[0]["reason"]
+
+
+def test_a_dosage_the_note_does_not_state_is_dropped():
+    """The name is in the note and the dose is not, which is how a plausible
+    wrong number gets in: the row looks right and the number was invented."""
+    reply = json.dumps({"medications": [
+        {"medication": "Lasix", "dosage": "160 mg", "frequency": "daily"},
+    ]})
+
+    verified, dropped = parse_medications(reply, _NOTE)
+
+    assert verified == []
+    assert "dosage" in dropped[0]["reason"]
+
+
+def test_an_extraction_with_no_dosage_is_kept():
+    """A note line without a dose is a real line; the check is that a stated
+    dose is supported, not that every row has one."""
+    reply = json.dumps({"medications": [
+        {"medication": "Metformin", "dosage": "", "frequency": "twice daily"},
+    ]})
+
+    verified, dropped = parse_medications(reply, _NOTE)
+
+    assert dropped == []
+    assert verified[0]["medication"] == "Metformin"
+
+
+def test_a_fenced_json_reply_is_read():
+    """The model sometimes wraps its JSON in a fence. Tolerating it here is
+    cheaper than letting a formatting habit read as "no medications"."""
+    reply = '```json\n{"medications": [{"medication": "Lasix", "dosage": "80 mg"}]}\n```'
+
+    verified, _ = parse_medications(reply, _NOTE)
+
+    assert [row["medication"] for row in verified] == ["Lasix"]
+
+
+def test_a_reply_that_is_not_json_drops_every_row():
+    verified, dropped = parse_medications("I could not read the list.", _NOTE)
+
+    assert verified == []
+    assert dropped == []
+
+
+def test_the_fallback_sentence_needs_a_genuinely_empty_result():
+    """The document reserves the disclaimer for an empty tool result. A tool
+    that returned text this module could not verify is a different failure, and
+    reporting it as "no information available" would turn a formatting bug into a
+    clinical statement."""
+    assert medication_narrative([], 0) == (
+        "No specific discharge medication information is available for this admission."
+    )
+
+    unverified = medication_narrative([], 3)
+    assert unverified != (
+        "No specific discharge medication information is available for this admission."
+    )
+    assert "formatting failure" in unverified
+
+
+def test_the_narrative_counts_the_verified_rows_rather_than_all_of_them():
+    verified = [{"medication": "Lasix", "dosage": "80 mg", "frequency": "daily"}]
+    assert "1 discharge medication" in medication_narrative(verified, 1)
+
+
+def test_the_medication_command_hands_the_payload_the_verified_rows_only():
+    """Through the command, not just the parser: the widget is built from the
+    verified rows, so a dropped row cannot reach the grid."""
+    reply = json.dumps({"medications": [
+        {"medication": "Tylenol", "dosage": "650 mg"},
+        {"medication": "Warfarin", "dosage": "5 mg"},
+    ]})
+    payload = {"returned": 1, "passages": [
+        {"id": "MT-1-DS_discharge_medications_1", "section": "discharge_medications",
+         "text": _NOTE},
+    ]}
+    model = _NoToolsModel(reply)
+
+    state, _, _ = _run_command(routing.command_for("meds"), payload=payload,
+                               model=model)
+
+    medications = state["command_payload"]["medications"]
+    assert [row["medication"] for row in medications] == ["Tylenol"]
+    assert state["command_payload"]["dropped"][0]["medication"] == "Warfarin"
+
+    components = build_ui_components("meds", state["tool_calls"],
+                                     state["command_payload"])
+    assert [c["component"] for c in components] == ["medication_table"]
+    assert [row["medication"] for row in components[0]["props"]["medications"]] == [
+        "Tylenol"]
+    assert components[0]["props"]["dropped"][0]["medication"] == "Warfarin"
+
+
+# --- the payload the answer is delivered as ---------------------------------
+
+@pytest.mark.parametrize("command", routing.COMMANDS, ids=lambda c: c.wire)
+def test_each_command_is_drawn_as_exactly_its_own_component(command):
+    """One component per command, named by the table. A second component would
+    mean the command reached for evidence it does not own."""
+    components = build_ui_components(command.wire, [], {})
+
+    assert [c["component"] for c in components] == [
+        EXPECTED_COMPONENTS[command.wire]]
+
+
+def test_the_component_table_is_keyed_by_the_wire_vocabulary():
+    """Checked in both directions, because the mistake this guards against is
+    invisible: a table keyed by the clinician-facing names covers half the
+    commands and hands the other half to the derived path, which draws something
+    plausible. `risk` and `meds` are the same word in both vocabularies;
+    `summarize` and `literature` are not.
+    """
+    routed = {command.wire for command in routing.COMMANDS}
+
+    assert set(payload_module.COMMAND_COMPONENTS) == routed
+    assert payload_module.COMMAND_COMPONENTS == EXPECTED_COMPONENTS
+
+
+def test_a_component_whose_data_is_missing_says_why_rather_than_nothing():
+    """Omitting it renders as "nothing to show", which a clinician reads as "the
+    notes say nothing" — a different and worse statement than "the tool failed"."""
+    components = build_ui_components("literature", [], None)
+
+    assert [c["component"] for c in components] == ["literature_cards"]
+    assert "unavailable" in components[0]["props"]
+
+
+def test_the_risk_component_carries_the_score_and_its_attributions():
+    calls = [{
+        "name": "predict_readmission",
+        "args": {"hadm_id": 90000023},
+        "response": {
+            "hadm_id": 90000023, "probability": 0.3443, "threshold": 0.11,
+            "decision": 1, "model_version": "risk-1",
+            "top_factors": [{"feature": "length of stay", "contribution": 0.4,
+                             "direction": "increases"}],
+        },
+    }]
+
+    props = build_ui_components("risk", calls, None)[0]["props"]
+
+    # The served probability is 0.3443; the component carries it at the precision
+    # the narrative describes it at, so the prose and the widget agree.
+    assert props["probability"] == 0.34
+    assert props["threshold"] == 0.11
+    assert props["top_factors"][0]["feature"] == "length of stay"
+
+
+def test_a_free_text_answer_is_drawn_as_what_its_own_evidence_calls_for():
+    """The field is not command-only: free text gets the components its calls
+    produced, in call order, deduplicated."""
+    calls = [
+        {"name": "rag_search", "args": {}, "response": {"passages": [
+            {"section": "brief_hospital_course", "text": "..."}]}},
+        {"name": "rag_search", "args": {}, "response": {"passages": [
+            {"section": "discharge_diagnosis", "text": "..."}]}},
+        {"name": "search_literature", "args": {}, "response": {
+            "returned": 1, "articles": [{"pmid": "1", "title": "T", "abstract": "A"}]}},
+    ]
+
+    components = build_ui_components(None, calls, None)
+
+    assert [c["component"] for c in components] == [
+        "source_cards", "literature_cards"]
+
+
+# --- the request that carries both -------------------------------------------
+
+def test_a_command_and_a_question_together_are_refused_not_resolved():
+    """Two intentions in one request, and the request can only be answered as
+    one. The old behaviour — the command won, the question was dropped — served a
+    repeat of the previous answer to a clinician who had asked something new."""
+    with pytest.raises(AgentRequestError) as caught:
+        parse_agent_request(
+            {"chip": "risk", "hadm_id": 90000023, "question": "and his meds?"},
+            max_question_chars=2000,
+        )
+
+    assert caught.value.code == "ambiguous_intent"
+    assert caught.value.status_code == 400
+    assert "on its own" in caught.value.message
+
+
+def test_a_command_alone_still_carries_its_admission_through_the_contract():
+    parsed = parse_agent_request(
+        {"chip": "meds", "hadm_id": 90000023}, max_question_chars=2000
+    )
+
+    assert parsed["kind"] == "meds"
+    assert parsed["hadm_id"] == 90000023
+    # A command that takes no topic carries none, and the contract says so
+    # rather than leaving the field to be discovered downstream.
+    assert parsed["topic"] is None
+
+
+def test_a_command_that_needs_a_topic_is_refused_without_one():
+    """The clinician is told what to type, not that something went wrong."""
+    with pytest.raises(AgentRequestError) as caught:
+        parse_agent_request(
+            {"chip": "literature", "hadm_id": 90000023}, max_question_chars=2000
+        )
+
+    assert caught.value.code == "topic_required"
+    assert caught.value.status_code == 400
+    assert "/pubmed" in caught.value.message
+    assert "clinical topic" in caught.value.message
+
+
+def test_the_topic_travels_as_a_value_and_names_itself_in_the_question():
+    """Two things at once, because they are one decision: the search string the
+    tool is called with is a validated value, and the question the model is asked
+    says what was searched rather than "this condition"."""
+    parsed = parse_agent_request(
+        {"chip": "literature", "hadm_id": 90000023,
+         "question": "dual antiplatelet therapy"},
+        max_question_chars=2000,
+    )
+
+    assert parsed["topic"] == "dual antiplatelet therapy"
+    assert parsed["question"] == (
+        "Search PubMed for recent literature on dual antiplatelet therapy. "
+        "For admission 90000023."
+    )

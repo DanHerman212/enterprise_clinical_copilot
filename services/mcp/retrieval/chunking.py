@@ -61,6 +61,32 @@ if _unknown:  # a typo here would silently index nothing for that section
     )
 del _unknown
 
+# The clinical sections a discharge summary draws on, in the order it cites them.
+# Defined here, beside the vocabulary it is drawn from, because two layers read
+# it: the serving tool that returns the passages, and the agent's routing table
+# that declares what a summary covers. A second copy in either place would let
+# the two disagree about the same concept.
+#
+# `discharge_medications` and `discharge_summary` are deliberately absent. A
+# medications list has its own command, and the summary is defined as these four
+# high-signal sections (UX Phase 1, 2026-10-12). The names are the parser's, not
+# the document's: `hospital_course` is stored as `brief_hospital_course`, and
+# `discharge_diagnoses` as `discharge_diagnosis`, because a section name is part
+# of every chunk id in the search index.
+SUMMARY_SECTIONS = (
+    "history_of_present_illness",
+    "brief_hospital_course",
+    "discharge_diagnosis",
+    "discharge_instructions",
+)
+
+_summary_unknown = set(SUMMARY_SECTIONS) - set(INDEX_SECTIONS)
+if _summary_unknown:  # a summary can only cite sections the index holds
+    raise ValueError(
+        f"SUMMARY_SECTIONS entries not in INDEX_SECTIONS: {sorted(_summary_unknown)}"
+    )
+del _summary_unknown
+
 _PARAGRAPH_RE = re.compile(r"\n\s*\n")
 # Sentence boundary: punctuation + whitespace + capital letter. Deliberately
 # conservative; a run-on that defeats it hits the fixed-width fallback.

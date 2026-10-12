@@ -56,7 +56,9 @@ from services.agent.mcp_client import MCPToolbox, _clean_schema
 from services.agent.contracts import RecordedToolCall, validate_recorded_tool_call
 from services.agent.prompts import SYSTEM_PROMPT
 from services.agent import observability
+from services.agent import routing
 from services.agent import stages
+from services.agent.deterministic import run_command
 
 logger = logging.getLogger(__name__)
 
@@ -182,8 +184,17 @@ def _emit(on_event: Callable[[dict[str, Any]], None] | None, event: dict[str, An
 async def _execute_tool_calls(
     toolbox: MCPToolbox, calls: list[dict],
     on_event: Callable[[dict[str, Any]], None] | None = None,
+    project: Callable[[str, Any], Any] | None = None,
 ) -> tuple[list[BaseMessage], list[RecordedToolCall]]:
-    """Run one turn's tool calls, refusing those beyond the per-turn budget."""
+    """Run one turn's tool calls, refusing those beyond the per-turn budget.
+
+    `project` rewrites what the MODEL is shown for a call, and nothing else: the
+    recorded call, the execution record, the caller's payload and the browser's
+    citation lookup all carry what the tool actually returned. It exists so a
+    deterministic command can hand the formatting turn the same field names the
+    interface draws with, without that substitution becoming a lie about what the
+    tool said.
+    """
     messages: list[BaseMessage] = []
     recorded: list[RecordedToolCall] = []
     for index, call in enumerate(calls):
@@ -210,7 +221,8 @@ async def _execute_tool_calls(
         recorded.append(validate_recorded_tool_call({
             "name": call["name"], "args": arguments, "response": payload,
         }))
-        body = _render_tool_result(payload)
+        shown = project(call["name"], payload) if project is not None else payload
+        body = _render_tool_result(shown)
         messages.append(
             ToolMessage(
                 content=(
@@ -357,6 +369,8 @@ async def ask(
     tags: list[str] | None = None,
     on_event: Callable[[dict[str, Any]], None] | None = None,
     question_kind: str | None = None,
+    hadm_id: int | None = None,
+    topic: str | None = None,
     turns: list[dict[str, str]] | None = None,
 ) -> dict:
     """Run one question to completion. Returns the final state.
@@ -376,6 +390,26 @@ async def ask(
     user saw is an assistant message here, exactly as it would be mid-turn, and
     it never becomes part of the instruction that frames the question.
     """
+    # A command runs its tool directly and then formats the result. The reasoning
+    # loop below is for free text, where choosing which tool to call is the
+    # model's job. The boundary between the two is a property of the path rather
+    # than of a prompt: on this path the model is never handed a tool to choose
+    # (UX Phase 1).
+    if routing.is_command(question_kind):
+        tracing = observability.handler()
+        command_state = await run_command(
+            toolbox,
+            routing.command_for(question_kind),
+            hadm_id,
+            topic=topic,
+            question=question,
+            model=model,
+            on_event=on_event,
+            callbacks=[tracing] if tracing is not None else None,
+        )
+        command_state["langfuse_trace_id"] = observability.trace_id(tracing)
+        return command_state
+
     graph = build_graph(
         toolbox, model=model, on_event=on_event, question_kind=question_kind
     )

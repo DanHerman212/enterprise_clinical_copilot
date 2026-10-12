@@ -367,15 +367,22 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
         # Both forms come from the rounded value, so the caption and the bar show
         # one number at one precision. Whole percent is the same precision as two
         # decimals of a probability — 0.09 is 9%, not 9.0%.
+        # No admission id: this is prose a clinician can read, and `fallback_text`
+        # is what a client without the renderer shows. The identifier ban covers it
+        # for the same reason it covers the narrative (UX Phase 1B) — the id is
+        # ours, not a clinical fact, and the reader cannot look it up.
         fallback = (
-            f"Admission {estimate.get('hadm_id')}: {shown:.0%} 30-day readmission "
+            f"{shown:.0%} 30-day readmission "
             f"probability ({shown:.2f}), {band} at a {threshold:.2f} threshold."
         )
 
-    # Provenance caption. For a risk estimate it names the model + feature
-    # source (the two facts a reviewer checks). For a non-risk question there
-    # is no estimate, so we say so plainly instead of rendering bare dashes
-    # that read as a rendering bug.
+    # Provenance caption: what the answer came from. Two forms, and a third case
+    # with no caption at all. A risk estimate names the model and the feature
+    # source, the two facts a reviewer checks. A literature turn names the query
+    # and the record count. A question that is neither has no provenance to state,
+    # and the sentence that used to stand in for one — "no readmission estimate was
+    # requested" — was a note to us rendered to a clinician, who had not asked for
+    # an estimate and could only read its absence as a fault (removed 2026-10-12).
     if literature_view is not None:
         query_text = (literature or {}).get("query") or ""
         if degraded:
@@ -390,11 +397,12 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
         feature_source = estimate.get('feature_source', 'unknown')
         prov_text = f"Model {model} · features from {feature_source} · A2UI canvas"
     else:
-        prov_text = "No model — no readmission estimate was requested for this question."
-    children.append("prov")
-    components.append({"id": "prov", "component": "Text",
-                       "text": prov_text,
-                       "variant": "caption"})
+        prov_text = None
+    if prov_text is not None:
+        children.append("prov")
+        components.append({"id": "prov", "component": "Text",
+                           "text": prov_text,
+                           "variant": "caption"})
 
     # Cited source — the passage the answer cites first (mirrors the custom
     # demo). Kept as the LAST child so it can pin to the bottom of the canvas
@@ -417,17 +425,12 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
                            "section": resolved["section"],
                            "text": resolved["text"],
                            "query": query})
-    elif literature_view is None:
-        # Not on a literature turn. There the articles above are the evidence, and a
-        # card saying no note passage was found would read as the search having
-        # failed rather than as the answer citing no note.
-        children.append("source")
-        components.append({"id": "source", "component": "SourceCard",
-                           "cite": 1, "section": "not found",
-                           "text": "No supporting note passage was found for this "
-                                   "question. An empty result is a real answer — "
-                                   "the agent does not fabricate passages.",
-                           "query": query})
+    # No card when there is no passage to cite. One used to be composed here, captioned
+    # "not found" over a sentence explaining that the agent does not fabricate
+    # passages — a note to a reviewer, in the clinician's canvas, on every turn that
+    # cited no note: /risk (retrieval is forbidden there by design) and both routing
+    # refusals rendered it, always. An empty citation slot is not evidence of a fault
+    # and does not need to say anything (removed 2026-10-12).
 
     return {
         "surface_id": SURFACE_ID,

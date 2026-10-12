@@ -76,27 +76,35 @@ def test_the_delimiter_the_wrapper_emits_is_the_one_the_prompt_names():
         )
 
 
-def test_the_prompt_names_exactly_the_tools_the_server_registers():
-    """Every registered tool must be named, or the model is never told to call it.
+def test_the_prompt_names_the_tools_the_reasoning_loop_can_call():
+    """The free-text prompt and the free-text toolkit must describe one system.
 
-    Only this direction is checked mechanically: the prompt backticks many
-    identifiers that are not tools (`passages`, `top_factors`,
-    `brief_hospital_course`), so the reverse check would have to guess which
-    backticked words are tool names.
+    Checked in BOTH directions now, because the failure on each side is real and
+    they are not symmetric. A tool the model can call but is never told about is a
+    tool it will not use. A tool it is told to call but does not have is worse:
+    the prompt describes a call that cannot happen, and a model asked for a risk
+    score it has no means to produce has every reason to write a plausible one —
+    which is the exact failure the risk guardrail exists to catch after the fact.
+
+    The set of tools the loop may use lives in `routing.py` beside the commands
+    that own the others, so this compares the prompt against that rather than
+    against everything the server registers. The reverse check is exact for the
+    same reason: which names are tools is no longer a guess, it is the complement
+    of the allow-list.
     """
-    from services.mcp.tools import (
-        predict_readmission,
-        rag_search,
-        rag_search_sections,
-    )
+    from services.agent import routing
 
-    registered = {
-        predict_readmission.__name__,
-        rag_search.__name__,
-        rag_search_sections.__name__,
-    }
-    unnamed = {name for name in registered if f"`{name}`" not in SYSTEM_PROMPT}
-    assert not unnamed, f"The prompt never names these registered tools: {unnamed}"
+    for name in sorted(routing.FREETEXT_TOOLS):
+        assert f"`{name}`" in SYSTEM_PROMPT, (
+            f"the prompt never names {name}, which the loop can call"
+        )
+
+    hidden = {command.tool for command in routing.COMMANDS} - routing.FREETEXT_TOOLS
+    for name in sorted(hidden):
+        assert f"`{name}`" not in SYSTEM_PROMPT, (
+            f"the prompt names {name}, which the loop cannot call: either admit it "
+            f"to FREETEXT_TOOLS or stop instructing the model to use it"
+        )
 
 
 # Each rule is checked by its operative phrase rather than by the sentence
@@ -107,13 +115,36 @@ RULE_MARKERS = (
     ("the data-versus-instructions rule", "never instructions"),
     ("the must-call-the-tool rule", "MUST call"),
     ("never invent a citation", "Never invent a citation"),
-    ("the exact number, not a risk band", "above or below the operating threshold"),
     # A citation is resolved against the passages THIS turn retrieved, and the
     # post-hoc citation guard removes a marker that points anywhere else. The
     # rule and the guard have to say the same thing, or a follow-up answered from
     # an earlier turn loses a citation it was right to write (2026-09-18).
     ("citations are scoped to this turn", "only from a tool call you made in THIS turn"),
+    # The decline is a literal in two files — here and `graph.EVIDENCE_FLAG_KEY` —
+    # and the sentence the clinician is owed is chosen from it (2026-10-12).
+    ("the evidence-decline contract", '{"evidence_found": false}'),
+    # Our record numbers are not clinical facts and are not something a clinician
+    # can look up. Live on 2026-10-12 the model wrote one into a prose answer.
+    ("the record-number ban", "no admission id"),
 )
+
+
+def test_the_risk_band_rule_lives_where_risk_prose_is_written():
+    """The rule that a risk is "above or below the operating threshold" and never
+    "high", "low" or "borderline" used to be stated here, for the reasoning loop.
+    The loop no longer carries the risk tool (UX Phase 1B), so the risk prose comes
+    from the /risk command's formatting turn, and the rule moved with it.
+
+    Asserted rather than dropped: the constraint is still load-bearing — the band
+    is a visual the interface derives from the same number, and prose that invents
+    its own band contradicts it — so the check follows the rule to its new home
+    instead of disappearing with its old one.
+    """
+    from services.agent import routing
+
+    assert "above or below the operating threshold" in routing.RISK_FORMATTING
+    for band in ("high", "low", "borderline"):
+        assert f'label the risk "{band}"' not in routing.RISK_FORMATTING
 
 
 @pytest.mark.parametrize("rule,marker", RULE_MARKERS)
@@ -133,3 +164,27 @@ def test_the_graph_uses_the_prompt_this_suite_tests():
     recorded as the cheaper seam rather than described as the stronger check.
     """
     assert graph.SYSTEM_PROMPT is SYSTEM_PROMPT
+
+
+def test_the_decline_object_the_prompt_names_is_the_one_the_graph_reads():
+    """A literal in two files that only work if they agree.
+
+    The prompt tells the model which object to reply with; `read_evidence_reply`
+    decides which replies count as a decline. Let them drift and a decline is served
+    as an answer — a JSON object, in front of a clinician, which is the failure this
+    contract exists to prevent.
+    """
+    assert f'{{"{graph.EVIDENCE_FLAG_KEY}": false}}' in SYSTEM_PROMPT
+
+
+def test_the_record_number_rule_has_both_halves():
+    """The prompt forbids the model from writing one of our record numbers, and
+    `_asked_about` strips the admission the contract appends to the question, so the
+    fixed sentence cannot carry one either. One half without the other is a rule with
+    a hole in it, and the hole was open: live on 2026-10-12 a free-text answer read
+    "the medical records for admission 90000019 do not indicate that the patient was
+    intubated during this admission".
+    """
+    assert "no admission id" in SYSTEM_PROMPT
+    assert "90000023" not in graph._asked_about(
+        "Was she febrile? For admission 90000023.")

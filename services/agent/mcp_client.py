@@ -39,6 +39,48 @@ _LOG = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 MCP_TRANSPORT = os.environ.get("MCP_TRANSPORT", "stdio")  # "stdio" | "http"
+
+# The one tool whose arguments leave our system: a search string goes to NCBI.
+# Named rather than derived, because what makes it special is where its arguments
+# GO, and a second tool that talks to a third party should acquire the same
+# treatment deliberately rather than by inheriting it.
+EXTERNAL_TOOL = "search_literature"
+
+
+def _external_argument_refusal(name: str, arguments: dict, tool) -> dict | None:
+    """Refuse a call that would carry a patient identifier to a third party.
+
+    The SDK validates a payload against the tool's DECLARED arguments by dropping
+    the ones it does not declare. So a caller that passes an admission alongside
+    the search terms does not get an error — the identifier disappears in transit,
+    and the call is made as though it had never been there. Verified live
+    2026-10-12: `search_literature` with `hadm_id` in the payload returned a
+    normal result.
+
+    That silence is the problem. "No identifier leaves the service" is then true
+    by accident of a validation library rather than by anything this service
+    decided, and the same silence would cover a future tool that forwards its
+    arguments somewhere less forgiving.
+
+    Scoped to the external tool on purpose: an undeclared argument to a local
+    retrieval tool is a harmless extra key today, and refusing every one of those
+    would turn a model's formatting habit into a failed answer.
+    """
+    if name != EXTERNAL_TOOL:
+        return None
+    declared = sorted((tool.input_schema or {}).get("properties") or {})
+    undeclared = sorted(set(arguments or {}) - set(declared))
+    if not undeclared:
+        return None
+    return {
+        "error": "undeclared_argument_refused",
+        "message": (
+            f"The search was not run: the call carried {undeclared}, which this "
+            f"tool does not take and which is dropped in transit rather than "
+            f"rejected. It takes only {declared}. Call it again with search "
+            f"terms and nothing else — no admission, no patient details."
+        ),
+    }
 MCP_URL = os.environ.get("MCP_URL", "")
 
 # Gemini's Schema is a subset of JSON Schema. Pydantic emits keys it rejects
@@ -158,6 +200,13 @@ class MCPToolbox:
         """
         if name not in self._tools:
             return {"error": "unknown_tool", "message": f"No MCP tool named {name!r}"}
+
+        refusal = _external_argument_refusal(name, arguments, self._tools[name])
+        if refusal is not None:
+            # The argument NAMES, never their values: a value here is exactly the
+            # kind of thing that must not reach a log line.
+            _LOG.error("MCP tool %s refused: undeclared argument(s) in the call", name)
+            return refusal
         try:
             result = await self.session.call_tool(
                 name, arguments, read_timeout_seconds=self.call_timeout_seconds
@@ -183,6 +232,30 @@ class MCPToolbox:
         return _checked(name, payload)
 
 
+def _mcp_child_environment() -> dict[str, str]:
+    """The environment the MCP server subprocess starts with.
+
+    `StdioServerParameters` without `env` passes the SDK's own default allow-list to
+    the child — on this platform six keys: HOME, LOGNAME, PATH, SHELL, TERM, USER.
+    That is the right default for a server someone else wrote. Ours is this package's
+    second entry point and reads its configuration out of the environment, so the
+    filter was quietly wrong for it.
+
+    Quietly is the problem. Nearly every setting the server reads has a pinned or
+    corpus-document fallback, so prediction and retrieval kept working while
+    `NCBI_EMAIL` — the one credential with no fallback — went missing, and the
+    literature tool reported itself degraded rather than broken. A search that could
+    have run was announced to the clinician as "temporarily unavailable" in the only
+    environment a developer can watch. Confirmed 2026-10-12 by printing the child's
+    environment: NCBI_EMAIL absent, six keys present.
+
+    So the child inherits the parent's environment. The parent has already loaded
+    `.env`, and the child is the same code in the same trust domain; a key missing
+    here should mean a misconfigured parent, not a differently-shaped child.
+    """
+    return dict(os.environ)
+
+
 @contextlib.asynccontextmanager
 async def stdio_toolbox(python: str | None = None):
     """Run the MCP server as a subprocess and yield a loaded toolbox.
@@ -193,6 +266,7 @@ async def stdio_toolbox(python: str | None = None):
         command=python or sys.executable,
         args=["-m", "services.mcp.server", "--transport", "stdio"],
         cwd=str(REPO_ROOT),
+        env=_mcp_child_environment(),
     )
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:

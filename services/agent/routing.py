@@ -196,6 +196,29 @@ COMMANDS: tuple[Command, ...] = (
 
 BY_WIRE: dict[str, Command] = {c.wire: c for c in COMMANDS}
 
+# The tools a FREE-TEXT question may use (UX Phase 1B).
+#
+# Free text is the one path where the model chooses the tool, so it is the one path
+# where the choice has to be bounded. A question that needs a risk score or a
+# discharge medication list is not answered here: both have commands, and the
+# commands exist so those answers are produced deterministically and completely
+# rather than invented under a plausible heading. What is left is retrieval —
+# semantic search, the summary's sections, and the literature.
+#
+# Written as an allow-list rather than as a list of banned tools, because the
+# direction of the failure matters: a tool added to the server tomorrow is
+# unreachable from free text until someone decides to admit it, instead of being
+# reachable until someone remembers to ban it.
+#
+# Every tool the server registers is either the tool of a command or a member of
+# this set; a test asserts that, because a tool that is neither is a tool nothing
+# can reach.
+FREETEXT_TOOLS: frozenset[str] = frozenset({
+    "rag_search",
+    "rag_search_sections",
+    "search_literature",
+})
+
 
 def command_for(wire: str) -> Command:
     """The command for a wire intent, or `UnknownCommand`.

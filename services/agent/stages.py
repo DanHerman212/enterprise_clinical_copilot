@@ -137,6 +137,21 @@ RESULT_LABELS = {
     "search_literature": LABEL_RESULT_LITERATURE,
 }
 
+# What a returned count counts. The noun travels with the tool because one number
+# means different things to different tools, and a count is only informational if
+# the noun is right: three passages of a discharge note, three published records.
+# "Found 3 Note Passages" was served for a PubMed search until 2026-10-12 — the
+# count was correct and the noun described a different system, which is the same
+# defect as a label that names a tool the caller cannot see.
+RESULT_NOUNS = {
+    "rag_search": "Note Passage",
+    "rag_search_sections": "Note Section",
+    "search_literature": "Literature Record",
+}
+
+# For a tool this table has not been taught. Vague and true, like LABEL_UNKNOWN_TOOL.
+RESULT_NOUN_FALLBACK = "Result"
+
 
 def _plural(count: int, noun: str) -> str:
     return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
@@ -183,10 +198,11 @@ def tool_event(name: str) -> dict[str, Any]:
 def result_event(name: str, response: Any) -> dict[str, Any]:
     """What a tool call returned, emitted immediately after it returns.
 
-    Reports the call's own output in the call's own terms: how many passages came
-    back, or that the call failed. A count is a fact about the work; the passages
-    themselves, and any probability, are not put on screen here — the answer is
-    where a guarded clinical value appears (rule 5).
+    Reports the call's own output in the call's own terms: how many note passages,
+    note sections or published records came back, or that the call failed. A count
+    is a fact about the work; the passages themselves, and any probability, are not
+    put on screen here — the answer is where a guarded clinical value appears
+    (rule 5).
     """
     payload = response if isinstance(response, dict) else {}
     if payload.get("error"):
@@ -201,7 +217,7 @@ def result_event(name: str, response: Any) -> dict[str, Any]:
     if returned is None and isinstance(payload.get("passages"), list):
         returned = len(payload["passages"])
     if isinstance(returned, int):
-        noun = "Note Section" if name == "rag_search_sections" else "Note Passage"
+        noun = RESULT_NOUNS.get(name, RESULT_NOUN_FALLBACK)
         return {
             "stage": STAGE_RESULT,
             "label": f"Found {_plural(returned, noun)}",

@@ -2,12 +2,18 @@
 
 Four criteria, one per test:
 
-1. Known-good value   — the expected probability, decision, and non-empty factors
+1. Known-good value   — the expected probability, decision, and non-empty factors,
+                        and the narrative that carries the score at the two
+                        decimals the interface draws it with
 2. Graceful error     — an invalid hadm_id gives a structured error, not a crash
                         and not an invented number
 3. Routing            — the call actually went through MCP, asserted on the
                         tool-call trace rather than on the prose
 4. Schema contract    — the response validates against the section 6 shape
+
+Measured on the /risk command, which is the path that owns the tool and the number
+(UX Phase 1). A free-text risk question is answered by naming that command and
+calling nothing, which is a boundary of its own and lives in `test_agent_local.py`.
 
 Transport-agnostic, so the same suite gates the deployed service:
 
@@ -106,10 +112,11 @@ ERROR_SCHEMA = {
 }
 
 
-def _run(question: str) -> dict:
+def _run(question: str, *, kind: str | None = None, hadm_id: int | None = None) -> dict:
+    """One conversation, driven the way the route drives it (`http._run_chain`)."""
     async def go():
         async with toolbox() as box:
-            return await ask(box, question)
+            return await ask(box, question, question_kind=kind, hadm_id=hadm_id)
 
     return asyncio.run(go())
 
@@ -117,17 +124,17 @@ def _run(question: str) -> dict:
 @pytest.fixture(scope="module")
 def known_patient() -> dict:
     """One real round trip through Gemini, MCP, and the endpoint."""
-    return _run(f"What is the readmission risk for admission {KNOWN_HADM_ID}?")
+    return _run("/risk", kind="risk", hadm_id=KNOWN_HADM_ID)
 
 
 @pytest.fixture(scope="module")
 def unknown_patient() -> dict:
-    return _run(f"What is the readmission risk for admission {UNKNOWN_HADM_ID}?")
+    return _run("/risk", kind="risk", hadm_id=UNKNOWN_HADM_ID)
 
 
-def test_known_good_value(known_patient):
+def test_known_good_value(known_patient, require_served):
     """Criterion 1 — the number, the decision, and real attribution."""
-    response = known_patient["tool_calls"][0]["response"]
+    response = require_served(known_patient)
 
     assert "error" not in response, response
     assert abs(response["probability"] - EXPECTED["probability"]) <= EXPECTED["tolerance"], (
@@ -140,8 +147,13 @@ def test_known_good_value(known_patient):
     assert response["threshold"] == FIXTURE["threshold"]
     assert response["top_factors"], "top_factors must not be empty"
 
-    # The number reaches the user unrounded, not just the tool.
-    assert str(EXPECTED["probability"]) in final_text(known_patient)
+    # The number reaches the user at display precision, not only the tool. The
+    # narrative used to state the raw value while the widget drew two decimals,
+    # which is one score stated two ways — two numbers, as far as a reader is
+    # concerned.
+    text = final_text(known_patient)
+    assert f"{EXPECTED['probability']:.2f}" in text, text
+    assert str(EXPECTED["probability"]) not in text, text
 
 
 def test_graceful_error(unknown_patient):
@@ -162,20 +174,21 @@ def test_graceful_error(unknown_patient):
 def test_routing_went_through_mcp(known_patient):
     """Criterion 3 — assert on the trace, because the prose cannot prove it.
 
-    Gemini knows what readmission risk is and will produce a confident,
-    plausible answer with no tool call at all. A grader reading only the answer
-    would pass that.
+    A model that knew what readmission risk is could produce a confident, plausible
+    answer with no tool call at all, and a grader reading only the answer would pass
+    that. The command path is held to the standard the loop was held to: one call,
+    the right admission, no error.
     """
     calls = known_patient["tool_calls"]
-    assert calls, "agent answered from its own knowledge — no tool call in the trace"
+    assert calls, "the answer came from the model's own knowledge — no tool call in the trace"
     assert calls[0]["name"] == "predict_readmission"
     assert calls[0]["args"] == {"hadm_id": KNOWN_HADM_ID}
     assert "error" not in calls[0], calls[0]
 
 
-def test_schema_contract(known_patient):
+def test_schema_contract(known_patient, require_served):
     """Criterion 4 — the section 6 return shape, exactly."""
-    response = known_patient["tool_calls"][0]["response"]
+    response = require_served(known_patient)
     validate(instance=response, schema=RESPONSE_SCHEMA)
 
     # Provenance is load-bearing: "which model, reading from where?" must be

@@ -427,6 +427,23 @@ def test_a_result_stage_reports_the_count_the_call_returned():
     assert events[1]["label"] == "Found 3 Note Passages"
 
 
+def test_a_literature_result_stage_counts_records_not_note_passages():
+    """One number, two systems. A PubMed search labelled "Note Passages" describes a
+    corpus the caller never touched; served live on 2026-10-12, where the count was
+    right and the noun belonged to the other retrieval path."""
+    events = _events_after_one_call(
+        "search_literature", {"returned": 3, "articles": []})
+
+    assert events[1]["label"] == "Found 3 Literature Records"
+
+
+def test_a_tool_with_no_noun_of_its_own_still_reports_truthfully():
+    """A count whose noun is guessed is misinformation; "Result" is vague and true."""
+    events = _events_after_one_call("a_tool_from_the_future", {"returned": 2})
+
+    assert events[1]["label"] == "Found 2 Results"
+
+
 def test_a_result_stage_never_carries_a_clinical_value():
     """What 6.1 declined was showing a number before the guardrails had run.
 

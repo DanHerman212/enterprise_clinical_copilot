@@ -28,6 +28,7 @@ import json
 import logging
 import operator
 import re
+from dataclasses import dataclass
 from typing import Annotated, Any, Callable, TypedDict
 
 from langchain_core.messages import (
@@ -155,6 +156,159 @@ def _render_tool_result(payload: Any) -> str:
     return _escape_delimiter(json.dumps(rendered, ensure_ascii=False))
 
 
+# The sentence for a question the notes turned out not to address (UX Phase 1B).
+# Fixed text, not a prompt: see `no_evidence_answer`.
+NO_EVIDENCE_TEMPLATE = (
+    'There is no information in the patient\'s chart regarding "{topic}".'
+)
+NO_EVIDENCE_UNKNOWN_TOPIC = (
+    "There is no information in the patient's chart regarding that question."
+)
+
+
+def _asked_about(question: str) -> str:
+    """The caller's own question, without the admission the contract appends.
+
+    Quoted rather than paraphrased: a sentence assembled in code must not invent
+    a subject for what was asked, and the caller's words are already the subject.
+    The admission suffix is dropped because "regarding \"... For admission
+    90000023.\"" names a record number in the middle of a clinical sentence.
+    """
+    head, marker, _ = question.rpartition(" For admission ")
+    return (head if marker else question).strip()
+
+
+# The relevance verdict (UX Phase 1B). A model asked to admit ignorance can always
+# decline to; this is the shape the decline has to take for the application to hear
+# it. Prose is still an answer — nothing about the ordinary path changed.
+EVIDENCE_FLAG_KEY = "evidence_found"
+
+# Where an envelope may carry prose, when a model wraps an answer it does have.
+# Read so a wrapped answer is served as its prose rather than as the object it
+# arrived in.
+EVIDENCE_TEXT_KEYS = ("narrative_text", "answer", "text")
+
+
+@dataclass(frozen=True)
+class EvidenceReply:
+    """The model's final message, once read as a contract rather than as text.
+
+    `declined` is the model's own report that the passages it was given do not
+    answer the question; `text` is the prose to serve. Prose without the flag is an
+    answer, and a decline carries no text — the two could not both be interesting
+    at once, which is what makes the shape safe to branch on.
+    """
+
+    declined: bool
+    text: str
+
+
+def read_evidence_reply(text: str) -> EvidenceReply:
+    """Read the model's final message for the decline, and for prose either way.
+
+    The cost of being strict here is a JSON object rendered to a clinician as if it
+    were an answer, so an envelope that carries prose is unwrapped and served. The
+    cost of being clever is an answer edited by a parser, so a message that is not
+    this object is returned exactly as it arrived, whatever it looks like.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return EvidenceReply(declined=True, text="")
+    if not stripped.startswith("{"):
+        return EvidenceReply(declined=False, text=text)
+    try:
+        parsed = json.loads(stripped)
+    except ValueError:
+        return EvidenceReply(declined=False, text=text)
+    if not isinstance(parsed, dict) or EVIDENCE_FLAG_KEY not in parsed:
+        return EvidenceReply(declined=False, text=text)
+    if not parsed[EVIDENCE_FLAG_KEY]:
+        return EvidenceReply(declined=True, text="")
+    for key in EVIDENCE_TEXT_KEYS:
+        value = parsed.get(key)
+        if isinstance(value, str) and value.strip():
+            return EvidenceReply(declined=False, text=value.strip())
+    # Said there was evidence and supplied none. There is nothing to serve, and
+    # nothing may be asserted on its behalf, so this reads as a decline and the
+    # caller decides (`ask`).
+    return EvidenceReply(declined=True, text="")
+
+
+def _replace_final_text(state: dict, text: str) -> None:
+    """Set the final answer's text in place.
+
+    The message is edited rather than replaced: `model_turn` reads the same message
+    for the finish reason and the content-filter verdict, and a new message would
+    lose both. Only the content changes.
+    """
+    message = final_message(state)
+    if message is not None:
+        message.content = text
+
+
+def no_evidence_answer(
+    question: str, tool_calls: list[dict], *, declined: bool = False
+) -> str | None:
+    """The fixed sentence for a question the notes did not answer, or None.
+
+    Free text is answered by a model that can fill a gap with plausible clinical
+    detail, and asking it in the prompt to admit ignorance is a request rather
+    than a guarantee — the failure it prevents is a confident answer to a
+    question the notes do not address, which reads exactly like an answer to one
+    they do. So the absence is decided here and the model's text for that turn is
+    never served.
+
+    Two things can establish it, and they are different observations:
+
+      * retrieval returned nothing at all;
+      * the model read what retrieval returned and reports that none of it answers
+        the question (`declined`, from `read_evidence_reply`). This is the case a
+        count cannot see. Vector search returns its nearest neighbours whatever it
+        is asked, so a question the notes cannot answer comes back looking like one
+        they can: live on 2026-10-12, "was the patient intubated during this
+        admission?" retrieved five passages, none of which mentioned intubation,
+        and the model answered from them anyway. The count was 5 and the answer was
+        absent, which is the pair a count cannot distinguish.
+
+    The verdict in the second case is the model's; the SENTENCE is not. It is
+    spoken here, in fixed words, so a model that would have hedged instead reports
+    nothing and the clinician hears the same thing either way.
+
+    The conditions around both are narrow on purpose:
+
+      * the note search RAN — a turn that made no retrieval call is not a turn
+        that found nothing, and saying "the chart does not mention it" about a
+        search nobody performed would invent a fact about the record;
+      * no search failed. A failed search says nothing about the chart, and
+        reporting an outage as an absence is the same mistake in the other
+        direction;
+      * the literature was not consulted. An answer built on published evidence
+        is an answer, and it is not a claim about this patient's notes.
+    """
+    names = [call.get("name") for call in tool_calls]
+    if "search_literature" in names:
+        return None
+    if "rag_search" not in names:
+        return None
+
+    found_passages = False
+    for name in ("rag_search", "rag_search_sections"):
+        for call in tool_calls:
+            if call.get("name") != name:
+                continue
+            response = call.get("response")
+            if not isinstance(response, dict) or response.get("error"):
+                return None
+            if response.get("passages"):
+                found_passages = True
+
+    if found_passages and not declined:
+        return None
+
+    topic = _asked_about(question)
+    return NO_EVIDENCE_TEMPLATE.format(topic=topic) if topic else NO_EVIDENCE_UNKNOWN_TOPIC
+
+
 def _emit(on_event: Callable[[dict[str, Any]], None] | None, event: dict[str, Any]) -> None:
     """Announce a stage, if anyone is listening.
 
@@ -181,10 +335,41 @@ def _emit(on_event: Callable[[dict[str, Any]], None] | None, event: dict[str, An
         logger.warning("progress callback failed; continuing", exc_info=True)
 
 
+def _outbound_patient_identifier(
+    name: str, args: dict, hadm_id: int | None
+) -> dict | None:
+    """Refuse a literature call whose search terms carry this admission's id.
+
+    The half of the rule the tool cannot check for itself. `search_literature` is
+    deliberately not told which patient is under discussion — that is the point of
+    it — so it has no identifier to compare against. The agent has one for the
+    turn, and the call is assembled here.
+
+    The prompt already forbids patient text in a literature query. A prompt is a
+    request; this is the one disclosure that cannot be taken back, because an
+    identifier sent to a third party cannot be recalled, so it is checked rather
+    than asked for.
+    """
+    if name != "search_literature" or hadm_id is None:
+        return None
+    if str(hadm_id) not in str(args.get("query") or ""):
+        return None
+    return {
+        "error": "patient_identifier_refused",
+        "message": (
+            "The search was not run: the search terms contained this admission's "
+            "identifier. A literature search takes de-identified clinical terms "
+            "only — no admission id, no patient details. Rewrite the terms "
+            "without them."
+        ),
+    }
+
+
 async def _execute_tool_calls(
     toolbox: MCPToolbox, calls: list[dict],
     on_event: Callable[[dict[str, Any]], None] | None = None,
     project: Callable[[str, Any], Any] | None = None,
+    guard: Callable[[str, dict], dict | None] | None = None,
 ) -> tuple[list[BaseMessage], list[RecordedToolCall]]:
     """Run one turn's tool calls, refusing those beyond the per-turn budget.
 
@@ -194,6 +379,10 @@ async def _execute_tool_calls(
     deterministic command can hand the formatting turn the same field names the
     interface draws with, without that substitution becoming a lie about what the
     tool said.
+
+    `guard` may refuse a call before it is dispatched, returning the error payload
+    the model should see instead. A refused call announces nothing: the stages
+    describe work that happened, and this is work that did not.
     """
     messages: list[BaseMessage] = []
     recorded: list[RecordedToolCall] = []
@@ -208,16 +397,18 @@ async def _execute_tool_calls(
                 ),
             }
         else:
-            # Emitted HERE, one line above the call it describes: the stage is
-            # derived from an execution that is about to happen, not from a
-            # script of what should happen. A refused call (the branch above)
-            # announces nothing, because nothing was called.
-            _emit(on_event, stages.tool_event(call["name"]))
-            payload = await toolbox.call(call["name"], arguments)
-            # What came back, in the call's own terms. Emitted here because this
-            # is where the payload exists, and only for a call that actually
-            # ran: a refused call announces nothing, result included (rule 3).
-            _emit(on_event, stages.result_event(call["name"], payload))
+            payload = guard(call["name"], arguments) if guard is not None else None
+            if payload is None:
+                # Emitted HERE, one line above the call it describes: the stage is
+                # derived from an execution that is about to happen, not from a
+                # script of what should happen. A refused call (the branches
+                # above) announces nothing, because nothing was called.
+                _emit(on_event, stages.tool_event(call["name"]))
+                payload = await toolbox.call(call["name"], arguments)
+                # What came back, in the call's own terms. Emitted here because this
+                # is where the payload exists, and only for a call that actually
+                # ran: a refused call announces nothing, result included (rule 3).
+                _emit(on_event, stages.result_event(call["name"], payload))
         recorded.append(validate_recorded_tool_call({
             "name": call["name"], "args": arguments, "response": payload,
         }))
@@ -288,7 +479,8 @@ def _build_llm(model: str) -> ChatGoogleGenerativeAI:
     )
 
 
-def _tools(toolbox: MCPToolbox) -> list[BaseTool]:
+def _tools(toolbox: MCPToolbox,
+           allowed: frozenset[str] | None = None) -> list[BaseTool]:
     """Build one LangChain tool per MCP tool, sharing the toolbox.
 
     Each MCP `input_schema` is declared to the model as the tool's
@@ -296,6 +488,10 @@ def _tools(toolbox: MCPToolbox) -> list[BaseTool]:
     parameter names and types instead of leaving the model to guess them from
     prose (ECC-10) — which is also what made the old kwargs-flatten heuristic
     necessary.
+
+    `allowed` is the free-text boundary (UX Phase 1B): the reasoning loop is
+    handed only these, so a tool that belongs to a command is not merely refused,
+    it is absent. `None` means every tool the server advertises.
     """
     return [
         _MCPTool(
@@ -305,6 +501,7 @@ def _tools(toolbox: MCPToolbox) -> list[BaseTool]:
             box=toolbox,
         )
         for name, tool in toolbox._tools.items()
+        if allowed is None or name in allowed
     ]
 
 
@@ -313,6 +510,7 @@ def build_graph(
     model: str = MODEL_ID,
     on_event: Callable[[dict[str, Any]], None] | None = None,
     question_kind: str | None = None,
+    guard: Callable[[str, dict], dict | None] | None = None,
 ):
     """Compile the graph. `on_event` receives progress stages; None disables them.
 
@@ -320,7 +518,9 @@ def build_graph(
     path byte-for-byte what it was: with no listener, `_emit` returns
     immediately and the graph behaves exactly as before.
     """
-    llm = _build_llm(model).bind_tools(_tools(toolbox))
+    llm = _build_llm(model).bind_tools(
+        _tools(toolbox, allowed=routing.FREETEXT_TOOLS)
+    )
 
     async def agent_node(state: AgentState) -> dict:
         # Which turn this is decides the label, and the transcript is the only
@@ -344,7 +544,9 @@ def build_graph(
     async def tool_node(state: AgentState) -> dict:
         last = state["messages"][-1]
         calls = last.tool_calls if isinstance(last, AIMessage) else []
-        messages, recorded = await _execute_tool_calls(toolbox, calls, on_event)
+        messages, recorded = await _execute_tool_calls(
+            toolbox, calls, on_event, guard=guard
+        )
         return {"messages": messages, "tool_calls": recorded}
 
     def route(state: AgentState) -> str:
@@ -411,7 +613,10 @@ async def ask(
         return command_state
 
     graph = build_graph(
-        toolbox, model=model, on_event=on_event, question_kind=question_kind
+        toolbox, model=model, on_event=on_event, question_kind=question_kind,
+        # The one identifier this turn holds, checked against what is about to
+        # leave the service (UX Phase 1B).
+        guard=lambda name, args: _outbound_patient_identifier(name, args, hadm_id),
     )
 
     config: dict = {"recursion_limit": RECURSION_LIMIT}
@@ -449,6 +654,36 @@ async def ask(
         },
         config=config,
     )
+
+    # The model's own verdict on what it was given, read before anything else looks
+    # at the text: an answer the model wrapped in the contract's envelope is
+    # unwrapped here, so the guardrails, the citation layer and the canvas all see
+    # prose. A reply that is not the envelope is left exactly as it arrived.
+    reply = read_evidence_reply(final_text(state))
+    if reply.text != final_text(state):
+        _replace_final_text(state, reply.text)
+
+    # A question the notes did not answer is answered here rather than by the model,
+    # which has already written something plausible that nobody will see (see
+    # `no_evidence_answer`). Set on the state, so both routes serve it and the
+    # guardrails and citation layer treat it like any other answer.
+    fallback = no_evidence_answer(
+        question, state.get("tool_calls") or [], declined=reply.declined
+    )
+    if fallback is not None:
+        state["deterministic_answer"] = fallback
+    elif reply.declined:
+        # Declined, and this turn may not assert an absence: no retrieval ran, a
+        # search failed, or the literature was consulted. The flag is not an answer
+        # and the fixed sentence would be a claim the records do not support, so the
+        # turn carries no text and the routes report an unavailable answer rather
+        # than a fabricated one (see `_compose_success`).
+        logger.warning(
+            "model declined with no absence to report; calls: %s",
+            ",".join(call.get("name") or "?" for call in state.get("tool_calls") or [])
+            or "none",
+        )
+        _replace_final_text(state, "")
 
     # The trace id leaves with the state so the layers that need to point back at
     # a run can: `collect.py` stores it per case, and `judge.py` attaches rubric

@@ -10,6 +10,7 @@ section extraction) live in tests/agent/test_citations.py; this file pins the
 composed envelope and the end-to-end presentation contract.
 """
 
+import json
 import sys
 from pathlib import Path
 
@@ -137,14 +138,17 @@ class TestRiskComposition:
 
 class TestNoEstimatePaths:
     def test_without_predict_composes_a_source_only_canvas(self):
-        """A non-risk question (meds / summarize) still composes a canvas."""
+        """A non-risk question (meds / summarize) still composes a canvas — and one
+        that states no provenance, because there is none to state. The caption that
+        used to stand in for one ("no readmission estimate was requested") answered
+        a question the clinician had not asked, in the voice of a bug report
+        (removed 2026-10-12)."""
         canvas = compose_risk_canvas(None, GOOD_RAG)
         types = {c["component"] for c in _by_id(canvas).values()}
         assert "SourceCard" in types
         assert "RiskBar" not in types
         assert canvas["fallback_text"].strip()
-        prov = _by_id(canvas)["prov"]
-        assert "no readmission estimate was requested" in prov["text"]
+        assert "prov" not in _by_id(canvas)
 
     def test_errored_predict_is_an_honest_note_never_a_500(self):
         canvas = compose_risk_canvas(
@@ -158,11 +162,16 @@ class TestNoEstimatePaths:
         canvas = compose_risk_canvas({"hadm_id": 1, "probability": 0.4}, None)
         assert "did not return a usable estimate" in canvas["fallback_text"]
 
-    def test_no_passages_is_an_honest_empty_source_card(self):
+    def test_no_passages_composes_no_source_card_at_all(self):
+        """A card captioned "not found" over a sentence about the agent not
+        fabricating passages was a note to a reviewer, printed in the clinician's
+        canvas on every turn that cited no note — including /risk, where retrieval
+        is forbidden by design (removed 2026-10-12). An empty citation slot is not
+        evidence of a fault."""
         canvas = compose_risk_canvas(None, None)
-        source = _by_id(canvas)["source"]
-        assert source["section"] == "not found"
-        assert "No supporting note passage" in source["text"]
+
+        assert "source" not in _by_id(canvas)
+        assert "not found" not in json.dumps(canvas)
 
 
 class TestSourceCardResolution:

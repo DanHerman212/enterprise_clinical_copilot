@@ -22,7 +22,12 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from services.mcp.retrieval.sections import KNOWN_HEADINGS, parse_note, redaction_profile
+from services.mcp.retrieval.sections import (
+    KNOWN_HEADINGS,
+    SUMMARY_SECTIONS,
+    parse_note,
+    redaction_profile,
+)
 
 # D2 default from the build guide; sections under this are single chunks.
 DEFAULT_MAX_CHARS = 1500
@@ -61,24 +66,11 @@ if _unknown:  # a typo here would silently index nothing for that section
     )
 del _unknown
 
-# The clinical sections a discharge summary draws on, in the order it cites them.
-# Defined here, beside the vocabulary it is drawn from, because two layers read
-# it: the serving tool that returns the passages, and the agent's routing table
-# that declares what a summary covers. A second copy in either place would let
-# the two disagree about the same concept.
-#
-# `discharge_medications` and `discharge_summary` are deliberately absent. A
-# medications list has its own command, and the summary is defined as these four
-# high-signal sections (UX Phase 1, 2026-10-12). The names are the parser's, not
-# the document's: `hospital_course` is stored as `brief_hospital_course`, and
-# `discharge_diagnoses` as `discharge_diagnosis`, because a section name is part
-# of every chunk id in the search index.
-SUMMARY_SECTIONS = (
-    "history_of_present_illness",
-    "brief_hospital_course",
-    "discharge_diagnosis",
-    "discharge_instructions",
-)
+# SUMMARY_SECTIONS lives in `sections.py` now, with the rest of the vocabulary. This
+# module is the chunker, and the agent's image ships the vocabulary but not the
+# chunker — so an agent that imported the constant from here failed to start, and the
+# deploy was rolled back to the previous revision (live defect, 2026-10-13). It is
+# still importable from this module: the import above re-exports it.
 
 _summary_unknown = set(SUMMARY_SECTIONS) - set(INDEX_SECTIONS)
 if _summary_unknown:  # a summary can only cite sections the index holds

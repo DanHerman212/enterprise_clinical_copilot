@@ -89,6 +89,31 @@ DISCHARGE_SUMMARY = "discharge_summary"
 FOLLOWUP_INSTRUCTIONS = "followup_instructions"
 FACILITY = "facility"
 
+# The clinical sections a discharge summary draws on, in the order it cites them.
+# Defined here, beside the vocabulary it is drawn from, because three layers read it:
+# the serving tool that returns the passages, the agent's routing table that declares
+# what a summary covers, and the chunker that checks the summary's sections are all
+# indexed. A second copy in any of them would let the others disagree about the same
+# concept.
+#
+# It moved here from `chunking.py` (2026-10-13). The agent's image ships this module
+# and deliberately does not ship the chunker, so a constant the agent needs could not
+# live with the index sets: importing it from there failed at container start, and
+# Cloud Run served the previous revision because of it.
+#
+# `discharge_medications` and `discharge_summary` are deliberately absent. A medications
+# list has its own command, and the summary is defined as these four high-signal
+# sections (UX Phase 1, 2026-10-12). The names are the parser's, not the document's:
+# `hospital_course` is stored as `brief_hospital_course`, and `discharge_diagnoses` as
+# `discharge_diagnosis`, because a section name is part of every chunk id in the search
+# index.
+SUMMARY_SECTIONS = (
+    "history_of_present_illness",
+    "brief_hospital_course",
+    "discharge_diagnosis",
+    "discharge_instructions",
+)
+
 # Headings that introduce each section. Written as they read; normalisation
 # below makes matching case- and punctuation-insensitive, so "Follow-Up
 # Instructions" and "followup instructions" both land on FOLLOWUP_INSTRUCTIONS.

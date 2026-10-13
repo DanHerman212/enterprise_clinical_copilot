@@ -51,13 +51,13 @@ from services.mcp.dependencies.features import (
 from services.mcp.retrieval.sections import (
     DISCHARGE_INSTRUCTIONS,
     DISCHARGE_MEDICATIONS,
+    SUMMARY_SECTIONS,
     parse_note,
 )
 from services.mcp.retrieval.chunking import (
     DEFAULT_MAX_CHARS,
     DEFAULT_PACK_TO,
     INDEX_SECTIONS,
-    SUMMARY_SECTIONS,
     chunk_note,
 )
 

@@ -45,7 +45,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from services.mcp.retrieval.chunking import SUMMARY_SECTIONS
+# The section vocabulary, not the chunker. The agent's image ships the vocabulary
+# module and not the chunker, so importing this constant from `chunking` failed the
+# container at startup and the deploy silently served the previous revision.
+from services.mcp.retrieval.sections import SUMMARY_SECTIONS
 
 
 class UnknownCommand(ValueError):

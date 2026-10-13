@@ -188,6 +188,10 @@ the second is ^[2], and so on, in the order the records appear. Put the marker i
 the claim that draws on that record. Cite each record at most once, and cite every record you
 actually used.
 
+The marker is the record's POSITION in the list, never its identifier: write ^[1], not
+^[PMID: 35186616]. The interface resolves both, but only the position is checked against what
+was retrieved, so an identifier printed by mistake may be removed from your answer.
+
 Never write a PMID, a DOI, a journal name or an article title into the prose: the interface
 draws the records from the structured result, with their links, beside this summary.
 

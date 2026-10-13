@@ -295,6 +295,92 @@ def test_a_marker_past_the_last_record_is_still_stripped():
     assert flags == ["citation_out_of_range:^4"]
 
 
+# --- markers written as identifiers -------------------------------------------
+#
+# The instruction asks for `^[1]` and forbids PMIDs in the prose. The model writes
+# `^[PMID: 35186616]` anyway, because on a literature turn the marker it displays IS the
+# identifier — and those markers reached a production reader as literal text, because
+# neither the renderer nor this guard recognised the form (2026-10-13).
+
+def test_a_marker_written_as_a_pmid_resolves_against_the_retrieved_records():
+    calls = _search({"pmid": "35186616"}, {"pmid": "42337790"})
+
+    cleaned, flags = g.check_citations(
+        "Bilateral disease is common ^[PMID: 35186616].",
+        slots=g._literature_slots(calls),
+        pmids=g._literature_pmids(calls),
+    )
+
+    assert "^[PMID: 35186616]" in cleaned
+    assert flags == []
+
+
+def test_a_marker_naming_a_pmid_that_was_never_retrieved_is_stripped():
+    """The form is accepted; the claim behind it is still checked against the records.
+    An invented identifier left in the prose reads as evidence."""
+    cleaned, flags = g.check_citations(
+        "Supported ^[PMID: 35186616]. Also invented ^[PMID: 99999999].",
+        slots=1,
+        pmids={"35186616"},
+    )
+
+    assert "^[PMID: 35186616]" in cleaned
+    assert "^[PMID: 99999999]" not in cleaned
+    assert flags == ["citation_out_of_range:^99999999"]
+
+
+def test_a_bare_identifier_resolves_the_same_as_a_labelled_one():
+    cleaned, flags = g.check_citations(
+        "A claim ^[35186616].", slots=1, pmids={"35186616"}
+    )
+
+    assert "^[35186616]" in cleaned
+    assert flags == []
+
+
+def test_a_note_turn_has_no_identifiers_to_name():
+    """A note turn carries no PMIDs, so nothing but a position resolves on it — the
+    identifier form is not a way past the position rule."""
+    cleaned, flags = g.check_citations("The notes say so ^[PMID: 1].", slots=0)
+
+    assert "^[PMID: 1]" not in cleaned
+    assert flags == ["citation_out_of_range:^1"]
+
+
+def test_the_identifiers_a_literature_turn_may_name_come_from_the_search():
+    calls = _search({"pmid": "1"}, {"pmid": "2"}, {"title": "no pmid"})
+
+    assert g._literature_pmids(calls) == frozenset({"1", "2"})
+    assert g._literature_pmids([{"name": "rag_search", "response": {}}]) == frozenset()
+    assert g._literature_pmids([]) == frozenset()
+    assert g._literature_pmids(None) == frozenset()
+
+
+def test_guard_answer_wires_the_identifiers_through():
+    """The guardrail runs on the answer the model wrote, so the wiring matters as much
+    as the rule: slots and identifiers have to arrive from the same search call. They
+    are read from THIS turn's calls — a marker addresses a slot in this turn's
+    presentation — so passing the calls as replayed history instead resolves nothing."""
+    calls = _search({"pmid": "35186616"})
+
+    out = g.guard_answer("Bilateral disease is common ^[PMID: 35186616].", calls)
+
+    assert "^[PMID: 35186616]" in out["answer"]
+    assert out["flags"] == []
+
+
+def test_a_marker_resolved_against_replayed_history_is_not_a_slot_this_turn_has():
+    """The same answer, with the search arriving as an earlier turn's call: the
+    presentation this turn composes has no records in it, so the marker cannot
+    resolve and is stripped rather than left pointing at nothing."""
+    calls = _search({"pmid": "35186616"})
+
+    out = g.guard_answer("Bilateral disease is common ^[PMID: 35186616].", [], calls)
+
+    assert "^[PMID: 35186616]" not in out["answer"]
+    assert out["flags"] == ["citation_out_of_range:^35186616"]
+
+
 def test_dates_without_source_redactions_are_left_alone():
     passages = [{"section": "brief_hospital_course",
                  "text": "Admitted January 2 and recovered."}]

@@ -13,8 +13,10 @@ Guardrails (P3 root-cause -> targeted):
      found there is dropped from the answer (an unverifiable medical claim is
      safer absent) and flagged. This catches med dose/freq errors and the
      admission-meds-conflated-as-discharge failure.
-  3. CITATION RANGE        — every ^[n] must point at a retrieved passage;
-     out-of-range markers are stripped, not just flagged (ECC-14).
+  3. CITATION RANGE        — every ^[n] must point at a retrieved passage, and a
+     marker written as an identifier (^[PMID: ...]) must name a record the turn
+     actually retrieved; unresolvable markers are stripped, not just flagged
+     (ECC-14).
   4. RISK-NUMBER GUARD     — every risk-shaped number must match a
      `predict_readmission` response; a fabricated "risk is 0.14" (or any risk
      number with no predict call at all) is stripped + flagged (ECC-04).
@@ -120,7 +122,12 @@ def _source_freqs(text: str) -> set[str]:
 
 # --- Citation ---------------------------------------------------------------
 
-_CITE = re.compile(r"\^\[(\d+)\]")
+# A citation marker as it arrives, in either form the model writes: the instructed
+# `^[2]`, or the identifier form `^[PMID: 35186616]` that the instruction forbids and the
+# model produces anyway. Those markers were served as literal text in production
+# (2026-10-13) because nothing downstream recognised them — the renderer printed them,
+# and this guard could not see them to strip them.
+_CITE = re.compile(r"\^\[\s*(?:PMID\s*[:#]?\s*)?(\d+)\s*\]", re.IGNORECASE)
 
 
 def _passage_sections(tool_calls: list[dict]) -> tuple[list[dict], str]:
@@ -222,25 +229,52 @@ def _literature_slots(tool_calls: list[dict]) -> int:
     return 0
 
 
-def check_citations(answer: str, slots: int) -> tuple[str, list[str]]:
-    """Strip + flag ^[n] markers that point at a citation this turn cannot resolve.
+def _literature_pmids(tool_calls: list[dict]) -> frozenset[str]:
+    """The PMIDs a literature turn may name instead of a position.
+
+    The companion to `_literature_slots`, read from the same call, so the identifiers this
+    accepts and the records the canvas draws are the same set.
+    """
+    for call in tool_calls or []:
+        if call.get("name") != "search_literature":
+            continue
+        articles = (call.get("response") or {}).get("articles")
+        if isinstance(articles, list):
+            return frozenset(
+                str(article["pmid"])
+                for article in articles
+                if isinstance(article, dict) and article.get("pmid")
+            )
+    return frozenset()
+
+
+def check_citations(
+    answer: str,
+    slots: int,
+    pmids: "frozenset[str] | set[str]" = frozenset(),
+) -> tuple[str, list[str]]:
+    """Strip + flag markers that point at a citation this turn cannot resolve.
 
     `slots` is how many numbered citations the presentation holds: one per retrieved note
     passage, or one per retrieved article on a literature turn. Both are numbered from 1
-    in the order the model was given them, so this count is the whole of what a marker
-    may legally address.
+    in the order the model was given them, so this count is the whole of what a marker may
+    legally address by position. `pmids` are the identifiers a literature turn may name
+    instead: the model writes `^[PMID: ...]` often enough that refusing the form outright
+    serves it as literal text, and accepting it unchecked would let an invented identifier
+    read as evidence. A marker resolves if it names either.
 
     An out-of-range marker left in rendered as a citation to nothing — with zero slots an
     answer containing ^[1] was served intact (ECC-14). It is the same failure whether the
     slot was never retrieved or never existed, so it is the same guard.
     """
-    n = slots
+    allowed = {str(pmid) for pmid in pmids}
     flags: list[str] = []
     spans: list[tuple[int, int]] = []
     for m in _CITE.finditer(answer):
-        c = int(m.group(1))
-        if c < 1 or c > n:
-            flags.append(f"citation_out_of_range:^{c}")
+        digits = m.group(1)
+        number = int(digits)
+        if not (1 <= number <= slots or digits in allowed):
+            flags.append(f"citation_out_of_range:^{digits}")
             spans.append((m.start(), m.end()))
     if not spans:
         return answer, flags
@@ -593,9 +627,10 @@ def guard_answer(
     turn_passages, _ = _passage_sections(tool_calls)
     # Passages for a note turn, articles for a literature turn: both are citation slots.
     # A literature turn has no passages at all, so counting only passages stripped every
-    # marker out of a properly grounded summary (observed live 2026-10-13).
+    # marker out of a properly grounded summary (observed live 2026-10-13). The identifiers
+    # travel too, because the model cites by PMID as well as by position.
     slots = len(turn_passages) or _literature_slots(tool_calls)
-    answer, f = check_citations(answer, slots)
+    answer, f = check_citations(answer, slots, _literature_pmids(tool_calls))
     flags += f
 
     return {"answer": answer, "flags": sorted(set(flags))}

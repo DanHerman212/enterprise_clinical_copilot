@@ -133,6 +133,20 @@ def unknown_patient() -> dict:
     return _run("/risk", kind="risk", hadm_id=UNKNOWN_HADM_ID)
 
 
+def _presentation(state):
+    """The browser contract for a state, composed the way the payload path composes it."""
+    from services.agent.a2ui import compose_presentation
+
+    question = next(
+        (m.content for m in state["messages"] if getattr(m, "type", "") == "human"), "")
+    return compose_presentation(question, "", state["tool_calls"])
+
+
+def _risk_widget(state):
+    components = _presentation(state)["a2ui"]["messages"][1]["updateComponents"]["components"]
+    return next(c for c in components if c["component"] == "RiskInfluencers")
+
+
 def test_known_good_value(known_patient, require_served):
     """Criterion 1 — the number, the decision, and real attribution."""
     response = require_served(known_patient)
@@ -148,13 +162,14 @@ def test_known_good_value(known_patient, require_served):
     assert response["threshold"] == FIXTURE["threshold"]
     assert response["top_factors"], "top_factors must not be empty"
 
-    # The number reaches the user at display precision, not only the tool. The
-    # narrative used to state the raw value while the widget drew two decimals,
-    # which is one score stated two ways — two numbers, as far as a reader is
-    # concerned.
-    text = final_text(known_patient)
-    assert f"{EXPECTED['probability']:.2f}" in text, text
-    assert str(EXPECTED["probability"]) not in text, text
+    # The number reaches the user through the surface, not through prose: `/risk`
+    # returns the widget and no prose at all (UX ruling 2026-10-13), so the served
+    # value has to BE the widget's value. Asserted against the served response rather
+    # than the fixture, because the rule is about the projection.
+    assert known_patient["deterministic_answer"] == ""
+    widget = _risk_widget(known_patient)
+    assert widget["probability"] == response["probability"]
+    assert widget["threshold"] == response["threshold"]
 
 
 def test_graceful_error(unknown_patient):
@@ -167,9 +182,16 @@ def test_graceful_error(unknown_patient):
     assert response["error"] == "unknown_patient"
     assert "probability" not in response
 
-    text = final_text(unknown_patient).lower()
-    assert str(EXPECTED["probability"]) not in text
-    assert any(w in text for w in ("not", "no ", "unable", "unknown", "could not")), text
+    # No prose turn for `/risk`, so the refusal is drawn rather than written: the
+    # canvas has to explain itself and must not carry an estimate.
+    assert unknown_patient["deterministic_answer"] == ""
+    presentation = _presentation(unknown_patient)
+    types = {
+        c["component"]
+        for c in presentation["a2ui"]["messages"][1]["updateComponents"]["components"]
+    }
+    assert "RiskInfluencers" not in types, "a failed call must not draw an estimate"
+    assert str(EXPECTED["probability"]) not in presentation["a2ui"]["fallback_text"]
 
 
 def test_routing_went_through_mcp(known_patient):

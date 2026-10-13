@@ -43,16 +43,16 @@ async def main() -> None:
                 tools = await s.list_tools()
                 print("tools:", [t.name for t in tools.tools])
 
-                r = await s.call_tool("predict_readmission", {"hadm_id": 90000017})
+                r = await s.call_tool("predict_readmission", {"hadm_id": 90000015})
                 d = json.loads(r.content[0].text)
-                print(f"predict 90000017: prob={d.get('probability')} "
+                print(f"predict 90000015: prob={d.get('probability')} "
                       f"decision={d.get('decision')} src={d.get('feature_source')}")
 
                 r = await s.call_tool(
-                    "rag_search", {"hadm_id": 90000017, "query": "medications", "top_k": 3}
+                    "rag_search", {"hadm_id": 90000015, "query": "medications", "top_k": 3}
                 )
                 d = json.loads(r.content[0].text)
-                print(f"rag 90000017 meds: returned={d.get('returned')}")
+                print(f"rag 90000015 meds: returned={d.get('returned')}")
                 for p in d.get("passages", [])[:3]:
                     print(f"    {p['id']}  score={p['score']}")
 

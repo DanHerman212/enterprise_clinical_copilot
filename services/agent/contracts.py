@@ -1,5 +1,6 @@
 """Validated request contract for the private agent HTTP service."""
 
+import re
 from typing import Any, NotRequired, TypedDict
 
 from services.agent import routing
@@ -18,6 +19,11 @@ class AgentRequest(TypedDict):
     `topic` is the same argument-fed value for the one command that needs the
     caller's own words: it is the search string the literature tool is called
     with, and it travels here for the same reason the admission does.
+
+    `stream_prose` is the caller asking to be shown a command's prose as it is
+    written, rather than only in the settled answer. It is a capability, not a
+    setting: it defaults off, only a command whose prose is pre-validated honours
+    it, and a caller that does not ask receives the frames it always received.
     """
 
     question: str
@@ -25,6 +31,7 @@ class AgentRequest(TypedDict):
     hadm_id: int | None
     topic: str | None
     turns: list[dict[str, Any]]
+    stream_prose: bool
 
 
 class AgentToolCall(TypedDict):
@@ -143,7 +150,9 @@ class AgentResponseError(ValueError):
 # `history`, `messages`, `session_id` or any other name is refused by
 # `CONVERSATION_FIELDS` below, which says why rather than leaving the caller to
 # infer it from an answer that quietly lost its context.
-ACCEPTED_REQUEST_FIELDS = frozenset({"question", "hadm_id", "chip", "turns"})
+ACCEPTED_REQUEST_FIELDS = frozenset(
+    {"question", "hadm_id", "chip", "turns", "stream_prose"}
+)
 
 # Names a caller reaches for when it expects the agent to remember the
 # conversation by itself. The agent holds nothing between requests, so a turn is
@@ -332,6 +341,24 @@ def _unsupported_field_error(unknown: list[str]) -> AgentRequestError:
     )
 
 
+def _leading_command(question: str) -> tuple[str, str] | None:
+    """(chip, remainder) when a question opens with a known slash command.
+
+    Matched against the command table's own slash forms, so the vocabulary this
+    accepts cannot drift from the one the composer's menu renders. An unknown slash
+    token is left alone: a slash is also a ratio, a path and a date separator, and
+    claiming those would be a worse failure than the one this prevents.
+    """
+    match = re.match(r"^\s*/([A-Za-z]+)\s*(.*)$", question, re.S)
+    if not match:
+        return None
+    name = match.group(1).lower()
+    for command in routing.COMMANDS:
+        if command.slash.lstrip("/").lower() == name:
+            return command.wire, match.group(2).strip()
+    return None
+
+
 def parse_agent_request(body: Any, *, max_question_chars: int) -> AgentRequest:
     """Validate JSON-decoded input and return the agent request contract.
 
@@ -402,6 +429,30 @@ def parse_agent_request(body: Any, *, max_question_chars: int) -> AgentRequest:
     if question is not None and not isinstance(question, str):
         raise AgentRequestError("invalid_request", "'question' must be a string", 400)
 
+    # A slash command typed into the question is the same intent as a chip, and it is
+    # resolved HERE, before anything downstream can route it probabilistically. The
+    # command vocabulary is closed and lives in one table, so this is a lookup rather
+    # than an inference: `/pubmed X` is the literature command with the topic X, not a
+    # sentence that happens to contain the word "pubmed".
+    #
+    # The client sends the chip for a command picked from the menu; this covers the
+    # command typed by hand, which is the path that reached the tool-choosing model and
+    # had the word "risk" decide the route (observed live 2026-10-13, where the request
+    # called no tool at all and answered with a routing sentence about /risk).
+    if chip is None and isinstance(question, str):
+        typed_command = _leading_command(question)
+        if typed_command is not None:
+            chip, question = typed_command
+
+    # Checked as a bool rather than for truthiness, for the same reason `hadm_id`
+    # rejects True: the string "false" is truthy, and a caller that sent it would
+    # stream prose while its own payload reads as off (UX Phase 2).
+    stream_prose = body.get("stream_prose", False)
+    if not isinstance(stream_prose, bool):
+        raise AgentRequestError(
+            "invalid_request", "'stream_prose' must be a boolean", 400
+        )
+
     # A command that takes the caller's own words is the one case where text
     # arriving beside a command is the command's own input rather than a second
     # intention. For every other command it is two intentions, and the request can
@@ -461,7 +512,19 @@ def parse_agent_request(body: Any, *, max_question_chars: int) -> AgentRequest:
         "hadm_id": hadm_id,
         "topic": topic,
         "turns": turns,
+        "stream_prose": stream_prose,
     }
+
+
+def _draws_the_answer(payload: dict) -> bool:
+    """Whether the payload carries a surface capable of drawing the answer alone.
+
+    Combined by every caller with "and there is no prose", because either half on its
+    own says the opposite of what it looks like: a surface WITH prose is an ordinary
+    answer, and no surface with no prose is a failed turn that must still be refused.
+    """
+    surface = payload.get("a2ui")
+    return isinstance(surface, dict) and bool(surface.get("messages"))
 
 
 def validate_agent_success(payload: Any) -> AgentSuccess:
@@ -472,7 +535,14 @@ def validate_agent_success(payload: Any) -> AgentSuccess:
     required_strings = ("question", "answer", "model", "mcp_transport")
     if any(not isinstance(payload.get(field), str) for field in required_strings):
         raise AgentResponseError("Agent produced an invalid response field.")
-    if not payload["answer"].strip():
+    # An empty answer is legitimate for exactly one shape: a payload whose answer is
+    # drawn by its own surface. `/risk` returns the widget and no prose, because the
+    # widget prints the score, the band and the threshold (UX ruling 2026-10-13), and
+    # the command's formatting turn was the only LLM call in its path. The rule stays
+    # narrow on purpose: with no surface, an empty answer means nothing carries the
+    # answer at all, which is still a bug.
+    surface_only = _draws_the_answer(payload)
+    if not payload["answer"].strip() and not surface_only:
         raise AgentResponseError("Agent produced an empty answer.")
 
     flags = payload.get("guardrail_flags")
@@ -540,8 +610,17 @@ def validate_agent_success(payload: Any) -> AgentSuccess:
     # fields, so an agent revision that omitted one is a bug rather than a
     # deployment-order question. The site can be lenient about them precisely
     # because they are additive on its side.
+    # A blank narrative is legitimate for exactly one shape: a payload whose answer is
+    # drawn by its own surface. `/risk` returns the widget and no prose, because the
+    # widget prints the score, the band and the threshold, and a sentence beneath it
+    # said the same thing a second time. The rule stays narrow on purpose — a blank
+    # narrative with no surface is still a bug, because then nothing carries the
+    # answer at all.
     narrative = payload.get("narrative_text")
-    if not isinstance(narrative, str) or not narrative.strip():
+    drawn_by_surface = _draws_the_answer(payload)
+    if not isinstance(narrative, str):
+        raise AgentResponseError("Agent produced no narrative text.")
+    if not narrative.strip() and not drawn_by_surface:
         raise AgentResponseError("Agent produced no narrative text.")
 
     citations = payload.get("citations")

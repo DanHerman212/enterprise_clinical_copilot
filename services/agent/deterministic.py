@@ -48,11 +48,11 @@ import logging
 import re
 from typing import Any, Callable
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from services.agent import stages
 from services.agent.contracts import RecordedToolCall
-from services.agent.feature_labels import display_probability, label_for
+from services.agent.feature_labels import label_for
 from services.agent.prompts import SYSTEM_PROMPT
 from services.agent.routing import Command, tool_arguments
 
@@ -174,11 +174,13 @@ def _presented_prediction(name: str, payload: Any) -> Any:
     performs is a translation the model can invent, and the prose and the bars
     have to name a factor the same way.
 
-    The score is shown at the same two decimals the widget uses, for the same
-    reason: a narrative that rounds and a bar that does not are two numbers for
-    one score. The guardrail still checks the prose against the SERVED value, and
-    a two-decimal rounding is inside its tolerance by construction — half a unit in
-    the last displayed place is exactly the tolerance it allows.
+    The score is NOT rounded here. It used to be, to the two decimals the old bar
+    drew. The widget now prints one decimal of a percentage, and a model handed a
+    pre-rounded number cannot print that digit: given 0.33 it wrote "33.0%" while
+    the widget beside it drew 33.2%. The served value goes to the model instead,
+    and RISK_FORMATTING states which form to write it in. The guardrail still
+    checks the prose against the SERVED value, so what the model writes is checked
+    against the same number it was given.
 
     Applied to the model's copy only. The recorded call keeps what the service
     returned, so the execution record and the caller's payload still say what the
@@ -187,9 +189,6 @@ def _presented_prediction(name: str, payload: Any) -> Any:
     if name != "predict_readmission" or not isinstance(payload, dict):
         return payload
     projected = dict(payload)
-    shown = display_probability(payload.get("probability"))
-    if shown is not None:
-        projected["probability"] = shown
     factors = payload.get("top_factors")
     if isinstance(factors, list):
         projected["top_factors"] = [
@@ -242,6 +241,27 @@ def medication_narrative(verified: list[dict[str, str]], returned_passages: int)
     )
 
 
+async def _formatting_turn(
+    llm: Any,
+    prompt: list[Any],
+    *,
+    config: dict | None,
+) -> Any:
+    """The formatting model turn.
+
+    One call, returning the model's message in the shape `ainvoke` returns, so
+    `final_text` and `model_turn` are unchanged.
+
+    This used to stream the answer token by token and merge the chunks, with the
+    merged text compared against the settled answer by `http._check_no_mutation`.
+    That path was removed on 2026-10-13 along with `/risk`'s prose, which was its only
+    user: every command that streams now writes its answer in code and announces it in
+    one piece, so there was no model chunk left to announce as it was written. Rebuild
+    it from source control if a command ever streams model prose again.
+    """
+    return await llm.ainvoke(prompt, config=config)
+
+
 async def run_command(
     toolbox,
     command: Command,
@@ -253,6 +273,7 @@ async def run_command(
     on_event: Callable[[dict[str, Any]], None] | None = None,
     callbacks: list[Any] | None = None,
     replayed_calls: list[RecordedToolCall] | None = None,
+    prose_stream: bool = False,
 ) -> dict[str, Any]:
     """Run one command to completion and return a state the pipeline understands.
 
@@ -263,6 +284,11 @@ async def run_command(
 
     `topic` is the caller's own words for a command that takes them, and it is the
     only input here that the command does not supply itself.
+
+    `prose_stream` is the caller asking to be shown the prose as it is written. It is
+    honoured only for a command whose prose is pre-validated
+    (`routing.Command.streams_prose`), and it defaults off: a caller that does not
+    ask receives exactly the frames it received before streaming existed.
     """
     # Imported here rather than at module scope: `graph` imports this module for
     # the command branch, so a module-level import would be circular.
@@ -281,9 +307,45 @@ async def run_command(
 
     _emit(on_event, stages.reviewing_event())
 
+    if not command.prose:
+        # No formatting turn, and therefore no LLM call at all: this command's answer
+        # IS its surface. Everything downstream — the guardrails, the citation layer,
+        # the envelope composer — reads the same state shape it always did, so the
+        # command stays subject to the same checks as any other; the difference is
+        # that there is no prose for them to inspect.
+        return {
+            "messages": [
+                SystemMessage(content=SYSTEM_PROMPT),
+                HumanMessage(content=question),
+                *tool_messages,
+            ],
+            "tool_calls": recorded,
+            "replayed_tool_calls": replayed_calls or [],
+            "command": command.wire,
+            # Empty, and declared as such: `_compose_success` treats an empty answer
+            # as a failed turn unless the state says the surface carries it.
+            "deterministic_answer": "",
+            "answer_in_surface": True,
+        }
+
     llm = _build_llm(model)  # no bind_tools: a formatting turn cannot call anything
     config = {"callbacks": list(callbacks)} if callbacks else None
-    response = await llm.ainvoke(
+    # Streaming is a capability the CALLER asks for, and only a command whose prose is
+    # pre-validated by construction may use it (`routing.Command.streams_prose`). A
+    # caller that has not asked for it gets exactly the frames it got before streaming
+    # existed — which matters while the canvas that renders those frames still treats
+    # every unrecognised event as a progress row (`stages.answer_delta_event`).
+    #
+    # It announces the finished prose in one piece, not as the model writes it: the
+    # only command that streams now composes its answer in code, so there are no model
+    # chunks to announce. The token-by-token path went with `/risk`'s prose (2026-10-13).
+    streams = bool(prose_stream and command.streams_prose and on_event is not None)
+
+    def _announce(piece: str) -> None:
+        _emit(on_event, stages.answer_delta_event(piece))
+
+    response = await _formatting_turn(
+        llm,
         [
             SystemMessage(content=f"{FORMATTER_PREAMBLE}\n\n{command.formatting}"),
             HumanMessage(content="\n\n".join(str(m.content) for m in tool_messages)),
@@ -323,5 +385,10 @@ async def run_command(
         # The narrative replaces the raw JSON: the grid renders the list, and the
         # prose is what the guardrails and the citation layer expect to see.
         state["deterministic_answer"] = medication_narrative(verified, returned)
+        if streams:
+            # Generated here from verified rows, so announcing it is not a preview of
+            # unverified text: this IS the settled answer, arriving as soon as it
+            # exists rather than after the envelope is composed.
+            _announce(state["deterministic_answer"])
 
     return state

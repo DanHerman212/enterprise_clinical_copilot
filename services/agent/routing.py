@@ -101,6 +101,22 @@ class Command:
     #: What the formatting turn must produce. The model receives the tool result
     #: and this instruction, and has no tools, so it can only format.
     formatting: str = ""
+    #: Whether this command's answer is prose at all. `/risk` sets this False: the
+    #: widget prints the score, the band and the threshold, so a sentence beneath it
+    #: said the same thing a second time. Composing that sentence was also the only
+    #: LLM call the command made, and it was formatting arithmetic — work the widget
+    #: does exactly and the model could not do at the same precision (it printed
+    #: 33.0% beside a widget drawing 33.2%). With this False the command makes one
+    #: tool call, composes a surface, and returns no prose at all.
+    prose: bool = True
+
+    #: Whether this command's prose may be announced as it is written. Set only
+    #: where the text is pre-validated by construction: `/meds`'s narrative is
+    #: generated in code from verified rows. `/ehr` is model prose over retrieved
+    #: sections — grounded, but unverified until the citation layer has resolved its
+    #: markers — so it is buffered with free text. Safety over time-to-first-token
+    #: (UX Phase 2, per-path streaming policy).
+    streams_prose: bool = False
 
 
 # The four clinical sections the summary draws on are imported from the
@@ -109,23 +125,33 @@ class Command:
 # summary covers.
 
 
-RISK_FORMATTING = """Write exactly two sentences for a clinician.
-The first states the risk score and whether it is above or below the operating threshold.
-The second names the factors that drove the score, in the order you were given, using the
-clinical label you were given for each one and saying which way each pushed the score.
-Use the labels exactly as they are written: do not use a feature key, and do not write a
-second name for a factor the labels have already named.
-Do not write the contribution numbers and do not use parentheses. The interface draws each
-factor's contribution from the structured result, and a number quoted here is not one the
-system can vouch for — it is removed, which leaves the sentence broken.
-Do not add a citation, a disclaimer, or any clinical detail that is not in the tool result."""
+RISK_FORMATTING = """Retired 2026-10-13 (UX ruling). The risk command returns the widget
+and no prose, so this instruction has no turn to inhabit. Kept as a name rather than
+deleted because the reasoning it carried is the record of why the prose went away:
+an LLM was in this command's loop only to format a number the widget already prints
+exactly, and it could not do it at the widget's precision."""
 
-MEDS_FORMATTING = """Extract the discharge medications from the note text you were given.
+MEDS_FORMATTING = """Extract the discharge medications from the note sections you were given.
 Return a JSON object with one key, "medications", holding an array of objects with exactly
 these fields: "medication", "dosage", "frequency".
-Take each value verbatim from the note text. If a field is not stated for a medication, use
-an empty string. Do not infer, normalise, expand an abbreviation, or add a medication that
-does not appear in the text.
+
+You are given TWO sections, and a medication may appear in either or both. The discharge
+medications section is usually the list of drug names; the discharge instructions section
+usually states the doses and frequencies, and sometimes names drugs the list omits.
+
+Include EVERY medication that appears in either section. A drug named in the instructions but
+absent from the list is still a discharge medication and must have a row: dropping a prescribed
+drug is the one error this extraction must never make.
+
+Order the rows as the discharge medications section lists them, then any drug that appears only
+in the instructions, in the order it appears there.
+
+Take each value verbatim from the text you were given. If neither section states a dosage or a
+frequency for a medication, use an empty string. An empty field is the honest answer; a guessed
+dose is a clinical error. Do not infer a dose from a similar drug, do not normalise or expand an
+abbreviation, do not convert units or spellings, and do not add a medication, a dosage or a
+frequency that does not appear in the text.
+
 Return only the JSON object, with no prose before or after it."""
 
 EHR_FORMATTING = """Summarise the note sections you were given, for a clinician.
@@ -144,9 +170,27 @@ citation, and it is what the interface turns into the numbered source the reader
 
 Write nothing about medications, and append no disclaimer about missing information."""
 
-LITERATURE_FORMATTING = """Write one sentence naming the clinical topic that was searched.
-Do not list the records, their titles, their abstracts, or their identifiers — the interface
-renders them from the structured result. Do not summarise or interpret the findings."""
+LITERATURE_FORMATTING = """Summarise the published literature you were given, for a clinician asking
+the question above. The records were retrieved for that question, so the summary must answer it.
+
+Write a concise synthesis in two to four sentences: what the retrieved evidence says about the
+question, not what the question was. Do not open by naming or restating the topic — the reader
+has the question in front of them, and a sentence that repeats it is the first thing they skip.
+
+Ground every claim in the records. If the evidence is thin, mixed, or only partly answers the
+question, say that plainly rather than generalising past it.
+
+Cite with an inline marker of the form ^[1], ^[2], ^[3]: the FIRST record you were given is ^[1],
+the second is ^[2], and so on, in the order the records appear. Put the marker immediately after
+the claim that draws on that record. Cite each record at most once, and cite every record you
+actually used.
+
+Never write a PMID, a DOI, a journal name or an article title into the prose: the interface
+draws the records from the structured result, with their links, beside this summary.
+
+If no records were retrieved, or the search failed, write NOTHING that claims to summarise
+evidence. State only that the search returned no records (or could not be completed) and do not
+invent findings, authors, or a topic."""
 
 
 COMMANDS: tuple[Command, ...] = (
@@ -157,7 +201,8 @@ COMMANDS: tuple[Command, ...] = (
         args={"hadm_id": "{hadm_id}"},
         forbidden=frozenset({"rag_search", "rag_search_sections", "discharge_medications",
                              "search_literature"}),
-        formatting=RISK_FORMATTING,
+        # The answer is the surface, and there is no prose at all: see `prose`.
+        prose=False,
     ),
     Command(
         wire="meds",
@@ -167,6 +212,7 @@ COMMANDS: tuple[Command, ...] = (
         forbidden=frozenset({"predict_readmission", "rag_search", "rag_search_sections",
                              "search_literature"}),
         formatting=MEDS_FORMATTING,
+        streams_prose=True,
     ),
     Command(
         wire="summarize",

@@ -574,6 +574,7 @@ async def ask(
     hadm_id: int | None = None,
     topic: str | None = None,
     turns: list[dict[str, str]] | None = None,
+    prose_stream: bool = False,
 ) -> dict:
     """Run one question to completion. Returns the final state.
 
@@ -585,6 +586,11 @@ async def ask(
     `stages.py`). It is a plain synchronous callback — the streaming route
     hands it a queue's `put_nowait` — and it is optional, so the answer path
     and the progress path stay one implementation.
+
+    `prose_stream` reaches a command and stops there: it is the caller asking to be
+    shown the prose as it is written. Free text never streams, and only a command
+    whose prose is pre-validated honours the flag, so nothing reaches a screen
+    before the guardrails have run on the paths where that matters (UX Phase 2).
 
     `turns` is the earlier conversation, as the caller understands it. Each turn
     is replayed as its own messages rather than pasted into the prompt, so the
@@ -608,6 +614,7 @@ async def ask(
             model=model,
             on_event=on_event,
             callbacks=[tracing] if tracing is not None else None,
+            prose_stream=prose_stream,
         )
         command_state["langfuse_trace_id"] = observability.trace_id(tracing)
         return command_state

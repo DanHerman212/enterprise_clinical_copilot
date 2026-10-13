@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from services.mcp.tools.prediction import predict_readmission  # noqa: E402
 from services.mcp.tools.retrieval import rag_search  # noqa: E402
 
-PATIENTS = (90000001, 90000009, 90000017)  # low / borderline / high
+PATIENTS = (90000001, 90000009, 90000015)  # low / borderline / the demo anchor
 QUERIES = ("medications", "summarize the hospital course")
 
 

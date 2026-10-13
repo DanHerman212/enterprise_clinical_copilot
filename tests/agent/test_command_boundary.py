@@ -222,7 +222,8 @@ def test_a_command_runs_exactly_its_own_tool_once(command):
     assert [call["name"] for call in state["tool_calls"]] == [command.tool]
 
 
-@pytest.mark.parametrize("command", routing.COMMANDS, ids=lambda c: c.wire)
+@pytest.mark.parametrize(
+    "command", [c for c in routing.COMMANDS if c.prose], ids=lambda c: c.wire)
 def test_the_formatting_turn_cannot_call_anything(command):
     state, _, model = _run_command(command)
 
@@ -232,6 +233,17 @@ def test_the_formatting_turn_cannot_call_anything(command):
     # The command's own formatting instruction is what the model is given, not
     # the tool-choosing system prompt.
     assert command.formatting in system.content
+
+
+def test_a_prose_less_command_never_builds_a_model():
+    """`/risk` has no formatting turn, so it must not construct an LLM either.
+
+    The point of deleting the turn was to take the model out of the path, not to
+    call it and discard the result.
+    """
+    _, _, model = _run_command(routing.command_for("risk"))
+
+    assert model.seen == []
 
 
 @pytest.mark.parametrize("command", routing.COMMANDS, ids=lambda c: c.wire)
@@ -506,3 +518,86 @@ def test_the_topic_travels_as_a_value_and_names_itself_in_the_question():
         "Search PubMed for recent literature on dual antiplatelet therapy. "
         "For admission 90000023."
     )
+
+
+# --- the command typed rather than chosen --------------------------------------
+#
+# The composer sends a chip when the command is picked from the menu. A command
+# typed by hand sent no chip, so the request was routed by the tool-choosing model
+# like any other sentence — and "risk for readmission from knee replacement" reads
+# as a risk question, so `/pubmed <that topic>` searched for nothing and answered
+# with an estimate (observed live 2026-10-13). The lookup below is the fix: the
+# command vocabulary is closed and lives in one table, so a slash token is resolved
+# by that table rather than by inference.
+
+def test_a_typed_command_is_the_same_intent_as_a_chip():
+    parsed = parse_agent_request(
+        {"question": "/pubmed risk for readmission from knee replacement",
+         "hadm_id": 90000023},
+        max_question_chars=2000,
+    )
+
+    assert parsed["kind"] == "literature"
+    assert parsed["topic"] == "risk for readmission from knee replacement"
+    assert parsed["question"] == (
+        "Search PubMed for recent literature on risk for readmission from knee "
+        "replacement. For admission 90000023."
+    )
+
+
+def test_a_typed_command_that_takes_no_topic_runs_alone():
+    parsed = parse_agent_request(
+        {"question": "/risk", "hadm_id": 90000023}, max_question_chars=2000
+    )
+
+    assert parsed["kind"] == "risk"
+    assert parsed["topic"] is None
+
+
+def test_a_typed_command_is_matched_regardless_of_case_and_surrounding_space():
+    parsed = parse_agent_request(
+        {"question": "  /PubMed dual antiplatelet therapy  ", "hadm_id": 90000023},
+        max_question_chars=2000,
+    )
+
+    assert parsed["kind"] == "literature"
+    assert parsed["topic"] == "dual antiplatelet therapy"
+
+
+def test_a_typed_command_with_text_beside_it_is_still_two_intentions():
+    """The slash token is resolved, and what remains beside it is judged by the
+    same rule as a chip with a question. Without the resolution the whole line
+    would have been read as free text, which is the quiet way round the refusal."""
+    with pytest.raises(AgentRequestError) as caught:
+        parse_agent_request(
+            {"question": "/risk and his meds", "hadm_id": 90000023},
+            max_question_chars=2000,
+        )
+
+    assert caught.value.code == "ambiguous_intent"
+
+
+def test_a_sent_chip_is_not_overridden_by_typed_text():
+    """The browser resolves the typed token too and sends the chip with it, so the
+    server resolves only when no chip arrives. Two resolvers that could disagree is
+    the bug being closed; the server's derivation is the fallback, not a second
+    opinion."""
+    with pytest.raises(AgentRequestError) as caught:
+        parse_agent_request(
+            {"chip": "risk", "hadm_id": 90000023, "question": "/risk"},
+            max_question_chars=2000,
+        )
+
+    assert caught.value.code == "ambiguous_intent"
+
+
+def test_an_unknown_slash_token_is_left_as_a_question():
+    """A slash is also a ratio, a path and a date separator. Claiming those as
+    commands would be a worse failure than the one the lookup prevents."""
+    parsed = parse_agent_request(
+        {"question": "/usr/bin/env is not a command", "hadm_id": 90000023},
+        max_question_chars=2000,
+    )
+
+    assert parsed["kind"] is None
+    assert "/usr/bin/env is not a command" in parsed["question"]

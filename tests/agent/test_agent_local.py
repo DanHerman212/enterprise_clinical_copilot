@@ -119,57 +119,88 @@ def test_tool_result_matches_the_fixture(risk_command, require_served):
     assert abs(response["probability"] - EXPECTED["probability"]) <= EXPECTED["tolerance"]
 
 
-def test_the_narrative_states_the_score_at_display_precision(risk_command, require_served):
-    """The prose carries the score as the widget draws it, to two decimals.
+def _risk_widget(state):
+    """The widget the browser would draw for this state.
 
-    Asserted against the value the service returned rather than against the
-    fixture, because the rule is about the projection and not about the number: the
-    narrative used to state the raw probability while the bar beside it drew two
-    decimals, which is one score stated two ways.
+    Composed through `compose_presentation`, the same call the payload path makes, so
+    these assert on what the surface actually carries rather than on a restatement of
+    it written here.
+    """
+    from services.agent.a2ui import compose_presentation
+
+    question = next(
+        (m.content for m in state["messages"] if getattr(m, "type", "") == "human"), "")
+    presentation = compose_presentation(question, "", state["tool_calls"])
+    components = presentation["a2ui"]["messages"][1]["updateComponents"]["components"]
+    return next(c for c in components if c["component"] == "RiskInfluencers")
+
+
+def test_the_score_reaches_the_user_through_the_surface(risk_command, require_served):
+    """`/risk` returns the widget and no prose at all (UX ruling 2026-10-13).
+
+    The number therefore has to be in the surface, and at the surface's own precision.
+    Asserted against the value the service returned rather than against the fixture,
+    because the rule is about the projection: this is the assertion that would have
+    caught the projection handing the model a pre-rounded probability, which is how
+    the prose came to say 33.0% beside a widget drawing 33.2%.
     """
     response = require_served(risk_command)
-    shown = response["probability"]
-    text = final_text(risk_command)
 
-    assert f"{shown:.2f}" in text, text
-    if f"{shown:.2f}" != str(shown):
-        # Only meaningful when the served value is more precise than the display,
-        # which is the case the projection exists for.
-        assert str(shown) not in text, text
+    assert risk_command["deterministic_answer"] == ""
+    assert risk_command["answer_in_surface"] is True
+    assert _risk_widget(risk_command)["probability"] == response["probability"]
 
 
-def test_answer_gives_the_threshold_and_decision(risk_command, require_served):
+def test_the_widget_carries_the_threshold_and_the_decision(risk_command, require_served):
     response = require_served(risk_command)
-    threshold = response["threshold"]
-    text = final_text(risk_command).lower()
+    widget = _risk_widget(risk_command)
 
-    assert str(threshold) in text or f"{threshold:.2f}" in text, text
-    assert "risk" in text
+    assert widget["threshold"] == response["threshold"]
+    # The model's own call travels with the number, so the widget's comparison can
+    # never overrule it.
+    assert widget["decision"] == response["decision"]
 
 
 def test_answer_invents_no_risk_factors(risk_command, require_served):
     """Guardrail: attribute only from top_factors.
 
-    Checked against the model's own feature vocabulary rather than a hand-list,
-    so a hallucinated-but-plausible feature name fails here.
+    Checked against the model's own feature vocabulary rather than a hand-list, so a
+    hallucinated-but-plausible feature name fails here. Read off the widget, because
+    the widget is where the factors are named now — there is no prose naming them.
     """
     response = require_served(risk_command)
-    reported = {factor["feature"] for factor in response["top_factors"]}
-    text = final_text(risk_command).lower()
 
-    from services.mcp.dependencies.features.manifest import groups
+    from services.agent.feature_labels import label_for
 
-    absent = set(groups()) - reported
-    leaked = [name for name in absent if name.lower() in text]
-    assert not leaked, f"agent cited features absent from top_factors: {leaked}"
+    reported = {label_for(str(factor["feature"])) for factor in response["top_factors"]}
+    shown = {factor["label"] for factor in _risk_widget(risk_command)["factors"]}
+    assert shown <= reported, (
+        f"the widget attributes factors the model did not: {sorted(shown - reported)}"
+    )
 
 
 def test_unknown_patient_is_reported_not_invented(unknown_patient):
-    """Guardrail: never substitute a plausible number for a failed call."""
+    """Guardrail: never substitute a plausible number for a failed call.
+
+    The refusal is drawn rather than written now. With no prose turn there is no
+    sentence to carry it, so what has to hold is that the canvas explains itself and
+    carries no estimate at all.
+    """
     calls = unknown_patient["tool_calls"]
     assert calls, "/risk answered without calling any tool"
     assert calls[0]["response"].get("error") == "unknown_patient"
+    assert unknown_patient["deterministic_answer"] == ""
 
-    text = final_text(unknown_patient).lower()
-    assert str(EXPECTED["probability"]) not in text
-    assert any(word in text for word in ("not", "no ", "unable", "unknown", "could not"))
+    from services.agent.a2ui import compose_presentation
+
+    question = next(
+        (m.content for m in unknown_patient["messages"]
+         if getattr(m, "type", "") == "human"), "")
+    presentation = compose_presentation(question, "", calls)
+    components = presentation["a2ui"]["messages"][1]["updateComponents"]["components"]
+
+    assert "RiskInfluencers" not in {c["component"] for c in components}, (
+        "a failed call must not draw an estimate"
+    )
+    assert str(EXPECTED["probability"]) not in presentation["a2ui"]["fallback_text"]
+    assert presentation["a2ui"]["fallback_text"].strip(), "the canvas must say what happened"

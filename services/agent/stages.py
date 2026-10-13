@@ -58,6 +58,11 @@ STAGE_TOOL = "tool"
 STAGE_RESULT = "result"
 STAGE_VERIFY = "verify"
 STAGE_ANSWER = "answer"
+#: One chunk of the answer's prose, announced as it is written. Distinct from
+#: STAGE_ANSWER, which carries the settled answer: a client that did not ask for
+#: prose streaming must be able to ignore this frame and still receive the answer
+#: (UX Phase 2, per-path streaming policy).
+STAGE_ANSWER_DELTA = "answer_delta"
 STAGE_ERROR = "error"
 
 STAGES = (
@@ -237,3 +242,16 @@ def result_event(name: str, response: Any) -> dict[str, Any]:
 def verify_event() -> dict[str, Any]:
     """The guardrails are about to check the answer against the evidence."""
     return {"stage": STAGE_VERIFY, "label": LABEL_VERIFYING}
+
+
+def answer_delta_event(text: str) -> dict[str, Any]:
+    """A chunk of the answer's prose, in the order it was written.
+
+    Carries no `label`, and that is the point: every other stage event is a progress
+    line, and this is not one — it is the answer arriving early. A client that draws
+    a progress row per event would draw one per token, so the frame is distinguished
+    by its stage and by nothing else. Emitted only for a command whose prose is
+    pre-validated, and only when the caller asked for it (`routing.Command.
+    streams_prose`, `http._stream_chain`).
+    """
+    return {"stage": STAGE_ANSWER_DELTA, "text": text}

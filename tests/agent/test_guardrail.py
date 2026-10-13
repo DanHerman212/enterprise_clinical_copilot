@@ -216,15 +216,14 @@ def test_dropping_a_dose_does_not_corrupt_a_similar_dose():
 # --- citation stripping (ECC-14) ----------------------------------------------
 
 def test_out_of_range_citation_is_stripped_and_flagged():
-    passages = [{"section": "brief_hospital_course", "text": "recovered"}]
-    cleaned, flags = g.check_citations("Recovered well ^[1]. See also ^[4].", passages)
+    cleaned, flags = g.check_citations("Recovered well ^[1]. See also ^[4].", slots=1)
     assert "^[1]" in cleaned
     assert "^[4]" not in cleaned
     assert flags == ["citation_out_of_range:^4"]
 
 
-def test_citation_with_zero_passages_is_stripped():
-    cleaned, flags = g.check_citations("The notes say so ^[1].", [])
+def test_citation_with_zero_slots_is_stripped():
+    cleaned, flags = g.check_citations("The notes say so ^[1].", slots=0)
     assert "^[1]" not in cleaned
     assert flags == ["citation_out_of_range:^1"]
 
@@ -243,6 +242,57 @@ def test_date_present_in_source_is_not_flagged():
                  "text": "Surgery was 3/14/23; other dates are ___."}]
     flags = g.flag_invented_dates("Surgery was on 3/14/23.", passages)
     assert flags == []
+
+
+# --- citation slots on a literature turn (the /pubmed marker defect) ------------
+
+def _search(*articles):
+    return [{"name": "search_literature",
+             "response": {"returned": len(articles), "articles": list(articles)}}]
+
+
+def test_a_literature_turn_offers_one_slot_per_record_that_can_be_cited():
+    """Counted from the records holding a PMID, which is the set the canvas draws,
+    so a slot always has something behind it to open."""
+    calls = _search({"pmid": "1"}, {"pmid": "2"}, {"title": "no pmid"})
+
+    assert g._literature_slots(calls) == 2
+
+
+def test_a_turn_with_no_search_offers_no_slots():
+    assert g._literature_slots([{"name": "rag_search",
+                                 "response": {"passages": [{"text": "x"}]}}]) == 0
+    assert g._literature_slots([]) == 0
+    assert g._literature_slots(None) == 0
+
+
+def test_markers_survive_on_a_literature_turn():
+    """Live defect 2026-10-13: the slot count came from note passages alone, a
+    literature turn reads none, so every marker the model wrote was stripped as out
+    of range — a grounded, cited summary served as an uncited one, which reads as a
+    model that made its claims up."""
+    calls = _search({"pmid": "1"}, {"pmid": "2"}, {"pmid": "3"})
+
+    cleaned, flags = g.check_citations(
+        "ERAS did not change readmission ^[1]; day-case surgery lowered it ^[2].",
+        slots=g._literature_slots(calls),
+    )
+
+    assert "^[1]" in cleaned
+    assert "^[2]" in cleaned
+    assert flags == []
+
+
+def test_a_marker_past_the_last_record_is_still_stripped():
+    """The fix widens the range; it does not remove the guard."""
+    calls = _search({"pmid": "1"}, {"pmid": "2"}, {"pmid": "3"})
+
+    cleaned, flags = g.check_citations(
+        "A claim ^[4].", slots=g._literature_slots(calls)
+    )
+
+    assert "^[4]" not in cleaned
+    assert flags == ["citation_out_of_range:^4"]
 
 
 def test_dates_without_source_redactions_are_left_alone():

@@ -129,20 +129,23 @@ RULE_MARKERS = (
 )
 
 
-def test_the_risk_band_rule_lives_where_risk_prose_is_written():
+def test_no_prompt_still_prescribes_a_risk_band_word():
     """The rule that a risk is "above or below the operating threshold" and never
-    "high", "low" or "borderline" used to be stated here, for the reasoning loop.
-    The loop no longer carries the risk tool (UX Phase 1B), so the risk prose comes
-    from the /risk command's formatting turn, and the rule moved with it.
+    "high", "low" or "borderline" used to be stated for the reasoning loop, then
+    for the /risk formatting turn, and now has no prose to live in at all: the
+    widget derives the band from the same number and `/risk` returns no prose (UX
+    ruling 2026-10-13).
 
-    Asserted rather than dropped: the constraint is still load-bearing — the band
-    is a visual the interface derives from the same number, and prose that invents
-    its own band contradicts it — so the check follows the rule to its new home
-    instead of disappearing with its old one.
+    Asserted rather than dropped, because the constraint is still load-bearing: the
+    band is a visual the interface derives from the served value, and any prose that
+    invents its own band contradicts it. The day a risk prose turn comes back, the
+    rule has to come back with it, and this test is what notices that it did not.
     """
     from services.agent import routing
 
-    assert "above or below the operating threshold" in routing.RISK_FORMATTING
+    risk = routing.command_for("risk")
+    assert risk.prose is False
+    assert risk.formatting == ""
     for band in ("high", "low", "borderline"):
         assert f'label the risk "{band}"' not in routing.RISK_FORMATTING
 

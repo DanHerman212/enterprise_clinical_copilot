@@ -30,8 +30,8 @@ it logs "Component implementation not found for type: [object Object]" and
 draws an empty box. The tests in tests/agent/test_a2ui.py pin the v0.9 shape
 so that regression is caught here rather than in a browser.
 
-The canvas uses the custom components registered in the site's vendored
-renderer (static/vendor/a2ui/a2ui_risk_components.js): RiskBar, FactorBars,
+The canvas uses the custom components registered in the site's clinical bundle
+(static/js/a2ui_clinical_components.js): RiskInfluencers, LiteratureList,
 SourceCard. The surface's `catalogId` must equal the combined catalog id the
 front-end registers, so one surface can use basic AND custom components
 together.
@@ -86,8 +86,10 @@ def _usable_estimate(predict) -> dict | None:
     return predict
 
 
-# The fields a literature card renders, in the order the card shows them.
-_LITERATURE_FIELDS = ("pmid", "title", "journal", "pub_date", "abstract", "url")
+# The fields a literature record is put on the wire with, in the order the card shows
+# them. The abstract is not among them: nothing renders it — the reader's next step is
+# the record at PubMed, not a second copy of its text here (UX ruling 2026-10-13).
+_LITERATURE_FIELDS = ("pmid", "title", "journal", "pub_date", "url")
 
 
 def _usable_articles(literature) -> list[dict]:
@@ -258,10 +260,115 @@ def resolve_sources(answer: str, citation_map: dict[str, int],
     ]
 
 
+# The section names as a clinician reads them. A separate vocabulary from
+# `feature_labels`, which names MODEL features: these name parts of a note, and the
+# two happen to share the word "discharge" without meaning the same thing by it.
+_SECTION_LABELS = {
+    "history_of_present_illness": "History of present illness",
+    "brief_hospital_course": "Brief hospital course",
+    "discharge_diagnosis": "Discharge diagnosis",
+    "discharge_medications": "Discharge medications",
+    "medications_on_transfer": "Medications on transfer",
+    "discharge_instructions": "Discharge instructions",
+    "discharge_condition": "Discharge condition",
+    "discharge_disposition": "Discharge disposition",
+    "followup_instructions": "Follow-up instructions",
+}
+
+
+def _section_label(section: object) -> str:
+    name = str(section or "")
+    return _SECTION_LABELS.get(name, name.replace("_", " ") or "Note passage")
+
+
+def narrative_surface(answer: str, citations: list[dict]) -> dict:
+    """The prose, and the evidence its markers point at, as one component.
+
+    The markers and the sentences they annotate travel together because a marker is a
+    control the reader clicks while reading the sentence it sits in. The answer used to
+    be drawn as plain text in a separate element with nothing to click, because the
+    basic Text component renders Markdown and Markdown cannot host a button.
+
+    `citations` are built by the caller from the evidence this turn actually rests on;
+    see `note_citations` and `literature_citations`. Each entry's `index` is the
+    number the marker shows, so the two cannot drift.
+    """
+    return {"text": answer, "citations": citations, "streaming": False}
+
+
+def note_citations(sources: list[dict]) -> list[dict]:
+    """One citation per resolved note passage, keyed by its renumbered marker.
+
+    The citation layer renumbers `^[n]` to first-appearance order; reading the
+    renumbered `cite` here keeps the marker and the popover in step without a second
+    mapping to drift.
+    """
+    return [
+        {
+            "index": int(source["cite"]),
+            # The channel the evidence came from. Note passages all share one channel
+            # and differ by section, so the section becomes the title.
+            "source": "Discharge note",
+            "title": _section_label(source.get("section")),
+            "excerpt": str(source.get("text") or ""),
+        }
+        for source in sources
+    ]
+
+
+def literature_citations(articles: list[dict]) -> list[dict]:
+    """One citation per retrieved article, numbered as the summary cites them.
+
+    `index` is the 1-based position in the record order the model was given, which is
+    exactly what the formatting instruction tells it to cite — so the marker in the
+    prose and the record beneath it are the same record by construction, and a marker
+    with no record behind it can only mean the model cited a number it never got.
+
+    `pmid` is what the marker DISPLAYS. A literature question is answered against
+    published records and the reader's next step is to open one, so the marker carries
+    the identifier itself and the console links it to PubMed. The number stays as the
+    wire index because the prose the model wrote is numbered; what that number looks
+    like on screen is the console's decision, not the model's.
+
+    No excerpt. That was the abstract, kept for a popover that no longer exists on this
+    path, and it travelled as a second copy of text the record already carries.
+    """
+    citations = []
+    for position, article in enumerate(articles, start=1):
+        citation = {
+            "index": position,
+            "source": "PubMed",
+            "title": str(article.get("title") or "Untitled record"),
+        }
+        if article.get("pmid"):
+            citation["pmid"] = str(article["pmid"])
+        if article.get("url"):
+            citation["url"] = str(article["url"])
+        citations.append(citation)
+    return citations
+
+
+def _narrative(answer: str, sources: list[dict], literature: dict | None) -> dict | None:
+    """The narrative surface for this answer, or None when there is no prose.
+
+    Citations come from whichever evidence the turn rests on. A literature turn cites its
+    articles and nothing else: those records ARE the evidence, and resolving the markers
+    against note passages would leave every marker in a summary unbacked — which the
+    component draws as a disabled control, on a summary that was properly grounded.
+    """
+    if not answer.strip():
+        return None
+    if literature is not None:
+        return narrative_surface(answer, literature_citations(_usable_articles(literature)))
+    return narrative_surface(answer, note_citations(sources))
+
+
 def compose_risk_canvas(predict: dict | None, rag: dict | None,
                         cite: int = 1, sections: tuple[str, ...] = (),
                         source: dict | None = None,
-                        literature: dict | None = None) -> dict:
+                        literature: dict | None = None,
+                        medications: dict | None = None,
+                        narrative: dict | None = None) -> dict:
     """Turn one predict (+ rag) payload into the A2UI risk-canvas envelope.
 
     predict is None when the question did not request a readmission estimate
@@ -280,12 +387,33 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
     when it could not be made, in which case the record list is empty, the note says
     which happened, and `degraded` marks the second for the browser. `None` means no
     search ran and the risk path is untouched.
+
+    `medications` is the `/meds` command's own payload: rows verified against the note
+    text before they got here. The grid draws them and nothing else — a list of drugs
+    in prose is what the grid replaces, and an empty grid would read as "this patient
+    takes nothing", which is a clinical claim this system has no basis for. With no
+    rows the narrative carries the absence alone, exactly as the missing SourceCard
+    says nothing rather than explaining itself.
     """
     components: list[dict] = [
-        {"id": "root", "component": "Card", "child": "body"},
-        {"id": "body", "component": "Column", "children": []},
+        {"id": "root", "component": "Column", "children": []},
     ]
-    children = components[1]["children"]
+    children = components[0]["children"]
+
+    # The answer leads and its evidence follows, for every command. The narrative is
+    # the one child that is prose, so it goes first: a reader who has to scroll past a
+    # grid to find the sentence that explains it has been given the parts in the wrong
+    # order. For `/meds` and a literature search the sentence is a caption — "9
+    # discharge medications" — and a caption above its table is where it belongs.
+    if narrative is not None:
+        children.append("narrative")
+        components.append({
+            "id": "narrative",
+            "component": "CitedNarrative",
+            "text": narrative["text"],
+            "citations": narrative["citations"],
+            "streaming": bool(narrative.get("streaming")),
+        })
 
     estimate = _usable_estimate(predict)
     literature_view = _literature_view(literature)
@@ -346,23 +474,42 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
         band = _band(probability, threshold)
         shown = display_probability(probability)
         factors = estimate.get("top_factors") or []
-        # Post-process the SHAP names for visual consumption: each factor gets
-        # a human label (feature_labels.humanize) so the bars never show a raw
-        # model key (camelCase or snake_case).
-        factors = [
-            {**f, "label": humanize(f["feature"])}
-            for f in factors
-        ]
 
-        # Each widget is a self-contained custom component whose chrome (card,
-        # widget title, band pill, SHAP bars, cited source) mirrors the custom
-        # demo.
-        children += ["risk", "factors"]
-        components.append({"id": "risk", "component": "RiskBar",
-                           "probability": shown, "threshold": threshold,
-                           "band": band})
-        components.append({"id": "factors", "component": "FactorBars",
-                           "factors": factors})
+        # One widget, not a score bar plus a separate bar list: the component
+        # restates the score and the threshold inside itself, so the band and the
+        # number it belongs to cannot be pulled apart by layout.
+        #
+        # `probability` goes over UNROUNDED. The widget formats both numbers to one
+        # decimal place, so pre-rounding to the prose's two decimals would discard
+        # exactly the digit that distinguishes a score from its threshold — the
+        # reason the widget stopped rounding to whole percent. `fallback_text` below
+        # keeps the rounded form, because that sentence is written, not computed.
+        #
+        # `decision` is passed rather than left to the widget's own `>=`
+        # comparison: the model already made the threshold call, and the two must
+        # not be able to disagree. A payload without one falls back to the
+        # comparison, which is why 0 is a safe default rather than a claim.
+        #
+        # A factor carries no `direction` key at all when the tool did not state
+        # one. The component's schema is strict, so an explicit null would be
+        # rejected and would take the whole widget down with it.
+        children += ["risk"]
+        components.append({
+            "id": "risk",
+            "component": "RiskInfluencers",
+            "decision": int(estimate.get("decision") or 0),
+            "probability": probability,
+            "threshold": threshold,
+            "factors": [
+                {
+                    "label": humanize(f["feature"]),
+                    "contribution": float(f["contribution"]),
+                    **({"direction": f["direction"]}
+                       if isinstance(f.get("direction"), str) else {}),
+                }
+                for f in factors
+            ],
+        })
 
         # Both forms come from the rounded value, so the caption and the bar show
         # one number at one precision. Whole percent is the same precision as two
@@ -375,6 +522,36 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
             f"{shown:.0%} 30-day readmission "
             f"probability ({shown:.2f}), {band} at a {threshold:.2f} threshold."
         )
+
+    # `/meds` brings its own rows. They are verified against the note text before
+    # they reach here (`deterministic.parse_medications`), so the grid draws what was
+    # read and nothing that was inferred. Inserted before the caption and the citation
+    # so the structured answer comes first and the evidence it rests on follows.
+    #
+    # No rows means no grid at all, not an empty one: a grid with no rows reads as
+    # "this patient takes nothing", which is a clinical claim this system has no basis
+    # for. The narrative already says the section was retrieved and could not be read,
+    # and one absence stated once is the same rule the missing SourceCard follows.
+    if medications is not None and (medications.get("medications") or []):
+        children.append("medications")
+        components.append({
+            "id": "medications",
+            "component": "MedicationGrid",
+            "medications": [
+                {
+                    "medication": str(row.get("medication") or ""),
+                    "dosage": str(row.get("dosage") or ""),
+                    "frequency": str(row.get("frequency") or ""),
+                }
+                for row in medications["medications"]
+            ],
+            # The rows that failed verification are never drawn — they are the ones
+            # the system could not stand behind. The count is carried so the grid can
+            # say how many are missing from it, which is the difference between a
+            # complete list and a list with a hole in it.
+            "dropped_count": len(medications.get("dropped") or []),
+            "returned_passages": int(medications.get("returned_passages") or 0),
+        })
 
     # Provenance caption: what the answer came from. Two forms, and a third case
     # with no caption at all. A risk estimate names the model and the feature
@@ -404,37 +581,26 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
                            "text": prov_text,
                            "variant": "caption"})
 
+    # Retired 2026-10-13 (UX ruling): the cited narrative carries the passage text per
+    # sentence, as an interactive marker the reader opens. The card showed the same
+    # evidence a second time, in a second place, disconnected from the sentence it
+    # supported — redundant weight next to a better affordance. The comment below is
+    # kept because it records why the card appeared only sometimes:
+    #
     # Cited source — the passage the answer cites first (mirrors the custom
     # demo). Kept as the LAST child so it can pin to the bottom of the canvas
     # (sticky) and the discharge notes stay in view however long the session
-    # gets.
-    passages = (rag or {}).get("passages") or []
-    query = (rag or {}).get("query") or "discharge note"
-    if source is not None:
-        children.append("source")
-        components.append({"id": "source", "component": "SourceCard",
-                           "cite": source["cite"],
-                           "section": source["section"],
-                           "text": source["text"],
-                           "query": source.get("query", query)})
-    elif passages:
-        children.append("source")
-        resolved = resolve_source(passages, cite, sections)
-        components.append({"id": "source", "component": "SourceCard",
-                           "cite": max(cite, 1),
-                           "section": resolved["section"],
-                           "text": resolved["text"],
-                           "query": query})
-    # No card when there is no passage to cite. One used to be composed here, captioned
-    # "not found" over a sentence explaining that the agent does not fabricate
-    # passages — a note to a reviewer, in the clinician's canvas, on every turn that
-    # cited no note: /risk (retrieval is forbidden there by design) and both routing
-    # refusals rendered it, always. An empty citation slot is not evidence of a fault
-    # and does not need to say anything (removed 2026-10-12).
+    # gets. No card when there is no passage to cite: an empty citation slot is
+    # not evidence of a fault and does not need to say anything.
 
     return {
         "surface_id": SURFACE_ID,
         "audience": AUDIENCE,
+        # Tells the console the prose is drawn by this surface, so it must not also
+        # write the answer into its own text element. One answer, one place: the
+        # duplicate is what a reader notices first and it is the failure the risk
+        # sentence was deleted for.
+        "renders_prose": narrative is not None,
         "messages": [
             {"version": A2UI_VERSION,
              "createSurface": {"surfaceId": SURFACE_ID, "catalogId": CATALOG_ID}},
@@ -487,7 +653,8 @@ def literature_payload(tool_calls: list[dict]) -> dict | None:
 
 
 def compose_presentation(question: str, answer: str,
-                         tool_calls: list[dict]) -> dict:
+                         tool_calls: list[dict],
+                         command_payload: dict | None = None) -> dict:
     """The full presentation contract for an answered question.
 
     One call produces every field the browser consumes, so the answer's
@@ -502,6 +669,11 @@ def compose_presentation(question: str, answer: str,
 
     citation_map and intent_sections are inputs to that resolution and are
     returned for tests and diagnostics; the browser does not need them.
+
+    `command_payload` is a command's own structured result when it has one — `/meds`
+    extracts rows the canvas draws as a grid. It is passed through rather than
+    recomposed, because the rows were verified against the note text in the command
+    and re-deriving them here would be a second implementation of that check.
 
     Pure — no I/O, no clock, no randomness — so it is fully testable without
     a browser or a live endpoint.
@@ -529,5 +701,9 @@ def compose_presentation(question: str, answer: str,
             sections=intent,
             source=sources[0] if sources else None,
             literature=literature,
+            medications=command_payload,
+            # The narrative chooses its citations from this turn's evidence: the
+            # articles for a literature turn, the resolved note passages otherwise.
+            narrative=_narrative(renumbered, sources, literature),
         ),
     }

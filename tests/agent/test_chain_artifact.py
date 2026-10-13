@@ -452,7 +452,7 @@ def test_the_record_carries_no_question_or_answer_text(caplog):
 
 def test_a_blocking_execution_records_once(caplog):
     async def fake_ask(box, question, on_event=None, question_kind=None,
-                       hadm_id=None, topic=None, turns=None):
+                       hadm_id=None, topic=None, turns=None, prose_stream=False):
         on_event(stages.planning_event())
         on_event(stages.tool_event("rag_search"))
         return _state()
@@ -474,7 +474,7 @@ def test_a_blocking_execution_records_once(caplog):
 
 def test_a_failed_blocking_execution_still_records_once(caplog):
     async def boom(box, question, on_event=None, question_kind=None,
-                   hadm_id=None, topic=None, turns=None):
+                   hadm_id=None, topic=None, turns=None, prose_stream=False):
         raise RuntimeError("upstream died")
 
     with patch.object(srv, "toolbox", _fake_toolbox), \
@@ -491,7 +491,7 @@ def test_a_failed_blocking_execution_still_records_once(caplog):
 
 def test_a_streamed_execution_records_once(caplog):
     async def fake_ask(box, question, on_event=None, question_kind=None,
-                       hadm_id=None, topic=None, turns=None):
+                       hadm_id=None, topic=None, turns=None, prose_stream=False):
         on_event(stages.planning_event())
         on_event(stages.tool_event("rag_search"))
         return _state()
@@ -510,7 +510,7 @@ def test_a_streamed_execution_records_once(caplog):
 
 def test_a_failed_streamed_execution_still_records_once(caplog):
     async def boom(box, question, on_event=None, question_kind=None,
-                   hadm_id=None, topic=None, turns=None):
+                   hadm_id=None, topic=None, turns=None, prose_stream=False):
         on_event(stages.tool_event("rag_search"))
         raise RuntimeError("upstream died")
 

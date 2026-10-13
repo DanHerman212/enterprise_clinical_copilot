@@ -48,7 +48,11 @@ from services.mcp.dependencies.features import (
     FeatureSource,
     get_feature_source,
 )
-from services.mcp.retrieval.sections import DISCHARGE_MEDICATIONS, parse_note
+from services.mcp.retrieval.sections import (
+    DISCHARGE_INSTRUCTIONS,
+    DISCHARGE_MEDICATIONS,
+    parse_note,
+)
 from services.mcp.retrieval.chunking import (
     DEFAULT_MAX_CHARS,
     DEFAULT_PACK_TO,
@@ -640,17 +644,61 @@ async def rag_search_sections(hadm_id: int) -> RetrievalResult | ToolError:
         return _error(hadm_id, "invalid_tool_response", "Retrieval response was malformed.")
 
 
+# The two sections a medication list is spread across, in the order the extraction
+# should read them: the list of names first, then the passage that carries the doses.
+MEDICATION_SECTIONS = (DISCHARGE_MEDICATIONS, DISCHARGE_INSTRUCTIONS)
+
+
+def _search_medication_sections(hadm_id: int) -> dict[str, Any]:
+    """Every chunk of the medications section, then every chunk of the instructions.
+
+    Merged rather than concatenated into one blob so each passage keeps its own
+    section label: the extraction is told which passage is the list and which carries
+    the doses, and the citation layer can still say where a value came from.
+
+    An error from either section is the whole answer. A partial list served as a
+    complete one is the failure mode this avoids: better to say the retrieval failed
+    than to return four of nine drugs and let the grid imply the patient is on four.
+    """
+    merged: dict[str, Any] = {
+        "hadm_id": hadm_id,
+        "query": "discharge medications",
+        "returned": 0,
+        "passages": [],
+    }
+    notes: list[str] = []
+    for section in MEDICATION_SECTIONS:
+        payload = _search_section_chunks(hadm_id, section)
+        if payload.get("error"):
+            return payload
+        merged["passages"].extend(payload.get("passages") or [])
+        if payload.get("note"):
+            notes.append(str(payload["note"]))
+    merged["returned"] = len(merged["passages"])
+    if not merged["passages"] and notes:
+        merged["note"] = "; ".join(notes)
+    return merged
+
+
 async def discharge_medications(hadm_id: int) -> RetrievalResult | ToolError:
-    """Retrieve every cited passage of the discharge medications section, in
-    order. Use when the medication list must be complete: a tool that returns one
-    passage per section gives only that section's first chunk.
+    """Retrieve the discharge medications section and the discharge instructions
+    section, in that order. Use when the medication list must be complete.
+
+    Two sections, because in these notes they carry different halves of one fact. The
+    medications section is often a bare list of drug names — "On transfer, Celebrex,
+    Coumadin, Colace, …" — while the doses and frequencies sit in the instructions
+    ("Celebrex 200 mg daily … Toprol-XL 50 mg daily"). Reading only the first produced
+    a grid of drug names with no doses, and the extraction could not have improved it:
+    the numbers were never in its context.
+
+    Both sections come back whole and labelled, so the extraction reconciles names
+    with doses and `parse_medications` then verifies every value against this same
+    text — a dose survives only if it appears in a passage here.
 
     Args:
         hadm_id: MIMIC-IV hospital admission id.
     """
-    payload = await asyncio.to_thread(
-        _search_section_chunks, hadm_id, DISCHARGE_MEDICATIONS
-    )
+    payload = await asyncio.to_thread(_search_medication_sections, hadm_id)
     try:
         return validate_retrieval_result(payload)
     except ToolContractError:

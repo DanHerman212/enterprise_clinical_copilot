@@ -54,7 +54,7 @@ def test_health_reports_which_code_is_running():
 
 def test_ask_failure_returns_generic_body_with_correlation_id():
     async def boom(box, question, on_event=None, question_kind=None,
-                   hadm_id=None, topic=None, turns=None):
+                   hadm_id=None, topic=None, turns=None, prose_stream=False):
         raise RuntimeError("https://secret-mcp-url/ask audience=projects/12345")
 
     with patch.object(srv, "toolbox", _fake_toolbox), \
@@ -79,7 +79,7 @@ def test_ask_logs_the_forwarded_cloud_trace_id(caplog):
     request must carry the trace id (the part before the slash) so the two
     services' entries pair up."""
     async def boom(box, question, on_event=None, question_kind=None,
-                   hadm_id=None, topic=None, turns=None):
+                   hadm_id=None, topic=None, turns=None, prose_stream=False):
         raise RuntimeError("nope")
 
     with patch.object(srv, "toolbox", _fake_toolbox), \
@@ -120,7 +120,7 @@ def test_ask_response_carries_each_tool_call_with_its_arguments():
     }
 
     async def fake_ask(box, question, on_event=None, question_kind=None,
-                       hadm_id=None, topic=None, turns=None):
+                       hadm_id=None, topic=None, turns=None, prose_stream=False):
         return state
 
     with patch.object(srv, "toolbox", _fake_toolbox), \

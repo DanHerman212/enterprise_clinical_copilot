@@ -83,7 +83,7 @@ def _patient(hadm_id: int, feature_order: list[str]):
 
 
 def main() -> None:
-    hadm_id = int(sys.argv[1]) if len(sys.argv) > 1 else 20924467
+    hadm_id = int(sys.argv[1]) if len(sys.argv) > 1 else 90000015
     aiplatform.init(project=PROJECT, location=LOCATION)
     bundle_uri = BUNDLE_URI_OVERRIDE.rstrip("/") if BUNDLE_URI_OVERRIDE else _discover_bundle_uri()
     print(f"Bundle: {bundle_uri}")

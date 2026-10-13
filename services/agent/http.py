@@ -189,7 +189,11 @@ def _compose_success(question: str, state: dict, trace: str) -> dict:
     # narrative beside that list, not the JSON the extraction returned — the
     # extraction is payload, the narrative is the answer (see deterministic.py).
     text = state.get("deterministic_answer") or final_text(state)
-    if not text:
+    # An empty answer is normally a failed turn. It is not one when the state says the
+    # surface carries the answer: `/risk` returns a widget and no prose by design (see
+    # deterministic.run_command), and without this the check below would turn a
+    # complete answer into a 502.
+    if not text and not state.get("answer_in_surface"):
         # An empty turn is not one thing. The response says which it was, and the
         # cases need different words: a truncated answer is worth retrying, a
         # refusal by the content filters is not — at temperature 0 the same
@@ -243,7 +247,9 @@ def _compose_success(question: str, state: dict, trace: str) -> dict:
     # renumbering, source resolution, and the A2UI canvas are evidence
     # semantics — they belong to the layer that ran the guardrails and saw the
     # tool evidence. Django passes them through; the browser renders them.
-    presentation = compose_presentation(question, guarded["answer"], trimmed_calls)
+    presentation = compose_presentation(
+        question, guarded["answer"], trimmed_calls, state.get("command_payload")
+    )
 
     payload = {
         "question": question,
@@ -368,6 +374,7 @@ async def _run_chain(
                 topic=parsed["topic"],
                 on_event=on_event,
                 turns=parsed["turns"],
+                prose_stream=parsed["stream_prose"],
             )
 
 
@@ -532,6 +539,35 @@ async def ask_stream_route(request: Request) -> Response:
     )
 
 
+def _check_no_mutation(announced: list[str], served: str, trace: str) -> None:
+    """Compare the prose a caller watched arrive with the prose finally served.
+
+    The per-path streaming policy rests on an assumption: that a command's prose
+    survives the post-hoc guardrails unchanged, so a clinician watching it arrive
+    never sees the text move. Free text is buffered for exactly that reason, and the
+    streaming commands were judged safe by construction — the risk sentence is
+    written from the projected result, the medication narrative is generated in
+    code. An assumption is not evidence, so it is measured here, at the one place
+    where both texts exist: a mismatch means a caller was shown text the system then
+    withdrew, which is the mutation the policy forbids.
+
+    Logged rather than raised. The settled answer is the correct one and it is what
+    the caller receives; failing the response would turn a telemetry signal into an
+    outage, and the anomaly is worth a warning precisely once — a repeated line in
+    the log is how we learn the assumption broke.
+    """
+    if not announced:
+        return
+    watched = "".join(announced).strip()
+    if watched == served.strip():
+        return
+    logger.warning(
+        "streamed prose differs from the served answer trace=%s — a caller watched "
+        "the text change (announced=%r served=%r)",
+        trace, watched[:160], served.strip()[:160],
+    )
+
+
 async def _stream_chain(
     parsed: dict,
     trace: str,
@@ -566,6 +602,8 @@ async def _stream_chain(
 
     task.add_done_callback(_finished)
 
+    announced: list[str] = []
+
     try:
         while True:
             try:
@@ -579,6 +617,10 @@ async def _stream_chain(
                 continue
             if event is _CHAIN_DONE:
                 break
+            # Kept so the settled answer can be compared with what was announced
+            # once the guardrails have run (see `_check_no_mutation`).
+            if event.get("stage") == stages.STAGE_ANSWER_DELTA:
+                announced.append(event.get("text") or "")
             yield _sse(event["stage"], event)
 
         try:
@@ -626,6 +668,8 @@ async def _stream_chain(
             )
             yield _error_frame(exc.code, str(exc))
             return
+
+        _check_no_mutation(announced, payload["answer"], trace)
 
         log.record(
             trace, parsed["question"], "ok",

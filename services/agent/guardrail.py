@@ -202,13 +202,39 @@ def verify_med_tokens(answer: str, evidence_text: str) -> tuple[str, list[str]]:
     return re.sub(r"[ \t]{2,}", " ", cleaned).strip(), flags
 
 
-def check_citations(answer: str, passages: list[dict]) -> tuple[str, list[str]]:
-    """Strip + flag ^[n] markers that point at no retrieved passage (ECC-14).
+def _literature_slots(tool_calls: list[dict]) -> int:
+    """How many articles a literature turn can cite: the records holding a PMID.
 
-    Leaving them in rendered as citations to nothing — with zero passages an
-    answer containing ^[1] was served intact.
+    Matched to the canvas, which drops a record with no pmid because it cannot be cited
+    or linked (`a2ui._usable_articles`), so the numbered citations a reader can open are
+    exactly these records. Counting the raw list instead would let a marker point at a
+    record the canvas never draws.
     """
-    n = len(passages)
+    for call in tool_calls or []:
+        if call.get("name") != "search_literature":
+            continue
+        articles = (call.get("response") or {}).get("articles")
+        if isinstance(articles, list):
+            return sum(
+                1 for article in articles
+                if isinstance(article, dict) and article.get("pmid")
+            )
+    return 0
+
+
+def check_citations(answer: str, slots: int) -> tuple[str, list[str]]:
+    """Strip + flag ^[n] markers that point at a citation this turn cannot resolve.
+
+    `slots` is how many numbered citations the presentation holds: one per retrieved note
+    passage, or one per retrieved article on a literature turn. Both are numbered from 1
+    in the order the model was given them, so this count is the whole of what a marker
+    may legally address.
+
+    An out-of-range marker left in rendered as a citation to nothing — with zero slots an
+    answer containing ^[1] was served intact (ECC-14). It is the same failure whether the
+    slot was never retrieved or never existed, so it is the same guard.
+    """
+    n = slots
     flags: list[str] = []
     spans: list[tuple[int, int]] = []
     for m in _CITE.finditer(answer):
@@ -565,7 +591,11 @@ def guard_answer(
     flags += f
     flags += flag_invented_dates(answer, passages)
     turn_passages, _ = _passage_sections(tool_calls)
-    answer, f = check_citations(answer, turn_passages)
+    # Passages for a note turn, articles for a literature turn: both are citation slots.
+    # A literature turn has no passages at all, so counting only passages stripped every
+    # marker out of a properly grounded summary (observed live 2026-10-13).
+    slots = len(turn_passages) or _literature_slots(tool_calls)
+    answer, f = check_citations(answer, slots)
     flags += f
 
     return {"answer": answer, "flags": sorted(set(flags))}

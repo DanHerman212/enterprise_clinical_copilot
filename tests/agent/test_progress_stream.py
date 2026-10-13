@@ -259,7 +259,7 @@ def test_a_failing_listener_does_not_take_the_answer_down():
 
 def test_stream_sends_stages_then_one_answer_frame():
     async def fake_ask(box, question, on_event=None, question_kind=None,
-                       hadm_id=None, topic=None, turns=None):
+                       hadm_id=None, topic=None, turns=None, prose_stream=False):
         on_event(stages.planning_event())
         on_event(stages.tool_event("rag_search"))
         return _state()
@@ -317,7 +317,7 @@ def test_the_answer_does_not_wait_for_a_keepalive_after_the_chain_finishes():
     takes a keepalive interval instead of milliseconds.
     """
     async def fake_ask(box, question, on_event=None, question_kind=None,
-                       hadm_id=None, topic=None, turns=None):
+                       hadm_id=None, topic=None, turns=None, prose_stream=False):
         on_event(stages.planning_event())
         return _state()
 
@@ -360,7 +360,7 @@ def test_stream_reports_a_mid_stream_failure_as_a_terminal_event():
     happens after that arrives as an error frame carrying the same code and
     correlation id the single-response route would have put in its body."""
     async def boom(box, question, on_event=None, question_kind=None,
-                   hadm_id=None, topic=None, turns=None):
+                   hadm_id=None, topic=None, turns=None, prose_stream=False):
         on_event(stages.tool_event("rag_search"))
         raise RuntimeError("https://secret-mcp-url/ask audience=projects/12345")
 
@@ -385,7 +385,7 @@ def test_stream_refuses_to_ship_an_empty_answer():
     final turn is empty and the caller gets answer_unavailable, not a blank
     frame that looks like a real answer."""
     async def empty_final_turn(box, question, on_event=None, question_kind=None,
-                               hadm_id=None, topic=None, turns=None):
+                               hadm_id=None, topic=None, turns=None, prose_stream=False):
         state = _state()
         state["messages"] = [AIMessage(content="")]
         return state
@@ -491,7 +491,7 @@ def test_the_planning_label_follows_the_chip_in_the_request():
     seen = {}
 
     async def capture(box, question, on_event=None, question_kind=None,
-                      hadm_id=None, topic=None, turns=None):
+                      hadm_id=None, topic=None, turns=None, prose_stream=False):
         seen["kind"] = question_kind
         on_event(stages.planning_event(question_kind))
         return _state()

@@ -25,7 +25,7 @@ def test_parse_agent_request_canonicalises_the_question():
     assert parse_agent_request(
         {"question": " assess risk "}, max_question_chars=20
     ) == {"question": "assess risk", "kind": None, "hadm_id": None,
-          "topic": None, "turns": []}
+          "topic": None, "turns": [], "stream_prose": False}
 
 
 # The shape of a request is a decision, not an accident. These pin the refusal,
@@ -89,7 +89,7 @@ def test_the_closed_contract_still_accepts_the_three_shapes():
     assert parse_agent_request(
         {"question": "why?"}, max_question_chars=2000
     ) == {"question": "why?", "kind": None, "hadm_id": None,
-          "topic": None, "turns": []}
+          "topic": None, "turns": [], "stream_prose": False}
     assert parse_agent_request(
         {"chip": "risk", "hadm_id": 90000009}, max_question_chars=2000
     )
@@ -184,6 +184,7 @@ def test_a_chip_and_admission_compose_what_the_website_used_to_build():
         "hadm_id": 90000009,
         "topic": None,
         "turns": [],
+        "stream_prose": False,
     }
 
 
@@ -197,6 +198,7 @@ def test_free_text_with_an_admission_gets_the_same_suffix_the_website_added():
         "hadm_id": 90000009,
         "topic": None,
         "turns": [],
+        "stream_prose": False,
     }
 
 
@@ -215,6 +217,7 @@ def test_an_admission_alone_asks_the_default_question():
         "hadm_id": 90000009,
         "topic": None,
         "turns": [],
+        "stream_prose": False,
     }
 
 

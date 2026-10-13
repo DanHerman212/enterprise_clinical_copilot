@@ -79,6 +79,7 @@ PHYSICAL_EXAM = "physical_exam"
 PERTINENT_RESULTS = "pertinent_results"
 BRIEF_HOSPITAL_COURSE = "brief_hospital_course"
 MEDICATIONS_ON_ADMISSION = "medications_on_admission"
+MEDICATIONS_ON_TRANSFER = "medications_on_transfer"
 DISCHARGE_MEDICATIONS = "discharge_medications"
 DISCHARGE_DISPOSITION = "discharge_disposition"
 DISCHARGE_DIAGNOSIS = "discharge_diagnosis"
@@ -180,6 +181,14 @@ KNOWN_HEADINGS: dict[str, tuple[str, ...]] = {
         "Course on Admission",
     ),
     MEDICATIONS_ON_ADMISSION: ("Medications on Admission",),
+    # A transfer medication list is neither the admission list nor the discharge
+    # list, and folding it into either would relabel drugs the patient arrived on as
+    # drugs they left on — a clinical error the grid would then present as fact. It
+    # gets its own section so the text is kept and labelled, rather than being
+    # dropped as an unrecognised heading (added 2026-10-13, from MT-2789-DS).
+    # Retrieval will not surface it until the index is rebuilt: the chunk ids carry
+    # the section, so a section the index was not built with is unreachable.
+    MEDICATIONS_ON_TRANSFER: ("Medications on Transfer",),
     DISCHARGE_MEDICATIONS: (
         "Discharge Medications",
         # MTSamples: a bare "Medications:" in a discharge summary is the

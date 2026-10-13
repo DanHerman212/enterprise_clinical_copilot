@@ -1,9 +1,15 @@
 {
-  "anchor_hadm_id": "90000064",
-  "generated_at": "2026-10-12",
+  "anchor_hadm_id": "90000015",
+  "generated_at": "2026-10-13",
   "generated_by": "mlops/training/smoke_test.py --write-fixture",
   "model_version": "readmission-final-20260917173317",
   "patients": {
+    "90000015": {
+      "base_value": -1.767608,
+      "decision": 0,
+      "probability": 0.090459,
+      "tolerance": 0.0001
+    },
     "90000064": {
       "base_value": -1.767608,
       "decision": 1,

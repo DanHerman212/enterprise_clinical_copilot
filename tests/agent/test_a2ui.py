@@ -26,6 +26,7 @@ from services.agent.a2ui import (  # noqa: E402
     compose_risk_canvas,
     predict_payload,
     rag_payload,
+    resolve_source,
 )
 
 # The pinned fixture from §14 — the same admission used everywhere else in the
@@ -96,26 +97,34 @@ class TestRiskComposition:
     def test_emits_the_custom_components(self):
         canvas = compose_risk_canvas(GOOD_PAYLOAD, GOOD_RAG)
         types = {c["component"] for c in _by_id(canvas).values()}
-        assert {"RiskBar", "FactorBars", "SourceCard"} <= types
 
-    def test_factor_bars_carry_human_labels_not_raw_model_keys(self):
+        assert "RiskInfluencers" in types
+        # No source card: the passage travels as the narrative's citation now — one
+        # marker per sentence, opened by the reader, rather than one card detached
+        # from all of them.
+        assert "SourceCard" not in types
+
+    def test_influencers_carry_human_labels_not_raw_model_keys(self):
         canvas = compose_risk_canvas(GOOD_PAYLOAD, GOOD_RAG)
-        factors = _by_id(canvas)["factors"]["factors"]
+        factors = _by_id(canvas)["risk"]["factors"]
         # Not in the curated map -> Title Case fallback.
         assert factors[0]["label"] == "N Prior Admissions"
         # "age" is a curated FEATURE_LABELS entry.
         assert factors[1]["label"] == "age"
 
-    def test_risk_bar_carries_probability_threshold_and_band(self):
+    def test_the_widget_carries_the_unrounded_probability_and_the_decision(self):
         canvas = compose_risk_canvas(GOOD_PAYLOAD, GOOD_RAG)
         risk = _by_id(canvas)["risk"]
-        # Two decimals: what the prose is written at, so the widget and the
-        # narrative cannot show one score two ways. The served value is 0.131398.
-        assert risk["probability"] == pytest.approx(0.13)
+        # Unrounded on the wire: the widget prints one decimal place, and rounding
+        # here to the prose's two decimals would erase the digit that separates a
+        # score from its threshold. The served value is 0.131398.
+        assert risk["probability"] == pytest.approx(0.131398)
         assert risk["threshold"] == pytest.approx(0.12)
-        # 0.1314 >= 0.12 and < 0.20 -> borderline. The band reads the served
-        # value, so display rounding can never soften a threshold call.
-        assert risk["band"] == "borderline"
+        # The model's own call travels with the number, so the widget's `>=`
+        # comparison can never overrule it.
+        assert risk["decision"] == 1
+        assert risk["factors"][0]["contribution"] == pytest.approx(0.4213)
+        assert risk["factors"][0]["direction"] == "increases"
 
     def test_provenance_names_model_and_feature_source(self):
         canvas = compose_risk_canvas(GOOD_PAYLOAD, GOOD_RAG)
@@ -136,8 +145,65 @@ class TestRiskComposition:
         assert compose_risk_canvas(GOOD_PAYLOAD, GOOD_RAG)["audience"] == AUDIENCE == ["user"]
 
 
+class TestMedicationGrid:
+    """The grid is drawn from rows the command already verified, never recomposed."""
+
+    ROWS = {
+        "medications": [
+            {"medication": "warfarin", "dosage": "4 mg", "frequency": "QD"},
+        ],
+        "dropped": [],
+        "returned_passages": 1,
+    }
+
+    def test_the_grid_draws_the_verified_rows(self):
+        canvas = compose_risk_canvas(None, None, medications=self.ROWS)
+        grid = _by_id(canvas)["medications"]
+
+        assert grid["component"] == "MedicationGrid"
+        assert grid["medications"] == [
+            {"medication": "warfarin", "dosage": "4 mg", "frequency": "QD"}
+        ]
+        assert grid["dropped_count"] == 0
+
+    def test_no_rows_composes_no_grid_at_all(self):
+        """An empty grid reads as "this patient takes nothing" — a clinical claim.
+
+        The narrative states the absence instead, once.
+        """
+        canvas = compose_risk_canvas(
+            None, None,
+            medications={"medications": [], "dropped": [], "returned_passages": 0},
+        )
+
+        assert "medications" not in _by_id(canvas)
+
+    def test_the_unverified_rows_are_counted_and_not_drawn(self):
+        rows = {
+            **self.ROWS,
+            "dropped": [{"medication": "gabapentin", "reason": "no_dosage"}],
+        }
+        grid = _by_id(compose_risk_canvas(None, None, medications=rows))["medications"]
+
+        assert grid["dropped_count"] == 1
+        assert "gabapentin" not in {row["medication"] for row in grid["medications"]}
+
+    def test_a_missing_field_arrives_as_an_empty_string(self):
+        """The component's schema is strict, so a null would take the grid down."""
+        rows = {
+            "medications": [{"medication": "aspirin"}],
+            "dropped": [],
+            "returned_passages": 1,
+        }
+        grid = _by_id(compose_risk_canvas(None, None, medications=rows))["medications"]
+
+        assert grid["medications"][0] == {
+            "medication": "aspirin", "dosage": "", "frequency": ""
+        }
+
+
 class TestNoEstimatePaths:
-    def test_without_predict_composes_a_source_only_canvas(self):
+    def test_without_predict_composes_a_canvas_with_no_estimate(self):
         """A non-risk question (meds / summarize) still composes a canvas — and one
         that states no provenance, because there is none to state. The caption that
         used to stand in for one ("no readmission estimate was requested") answered
@@ -145,8 +211,8 @@ class TestNoEstimatePaths:
         (removed 2026-10-12)."""
         canvas = compose_risk_canvas(None, GOOD_RAG)
         types = {c["component"] for c in _by_id(canvas).values()}
-        assert "SourceCard" in types
-        assert "RiskBar" not in types
+
+        assert "RiskInfluencers" not in types
         assert canvas["fallback_text"].strip()
         assert "prov" not in _by_id(canvas)
 
@@ -174,7 +240,14 @@ class TestNoEstimatePaths:
         assert "not found" not in json.dumps(canvas)
 
 
-class TestSourceCardResolution:
+class TestSourceResolution:
+    """Which passage a citation resolves to, and how a section hint picks it.
+
+    Tested against `resolve_source` rather than through the canvas: the canvas no
+    longer draws an evidence card, and this resolution is what the narrative's
+    citations are built from, so this is now the layer that matters.
+    """
+
     def test_resolves_the_cited_passage_by_section_not_number(self):
         """A meds answer cites ^[1] while the meds passage sits at index 2 —
         the canvas must still show discharge_medications."""
@@ -186,25 +259,18 @@ class TestSourceCardResolution:
             {"id": "n_meds_1", "section": "discharge_medications",
              "text": "Discharge Medications: Celebrex 200 mg daily.", "score": 0.1},
         ], "query": "discharge notes"}
-        canvas = compose_risk_canvas(
-            None, rag, cite=1, sections=("discharge_medications",))
-        source = _by_id(canvas)["source"]
-        assert source["section"] == "discharge_medications"
-        assert "Celebrex" in source["text"]
-        # Badge mirrors the thread's citation number, not the array position.
-        assert source["cite"] == 1
+        resolved = resolve_source(rag["passages"], 1, ("discharge_medications",))
+        assert resolved["section"] == "discharge_medications"
+        assert "Celebrex" in resolved["text"]
 
         # Without a section hint the number mapping is unchanged.
-        canvas = compose_risk_canvas(None, rag, cite=1)
-        assert _by_id(canvas)["source"]["section"] == "brief_hospital_course"
+        assert resolve_source(rag["passages"], 1, ())["section"] == "brief_hospital_course"
 
         # A section hint the note does not have is a deterministic
-        # "not available" card — never a fallback to the wrong section.
-        canvas = compose_risk_canvas(
-            None, rag, cite=2, sections=("discharge_instructions",))
-        source = _by_id(canvas)["source"]
-        assert source["section"] == "not available"
-        assert "instruction" in source["text"]
+        # "not available" — never a fallback to the wrong section.
+        resolved = resolve_source(rag["passages"], 2, ("discharge_instructions",))
+        assert resolved["section"] == "not available"
+        assert "instruction" in resolved["text"]
 
     def test_extracts_the_intent_section_from_whole_note_chunks(self):
         """The index stores whole-note chunks, so the intent-labeled passage
@@ -222,13 +288,10 @@ class TestSourceCardResolution:
             {"id": "n_dx_1", "section": "discharge_diagnosis",
              "text": whole_note, "score": 0.2},
         ], "query": "discharge notes"}
-        canvas = compose_risk_canvas(
-            None, rag, cite=1, sections=("discharge_medications",))
-        source = _by_id(canvas)["source"]
-        assert source["section"] == "discharge_medications"
-        assert "Celebrex" in source["text"]
-        assert "HOSPITAL COURSE" not in source["text"]
-        assert source["cite"] == 1
+        resolved = resolve_source(rag["passages"], 1, ("discharge_medications",))
+        assert resolved["section"] == "discharge_medications"
+        assert "Celebrex" in resolved["text"]
+        assert "HOSPITAL COURSE" not in resolved["text"]
 
     def test_resolves_meds_to_instructions_when_no_meds_section(self):
         """The meds claim's supporting text can live in DISCHARGE INSTRUCTIONS
@@ -248,13 +311,11 @@ class TestSourceCardResolution:
             {"id": "n_ins_1", "section": "discharge_instructions",
              "text": note, "score": 0.1},
         ], "query": "discharge notes"}
-        canvas = compose_risk_canvas(
-            None, rag, cite=1,
-            sections=("discharge_medications", "discharge_instructions"))
-        source = _by_id(canvas)["source"]
-        assert source["section"] == "discharge_instructions"
-        assert "Valium" in source["text"]
-        assert "HOSPITAL COURSE" not in source["text"]
+        resolved = resolve_source(
+            rag["passages"], 1, ("discharge_medications", "discharge_instructions"))
+        assert resolved["section"] == "discharge_instructions"
+        assert "Valium" in resolved["text"]
+        assert "HOSPITAL COURSE" not in resolved["text"]
 
     def test_unavailable_when_the_note_lacks_all_target_sections(self):
         """The note mentions meds only inside the hospital course — the
@@ -272,13 +333,11 @@ class TestSourceCardResolution:
             {"id": "n_dx_1", "section": "discharge_diagnosis",
              "text": note, "score": 0.2},
         ], "query": "discharge notes"}
-        canvas = compose_risk_canvas(
-            None, rag, cite=1,
-            sections=("discharge_medications", "discharge_instructions"))
-        source = _by_id(canvas)["source"]
-        assert source["section"] == "not available"
-        assert "No discharge medication information" in source["text"]
-        assert "Vicodin" not in source["text"]
+        resolved = resolve_source(
+            rag["passages"], 1, ("discharge_medications", "discharge_instructions"))
+        assert resolved["section"] == "not available"
+        assert "No discharge medication information" in resolved["text"]
+        assert "Vicodin" not in resolved["text"]
 
 
 class TestToolCallExtraction:
@@ -329,7 +388,14 @@ class TestPresentationContract:
         assert out["a2ui"]["surface_id"] == "risk-canvas"
         # A predict ran, so the canvas carries the risk widgets too.
         types = {c["component"] for c in _by_id(out["a2ui"]).values()}
-        assert {"RiskBar", "SourceCard"} <= types
+        assert {"RiskInfluencers", "CitedNarrative"} <= types
+        # The surface draws the prose and the payload says so, which is what stops
+        # the console writing the same answer into its own text element as well.
+        assert out["a2ui"]["renders_prose"] is True
+        narrative = _by_id(out["a2ui"])["narrative"]
+        assert narrative["text"] == out["answer"]
+        assert [c["index"] for c in narrative["citations"]] == [1]
+        assert narrative["streaming"] is False
 
     def test_compose_presentation_renumbers_out_of_order_citations(self):
         out = compose_presentation(
@@ -382,17 +448,24 @@ class TestResolvedSources:
         assert "Celebrex" in src["text"]
         assert "Hospital Course" not in src["text"]
 
-    def test_canvas_source_card_is_sources_zero(self):
-        """The canvas and the click-through list can never disagree."""
+    def test_the_narrative_citation_is_sources_zero(self):
+        """The marker the reader opens and the resolved list can never disagree.
+
+        This was the source card's job. The card is gone and the invariant it
+        protected is not, so it moves to the citation the reader actually clicks.
+        """
         out = compose_presentation(
             "What medications was the patient discharged on?",
             "Celebrex^[1].",
             [{"name": "rag_search", "response": self.THREE}],
         )
-        card = _by_id(out["a2ui"])["source"]
+        citation = _by_id(out["a2ui"])["narrative"]["citations"][0]
         first = out["sources"][0]
-        assert (card["cite"], card["section"], card["text"], card["query"]) == (
-            first["cite"], first["section"], first["text"], first["query"])
+
+        assert citation["index"] == first["cite"]
+        assert citation["excerpt"] == first["text"]
+        assert citation["title"] == "Discharge medications"
+        assert citation["source"] == "Discharge note"
 
     def test_unavailable_section_is_a_deterministic_entry(self):
         rag = {"query": "discharge notes", "passages": [

@@ -17,32 +17,25 @@ The diagram represents the tool calls and boundaries for 4 tools:
 
 
 ```mermaid
-flowchart TD
-  caller["Agent service"]
+flowchart LR
+  caller["Agent service"] --> server["server.py"]
 
-  subgraph srv["Serving"]
-    direction LR
-    server["server.py"] --> tools["tools/"]
-    tools -.-> contracts["contracts.py"]
-    runtime["runtime.py"] -.-> server
-    config["config.py"] -.-> tools
-  end
+  server --> predict["tools/prediction.py"]
+  server --> retrieve["tools/retrieval.py"]
+  server --> lit["tools/literature.py"]
 
-  subgraph data["Data and models"]
-    direction LR
-    features["dependencies/features/"] --> bigquery["BigQuery"]
-    endpoint["dependencies/model_endpoint.py"] --> vertex["Vertex AI"]
-    retrieval["retrieval/"] --> bigquery
-    retrieval --> vertex
-  end
+  predict --> endpoint["dependencies/model_endpoint.py"]
+  endpoint --> vertex["Vertex AI"]
+  predict --> features["dependencies/features/"]
+  features --> bigquery["BigQuery"]
+  retrieve --> bigquery
+  retrieve --> vertex
+  lit --> pubmed["PubMed"]
 
-  build["pipelines/"]
-
-  caller --> server
-  tools --> features
-  tools --> endpoint
-  tools --> retrieval
-  build -.-> retrieval
+  runtime["runtime.py"] -.-> server
+  config["config.py"] -.-> server
+  contracts["contracts.py"] -.-> server
+  build["pipelines/"] -.-> retrieve
 ```
 
 ## Serving

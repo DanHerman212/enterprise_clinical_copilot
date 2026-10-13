@@ -1,45 +1,25 @@
 # `services/agent` — the clinical copilot's reasoning service
 
-The diagram is the request path. Each band reads left to right — **request** → **run** →
-**answer** — and the bands stack vertically, so no row is wide enough to be scaled down. That
-is what keeps the labels at full size. The **record** is written alongside, off the main path
-on purpose: one line for every run, including the ones that never reach an answer.
+The diagram is the request path, read left to right. The main line is the sequence a question
+passes through; the modules hanging off it are what each step calls. The **record** sits off
+the path on purpose — one line is written for every run, including the ones that never reach
+an answer.
 
 ```mermaid
-flowchart TD
-  caller["Django site"]
+flowchart LR
+  caller["Django site"] --> http["http.py"] --> flow["graph.py"] --> guard["guardrail.py"] --> canvas["a2ui.py"] --> out["the answer"]
 
-  subgraph req["Request"]
-    direction LR
-    http["http.py"] --> contracts["contracts.py"] --> questions["questions.py"]
-  end
-
-  subgraph run["Run"]
-    direction LR
-    prompts["prompts.py"] --> flow["graph.py"] <--> mcp["mcp_client.py"]
-    flow --> stages["stages.py"]
-  end
-
-  subgraph ans["Answer"]
-    direction LR
-    turn["model_turn.py"] --> guard["guardrail.py"] --> cites["citations.py"] --> canvas["a2ui.py"]
-    labels["feature_labels.py"] --> canvas
-  end
-
-  subgraph rec["Record"]
-    direction LR
-    chain["chain.py"]
-    obs["observability.py"]
-  end
-
-  tools["MCP server"]
-
-  caller --> http
-  questions --> flow
-  flow --> turn
-  mcp <--> tools
-  canvas --> chain
-  flow -.-> obs
+  contracts["contracts.py"] -.-> http
+  chain["chain.py"] -.-> http
+  questions["questions.py"] -.-> flow
+  prompts["prompts.py"] -.-> flow
+  stages["stages.py"] -.-> flow
+  obs["observability.py"] -.-> flow
+  mcp["mcp_client.py"] <--> flow
+  mcp <--> tools["MCP server"]
+  turn["model_turn.py"] -.-> guard
+  cites["citations.py"] -.-> canvas
+  labels["feature_labels.py"] -.-> canvas
 ```
 
 ## Modules

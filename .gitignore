@@ -79,3 +79,15 @@ evaluation/agent/results/hybrid_notes.json
 
 # don't sync obsidian json files
 docs/.obsidian 
+
+# --- UX workshop capture ---------------------------------------------------
+# The capture stays out: screenshots and verbatim turn outputs quote
+# discharge-note text directly — the same raw-text rule that keeps the hybrid
+# notes artifact out of git — and it is reproducible from the procedure document.
+#
+# The practice record IS tracked (2026-10-13): the strategy-and-tactics documents
+# and the capture procedure describe how the workshop was run, quote no note text,
+# and are the artifacts worth sharing.
+docs/ux_workshop/screenshots/
+docs/ux_workshop/turns/
+docs/ux_workshop/phase1/live/

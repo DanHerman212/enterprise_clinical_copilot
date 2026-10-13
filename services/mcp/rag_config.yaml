@@ -30,9 +30,11 @@ corpus:
     notes_table_ref: "trim-icon-498815-a0.readmission.hybrid_notes"
     split_table_ref: "trim-icon-498815-a0.readmission.hybrid_split"
     split_name: "test"
-    # 89 MTSamples notes -> 454 section chunks (deterministic, recomputed
-    # locally with the same chunk_note(pack_to=700) path the pipeline runs).
-    expected_vectors: 454
+    # 87 MTSamples notes -> 446 section chunks (deterministic, recomputed
+    # locally with the same chunk_note(pack_to=700) path the pipeline runs:
+    # scripts/agent/count_hybrid_chunks.py). Two notes were removed as
+    # inclusion violations on 2026-10-08, which took this from 454.
+    expected_vectors: 446
     shard_size: "SHARD_SIZE_SMALL"
     deploy_machine_type: "e2-standard-2"
 

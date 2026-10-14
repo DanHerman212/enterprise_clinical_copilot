@@ -246,20 +246,37 @@ async def _formatting_turn(
     prompt: list[Any],
     *,
     config: dict | None,
+    announce: Callable[[str], None] | None = None,
 ) -> Any:
     """The formatting model turn.
 
-    One call, returning the model's message in the shape `ainvoke` returns, so
-    `final_text` and `model_turn` are unchanged.
+    Returns the model's message in the shape `ainvoke` returns — the accumulated
+    chunks are an `AIMessageChunk`, which subclasses `AIMessage` — so `final_text`
+    and `model_turn` are unchanged either way.
 
-    This used to stream the answer token by token and merge the chunks, with the
-    merged text compared against the settled answer by `http._check_no_mutation`.
-    That path was removed on 2026-10-13 along with `/risk`'s prose, which was its only
-    user: every command that streams now writes its answer in code and announces it in
-    one piece, so there was no model chunk left to announce as it was written. Rebuild
-    it from source control if a command ever streams model prose again.
+    `announce` asks for the prose to be shown as the model writes it; with it None
+    this is the single blocking call it has always been. This turn is the one place in
+    the agent where announcing on arrival needs no lookahead: no tool is bound
+    (`_build_llm` is called without `bind_tools`), so the turn cannot be deliberation
+    choosing a tool. There is nothing for the text to turn out to have been instead,
+    so there is nothing to hold back.
+
+    Whether the announced text is safe to *show* is a different question and not one
+    this function answers. `Command.prose_is_model_output` decides whether the caller
+    is offered this turn's output at all, and the guardrails' verdict on it lands
+    after the turn has finished — which is what the swap protocol in `http` exists for.
     """
-    return await llm.ainvoke(prompt, config=config)
+    if announce is None:
+        return await llm.ainvoke(prompt, config=config)
+
+    turn: Any = None
+    async for chunk in llm.astream(prompt, config=config):
+        turn = chunk if turn is None else turn + chunk
+        if chunk.content:
+            announce(str(chunk.content))
+    if turn is None:
+        raise RuntimeError("the formatting model returned no chunks")
+    return turn
 
 
 async def run_command(
@@ -330,20 +347,23 @@ async def run_command(
 
     llm = _build_llm(model)  # no bind_tools: a formatting turn cannot call anything
     config = {"callbacks": list(callbacks)} if callbacks else None
-    # Streaming is a capability the CALLER asks for, and only a command whose prose is
-    # pre-validated by construction may use it (`routing.Command.streams_prose`). A
-    # caller that has not asked for it gets exactly the frames it got before streaming
-    # existed — which matters while the canvas that renders those frames still treats
-    # every unrecognised event as a progress row (`stages.answer_delta_event`).
-    #
-    # It announces the finished prose in one piece, not as the model writes it: the
-    # only command that streams now composes its answer in code, so there are no model
-    # chunks to announce. The token-by-token path went with `/risk`'s prose (2026-10-13).
+    # Streaming is a capability the CALLER asks for (`routing.Command.streams_prose`).
+    # A caller that has not asked gets exactly the frames it got before streaming
+    # existed — which matters while a canvas that renders stages would print an
+    # announcement as a progress row.
     streams = bool(prose_stream and command.streams_prose and on_event is not None)
 
     def _announce(piece: str) -> None:
         _emit(on_event, stages.answer_delta_event(piece))
 
+    # Two prose sources, and the turn streams for one of them.
+    #
+    # `/meds`'s model reply is the extraction JSON — announcing it would put
+    # `{"medications": …}` on a clinician's screen — so its answer is the narrative
+    # written in code from verified rows and this turn is not asked to stream.
+    #
+    # `/ehr` and `/pubmed` are the other way round: the model's reply IS the answer, so
+    # the turn streams and each chunk is announced on arrival.
     response = await _formatting_turn(
         llm,
         [
@@ -351,6 +371,7 @@ async def run_command(
             HumanMessage(content="\n\n".join(str(m.content) for m in tool_messages)),
         ],
         config=config,
+        announce=_announce if streams and command.prose_is_model_output else None,
     )
     text = response.text() if hasattr(response, "text") else str(response.content)
 

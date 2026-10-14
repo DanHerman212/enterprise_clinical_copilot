@@ -33,6 +33,7 @@ from typing import Annotated, Any, Callable, TypedDict
 
 from langchain_core.messages import (
     AIMessage,
+    AIMessageChunk,
     BaseMessage,
     HumanMessage,
     SystemMessage,
@@ -505,18 +506,102 @@ def _tools(toolbox: MCPToolbox,
     ]
 
 
+#: How many opening chunks are held before a model turn is declared an answer.
+#
+# The hold exists because `agent_node` writes two different things through one call:
+# the deliberation that picks a tool, and the answer the reader came for. Which one
+# it is cannot be known until the turn ends, and announcing a routing thought and then
+# withdrawing it is the mutation the streaming policy forbids (`stages.py`). A turn
+# that calls a tool writes the call first, so holding the opening few chunks is enough
+# to tell the two apart, and the latency it costs an answer is a fraction of a
+# sentence.
+#
+# The residual assumption is named rather than hidden: a model that writes a paragraph
+# and *then* calls a tool would have that paragraph announced before the call arrived.
+# `http._check_no_mutation` measures announced prose against the prose finally served
+# on every streamed turn, so that case is logged where it happens rather than assumed
+# away here.
+PROSE_LOOKAHEAD_CHUNKS = 3
+
+
+def _has_tool_call(chunk: AIMessageChunk) -> bool:
+    """Whether this chunk carries any part of a tool call.
+
+    Read from `tool_call_chunks`, which arrives as fragments: a chunk can carry a
+    name without arguments, or arguments without a name. Any fragment at all means
+    the model is calling a tool, which is all this needs to know.
+    """
+    return bool(getattr(chunk, "tool_call_chunks", None))
+
+
+async def _streamed_turn(llm, messages, on_event) -> AIMessage:
+    """One model turn announced as it is written, unless it turns out to be routing.
+
+    Concatenates as it goes: `AIMessageChunk + AIMessageChunk` is how LangChain
+    accumulates a streamed turn, and `AIMessageChunk` subclasses `AIMessage`, so the
+    accumulator satisfies every `isinstance(m, AIMessage)` reading the graph already
+    does — `route()` and `final_message()` included.
+    """
+    held: list[str] = []
+    announcing = False
+    routing = False
+    turn: AIMessageChunk | None = None
+
+    async for chunk in llm.astream(messages):
+        turn = chunk if turn is None else turn + chunk
+        if routing:
+            # A tool call was seen: this turn is deliberation and none of it goes to
+            # the caller. The held prefix is dropped unannounced.
+            continue
+        if _has_tool_call(chunk):
+            routing = True
+            held = []
+            continue
+        if announcing:
+            if chunk.content:
+                _emit(on_event, stages.answer_delta_event(str(chunk.content)))
+            continue
+        held.append(str(chunk.content or ""))
+        if len(held) >= PROSE_LOOKAHEAD_CHUNKS:
+            announcing = True
+            for piece in held:
+                if piece:
+                    _emit(on_event, stages.answer_delta_event(piece))
+            held = []
+
+    if turn is None:
+        raise RuntimeError("the model returned no chunks")
+
+    if not routing and not announcing:
+        # Shorter than the lookahead and no tool call: an answer that arrived in fewer
+        # chunks than the hold. It is announced now rather than withheld — the hold is
+        # a gate on ordering, not a reason to suppress a short answer.
+        for piece in held:
+            if piece:
+                _emit(on_event, stages.answer_delta_event(piece))
+
+    return turn
+
+
 def build_graph(
     toolbox: MCPToolbox,
     model: str = MODEL_ID,
     on_event: Callable[[dict[str, Any]], None] | None = None,
     question_kind: str | None = None,
     guard: Callable[[str, dict], dict | None] | None = None,
+    prose_stream: bool = False,
 ):
     """Compile the graph. `on_event` receives progress stages; None disables them.
 
     Progress is opt-in per call, which is what keeps the single-response `/ask`
     path byte-for-byte what it was: with no listener, `_emit` returns
     immediately and the graph behaves exactly as before.
+
+    `prose_stream` asks for the answer's prose to be announced as it is written. It
+    needs a listener to announce to, so it does nothing without `on_event`, and an
+    unasked-for stream is the one thing this must not do: a client that renders
+    stages and does not understand `answer_delta` would print the answer as progress
+    rows.
     """
     llm = _build_llm(model).bind_tools(
         _tools(toolbox, allowed=routing.FREETEXT_TOOLS)
@@ -538,7 +623,11 @@ def build_graph(
             if seen_a_model_turn
             else stages.planning_event(question_kind),
         )
-        response: AIMessage = await llm.ainvoke(state["messages"])
+        response: AIMessage
+        if prose_stream and on_event is not None:
+            response = await _streamed_turn(llm, state["messages"], on_event)
+        else:
+            response = await llm.ainvoke(state["messages"])
         return {"messages": [response], "tool_calls": []}
 
     async def tool_node(state: AgentState) -> dict:
@@ -587,10 +676,13 @@ async def ask(
     hands it a queue's `put_nowait` — and it is optional, so the answer path
     and the progress path stay one implementation.
 
-    `prose_stream` reaches a command and stops there: it is the caller asking to be
-    shown the prose as it is written. Free text never streams, and only a command
-    whose prose is pre-validated honours the flag, so nothing reaches a screen
-    before the guardrails have run on the paths where that matters (UX Phase 2).
+    `prose_stream` is the caller asking to be shown the prose as it is written, and
+    it now reaches both paths: a command's formatting turn, and the free-text model
+    turn through `_streamed_turn` and its lookahead. Nothing is withheld from the
+    caller until the guardrails have run any more; what a caller watches arrive is
+    provisional, and `http` measures it against the prose finally served on every
+    streamed turn. (UX Phase 4, reversing the Phase 2 per-path policy — the reasons
+    the reversal is made, and what carries it, are in `stages.py`.)
 
     `turns` is the earlier conversation, as the caller understands it. Each turn
     is replayed as its own messages rather than pasted into the prompt, so the
@@ -624,6 +716,7 @@ async def ask(
         # The one identifier this turn holds, checked against what is about to
         # leave the service (UX Phase 1B).
         guard=lambda name, args: _outbound_patient_identifier(name, args, hadm_id),
+        prose_stream=prose_stream,
     )
 
     config: dict = {"recursion_limit": RECURSION_LIMIT}

@@ -110,22 +110,31 @@ def _run(wire, *, prose_stream, payload=PREDICTION, pieces=RISK_PIECES):
 
 # --- the policy ---------------------------------------------------------------
 
-def test_the_streaming_set_is_exactly_the_pre_validated_commands():
+def test_the_streaming_set_is_exactly_the_commands_that_asked_for_it():
     """Written as a set rather than as flags read off each entry, so a command
-    added later has to decide and this fails until it does."""
-    # `/risk` used to be in here and is not any more: it has no prose to stream
-    # (UX ruling 2026-10-13), so `/meds` is the whole set.
-    assert {c.wire for c in routing.COMMANDS if c.streams_prose} == {"meds"}
+    added later has to decide and this fails until it does.
 
-
-def test_only_the_command_that_writes_its_own_prose_streams():
-    """Streaming is granted per command, and only `/meds` has it.
-
-    It composes its narrative in code from verified rows, so the text announced is the
-    settled answer rather than a preview of something still being written. `/risk` used
-    to be here and returns no prose at all now (UX ruling 2026-10-13).
+    Three now, and the two model-prose commands are the Phase 4 change: they were
+    buffered while withholding the text was what carried the risk. `/risk` is still
+    absent, having no prose at all (UX ruling 2026-10-13).
     """
-    assert routing.command_for("meds").streams_prose is True
+    assert {c.wire for c in routing.COMMANDS if c.streams_prose} == {
+        "meds", "summarize", "literature",
+    }
+
+
+def test_the_two_prose_sources_are_declared_per_command():
+    """`streams_prose` says there is prose to announce; `prose_is_model_output`
+    says whose prose it is. `/meds` announces code output and `/ehr` announces the
+    model's own reply, and the second flag is what keeps the extraction JSON off a
+    clinician's screen."""
+    meds = routing.command_for("meds")
+    ehr = routing.command_for("summarize")
+
+    assert meds.streams_prose is True
+    assert meds.prose_is_model_output is False
+    assert ehr.streams_prose is True
+    assert ehr.prose_is_model_output is True
 
 
 def test_the_risk_command_has_no_prose_turn_at_all():
@@ -176,35 +185,74 @@ def test_nothing_is_announced_unless_the_caller_asks():
     assert model.used == ["ainvoke"]
 
 
-def test_a_buffered_command_does_not_stream_however_hard_it_is_asked():
-    """`/ehr` is model prose over retrieved sections: the summary is grounded, but
-    it is not final while it is being written — its markers are resolved after the
-    turn — so it waits with free text."""
+def test_the_summary_streams_its_own_model_prose():
+    """`/ehr`'s model reply IS the answer, so it is announced as it is written.
+
+    This is the Phase 4 reversal. Under the Phase 2 policy this test asserted the
+    opposite — that `/ehr` was buffered because its markers are resolved after the
+    turn — and the risk it named is still real: what a caller watches arrive carries
+    citations that are unresolved until the citation layer has run, and the settled
+    answer may differ. What changed is where that is handled: not by withholding the
+    text, but by the swap the terminal frame drives when the two disagree.
+    """
     _, model, deltas = _run("summarize", prose_stream=True, payload=SECTIONS)
 
-    assert deltas == []
-    assert model.used == ["ainvoke"]
+    assert "".join(d["text"] for d in deltas) == "".join(RISK_PIECES)
+    assert model.used == ["astream"]
 
 
-# --- the assumption, measured -------------------------------------------------
+def test_the_literature_synthesis_streams_too():
+    """`/pubmed` is the same case as `/ehr`: the synthesis is the answer, and the
+    PMIDs it cites are resolved after the turn."""
+    _, model, deltas = _run("literature", prose_stream=True, payload=SECTIONS)
 
-def test_a_changed_answer_is_logged_and_a_match_is_not(caplog):
-    """The policy assumes a streaming command's prose survives the guardrails
-    unchanged. This is where that assumption is checked against the finished
-    answer, so a broken assumption is a log line rather than a clinician watching
-    text move."""
-    with caplog.at_level("WARNING", logger="services.agent.http"):
-        http._check_no_mutation([], "served", "trace-quiet")
-        http._check_no_mutation(["serv", "ed"], "served", "trace-quiet")
+    assert "".join(d["text"] for d in deltas) == "".join(RISK_PIECES)
+    assert model.used == ["astream"]
 
-    assert caplog.text == ""
 
-    with caplog.at_level("WARNING", logger="services.agent.http"):
-        http._check_no_mutation(["The score is 0.14"], "The score is 0.33", "trace-1")
+# --- the swap, decided here ----------------------------------------------------
 
-    assert "differs from the served answer" in caplog.text
+def test_a_settled_verdict_names_the_swap_the_client_owes():
+    """The verdict is the server half of the Dual Swap Protocol: it says whether the
+    caller is owed a notice, and it is computed here because only this process ran the
+    guardrails. A client could see the text move; it could not say why."""
+    quiet = {"answer": "served", "guardrail_flags": []}
+
+    # Nothing announced, and announced-but-unchanged: nothing to reconcile.
+    assert http._prose_settled([], quiet, "trace-none") is None
+    assert http._prose_settled(["serv", "ed"], quiet, "trace-same") is None
+
+    # Moved with nothing claiming responsibility — reformatting, not removal.
+    assert http._prose_settled(
+        ["served with  [1]"],
+        {"answer": "served with [1]", "guardrail_flags": []},
+        "trace-silent",
+    ) == "silent"
+
+    # Moved and a guardrail owns it: the caller must be told, not quietly corrected.
+    assert http._prose_settled(
+        ["The score is 0.14"],
+        {"answer": "The score is 0.33", "guardrail_flags": ["risk_number"]},
+        "trace-visible",
+    ) == "visible"
+
+
+def test_the_settled_verdict_is_logged_with_both_texts(caplog):
+    """Both texts, so the swap can be judged from the log alone.
+
+    At info rather than warning: movement is the expected outcome on a streaming path
+    now, so a warning would fire on the normal case and stop meaning anything. What is
+    worth watching is how often the visible one happens.
+    """
+    with caplog.at_level("INFO", logger="services.agent.http"):
+        http._prose_settled(
+            ["The score is 0.14"],
+            {"answer": "The score is 0.33", "guardrail_flags": ["risk_number"]},
+            "trace-1",
+        )
+
+    assert "visible swap" in caplog.text
     assert "trace-1" in caplog.text
-    # Both texts, so the anomaly can be judged from the log alone.
     assert "0.14" in caplog.text
     assert "0.33" in caplog.text
 
@@ -228,3 +276,81 @@ def test_the_opt_in_defaults_off_and_has_to_be_a_bool():
         )
 
     assert raised.value.code == "invalid_request"
+
+
+# --- the free-text turn: what the lookahead is for ----------------------------
+#
+# `agent_node` writes two different things through one call — the deliberation that
+# picks a tool, and the answer the reader came for — so a chunk cannot be announced
+# when it arrives: it might be either. `graph._streamed_turn` holds the opening
+# chunks until the turn shows which of the two it is. These tests are that rule
+# stated as behaviour, and they run the helper directly rather than through the
+# graph: the node's other work (the stage label, the state it returns) is covered
+# where it already was.
+
+
+def _chunk(text="", tool=None):
+    if tool is None:
+        return AIMessageChunk(content=text)
+    return AIMessageChunk(
+        content=text,
+        tool_call_chunks=[{"name": tool, "args": "", "id": "call_1", "index": 0}],
+    )
+
+
+class _ChunkModel:
+    """Streams a fixed list of chunks, and records that it was asked to stream."""
+
+    def __init__(self, chunks):
+        self.chunks = chunks
+        self.used: list[str] = []
+
+    async def astream(self, messages, config=None):
+        self.used.append("astream")
+        for chunk in self.chunks:
+            yield chunk
+
+
+def _streamed(chunks):
+    """Run the helper over these chunks; return (accumulated turn, announced text)."""
+    events: list[dict] = []
+    turn = asyncio.run(graph._streamed_turn(_ChunkModel(chunks), [], events.append))
+    text = "".join(
+        e["text"] for e in events if e["stage"] == stages.STAGE_ANSWER_DELTA
+    )
+    return turn, text
+
+
+def test_an_answer_turn_is_announced_in_full_once_the_lookahead_passes():
+    turn, announced = _streamed([
+        _chunk("The patient "), _chunk("was admitted "), _chunk("with sepsis."),
+    ])
+
+    assert announced == "The patient was admitted with sepsis."
+    assert turn.content == "The patient was admitted with sepsis."
+
+
+def test_a_routing_turn_is_never_announced():
+    """A tool call in the opening chunks marks the turn as deliberation, so nothing
+    of it reaches the caller and there is no text to withdraw afterwards."""
+    turn, announced = _streamed([
+        _chunk("I should check the notes first.", tool="search_notes"),
+        _chunk(""),
+    ])
+
+    assert announced == ""
+    assert graph._has_tool_call(turn)
+
+
+def test_an_answer_shorter_than_the_lookahead_is_still_announced():
+    """The hold is a gate on ordering, not a reason to swallow a short answer."""
+    _, announced = _streamed([_chunk("No evidence was found in the chart.")])
+
+    assert announced == "No evidence was found in the chart."
+
+
+def test_a_turn_of_empty_chunks_announces_nothing():
+    """A turn that never says anything must not put an empty frame on the wire."""
+    _, announced = _streamed([_chunk(""), _chunk(""), _chunk("")])
+
+    assert announced == ""

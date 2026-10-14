@@ -113,13 +113,29 @@ class Command:
     #: tool call, composes a surface, and returns no prose at all.
     prose: bool = True
 
-    #: Whether this command's prose may be announced as it is written. Set only
-    #: where the text is pre-validated by construction: `/meds`'s narrative is
-    #: generated in code from verified rows. `/ehr` is model prose over retrieved
-    #: sections — grounded, but unverified until the citation layer has resolved its
-    #: markers — so it is buffered with free text. Safety over time-to-first-token
-    #: (UX Phase 2, per-path streaming policy).
+    #: Whether this command's prose may be announced as it is written. UX Phase 2
+    #: granted this only where the text was pre-validated by construction — `/meds`'s
+    #: narrative, written in code from verified rows — and buffered `/ehr` on the
+    #: grounds that its `^[n]` markers are resolved after the turn has finished.
+    #:
+    #: UX Phase 4 grants it to the model-prose commands as well. What carries the risk
+    #: is no longer withholding the text, it is the swap protocol: a caller may be shown
+    #: prose the guardrails then correct, and that correction is reported as it happens
+    #: instead of prevented (`http._check_no_mutation`, and the swap the client performs
+    #: when the terminal frame says the settled answer differs). The Phase 2 wording is
+    #: kept above rather than deleted because the risk it names has not gone away — it is
+    #: paid differently now, and the cost is a clinician reading a number the system then
+    #: withdraws.
     streams_prose: bool = False
+
+    #: Whether the announced prose is the formatting turn's own output.
+    #:
+    #: This is about what there is to announce, not whether to announce. `/meds`'s model
+    #: reply is the extraction JSON, so its prose is written in code and this is False.
+    #: `/ehr` and `/pubmed` summarize retrieved material, where the model's reply IS the
+    #: answer and this is True — so the formatting turn streams, and it is asked to stream
+    #: only when this says the reply is what the caller wants to read.
+    prose_is_model_output: bool = False
 
 
 # The four clinical sections the summary draws on are imported from the
@@ -219,6 +235,8 @@ COMMANDS: tuple[Command, ...] = (
         forbidden=frozenset({"predict_readmission", "rag_search", "rag_search_sections",
                              "search_literature"}),
         formatting=MEDS_FORMATTING,
+        # Prose to announce, and the model's reply is not it: the narrative is written
+        # in code, so `prose_is_model_output` stays False and the turn does not stream.
         streams_prose=True,
     ),
     Command(
@@ -230,6 +248,11 @@ COMMANDS: tuple[Command, ...] = (
                              "search_literature"}),
         sections=SUMMARY_SECTIONS,
         formatting=EHR_FORMATTING,
+        # The model's cited summary is the answer, so it is announced as it is written.
+        # Its markers are resolved after the turn, so what a caller watches arrive is
+        # provisional until the citation layer has finished with it.
+        streams_prose=True,
+        prose_is_model_output=True,
     ),
     Command(
         wire="literature",
@@ -244,6 +267,10 @@ COMMANDS: tuple[Command, ...] = (
         forbidden=frozenset({"predict_readmission", "rag_search", "rag_search_sections",
                              "discharge_medications"}),
         formatting=LITERATURE_FORMATTING,
+        # The synthesis is the answer, and it cites PMIDs the citation layer resolves
+        # after the turn: same swap protocol as `/ehr`.
+        streams_prose=True,
+        prose_is_model_output=True,
     ),
 )
 

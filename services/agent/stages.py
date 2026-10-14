@@ -1,14 +1,25 @@
 """What the agent tells the caller while a question is still in flight.
 
-The answer itself is delivered complete, never token by token. The guardrails
-in `guardrail.py` rewrite the model's text after it finishes — an unsupported
-risk number is removed, an invented age is redacted, a medication that is not
-in the retrieved notes is stripped — so a stream of tokens would be a draft the
-user watches being corrected, and for a clinical answer the corrected part is
-exactly the part that matters. What *can* be streamed honestly is progress:
-which step of the chain is running.
+The answer's prose is now announced as it is written (UX Phase 4, reversing the
+Phase 2 policy this paragraph used to state). The reversal was made with its cost
+named rather than argued away: the guardrails in `guardrail.py` rewrite the model's
+text after it finishes — an unsupported risk number is removed, an invented age is
+redacted, a medication that is not in the retrieved notes is stripped — so a caller
+watching the prose arrive is watching a draft, and for a clinical answer the
+corrected part is exactly the part that matters. A clinician can read a dose or a
+probability and then watch the system withdraw it.
 
-This module exists to make that progress honest. Five rules:
+What the reversal buys is time-to-first-token on the paths a clinician waits on. What
+is meant to carry the risk is no longer withholding the text, it is the swap: `http`
+measures the announced prose against the prose finally served, and the terminal frame
+tells the client whether the two agree. Where they do not, the client replaces what it
+rendered and says so, and the caller is owed that notice rather than left to notice.
+The measurement is therefore no longer a diagnostic — it was one while the policy was
+"announce nothing that might move" — it is the trigger for the correction. The one
+case where text is still withheld is the ReAct turn's opening chunks, because there
+the text might not be the answer at all: see `PROSE_LOOKAHEAD_CHUNKS` in `graph`.
+
+This module exists to keep the progress frames honest. Five rules:
 
 1. **A stage is emitted where the work happens, not before it.** The tool node
    emits immediately before it calls the tool; the model node emits immediately
@@ -33,12 +44,13 @@ This module exists to make that progress honest. Five rules:
 
 5. **A result stage reports the tool's own output, and nothing else.** It is
    emitted immediately after a call returns and carries what came back — a
-   count, or the fact of a failure. Clinical values are deliberately absent: a
-   probability on screen before `guard_answer` has run is the disclosure the
-   layer 3 streaming decision refused, and the answer is where that number is
-   stated, guarded. A count is not that, and it is the difference between a
-   progress line that repeats five fixed phrases and one that tells the user
-   something.
+   count, or the fact of a failure. Clinical values are still deliberately
+   absent, and that rule survives the Phase 4 reversal for a reason of its own:
+   a progress line is not where a number is stated, and a probability printed as
+   a *stage* would be one the guardrails never read at all. The answer frame is
+   the prose they read, which is why the number belongs there and nowhere else. A
+   count is not a clinical value, and it is the difference between a progress
+   line that repeats five fixed phrases and one that tells the user something.
 
 The labels are display text: they are what the user reads, so they live here,
 next to the prompt, rather than in the browser. The browser cannot know what
@@ -60,9 +72,20 @@ STAGE_VERIFY = "verify"
 STAGE_ANSWER = "answer"
 #: One chunk of the answer's prose, announced as it is written. Distinct from
 #: STAGE_ANSWER, which carries the settled answer: a client that did not ask for
-#: prose streaming must be able to ignore this frame and still receive the answer
-#: (UX Phase 2, per-path streaming policy).
+#: prose streaming must be able to ignore this frame and still receive the answer.
+#:
+#: A client that does render these frames owes the caller the other half of the
+#: bargain, and that half is not optional — what they add up to is a draft, and when
+#: it differs from the answer frame's prose the difference is the guardrails' work.
+#: STAGE_PROSE_SETTLED is how it finds out, and the caller is told either way.
 STAGE_ANSWER_DELTA = "answer_delta"
+#: Reported once, and only when the announced prose did not survive into the answer.
+#: Absent means the caller was shown the answer, which is the common case and needs no
+#: frame to say so. Carries one of two verdicts — see `http._prose_settled`, which also
+#: says why the process that ran the guardrails is the only one that can decide between
+#: them. A client that receives it replaces what it rendered; a client that never does
+#: was shown the settled text all along.
+STAGE_PROSE_SETTLED = "prose_settled"
 STAGE_ERROR = "error"
 
 STAGES = (
@@ -250,8 +273,19 @@ def answer_delta_event(text: str) -> dict[str, Any]:
     Carries no `label`, and that is the point: every other stage event is a progress
     line, and this is not one — it is the answer arriving early. A client that draws
     a progress row per event would draw one per token, so the frame is distinguished
-    by its stage and by nothing else. Emitted only for a command whose prose is
-    pre-validated, and only when the caller asked for it (`routing.Command.
-    streams_prose`, `http._stream_chain`).
+    by its stage and by nothing else. Emitted only when the caller asked for it
+    (`http._stream_chain`), and only on paths whose prose is the answer
+    (`routing.Command.streams_prose`).
     """
     return {"stage": STAGE_ANSWER_DELTA, "text": text}
+
+
+def prose_settled_event(swap: str) -> dict[str, Any]:
+    """The verdict on the prose a caller watched arrive.
+
+    One of `"visible"` or `"silent"`, and it carries no `label` for the same reason
+    `answer_delta_event` does not: it is not a step of the work, it is a fact about the
+    answer the caller is already holding. A client that drew a progress row per event
+    would invent a step that never happened.
+    """
+    return {"stage": STAGE_PROSE_SETTLED, "swap": swap}

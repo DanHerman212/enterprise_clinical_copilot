@@ -539,33 +539,51 @@ async def ask_stream_route(request: Request) -> Response:
     )
 
 
-def _check_no_mutation(announced: list[str], served: str, trace: str) -> None:
-    """Compare the prose a caller watched arrive with the prose finally served.
+def _prose_settled(announced: list[str], payload: dict, trace: str) -> str | None:
+    """Whether the prose a caller watched arrive survived into the served answer.
 
-    The per-path streaming policy rests on an assumption: that a command's prose
-    survives the post-hoc guardrails unchanged, so a clinician watching it arrive
-    never sees the text move. Free text is buffered for exactly that reason, and the
-    streaming commands were judged safe by construction — the risk sentence is
-    written from the projected result, the medication narrative is generated in
-    code. An assumption is not evidence, so it is measured here, at the one place
-    where both texts exist: a mismatch means a caller was shown text the system then
-    withdrew, which is the mutation the policy forbids.
+    Returns None when nothing was announced, or when nothing moved — the caller was
+    shown the answer and there is nothing to reconcile. Otherwise it names the swap
+    the client owes the caller, which is the whole of the Dual Swap Protocol:
 
-    Logged rather than raised. The settled answer is the correct one and it is what
-    the caller receives; failing the response would turn a telemetry signal into an
-    outage, and the anomaly is worth a warning precisely once — a repeated line in
-    the log is how we learn the assumption broke.
+      * ``"silent"`` — the prose moved and no guardrail fired. What changed is
+        envelope unwrapping, whitespace, or a citation marker renumbered by the
+        citation layer. The settled text is the right one and the caller does not
+        need to know the two differed, because nothing was taken away.
+      * ``"visible"`` — a guardrail fired, so the announcement was a draft and the
+        settled answer withdrew part of it: a dose that could not be verified against
+        the retrieved notes, a risk figure with nothing behind it, an age the source
+        redacted, a citation that resolved to nothing. Replacing that quietly is
+        exactly the dishonesty the streaming decision was about, so the caller is
+        told, and the client shows it in the Evidence-Check badge.
+
+    Why the verdict is computed here rather than by the client. The client can see
+    that the text moved — it rendered the deltas — but only this process knows *why*,
+    because only this process ran the guardrails. A client left to infer it from
+    `guardrail_flags` would have to re-derive which flags mean content was removed
+    and which mean it was reformatted, and that is a rule about the guardrails living
+    in the browser.
+
+    The difference is no longer logged as a warning. It was one while the policy was
+    "announce nothing that might move", where any movement meant the assumption had
+    broken; now movement is the expected outcome on the paths that stream, so a
+    warning would fire on the normal case and stop meaning anything. Both outcomes are
+    reported at info with the texts, which is the evidence if the swap ever needs
+    judging, and the thing to watch is how often the visible one happens.
     """
     if not announced:
-        return
+        return None
     watched = "".join(announced).strip()
-    if watched == served.strip():
-        return
-    logger.warning(
-        "streamed prose differs from the served answer trace=%s — a caller watched "
-        "the text change (announced=%r served=%r)",
-        trace, watched[:160], served.strip()[:160],
+    served = (payload.get("answer") or "").strip()
+    if watched == served:
+        return None
+
+    swap = "visible" if payload.get("guardrail_flags") else "silent"
+    logger.info(
+        "streamed prose settled as a %s swap trace=%s (announced=%r served=%r)",
+        swap, trace, watched[:160], served[:160],
     )
+    return swap
 
 
 async def _stream_chain(
@@ -669,7 +687,16 @@ async def _stream_chain(
             yield _error_frame(exc.code, str(exc))
             return
 
-        _check_no_mutation(announced, payload["answer"], trace)
+        # The verdict travels as its own frame rather than as a key on the answer.
+        # The answer object is the contract both routes share — `/ask` returns it whole,
+        # and a test asserts the streamed frame carries the same fields — and how the
+        # transport performed is not part of the answer. A frame is also the safe shape:
+        # `stream_prose` is opt-in, so only a caller that asked to watch the prose arrive
+        # ever receives this, and that caller is the client that knows the term. An older
+        # client is never sent one.
+        swap = _prose_settled(announced, payload, trace)
+        if swap is not None:
+            yield _sse(stages.STAGE_PROSE_SETTLED, stages.prose_settled_event(swap))
 
         log.record(
             trace, parsed["question"], "ok",

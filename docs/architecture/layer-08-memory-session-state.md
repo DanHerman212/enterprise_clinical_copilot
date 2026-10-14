@@ -5,6 +5,76 @@ Requirement statuses were re-verified against both repositories on 2026-09-29. F
 recorded by the previous audit; all five were closed by implementation on 2026-09-18, and the
 changes that closed them are in section 4.
 
+Amended 2026-10-14 for the A2UI console. The consolidated policy is stated first, immediately
+below, because that is the part a reader now needs and the part the interface changed; the
+layer's reasoning, its requirements and the record of change follow, unchanged, as the history
+of how it was arrived at.
+
+---
+
+## The policy as it stands (2026-10-14)
+
+**Three holdings of clinical text, each with its own stated lifetime.** A lifetime that is
+stated but not enforced is a wish, so each names what enforces it.
+
+| Holding | Lifetime | Enforced by |
+|---|---|---|
+| The conversation store | **Seven days (168 hours) from the moment a conversation opens**, fixed rather than sliding | The nightly sweep, which deletes in batches and cascades to turns and their stored presentations |
+| The note cache | **Ephemeral and regenerable — no fixed age**; deleted whole and re-fetched | The retention script, which deletes in full because nothing in it is authoritative |
+| Evaluation trace archives | **A fixed 90 days**, longer than a conversation because an audit reads it after the fact | The retention script, applied to the *set* of archives matching the trace pattern |
+
+The sweep runs daily at 03:00 America/New_York as a scheduled job against the production
+database, with retries, deleting in batches of 500 by primary key. Turns, and now their stored
+presentations, are removed by cascade with the conversation; deleting the conversation is the
+only thing that removes a turn. A dry run is available and is the default posture for anything
+that deletes clinical text.
+
+**What a stored turn holds.** The question and the answer as the pair they were; the model and
+the code revision behind the answer; the trace identifier that points at the run; the citations
+as identities; the tool calls whose results cannot be obtained again, each with its arguments
+and its re-derivability; the guardrail flags, which are the only record of why a served answer
+differs from what the model wrote; and — new in this revision — **the composed presentation
+payload**, so that recalling a thread restores the canvas it showed rather than a transcript of
+it.
+
+**What is never stored.** Retrieved discharge-note text: a citation is stored as its identity
+and the passage is re-resolved from the corpus, because the note text lives in the index and not
+in the session store. A tool result that can be recomputed is likewise not stored, and the agent
+says which is which.
+
+**How a long thread is replayed.** The agent's bound is unchanged — at most six earlier turns,
+at most five tool calls per turn, answers over 8,000 characters shortened behind a visible
+marker. What is new is which six: once a conversation passes six turns, the site sends the
+**first turn and the five most recent**. The first turn carries the clinical anchor the rest of
+the thread is written against, and dropping it in favour of six recent turns would leave the
+agent reasoning about a patient from its most recent exchanges alone.
+
+**What this revision changed, and why.**
+
+- **The session is no longer a page load.** The previous decision made the rendered thread and
+the stored conversation end together, so a reload began a new conversation and spent a new
+credit. Against a clinical workspace that holds several patients in parallel, that discards work
+the user believes is retained. A conversation now lives for its retention window and a reload
+resumes it.
+- **The retention window is seven days, not twenty-four hours.** A day is shorter than an
+inpatient episode, and shorter than the interval over which a clinician works a case.
+- **The ceiling is twenty turns, not six, and the daily allowance twenty-five rather than ten.**
+The six-turn ceiling was chosen as a starting point and never derived from use; the refund cap
+for timeout-class failures is unchanged at three a day.
+- **The composed presentation is persisted.** This closes the gap that made resumption
+deferred: a recalled thread used to be a transcript without its artifacts, because the canvas
+was composed from live evidence and storing it would have put note text in the site's database.
+Storing the composed payload does not require storing the passages behind it, so recall restores
+the visual state without the policy having to be relaxed.
+- **Switching patients stays an explicit action.** Isolation is unchanged in substance and is
+now stated as a UI rule: the subject is pinned when a conversation opens, re-asserted on every
+turn, and never inferred from the text of a question.
+
+**Implementation status.** This section is the decision. The settings that carry the window, the
+ceiling and the allowance, the persisted presentation, and the restore path are Phase 3 build
+items, listed in that phase's specification; the doc states the policy and does not claim the
+code already implements it.
+
 ---
 
 ## 1. The layer
@@ -34,14 +104,16 @@ isolation guarantee is made relative to it.
 
 | Term | Definition |
 |---|---|
-| Session | The interval during which a conversation is available; defined here as a page load, and stated in the interface. |
+| Session | The interval during which a conversation is available. Revised 2026-10-14: no longer a page load — a conversation persists for its retention window, and a reload resumes it. |
 | Conversation | A stored sequence of answered turns, pinned to one subject, with a retention window and a turn ceiling. |
 | Turn | One question and its answer, stored as the pair it was, so that a replay reproduces what happened rather than a summary of it. |
 | Structural replay | Reconstructing earlier turns as the message structure a live turn would have produced — dialogue as messages, tool calls as a call and its result — rather than pasting their text into the prompt. |
 | Retrieval re-resolution | Re-deriving retrieved passages from the corpus on replay rather than storing them, so that note text never enters the session store. |
-| Retention window | The maximum age of a stored conversation, enforced by a sweep rather than by expiry on read. |
-| Turn ceiling | The maximum number of user turns in one conversation; the bound on what a single credit buys once only the first turn is charged. |
+| Retention window | The maximum age of a stored conversation, enforced by a sweep rather than by expiry on read. Seven days (168 hours) from creation, fixed rather than sliding; raised from twenty-four hours on 2026-10-14. |
+| Turn ceiling | The maximum number of user turns in one conversation; the bound on what a single credit buys once only the first turn is charged. Twenty, raised from six on 2026-10-14. |
 | Re-derivable | A tool result that can be recomputed from its arguments and the corpus, and which is therefore not stored. |
+| Stored presentation | The composed A2UI payload for a turn, persisted beside its question and answer so that a recalled thread renders the canvas it showed. Added 2026-10-14; closes G1. |
+| Anchor replay | The rule for a thread longer than the replay bound: the first turn together with the five most recent, so the clinical baseline survives context pruning. Added 2026-10-14. |
 
 **Why replay is structural rather than textual.** Retrieved content enters the prompt inside a
 framed, delimited region that marks it as data, and the prompt's rule holds only for text inside
@@ -93,7 +165,7 @@ may keep.
 Every entry from the previous audit is closed. Three matters remain open, and are recorded because a
 refresh document should not present a closed audit as an absent constraint.
 
-**G1 — resuming a rendered thread from the store is deferred.** A conversation is stored, and the
+**G1 — resuming a rendered thread from the store is CLOSED (2026-10-14).** The composed presentation is now persisted with the turn, so a recalled thread restores its visual state rather than a transcript of it. What follows records why resumption was deferred at the time and is left as it stands, because that is the reasoning that was acted on then — and the constraint it names is still the constraint: note text and prediction scores must not enter the site's database. Storing the composed payload respects it, which is why the closure did not require relaxing the policy. A conversation is stored, and the
 thread that rendered it is not: the canvas and the passages behind citations are composed by the
 agent from live evidence, so a resumed thread would be a transcript without its artifacts. Storing
 the artifacts would place note text and prediction scores in the site's database, which the
@@ -104,7 +176,7 @@ recompose a stored turn from the store's identifiers alone — which is possible
 that are re-derivable, and the prediction scores are not. The second is closer to the layer's
 existing grain, since re-derivation is already how retrieval is handled.
 
-**G2 — the turn ceiling is provisional.** The ceiling exists, is enforced, and is accompanied by a
+**G2 — the turn ceiling is SETTLED at twenty (2026-10-14).** It was raised from six together with the daily allowance, which moved from ten to twenty-five. What follows records that six was chosen as a starting point rather than derived from use, and that is precisely why it moved; the ceiling remains a bound to be revisited against observed conversations rather than a value with evidence behind it. The ceiling exists, is enforced, and is accompanied by a
 way forward rather than a dead end; its value was chosen as a starting point rather than derived
 from use. *Remediation:* settle it against observed conversations once there are any, which is the
 same evidence the cost baseline needs.

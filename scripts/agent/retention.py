@@ -265,6 +265,14 @@ def main() -> int:
         help="perform the deletions; without it this is a dry run")
     parser.add_argument(
         "--holdings", choices=("both", "note-cache", "traces"), default="both")
+    # Declared because the note-cache branch reads it: without this argument the
+    # default dry run raised AttributeError before it printed anything, so the
+    # note cache could not be reported or purged by this script at all. The
+    # functions below always accepted a directory; only the CLI never offered one.
+    parser.add_argument(
+        "--note-cache-dir", type=Path, default=None,
+        help="directory holding the note cache "
+             f"(default: {CACHE_DIR}, or NOTE_CACHE_DIR when set)")
     parser.add_argument(
         "--trace-dir", type=Path, default=DEFAULT_TRACE_DIR,
         help=f"directory holding the archives (default: {DEFAULT_TRACE_DIR})")

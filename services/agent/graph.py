@@ -43,6 +43,7 @@ from langchain_core.tools import BaseTool
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, START, StateGraph
 
+from services.agent.message_text import text_of
 from services.mcp.config import (
     GEMINI_LOCATION,
     GEMINI_MAX_OUTPUT_TOKENS,
@@ -557,11 +558,15 @@ async def _streamed_turn(llm, messages, on_event) -> AIMessage:
             routing = True
             held = []
             continue
+        # The chunk's own text, not its repr. Gemini answers in content blocks, and
+        # `str(chunk.content)` announced the envelope and not the prose — measured live
+        # on `/ehr`, 2026-10-14 (see `message_text`).
+        piece = text_of(chunk.content)
         if announcing:
-            if chunk.content:
-                _emit(on_event, stages.answer_delta_event(str(chunk.content)))
+            if piece:
+                _emit(on_event, stages.answer_delta_event(piece))
             continue
-        held.append(str(chunk.content or ""))
+        held.append(piece)
         if len(held) >= PROSE_LOOKAHEAD_CHUNKS:
             announcing = True
             for piece in held:
@@ -914,11 +919,6 @@ def final_text(state: dict) -> str:
     message = final_message(state)
     if message is None:
         return ""
-    text = message.content
-    if isinstance(text, list):
-        # A list of content blocks — keep the text parts.
-        text = "".join(
-            b.get("text", "") if isinstance(b, dict) else str(b)
-            for b in text
-        )
-    return text.strip() if isinstance(text, str) else ""
+    # One implementation of "where is the text in a message", shared with the
+    # streaming paths. It lived here until they needed it too (`message_text`).
+    return text_of(message.content).strip()

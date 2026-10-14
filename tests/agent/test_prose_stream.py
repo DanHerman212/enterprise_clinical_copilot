@@ -29,6 +29,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk  # noqa: E402
 
 from services.agent import graph, http, routing, stages  # noqa: E402
 from services.agent.contracts import AgentRequestError, parse_agent_request  # noqa: E402
+from services.agent.message_text import text_of  # noqa: E402
 from services.agent.deterministic import run_command  # noqa: E402
 
 PREDICTION = {
@@ -354,3 +355,54 @@ def test_a_turn_of_empty_chunks_announces_nothing():
     _, announced = _streamed([_chunk(""), _chunk(""), _chunk("")])
 
     assert announced == ""
+
+
+# --- reading the text out of a chunk ------------------------------------------
+#
+# Gemini answers in content blocks, so `chunk.content` is usually a list. The streaming
+# paths announced `str(chunk.content)` and put the envelope on the wire instead of the
+# prose. Measured live against `/ehr` on 2026-10-14: 6,116 announced characters against
+# a 1,021-character answer. `message_text.text_of` is the one implementation of the
+# unwrapping, and these are its cases.
+
+
+def test_text_of_reads_a_plain_string():
+    assert text_of("The patient was admitted.") == "The patient was admitted."
+
+
+def test_text_of_reads_content_blocks():
+    assert text_of([
+        {"type": "text", "text": "Brief Hospital Course\n"},
+        {"type": "text", "text": "The patient was admitted.", "index": 0},
+    ]) == "Brief Hospital Course\nThe patient was admitted."
+
+
+def test_text_of_ignores_blocks_that_carry_no_text():
+    """A function call is not prose to announce, and neither is a thought signature."""
+    assert text_of([
+        {"type": "text", "text": "Checking the notes."},
+        {"type": "function_call", "name": "rag_search_sections", "args": {}},
+    ]) == "Checking the notes."
+
+
+def test_text_of_stringifies_a_non_dict_entry():
+    """The original unwrapping did this, and a plain list of strings depends on it."""
+    assert text_of(["one", "two"]) == "onetwo"
+
+
+def test_text_of_is_empty_for_shapes_it_does_not_know():
+    assert text_of(None) == ""
+    assert text_of(42) == ""
+
+
+def test_a_block_shaped_chunk_is_announced_as_prose_not_as_its_repr():
+    """The bug that module exists for: the delta is the sentence, not the block."""
+    _, announced = _streamed([
+        AIMessageChunk(content=[{"type": "text", "text": "The patient "}]),
+        AIMessageChunk(content=[{"type": "text", "text": "was admitted."}]),
+        AIMessageChunk(content=[{"type": "text", "text": " She recovered."}]),
+    ])
+
+    assert announced == "The patient was admitted. She recovered."
+    assert "type" not in announced.replace("type-", "")
+    assert "{" not in announced

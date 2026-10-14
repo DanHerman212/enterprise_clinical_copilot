@@ -53,6 +53,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from services.agent import stages
 from services.agent.contracts import RecordedToolCall
 from services.agent.feature_labels import label_for
+from services.agent.message_text import text_of
 from services.agent.prompts import SYSTEM_PROMPT
 from services.agent.routing import Command, tool_arguments
 
@@ -272,8 +273,12 @@ async def _formatting_turn(
     turn: Any = None
     async for chunk in llm.astream(prompt, config=config):
         turn = chunk if turn is None else turn + chunk
-        if chunk.content:
-            announce(str(chunk.content))
+        # The chunk's own text, not its repr: Gemini answers in content blocks, so
+        # announcing `str(chunk.content)` would put the envelope on screen instead of
+        # the summary (see `message_text`).
+        piece = text_of(chunk.content)
+        if piece:
+            announce(piece)
     if turn is None:
         raise RuntimeError("the formatting model returned no chunks")
     return turn

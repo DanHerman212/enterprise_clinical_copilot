@@ -248,15 +248,14 @@ def test_the_formatting_turn_cannot_call_anything(command):
     assert command.formatting in system.content
 
 
-def test_the_supplementary_result_is_withheld_from_the_formatting_turn():
-    """`/ehr` records the risk payload for the canvas and does not show it to the
-    summarizer.
+def test_the_supplementary_result_reaches_the_formatting_turn():
+    """`/ehr` hands the risk result to the summarizer, so the narrative can explain it.
 
-    The canvas prints the score exactly, to a digit the model could only round. A
-    model handed the payload restates it in the narrative, and the widget then says
-    the same thing a second time — the duplication the risk sentence was deleted for
-    on 2026-10-13. So the call is recorded for the composer and withheld from the
-    prose, and this is the test that holds those two apart.
+    This reverses a withholding that briefly stood here. Withholding the risk payload did
+    not stop the model writing about risk; it stopped the model explaining risk, and the
+    reader got a chart summary beside a score with nothing joining them. The division of
+    labour that replaces it — the widget owns the score and the bars, the narrative's
+    fourth section owns the clinical meaning — only works if the model can see the drivers.
     """
     command = routing.command_for("summarize")
     state, box, model = _run_command(command)
@@ -264,13 +263,30 @@ def test_the_supplementary_result_is_withheld_from_the_formatting_turn():
     # The turn really did make both calls...
     assert [name for name, _ in box.calls] == ["rag_search_sections",
                                               "predict_readmission"]
-    # ...and the composer can see the estimate, because it is what draws the chip.
+    # ...and the composer still sees the estimate, because it is what draws the chip.
     assert "predict_readmission" in [call["name"] for call in state["tool_calls"]]
 
-    # The prose was written without it: the risk result is not in the prompt.
+    # ...and so does the prose: the risk result is in the formatting prompt now.
     human = model.seen[0][1]
-    assert '<tool_result name="predict_readmission">' not in human.content
+    assert '<tool_result name="predict_readmission">' in human.content
     assert '<tool_result name="rag_search_sections">' in human.content
+
+
+def test_the_summary_prompt_asks_for_the_fourth_risk_section():
+    """The fourth section is the bridge between the narrative and the widget.
+
+    Asserted as the section names rather than as the whole instruction, so the wording can
+    be improved without failing a test that was only ever checking that the requirement is
+    still stated at all.
+    """
+    formatting = routing.command_for("summarize").formatting
+
+    for section in ("Hospital course", "Discharge diagnosis",
+                    "Discharge instructions", "Readmission risk & trajectory"):
+        assert section in formatting, f"the summary no longer asks for {section!r}"
+
+    # And it must not invite the model to re-derive the score the widget prints.
+    assert "round" in formatting
 
 
 def test_a_prose_less_command_never_builds_a_model():

@@ -52,7 +52,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from services.agent import stages
 from services.agent.contracts import RecordedToolCall
-from services.agent.feature_labels import label_for
+from services.agent.feature_labels import humanize
 from services.agent.message_text import text_of
 from services.agent.prompts import SYSTEM_PROMPT
 from services.agent.routing import Command, supplementary_arguments, tool_arguments
@@ -167,19 +167,25 @@ def _dose_supported(dosage: str, source: str) -> bool:
 def _presented_prediction(name: str, payload: Any) -> Any:
     """The prediction result as the interface shows it, for the model to read.
 
-    `/risk` is rendered as prose by a model that has never seen a feature key, and
-    the keys are not words a clinician reads: the widget draws "red cell
-    distribution width (RDW)" where the result says `rdw_max`. The mapping already
-    exists (`feature_labels.py`) and the interface uses it, so the substitution is
-    made here rather than requested from the model — a translation the model
-    performs is a translation the model can invent, and the prose and the bars
-    have to name a factor the same way.
+    The model has never seen a feature key, and the keys are not words a clinician
+    reads: the widget draws "red cell distribution width (RDW)" where the result says
+    `rdw_max`. The mapping already exists (`feature_labels.py`) and the interface uses
+    it, so the substitution is made here rather than requested from the model — a
+    translation the model performs is a translation the model can invent, and the prose
+    and the bars have to name a factor the same way.
+
+    `humanize`, not `label_for`. Both read the same curated map, so they agree on every
+    feature it names; they part only in the fallback, where `label_for` hands back the raw
+    key and `humanize` title-cases it. The widget draws `humanize`, so the prose has to be
+    shown `humanize` too — otherwise a feature the map has not caught yet reads as
+    "Rdw Max" on its bar and `rdw_max` in the sentence describing it. One factor, one name,
+    whichever name the map happens to know.
 
     The score is NOT rounded here. It used to be, to the two decimals the old bar
     drew. The widget now prints one decimal of a percentage, and a model handed a
     pre-rounded number cannot print that digit: given 0.33 it wrote "33.0%" while
     the widget beside it drew 33.2%. The served value goes to the model instead,
-    and RISK_FORMATTING states which form to write it in. The guardrail still
+    and EHR_FORMATTING states which form to write it in. The guardrail still
     checks the prose against the SERVED value, so what the model writes is checked
     against the same number it was given.
 
@@ -193,7 +199,7 @@ def _presented_prediction(name: str, payload: Any) -> Any:
     factors = payload.get("top_factors")
     if isinstance(factors, list):
         projected["top_factors"] = [
-            {**factor, "feature": label_for(str(factor.get("feature", "")))}
+            {**factor, "feature": humanize(str(factor.get("feature", "")))}
             if isinstance(factor, dict) else factor
             for factor in factors
         ]
@@ -333,13 +339,18 @@ async def run_command(
         toolbox, calls, on_event, project=_presented_prediction,
     )
 
-    # Only the command's OWN tool result is handed to the formatting turn. A
-    # supplementary result is recorded for the composer and withheld from the prose:
-    # the canvas prints the score exactly, and a model given the payload would restate
-    # it in the narrative — the duplication the risk sentence was deleted for. The
-    # executor appends one message per call in call order, so the primary's is first.
-    primary_messages = tool_messages[:len(calls) - len(command.supplementary)]
-
+    # Every result this turn produced goes to the formatting turn, supplementary calls
+    # included.
+    #
+    # This reverses the withholding that stood here earlier the same day, and the reason
+    # is what the withholding actually bought. It did not stop the model writing about
+    # risk; it stopped the model *explaining* risk. The reader got a chart summary and a
+    # score side by side with nothing joining them — two artifacts stacked, which is what
+    # a reader notices first. What replaces it is a division of labour rather than a
+    # shared number: the widget owns the quantitative score and the driver bars, and the
+    # narrative's fourth section owns how those drivers relate to this patient's course.
+    # `routing.EHR_FORMATTING` carries the instruction and `routing.RISK_FORMATTING`
+    # records the rule, so the three cannot drift apart quietly.
     _emit(on_event, stages.reviewing_event())
 
     if not command.prose:
@@ -386,7 +397,7 @@ async def run_command(
         llm,
         [
             SystemMessage(content=f"{FORMATTER_PREAMBLE}\n\n{command.formatting}"),
-            HumanMessage(content="\n\n".join(str(m.content) for m in primary_messages)),
+            HumanMessage(content="\n\n".join(str(m.content) for m in tool_messages)),
         ],
         config=config,
         announce=_announce if streams and command.prose_is_model_output else None,

@@ -175,7 +175,20 @@ RISK_FORMATTING = """Retired 2026-10-13 (UX ruling). The risk command returns th
 and no prose, so this instruction has no turn to inhabit. Kept as a name rather than
 deleted because the reasoning it carried is the record of why the prose went away:
 an LLM was in this command's loop only to format a number the widget already prints
-exactly, and it could not do it at the widget's precision."""
+exactly, and it could not do it at the widget's precision.
+
+Amended 2026-10-15 (UX remediation). The retirement above is about `/risk`, whose answer IS
+the widget, and it stands untouched. A unified `/ehr` turn is the other case, and both are
+governed by one rule:
+
+  The widget owns the quantitative score and the driver bars. On a unified `/ehr` turn the
+  narrative's fourth section synthesizes how those drivers relate to the clinical course
+  without restating raw unformatted floats.
+
+That is a division of labour, not a reversal of the 2026-10-13 ruling, and the difference is
+what each sentence is for. The deleted sentence said the same thing the widget said, in the
+widget's own terms — a second copy of one number. The fourth section says what no widget can:
+why these drivers, for this patient, and what they mean for the follow-up plan."""
 
 MEDS_FORMATTING = """Extract the discharge medications from the note sections you were given.
 Return a JSON object with one key, "medications", holding an array of objects with exactly
@@ -201,8 +214,25 @@ frequency that does not appear in the text.
 Return only the JSON object, with no prose before or after it."""
 
 EHR_FORMATTING = """Summarise the note sections you were given, for a clinician.
-Write flowing prose. Group it under bold inline headers naming the section, in the order the
-sections were given.
+Write flowing prose under four headings, in this order and with these names: Hospital course,
+Discharge diagnosis, Discharge instructions, Readmission risk & trajectory.
+
+Write each heading on its own line as a bold line of its own, with a blank line before it, so
+the interface can set it as a block above the prose it names instead of running it into the end
+of the previous sentence.
+
+The first three sections summarise the note passages you were given.
+
+The fourth explains the readmission-risk estimate you were also given, for THIS patient: what
+the named drivers mean clinically, how they connect to the hospital course and the discharge
+plan, and what they imply for follow-up. Name each driver exactly as the risk result names it,
+so the sentence and the bar beside it describe one factor one way.
+
+Quote a figure only in the form the risk result states it. Do not round it, re-derive it, or
+compute a percentage, a count or a score of your own: the widget prints the score to a
+precision this prose cannot reproduce, and a number here that disagrees with the number beside
+it is worse than no number at all. Describe magnitude qualitatively — a leading driver, a
+modest contributor — unless the stated string is what makes the sentence true.
 
 Cite with an inline marker of the form ^[1], ^[2], ^[3]: the FIRST passage you were given is
 ^[1], the second is ^[2], and so on, in the order the passages appear in the result. Put the

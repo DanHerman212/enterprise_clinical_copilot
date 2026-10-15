@@ -121,7 +121,7 @@ class Command:
     #: UX Phase 4 grants it to the model-prose commands as well. What carries the risk
     #: is no longer withholding the text, it is the swap protocol: a caller may be shown
     #: prose the guardrails then correct, and that correction is reported as it happens
-    #: instead of prevented (`http._check_no_mutation`, and the swap the client performs
+    #: instead of prevented (`http._prose_settled`, and the swap the client performs
     #: when the terminal frame says the settled answer differs). The Phase 2 wording is
     #: kept above rather than deleted because the risk it names has not gone away — it is
     #: paid differently now, and the cost is a clinician reading a number the system then

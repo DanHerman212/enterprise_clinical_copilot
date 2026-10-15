@@ -636,7 +636,7 @@ async def _stream_chain(
             if event is _CHAIN_DONE:
                 break
             # Kept so the settled answer can be compared with what was announced
-            # once the guardrails have run (see `_check_no_mutation`).
+            # once the guardrails have run (see `_prose_settled`).
             if event.get("stage") == stages.STAGE_ANSWER_DELTA:
                 announced.append(event.get("text") or "")
             yield _sse(event["stage"], event)

@@ -91,7 +91,12 @@ def test_the_loop_is_bound_with_the_allow_list():
     """The filter has to be applied at the binding, not merely available."""
     source = Path(graph.__file__).read_text(encoding="utf-8")
 
-    assert "bind_tools(\n        _tools(toolbox, allowed=routing.FREETEXT_TOOLS)\n    )" in source
+    # Two facts, asserted as two facts rather than as one formatting of the call: the
+    # allow-list has to be what is built, and every binding has to be given it. Pinning
+    # the whitespace of a single call made a refactor that preserved both facts fail,
+    # which is a test reporting on its own brittleness rather than on the boundary.
+    assert "freetext_tools = _tools(toolbox, allowed=routing.FREETEXT_TOOLS)" in source
+    assert source.count("bind_tools(freetext_tools") == 2
 
 
 # --- what an empty search becomes --------------------------------------------

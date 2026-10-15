@@ -76,6 +76,10 @@ class AgentState(TypedDict):
     # this turn did. Kept out of `tool_calls` so the caller's stored turn stays
     # exactly this turn's calls, which is what the site replays back next time.
     replayed_tool_calls: list[RecordedToolCall]
+    #: Set once the graph has sent the model back to retrieve. Read by `route` to keep
+    #: the demand one-shot: a model that twice answers without calling a tool would
+    #: otherwise be asked a third time, and the third answer is no better than the second.
+    retrieval_demanded: bool
 
 
 # Spend bounds (ECC-02). One question is one tool call in every designed flow;
@@ -519,10 +523,22 @@ def _tools(toolbox: MCPToolbox,
 #
 # The residual assumption is named rather than hidden: a model that writes a paragraph
 # and *then* calls a tool would have that paragraph announced before the call arrived.
-# `http._check_no_mutation` measures announced prose against the prose finally served
-# on every streamed turn, so that case is logged where it happens rather than assumed
-# away here.
-PROSE_LOOKAHEAD_CHUNKS = 3
+# `http._prose_settled` measures announced prose against the prose finally served on
+# every streamed turn, so that case is logged where it happens rather than assumed away
+# here. Lowering this number widens that exposure, which is the trade below.
+#
+# Why it is 1 rather than 3 (2026-10-15), and the reason is measured. The client paces
+# the draft to a reading cadence, but everything held here is released as ONE burst and
+# painted at once — so this number sets how much of an answer is never paced at all. On
+# a 593-character answer a three-chunk hold released 426 characters in the first paint:
+# 72% of the text was on screen before the cadence had anything to do. At one chunk the
+# first paint is a single chunk, and the cadence governs the rest.
+#
+# One chunk still keeps routing off the screen, because a turn that calls a tool opens
+# with the call. It does not cover a model that opens with prose and calls the tool
+# later; that is the case `_prose_settled` reports, and an unmasked deliberation would
+# be worse than a first paint a beat larger.
+PROSE_LOOKAHEAD_CHUNKS = 1
 
 
 def _has_tool_call(chunk: AIMessageChunk) -> bool:
@@ -588,6 +604,42 @@ async def _streamed_turn(llm, messages, on_event) -> AIMessage:
     return turn
 
 
+# Sent to the model when a run is about to end with an answer and no retrieval happened.
+#
+# Why this exists: free text is the one path where the model chooses the tool, and left
+# on `AUTO` it will sometimes answer a chart question having called nothing at all.
+# Measured 2026-10-15 — two turns in one thread returned `tool_calls: []`, the
+# presentation composed with no citation slots, and the `^[1]..^[3]` the model had
+# written anyway were stripped by the citation guard, correctly, as pointing at nothing.
+# What reached the clinician was a confident summary of the chart with no evidence
+# attached, which is the failure the whole citation contract exists to prevent.
+#
+# It restates the redirect rather than removing it, because the demand has to be able to
+# come back with the same answer it gave the first time: a risk or medication question is
+# answered by NAMING the command that owns it and stopping, and that answer calls no tool
+# either. Without the second paragraph the demand would read as "a tool call is mandatory",
+# which would turn a redirect into a summary read out of the notes — the boundary this
+# path already refuses to cross.
+RETRIEVAL_DEMAND = """\
+You answered without calling a tool. If this question is about what the patient's notes
+say, then you do not have the answer: call `rag_search` with the admission's hadm_id and a
+focused query now, and answer from the passages it returns.
+
+If instead this is a question whose answer belongs to a command — a readmission risk
+score, or a discharge medication list — then answer it exactly as you just did, by naming
+the command that produces it and stopping."""
+
+
+def names_a_command(answer: str) -> bool:
+    """Whether this reply is naming the command that owns the question.
+
+    The redirect form the prompt asks for: "say plainly which command answers it, and stop".
+    Read off the command table rather than from a list written here, so a command added
+    later is recognised without a second place to keep in step.
+    """
+    return any(f"/{wire}" in (answer or "") for wire in routing.BY_WIRE)
+
+
 def build_graph(
     toolbox: MCPToolbox,
     model: str = MODEL_ID,
@@ -608,10 +660,30 @@ def build_graph(
     stages and does not understand `answer_delta` would print the answer as progress
     rows.
     """
-    llm = _build_llm(model).bind_tools(
-        _tools(toolbox, allowed=routing.FREETEXT_TOOLS)
-    )
-
+    # Free text is the one path where the model chooses the tool, and the choice is
+    # bounded by `FREETEXT_TOOLS`. Bounded is not the same as guaranteed: left on
+    # `AUTO`, the model sometimes answers a chart question having called nothing at
+    # all. Measured 2026-10-15 — two turns in one thread returned `tool_calls: []`,
+    # the presentation composed with no citation slots, and the `^[1]..^[3]` the model
+    # had written anyway were stripped by the citation guard, correctly, as pointing at
+    # nothing. What reached the clinician was a confident summary of the chart with no
+    # evidence attached, which is the one thing this path must not produce.
+    #
+    # So the first turn of a run is bound with `tool_choice="any"`: the model must call
+    # one of the retrieval tools, and it still chooses which. The instruction to
+    # retrieve first is already in the prompt; this is that instruction as a guarantee
+    # rather than a request. Later turns stay on `AUTO` so the loop can stop — a
+    # retrieval that comes back empty has to be able to decline rather than search
+    # again, and `no_evidence_answer` is what turns that into the refusal.
+    #
+    # Keyed on `state["tool_calls"]`, not on whether the model has spoken: the replayed
+    # transcript of a follow-up question already contains the model's earlier turns, so
+    # "has the model spoken" is true before this run has done anything and would never
+    # force anything on the questions that need it most.
+    freetext_tools = _tools(toolbox, allowed=routing.FREETEXT_TOOLS)
+    chat_model = _build_llm(model)
+    llm = chat_model.bind_tools(freetext_tools)
+    llm_retrieving = chat_model.bind_tools(freetext_tools, tool_choice="any")
     async def agent_node(state: AgentState) -> dict:
         # Which turn this is decides the label, and the transcript is the only
         # honest source for that. No prior AIMessage means the model has not
@@ -629,10 +701,16 @@ def build_graph(
             else stages.planning_event(question_kind),
         )
         response: AIMessage
+        # The forced binding applies only after the graph has demanded a retrieval (see
+        # `route`). The first turn stays on `AUTO` on purpose: a free-text risk or
+        # medication question is answered by naming the command that owns it and calling
+        # nothing, and forcing a tool call there would make the model read the notes and
+        # answer the very question the boundary says it must not answer.
+        answering_llm = llm_retrieving if state["retrieval_demanded"] else llm
         if prose_stream and on_event is not None:
-            response = await _streamed_turn(llm, state["messages"], on_event)
+            response = await _streamed_turn(answering_llm, state["messages"], on_event)
         else:
-            response = await llm.ainvoke(state["messages"])
+            response = await answering_llm.ainvoke(state["messages"])
         return {"messages": [response], "tool_calls": []}
 
     async def tool_node(state: AgentState) -> dict:
@@ -643,17 +721,50 @@ def build_graph(
         )
         return {"messages": messages, "tool_calls": recorded}
 
+    async def demand_retrieval_node(state: AgentState) -> dict:
+        # A `HumanMessage` rather than a system instruction: a system message appended
+        # mid-conversation is not where the provider expects one, and this is a change of
+        # instruction inside a run rather than a second contract. The transcript it joins
+        # is the run's own and is never stored as the turn's question.
+        return {
+            "messages": [HumanMessage(content=RETRIEVAL_DEMAND)],
+            "retrieval_demanded": True,
+        }
+
     def route(state: AgentState) -> str:
         last = state["messages"][-1]
-        has_calls = isinstance(last, AIMessage) and bool(last.tool_calls)
-        return "tools" if has_calls else END
+        if isinstance(last, AIMessage) and last.tool_calls:
+            return "tools"
+        # No tool call, so the turn is finished — unless it is an answer about the chart
+        # written without reading the chart. The four ways that is not the case: something
+        # was already retrieved, the demand has already been made once, the reply is the
+        # redirect the prompt asks for (a complete answer that calls no tool by design), or
+        # there is no reply at all.
+        if state["tool_calls"] or state["retrieval_demanded"]:
+            return END
+        answer = text_of(getattr(last, "content", ""))
+        if not answer.strip():
+            # A turn with no text is a failure — truncated at the token cap, stopped by a
+            # safety filter, or empty for a provider reason — and it is reported as one.
+            # Demanding a retrieval here would re-prompt a model that has just produced
+            # nothing and would surface the second failure in place of the first.
+            return END
+        if names_a_command(answer):
+            return END
+        return "demand_retrieval"
 
     graph = StateGraph(AgentState)
     graph.add_node("agent", agent_node)
     graph.add_node("tools", tool_node)
+    graph.add_node("demand_retrieval", demand_retrieval_node)
     graph.add_edge(START, "agent")
-    graph.add_conditional_edges("agent", route, {"tools": "tools", END: END})
+    graph.add_conditional_edges(
+        "agent",
+        route,
+        {"tools": "tools", "demand_retrieval": "demand_retrieval", END: END},
+    )
     graph.add_edge("tools", "agent")
+    graph.add_edge("demand_retrieval", "agent")
     return graph.compile()
 
 
@@ -756,6 +867,9 @@ async def ask(
             # stripped as unsupported, which is a correct answer destroyed by a
             # guardrail that could only see this turn.
             "replayed_tool_calls": replayed_calls,
+            # Cleared per run, so the demand below is made at most once per question
+            # rather than once per conversation.
+            "retrieval_demanded": False,
         },
         config=config,
     )

@@ -68,7 +68,12 @@ class _FailingModel:
         self.delay = delay
         self.calls = 0
 
-    def bind_tools(self, tools):
+    def bind_tools(self, tools, **kwargs):
+        # `**kwargs` because the real binding takes them: `graph.py` binds a second variant
+        # with `tool_choice="any"` for the retrieval demand. A double narrower than the
+        # interface fails inside `build_graph`, before the model is ever reached — which
+        # reports as "the model was never reached", saying nothing about the failure the
+        # test is actually about.
         return self
 
     async def ainvoke(self, messages, **kwargs):

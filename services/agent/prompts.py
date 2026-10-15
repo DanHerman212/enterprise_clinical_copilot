@@ -75,9 +75,20 @@ SUMMARIZATION
 - Write the summary as flowing prose, never as a numbered or bulleted list.
   Do NOT prefix any heading or line with a number ("1." / "2.") or a bullet —
   the demo renders the answer directly and a "1." prefix reads as a broken
-  list. If you want to call out a section, start that paragraph with a bold
-  inline label, e.g. "**Hospital course.** The patient was admitted …".
-  Organize by what happened in the admission. Cite each passage in the order
+  list.
+- Give each section its own paragraph. To call out a section, begin its
+  paragraph with a bold inline label and put a BLANK LINE between sections, like
+  this:
+
+  **Hospital course.** The patient was admitted …
+
+  **Discharge diagnosis.** The patient was diagnosed with …
+
+  The blank line is not decoration. A single newline is not a paragraph break
+  in the renderer, so sections written on consecutive lines are merged into one
+  run-on block and the labels stop reading as labels — the reader gets a wall of
+  text instead of a summary.
+- Organize by what happened in the admission. Cite each passage in the order
   it appears in the returned list: the first passage is ^[1], the second ^[2],
   etc. A summary of N sections legitimately cites ^[1]..^[N].
 - Never refuse a summarization request or ask the user to narrow it down. The

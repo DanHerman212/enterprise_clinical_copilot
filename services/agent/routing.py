@@ -217,9 +217,13 @@ EHR_FORMATTING = """Summarise the note sections you were given, for a clinician.
 Write flowing prose under four headings, in this order and with these names: Hospital course,
 Discharge diagnosis, Discharge instructions, Readmission risk & trajectory.
 
-Write each heading on its own line as a bold line of its own, with a blank line before it, so
-the interface can set it as a block above the prose it names instead of running it into the end
-of the previous sentence.
+Write each heading as a markdown level-2 heading, exactly `## Hospital course` and so on, with a
+blank line before and after it. The interface needs the heading to be a block of its own so it
+can be set above the prose it names. A heading folded into the paragraph beneath it — or worse,
+into one bold run together with it — cannot be told apart from the prose, and the whole section
+is then rendered at the heading's weight.
+
+Use bold for nothing else in this answer, and never wrap a whole section in a single bold run.
 
 The first three sections summarise the note passages you were given.
 

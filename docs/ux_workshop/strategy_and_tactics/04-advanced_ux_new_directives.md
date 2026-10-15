@@ -10,7 +10,7 @@ To maintain velocity and verify core protocol changes before adding new tools, P
 * **Milestone 4A (Core Experience — In Progress):**
   * **4A-0 (Completed & Committed):** Phase 3 Carry-Over Hygiene (§0).
   * **4A-1 (Completed & Committed — `1c84d67`, `8ba5dbf`):** Real-Time Lookahead Streaming & Safety Swap Protocol (§1).
-  * **4A-1b (Implemented, uncommitted):** Client-Side Streaming Cadence & Pacing Queue (§1.4), the auto-expanding composer from §6, and §1.5 below — free text now retrieves, so its answers carry citations.
+  * **4A-1b (Completed & Committed — agent `6685365`, site `8fa6488`):** Client-Side Streaming Cadence & Pacing Queue (§1.4), the auto-expanding composer from §6, and §1.5 below — free text now retrieves, so its answers carry citations. Pushed and deployed 2026-10-15.
   * **4A-2 (Next Up):** OpenEvidence-Style Follow-Ups, Citation Drawers (§2), and the remaining table-export affordance in §6.
 * **Milestone 4B (Risk & Literature Synthesis):** Unified `/ehr` + `/risk` View, Interactive Driver Bars, Multi-Source Condition Risk Matrix, and Reference-Level Feedback Traces (§3).
 * **Milestone 4C (Clinical Depth):** OpenFDA/RxNorm Pharmacology Tool (`/drug`) (§4) and DUA-Compliant Synthetic Longitudinal Lab Trends (`/labs`) (§5).

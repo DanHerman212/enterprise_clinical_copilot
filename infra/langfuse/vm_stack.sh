@@ -81,6 +81,23 @@ echo "=== copying the stack definition and secrets ==="
 gcloud compute scp --tunnel-through-iap --zone "$ZONE" --project "$PROJECT" \
   "$(dirname "$0")/docker-compose.yml" "$STAGE" "$VM:$REMOTE/" >/dev/null 2>&1
 
+# ClickHouse's memory ceiling is a sibling file rather than a compose setting,
+# and the compose file mounts it by relative path. It has to be copied here for
+# the same reason the compose file is: without this the VM keeps serving whatever
+# copy it was given last, so editing the ceiling in the repo appears to change
+# nothing. That is also the symptom a wrong ceiling presents, which would make
+# the mistake very hard to see.
+#
+# It is staged under a writable name and moved into place with sudo, because the
+# mounted directory is root-owned: `clickhouse/` and `clickhouse/config.d/` were
+# created by root on the VM, while $REMOTE itself belongs to the login user.
+# Copying straight to $REMOTE/ therefore succeeds for docker-compose.yml and
+# fails for memory.xml with a bare "Permission denied" — and it fails *after* the
+# compose file has been replaced, leaving the cgroup limit and the server limit
+# disagreeing until someone reads both files.
+gcloud compute scp --recurse --tunnel-through-iap --zone "$ZONE" --project "$PROJECT" \
+  "$(dirname "$0")/clickhouse" "$VM:$REMOTE/clickhouse-staged" >/dev/null 2>&1
+
 # The staging file has to land as `.env`: compose interpolates the
 # project-directory .env and nothing else, so a differently-named file is not
 # read and every `${VAR:?}` guard fires even though the values arrived intact.
@@ -89,6 +106,8 @@ gcloud compute ssh "$VM" --zone "$ZONE" --project "$PROJECT" --tunnel-through-ia
   cd $REMOTE
   mv -f '$(basename "$STAGE")' .env
   sudo chmod 600 .env
+  sudo install -D -m 644 $REMOTE/clickhouse-staged/config.d/memory.xml $REMOTE/clickhouse/config.d/memory.xml
+  rm -rf $REMOTE/clickhouse-staged
   sudo docker compose up -d --quiet-pull 2>&1 | tail -6
   echo '--- containers ---'
   sudo docker compose ps --format 'table {{.Name}}\t{{.Status}}'

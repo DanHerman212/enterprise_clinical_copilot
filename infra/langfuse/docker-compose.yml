@@ -31,8 +31,13 @@ services:
     container_name: langfuse-clickhouse
     restart: unless-stopped
     # Safety net below the server's own cap: a runaway contained here cannot
-    # starve Redis, MinIO and the worker, which share this 4 GB host.
-    mem_limit: 2g
+    # starve Redis, MinIO and the worker. Sized against the 8 GB host the VM was
+    # moved to on 2026-10-15 — the four other containers hold about 1.9 GB, so
+    # 4 GB here leaves them room and still covers the 3 GB server cap in
+    # memory.xml plus roughly 1 GB of untracked allocations. On the previous
+    # 3.9 GB host this cap was the binding constraint, and ClickHouse was OOM
+    # killed ~76 times a day while nominally inside its own lower limit.
+    mem_limit: 4g
     environment:
       CLICKHOUSE_DB: default
       CLICKHOUSE_USER: default

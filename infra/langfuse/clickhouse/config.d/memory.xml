@@ -10,18 +10,38 @@
   front door as a 503. Nothing alerted.
 
   What this changes. The server now refuses work under pressure instead of
-  growing until the kernel kills it. The limit is 1.6 GB, a little over 40% of
-  the host, leaving room for the other four services and the page cache. The
-  merge scheduler is the main consumer to be throttled, which is the intended
-  trade: delayed merges degrade performance, whereas an OOM kill is an outage.
+  growing until the kernel kills it. The merge scheduler is the main consumer to
+  be throttled, which is the intended trade: delayed merges degrade performance,
+  whereas an OOM kill is an outage.
 
-  Change this with the host size, not independently of it.
+  Why the ceiling moved, 2026-10-15. The original 1.6 GB was correct in intent
+  and unreachable in practice. The VM had 3.9 GB; the other four containers and
+  the page cache already accounted for about 1.9 GB of it, so the 2 GB cgroup
+  cap — this limit's safety net, set in docker-compose.yml — sat at what the host
+  could actually hand over. ClickHouse was therefore killed while still inside
+  its own limit: 76 OOM kills in one day, roughly ten minutes apart, each one
+  recorded against the container's memory cgroup rather than the host's
+  (`constraint=CONSTRAINT_MEMCG`), which is what identified the cap as the
+  operative ceiling. A limit that the host cannot fund is not a limit; it is a
+  countdown.
+
+  What changed. The VM is e2-standard-2 (2 vCPU, 8 GB) and this ceiling scales
+  with it, as the note below requires. 3 GB against a 4 GB cgroup leaves about
+  1 GB for memory ClickHouse does not track itself — thread stacks, allocator
+  arenas, and the page cache over the data directory. That margin is the actual
+  fix: at 1.6 GB inside 2 GB there was roughly 400 MB, and it was consumed every
+  ten minutes.
+
+  Change this with the host size, not independently of it. Raising either this
+  limit or the cgroup cap alone changes nothing, because the lower of the two
+  governs.
 -->
 <clickhouse>
-    <max_server_memory_usage>1600000000</max_server_memory_usage>
+    <max_server_memory_usage>3000000000</max_server_memory_usage>
 
     <!-- Keep the caches small relative to the ceiling above: together they
-         would otherwise be allowed to occupy most of it. -->
+         would otherwise be allowed to occupy most of it. At 384 MB they are
+         about 13% of the new ceiling, down from 24% of the old one. -->
     <mark_cache_size>268435456</mark_cache_size>
     <uncompressed_cache_size>134217728</uncompressed_cache_size>
 </clickhouse>

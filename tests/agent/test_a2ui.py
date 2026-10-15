@@ -504,6 +504,24 @@ class TestUnifiedEhrRiskTurn:
         assert fallback == out["answer"]
         assert "warfarin" in fallback
 
+    def test_the_widget_sits_immediately_below_the_narrative(self):
+        """The widget is the evidence under the fourth section, not a neighbour of it.
+
+        On this path the integration IS the order, and the order is decided here rather
+        than in the browser: the composer appends the narrative first and the estimate
+        second, so a reader meets the explanation and then the numbers it explains.
+
+        Asserted as adjacency rather than as 'below', because 'below' is what produced a
+        score floating beside a summary with nothing joining the two — the thing the
+        2026-10-15 remediation exists to undo.
+        """
+        out, _ = self._composed()
+        components = out["a2ui"]["messages"][1]["updateComponents"]["components"]
+        ids = [c["id"] for c in components]
+
+        assert "narrative" in ids and "risk" in ids, ids
+        assert ids.index("narrative") + 1 == ids.index("risk"), ids
+
 
 class TestResolvedSources:
     """`sources` is what the browser renders on a footnote click. It must be

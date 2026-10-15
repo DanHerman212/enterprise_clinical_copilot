@@ -291,6 +291,10 @@ def test_stream_sends_stages_then_one_answer_frame():
         # what the console renders, and these three are what the Phase 2
         # components are built against.
         "narrative_text", "citations", "ui_components",
+        # Phase 4A-2. `follow_ups` is empty unless the caller asked for it; `scope`
+        # and `references` are derived from the tool calls and the resolved
+        # citations, so they are always present and cost nothing.
+        "follow_ups", "scope", "references",
     }
     assert answer["answer"].strip()
     # The narrative and the citations are the legacy fields under the contract's

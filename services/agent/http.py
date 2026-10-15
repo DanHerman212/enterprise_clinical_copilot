@@ -24,6 +24,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from services.agent import chain, model_turn, stages
+from services.agent import followups
 from services.agent.a2ui import compose_presentation
 from services.agent.contracts import (
     RE_DERIVABLE_TOOLS,
@@ -174,12 +175,19 @@ def _response_fields(state: dict) -> dict:
     }
 
 
-def _compose_success(question: str, state: dict, trace: str) -> dict:
+async def _compose_success(
+    question: str, state: dict, trace: str, *, want_follow_ups: bool = False
+) -> dict:
     """Guard the answer, compose the presentation, validate the payload.
 
     The whole post-model pipeline, in one place, shared by both routes: this is
     what makes a streamed answer and a single-response answer the same object
     rather than two implementations that agree today.
+
+    Async for one reason: the follow-up questions are proposed by a model call. It is
+    the last thing this does, on an answer that is already written, and it cannot fail
+    the turn (`followups.suggest` returns an empty list rather than raising) — so the
+    only thing it can cost is the follow-up row.
     """
     # Deterministic post-hoc guardrails (P4): the LLM proposes, code disposes.
     # The served answer is the guarded one; flags are returned for observability
@@ -251,6 +259,26 @@ def _compose_success(question: str, state: dict, trace: str) -> dict:
         question, guarded["answer"], trimmed_calls, state.get("command_payload")
     )
 
+    # Proposed from the answer that will actually be served, not from what the model
+    # first wrote: a follow-up built on a sentence a guardrail removed would ask about
+    # something the reader never saw. Runs last, and cannot fail the turn —
+    # `followups.suggest` returns an empty list rather than raising.
+    #
+    # Only when the caller asked for it. One model call per turn is a real cost, and the
+    # caller that draws a follow-up row is the only one that should pay it. The two
+    # derived fields below the payload are free and always present, so the shape of a
+    # payload does not depend on this flag — only whether the list has anything in it.
+    follow_ups = (
+        await followups.suggest(
+            question,
+            presentation["answer"],
+            model=chain.MODEL_ID,
+            scope=presentation.get("scope"),
+        )
+        if want_follow_ups
+        else []
+    )
+
     payload = {
         "question": question,
         "answer": presentation["answer"],
@@ -294,6 +322,17 @@ def _compose_success(question: str, state: dict, trace: str) -> dict:
         # renders no link rather than a link to nowhere.
         "langfuse_trace_id": state.get("langfuse_trace_id") or "",
         "mcp_transport": MCP_TRANSPORT,
+        # The three questions to offer beneath this answer, proposed by the model and
+        # cleaned here. Empty is a supported value and the common one on failure: the
+        # console draws no follow-up row rather than an empty one.
+        "follow_ups": follow_ups,
+        # What the answer rested on, decided from the tool calls rather than asked of
+        # the model (`a2ui.turn_scope`). `None` means it rested on nothing — a redirect
+        # to a command — and the console labels no scope for it rather than claiming one.
+        "scope": presentation.get("scope"),
+        # The rows the console's references drawer lists. The same records the inline
+        # markers resolve to, so a clicked marker and its drawer row are one record.
+        "references": presentation.get("references") or [],
     }
     try:
         validate_agent_success(payload)
@@ -446,7 +485,10 @@ async def ask_route(request: Request) -> JSONResponse:
         )
 
     try:
-        payload = _compose_success(parsed["question"], state, trace)
+        payload = await _compose_success(
+            parsed["question"], state, trace,
+            want_follow_ups=parsed.get("follow_ups") is True,
+        )
     except AgentAnswerUnavailable as exc:
         # The record says which of the three it was, in the code and in the
         # model's own finish reason.
@@ -677,7 +719,10 @@ async def _stream_chain(
         yield _sse(stages.STAGE_VERIFY, stages.verify_event())
 
         try:
-            payload = _compose_success(parsed["question"], state, trace)
+            payload = await _compose_success(
+                parsed["question"], state, trace,
+                want_follow_ups=parsed.get("follow_ups") is True,
+            )
         except AgentAnswerUnavailable as exc:
             log.record(
                 trace, parsed["question"], "error",

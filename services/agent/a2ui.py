@@ -652,6 +652,33 @@ def literature_payload(tool_calls: list[dict]) -> dict | None:
     return None
 
 
+#: What a turn's answer rested on. The console labels the turn with this, so a reader
+#: never mistakes a claim about the patient for a claim about the literature.
+SCOPE_PATIENT = "patient_chart"
+SCOPE_GENERAL = "general_evidence"
+
+
+def turn_scope(tool_calls: list[dict]) -> str | None:
+    """What this turn's evidence was, or None when it rested on nothing.
+
+    A tool call that carried a `hadm_id` read the patient's record; a call without one
+    did not. That is the whole test, and it is read off the arguments the tools were
+    actually given rather than off a list of tool names — so a tool added later is
+    classified by what it did rather than by being remembered here.
+
+    None when no tool ran. A redirect ("that is /risk's answer to give") is a complete
+    answer that rests on no evidence, and labelling it either way would claim a basis
+    it does not have.
+    """
+    if not tool_calls:
+        return None
+    for call in tool_calls:
+        args = call.get("args") or {}
+        if args.get("hadm_id") is not None:
+            return SCOPE_PATIENT
+    return SCOPE_GENERAL
+
+
 def compose_presentation(question: str, answer: str,
                          tool_calls: list[dict],
                          command_payload: dict | None = None) -> dict:
@@ -684,6 +711,7 @@ def compose_presentation(question: str, answer: str,
     rag = rag_payload(tool_calls)
     literature = literature_payload(tool_calls)
     sources = resolve_sources(renumbered, remap, rag, intent)
+    narrative = _narrative(renumbered, sources, literature)
     return {
         "answer": renumbered,
         "citation_map": remap,
@@ -694,6 +722,16 @@ def compose_presentation(question: str, answer: str,
         # citation channel — numbered, renumbered, and resolved against retrieved
         # passages — and an article has no passage to resolve against.
         "literature": literature,
+        # What the turn rested on, and the rows the console's references drawer lists.
+        # Derived here rather than in the browser because this is the layer that saw the
+        # tool calls and resolved the citations; a second derivation downstream would be
+        # a second answer to the same question, and the two would drift.
+        #
+        # `references` is the narrative's own citation list, so the marker a reader
+        # clicks and the row they find at the foot of the turn are the same record by
+        # construction rather than by two lists agreeing today.
+        "scope": turn_scope(tool_calls),
+        "references": list((narrative or {}).get("citations") or []),
         "a2ui": compose_risk_canvas(
             predict_payload(tool_calls),
             rag,
@@ -704,6 +742,6 @@ def compose_presentation(question: str, answer: str,
             medications=command_payload,
             # The narrative chooses its citations from this turn's evidence: the
             # articles for a literature turn, the resolved note passages otherwise.
-            narrative=_narrative(renumbered, sources, literature),
+            narrative=narrative,
         ),
     }

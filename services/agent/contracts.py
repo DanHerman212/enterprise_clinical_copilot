@@ -24,6 +24,11 @@ class AgentRequest(TypedDict):
     written, rather than only in the settled answer. It is a capability, not a
     setting: it defaults off, only a command whose prose is pre-validated honours
     it, and a caller that does not ask receives the frames it always received.
+
+    `follow_ups` is the caller asking for the next questions to be proposed beneath
+    the answer. Off by default for the same reason, and for a sharper one: it costs a
+    model call on every turn, and the evaluation loop asks a thousand questions that no
+    reader will ever see a follow-up row under.
     """
 
     question: str
@@ -32,6 +37,7 @@ class AgentRequest(TypedDict):
     topic: str | None
     turns: list[dict[str, Any]]
     stream_prose: bool
+    follow_ups: bool
 
 
 class AgentToolCall(TypedDict):
@@ -151,7 +157,7 @@ class AgentResponseError(ValueError):
 # `CONVERSATION_FIELDS` below, which says why rather than leaving the caller to
 # infer it from an answer that quietly lost its context.
 ACCEPTED_REQUEST_FIELDS = frozenset(
-    {"question", "hadm_id", "chip", "turns", "stream_prose"}
+    {"question", "hadm_id", "chip", "turns", "stream_prose", "follow_ups"}
 )
 
 # Names a caller reaches for when it expects the agent to remember the
@@ -453,6 +459,16 @@ def parse_agent_request(body: Any, *, max_question_chars: int) -> AgentRequest:
             "invalid_request", "'stream_prose' must be a boolean", 400
         )
 
+    # Asked for rather than assumed, and type-checked the same way. The caller that
+    # wants this is the one drawing a row of clickable questions under the answer; the
+    # evaluation loop is not, and should not pay a model call per question for a row it
+    # never renders.
+    follow_ups = body.get("follow_ups", False)
+    if not isinstance(follow_ups, bool):
+        raise AgentRequestError(
+            "invalid_request", "'follow_ups' must be a boolean", 400
+        )
+
     # A command that takes the caller's own words is the one case where text
     # arriving beside a command is the command's own input rather than a second
     # intention. For every other command it is two intentions, and the request can
@@ -513,6 +529,7 @@ def parse_agent_request(body: Any, *, max_question_chars: int) -> AgentRequest:
         "topic": topic,
         "turns": turns,
         "stream_prose": stream_prose,
+        "follow_ups": follow_ups,
     }
 
 

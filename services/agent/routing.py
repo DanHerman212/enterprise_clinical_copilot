@@ -78,6 +78,14 @@ class MissingTopic(ValueError):
 
 
 @dataclass(frozen=True)
+class ToolSpec:
+    """One additional call a command makes, and the arguments it makes it with."""
+
+    tool: str
+    args: dict
+
+
+@dataclass(frozen=True)
 class Command:
     """One deterministic command and the rules that bind it."""
 
@@ -99,6 +107,20 @@ class Command:
     #: tests rather than trusted, because a regression here is invisible in the
     #: answer: a secondary search that succeeds looks like diligence.
     forbidden: frozenset[str] = field(default_factory=frozenset)
+    #: Further calls this command makes, after `tool`.
+    #:
+    #: This is the single place the "a command names one tool" rule is relaxed, and
+    #: it is relaxed for a reason rather than because two calls are convenient. The
+    #: readmission score and the discharge narrative are two views of one admission,
+    #: and a clinician made to ask twice to see them together is being asked to hold
+    #: the first answer in their head while they wait for the second. One turn also
+    #: keeps the figure and the prose that qualifies it inside one guardrail pass.
+    #:
+    #: A supplementary call's result is recorded for the composer and withheld from
+    #: the formatting turn: the canvas prints the score exactly, and a model handed
+    #: the payload would restate it in the narrative — the duplication the risk
+    #: sentence was deleted for.
+    supplementary: tuple[ToolSpec, ...] = ()
     #: Sections this command may cite, when it is a section command.
     sections: tuple[str, ...] = ()
     #: What the formatting turn must produce. The model receives the tool result
@@ -136,6 +158,11 @@ class Command:
     #: answer and this is True — so the formatting turn streams, and it is asked to stream
     #: only when this says the reply is what the caller wants to read.
     prose_is_model_output: bool = False
+
+    @property
+    def tools(self) -> tuple[str, ...]:
+        """Every tool this command may run, primary first."""
+        return (self.tool, *(spec.tool for spec in self.supplementary))
 
 
 # The four clinical sections the summary draws on are imported from the
@@ -244,7 +271,12 @@ COMMANDS: tuple[Command, ...] = (
         slash="/ehr",
         tool="rag_search_sections",
         args={"hadm_id": "{hadm_id}"},
-        forbidden=frozenset({"predict_readmission", "rag_search", "discharge_medications",
+        # The one composite command (§3, 2026-10-15): the summary the clinician
+        # asked for, and the readmission estimate that belongs beside it.
+        supplementary=(ToolSpec("predict_readmission", {"hadm_id": "{hadm_id}"}),),
+        # `predict_readmission` is absent from this set because this command runs
+        # it. Every other command's tool is still refused here.
+        forbidden=frozenset({"rag_search", "discharge_medications",
                              "search_literature"}),
         sections=SUMMARY_SECTIONS,
         formatting=EHR_FORMATTING,
@@ -319,9 +351,28 @@ def is_command(wire: str | None) -> bool:
     return wire is not None and wire in BY_WIRE
 
 
+def _templated_arguments(args: dict, hadm_id: int | None,
+                         command: Command) -> dict:
+    """`args` over `hadm_id`, refusing when an admission is needed and absent.
+
+    Shared with `supplementary_arguments` so a second call cannot be built by a
+    second set of rules.
+    """
+    if "{hadm_id}" in str(args.values()) and hadm_id is None:
+        raise ValueError(f"{command.slash} needs an admission; none was given")
+    return {k: (hadm_id if v == "{hadm_id}" else v) for k, v in args.items()}
+
+
+def supplementary_arguments(
+        command: Command, hadm_id: int | None) -> list[tuple[str, dict]]:
+    """`(tool, arguments)` for each of this command's supplementary calls."""
+    return [(spec.tool, _templated_arguments(spec.args, hadm_id, command))
+            for spec in command.supplementary]
+
+
 def tool_arguments(command: Command, hadm_id: int | None,
                    topic: str | None = None) -> dict:
-    """The arguments to call the command's tool with.
+    """The arguments to call the command's primary tool with.
 
     The admission is the only argument most of these tools take, and a command
     that needs one cannot run without it — refusing here is better than calling a
@@ -332,10 +383,7 @@ def tool_arguments(command: Command, hadm_id: int | None,
     passed through rather than composed on the way, because a search string the
     agent rewrote is a search string nobody can see.
     """
-    if "{hadm_id}" in str(command.args.values()) and hadm_id is None:
-        raise ValueError(f"{command.slash} needs an admission; none was given")
-    arguments = {k: (hadm_id if v == "{hadm_id}" else v)
-                 for k, v in command.args.items()}
+    arguments = _templated_arguments(command.args, hadm_id, command)
     if command.topic_arg is None:
         if topic is not None:
             raise ValueError(f"{command.slash} takes no topic")

@@ -447,6 +447,64 @@ class TestPresentationContract:
         assert out["scope_suppressed"] is False
 
 
+class TestUnifiedEhrRiskTurn:
+    """`/ehr` is the one composite command: one turn, a narrative and a risk
+    estimate (§3, 2026-10-15).
+
+    The pairing is the feature. A clinician who has to ask twice to see the score
+    and the note together is being asked to hold the first answer while they wait
+    for the second, and both are about the same admission.
+    """
+
+    #: A turn that made both calls, in the order the routing table declares them.
+    BOTH_CALLS = [
+        {"name": "rag_search_sections",
+         "args": {"hadm_id": 20924467},
+         "response": GOOD_RAG},
+        {"name": "predict_readmission",
+         "args": {"hadm_id": 20924467},
+         "response": GOOD_PAYLOAD},
+    ]
+
+    def _composed(self):
+        out = compose_presentation(
+            "Summarize the discharge notes for this patient.",
+            "The patient was discharged on warfarin.^[1]",
+            self.BOTH_CALLS,
+        )
+        return out, _by_id(out["a2ui"])
+
+    def test_one_turn_carries_the_narrative_and_the_risk_widget(self):
+        """Both halves, composed from the two calls the command made. The canvas
+        needed no change to do this — it derives the estimate from the recorded
+        calls — which is why the unified view is a routing decision, not a
+        rendering one."""
+        _, by_id = self._composed()
+        assert "narrative" in by_id, "the summary is missing from the unified turn"
+        assert "risk" in by_id, "the risk widget is missing from the unified turn"
+        assert by_id["risk"]["component"] == "RiskInfluencers"
+
+    def test_the_driver_bars_come_with_the_chip(self):
+        """The chip is the number and the bars are why. A score drawn without its
+        drivers is the half of the pairing a clinician cannot act on."""
+        _, by_id = self._composed()
+        labels = [f["label"] for f in by_id["risk"]["factors"]]
+        assert labels, "the unified turn drew a score with no drivers"
+
+    def test_the_turn_is_still_a_chart_turn(self):
+        assert self._composed()[0]["scope"] == "patient_chart"
+
+    def test_the_fallback_is_the_summary_not_the_score(self):
+        """`fallback_text` is what a client shows when the renderer is unavailable.
+        For `/ehr` that has to be the discharge summary: a bare risk percentage in
+        its place reads as an answer, and it is not the answer that was asked for.
+        """
+        out, _ = self._composed()
+        fallback = out["a2ui"]["fallback_text"]
+        assert fallback == out["answer"]
+        assert "warfarin" in fallback
+
+
 class TestResolvedSources:
     """`sources` is what the browser renders on a footnote click. It must be
     fully resolved here so the client holds no vocabulary and no heuristics."""

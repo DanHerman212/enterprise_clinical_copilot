@@ -55,7 +55,7 @@ from services.agent.contracts import RecordedToolCall
 from services.agent.feature_labels import label_for
 from services.agent.message_text import text_of
 from services.agent.prompts import SYSTEM_PROMPT
-from services.agent.routing import Command, tool_arguments
+from services.agent.routing import Command, supplementary_arguments, tool_arguments
 
 logger = logging.getLogger(__name__)
 
@@ -319,13 +319,26 @@ async def run_command(
     arguments = tool_arguments(command, hadm_id, topic)
     _emit(on_event, stages.planning_event(command.wire))
 
-    # The one tool call, named by the table rather than chosen by a model.
+    # The calls, named by the table rather than chosen by a model: the command's own
+    # tool, then any the command declares alongside it. `/ehr` is the only command with
+    # a second, and it takes one so a single turn can put the readmission score beside
+    # the narrative it qualifies.
+    calls = [{"name": command.tool, "args": arguments, "id": f"{command.wire}-1"}]
+    calls += [
+        {"name": name, "args": extra, "id": f"{command.wire}-{index}"}
+        for index, (name, extra) in
+        enumerate(supplementary_arguments(command, hadm_id), start=2)
+    ]
     tool_messages, recorded = await _execute_tool_calls(
-        toolbox,
-        [{"name": command.tool, "args": arguments, "id": f"{command.wire}-1"}],
-        on_event,
-        project=_presented_prediction,
+        toolbox, calls, on_event, project=_presented_prediction,
     )
+
+    # Only the command's OWN tool result is handed to the formatting turn. A
+    # supplementary result is recorded for the composer and withheld from the prose:
+    # the canvas prints the score exactly, and a model given the payload would restate
+    # it in the narrative — the duplication the risk sentence was deleted for. The
+    # executor appends one message per call in call order, so the primary's is first.
+    primary_messages = tool_messages[:len(calls) - len(command.supplementary)]
 
     _emit(on_event, stages.reviewing_event())
 
@@ -373,7 +386,7 @@ async def run_command(
         llm,
         [
             SystemMessage(content=f"{FORMATTER_PREAMBLE}\n\n{command.formatting}"),
-            HumanMessage(content="\n\n".join(str(m.content) for m in tool_messages)),
+            HumanMessage(content="\n\n".join(str(m.content) for m in primary_messages)),
         ],
         config=config,
         announce=_announce if streams and command.prose_is_model_output else None,

@@ -518,10 +518,21 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
         # is what a client without the renderer shows. The identifier ban covers it
         # for the same reason it covers the narrative (UX Phase 1B) — the id is
         # ours, not a clinical fact, and the reader cannot look it up.
-        fallback = (
-            f"{shown:.0%} 30-day readmission "
-            f"probability ({shown:.2f}), {band} at a {threshold:.2f} threshold."
-        )
+        #
+        # Unless there is a narrative, and as of 2026-10-15 there can be one beside
+        # an estimate: `/ehr` draws the readmission chip next to the discharge
+        # summary it qualifies, in one turn. For that turn the fallback has to be the
+        # summary. The sentence below is the whole answer only when the surface IS
+        # the answer — `/risk`, whose widget prints the score and prints it exactly.
+        # Handing a reader a bare risk figure in place of the summary they asked for
+        # is worse than handing them nothing, because it reads as an answer.
+        if narrative is not None:
+            fallback = narrative["text"]
+        else:
+            fallback = (
+                f"{shown:.0%} 30-day readmission "
+                f"probability ({shown:.2f}), {band} at a {threshold:.2f} threshold."
+            )
 
     # `/meds` brings its own rows. They are verified against the note text before
     # they reach here (`deterministic.parse_medications`), so the grid draws what was

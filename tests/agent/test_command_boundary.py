@@ -115,10 +115,14 @@ def _run_command(command, hadm_id=90000023, *, payload=None, reply=None,
 
 # --- the table ---------------------------------------------------------------
 
-def test_every_command_names_a_tool_the_server_registers():
+def test_every_command_names_tools_the_server_registers():
     """A command that names a tool the server does not serve is a 500 at the
-    moment a clinician presses the button, not a wrong answer."""
-    unknown = {c.tool for c in routing.COMMANDS} - set(REGISTERED_TOOLS)
+    moment a clinician presses the button, not a wrong answer.
+
+    Every declared call is checked, not just the primary: a supplementary tool is
+    as reachable as the one beside it, so it is as able to be unregistered."""
+    declared = {name for c in routing.COMMANDS for name in c.tools}
+    unknown = declared - set(REGISTERED_TOOLS)
     assert not unknown, f"commands name unregistered tools: {sorted(unknown)}"
 
 
@@ -131,7 +135,7 @@ def test_every_command_forbids_every_other_tool():
     silently — a new tool that no command forbids is a command that may call it.
     """
     for command in routing.COMMANDS:
-        assert command.forbidden == set(REGISTERED_TOOLS) - {command.tool}, (
+        assert command.forbidden == set(REGISTERED_TOOLS) - set(command.tools), (
             f"{command.slash} does not forbid every tool but its own"
         )
 
@@ -208,18 +212,27 @@ def test_an_unknown_wire_value_is_not_a_command():
 # --- one call, and only one --------------------------------------------------
 
 @pytest.mark.parametrize("command", routing.COMMANDS, ids=lambda c: c.wire)
-def test_a_command_runs_exactly_its_own_tool_once(command):
+def test_a_command_runs_exactly_its_own_tools_once(command):
     state, box, _ = _run_command(command)
 
-    assert len(box.calls) == 1, box.calls
+    # Every declared call, in declaration order, once each — and nothing else.
+    # `/ehr` declares two, so this is the assertion that fails if a supplementary
+    # call is dropped, duplicated, or run ahead of the tool it accompanies.
+    assert [name for name, _ in box.calls] == list(command.tools), box.calls
+
     name, args = box.calls[0]
-    assert name == command.tool
     assert name not in command.forbidden
     assert args == routing.tool_arguments(command, 90000023, _topic_for(command))
 
-    # The record the answer is stored with names the same single call, so a
-    # replayed turn shows what actually ran.
-    assert [call["name"] for call in state["tool_calls"]] == [command.tool]
+    # A supplementary call is built from the same template rules as the primary,
+    # so a second call cannot acquire its own argument conventions.
+    for index, (tool, extra) in enumerate(
+            routing.supplementary_arguments(command, 90000023), start=1):
+        assert box.calls[index] == (tool, extra), box.calls[index]
+
+    # The record the answer is stored with names the same calls, so a replayed
+    # turn shows what actually ran.
+    assert [call["name"] for call in state["tool_calls"]] == list(command.tools)
 
 
 @pytest.mark.parametrize(
@@ -235,6 +248,31 @@ def test_the_formatting_turn_cannot_call_anything(command):
     assert command.formatting in system.content
 
 
+def test_the_supplementary_result_is_withheld_from_the_formatting_turn():
+    """`/ehr` records the risk payload for the canvas and does not show it to the
+    summarizer.
+
+    The canvas prints the score exactly, to a digit the model could only round. A
+    model handed the payload restates it in the narrative, and the widget then says
+    the same thing a second time — the duplication the risk sentence was deleted for
+    on 2026-10-13. So the call is recorded for the composer and withheld from the
+    prose, and this is the test that holds those two apart.
+    """
+    command = routing.command_for("summarize")
+    state, box, model = _run_command(command)
+
+    # The turn really did make both calls...
+    assert [name for name, _ in box.calls] == ["rag_search_sections",
+                                              "predict_readmission"]
+    # ...and the composer can see the estimate, because it is what draws the chip.
+    assert "predict_readmission" in [call["name"] for call in state["tool_calls"]]
+
+    # The prose was written without it: the risk result is not in the prompt.
+    human = model.seen[0][1]
+    assert '<tool_result name="predict_readmission">' not in human.content
+    assert '<tool_result name="rag_search_sections">' in human.content
+
+
 def test_a_prose_less_command_never_builds_a_model():
     """`/risk` has no formatting turn, so it must not construct an LLM either.
 
@@ -247,9 +285,14 @@ def test_a_prose_less_command_never_builds_a_model():
 
 
 @pytest.mark.parametrize("command", routing.COMMANDS, ids=lambda c: c.wire)
-def test_a_command_reports_the_tool_before_the_review_stage(command):
-    """The run reads as: plan, run the one tool, review. A command that listed
-    stages in another order would be narrating work it did not do."""
+def test_a_command_reports_each_tool_before_the_review_stage(command):
+    """The run reads as: plan, run the declared tools, review.
+
+    One `tool`/`result` pair per declared call, in the order the table declares
+    them. A supplementary call is work that happened, so it announces like any
+    other: a command that listed stages in another order would be narrating work it
+    did not do, and silencing the second call would hide half of what `/ehr` ran.
+    """
     seen = []
     box = _RecordingToolbox()
     model = _NoToolsModel()
@@ -260,9 +303,12 @@ def test_a_command_reports_the_tool_before_the_review_stage(command):
             on_event=seen.append,
         ))
 
-    assert [event["stage"] for event in seen] == [
-        "planning", "tool", "result", "reviewing"]
-    assert seen[1]["tool"] == command.tool
+    assert [event["stage"] for event in seen] == (
+        ["planning"] + ["tool", "result"] * len(command.tools) + ["reviewing"]
+    )
+    assert [event["tool"] for event in seen if event["stage"] == "tool"] == (
+        list(command.tools)
+    )
 
 
 def test_the_topic_reaches_the_tool_exactly_as_the_caller_wrote_it():

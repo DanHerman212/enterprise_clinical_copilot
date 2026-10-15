@@ -310,6 +310,13 @@ def note_citations(sources: list[dict]) -> list[dict]:
             # and differ by section, so the section becomes the title.
             "source": "Discharge note",
             "title": _section_label(source.get("section")),
+            # What the marker SAYS, resolved here rather than in the browser. The marker
+            # reads `1 · Hospital Course` and not a bare `1`, because a number tells the
+            # reader nothing about what they are about to open — and resolving it here
+            # keeps the section vocabulary in the one module that already owns it
+            # (`_SECTION_LABELS`), rather than a second copy in the client that would
+            # drift the first time a section is renamed.
+            "label": f"{int(source['cite'])} · {_section_label(source.get('section'))}",
             "excerpt": str(source.get("text") or ""),
         }
         for source in sources
@@ -324,21 +331,34 @@ def literature_citations(articles: list[dict]) -> list[dict]:
     prose and the record beneath it are the same record by construction, and a marker
     with no record behind it can only mean the model cited a number it never got.
 
-    `pmid` is what the marker DISPLAYS. A literature question is answered against
-    published records and the reader's next step is to open one, so the marker carries
-    the identifier itself and the console links it to PubMed. The number stays as the
-    wire index because the prose the model wrote is numbered; what that number looks
-    like on screen is the console's decision, not the model's.
+    `label` is what the marker DISPLAYS and `pmid` is what it links to. The two used to be
+    one string: the marker printed the identifier, on the reasoning that a literature
+    question is answered against published records and the reader's next step is to open
+    one. The 2026-10-15 remediation moved the display to the journal, because on a
+    literature turn the reader is weighing sources and the journal is what says what kind
+    of claim a record makes. The identifier is still on screen a hover away and is still
+    the link target, so nothing became unactionable — but this is a deliberate trade of a
+    terse identifier for an informative name, and it is the thing to revisit first if the
+    inline pills start reading long.
+
+    The number stays as the wire index because the prose the model wrote is numbered;
+    what that number looks like on screen is the console's decision, not the model's.
 
     No excerpt. That was the abstract, kept for a popover that no longer exists on this
     path, and it travelled as a second copy of text the record already carries.
     """
     citations = []
     for position, article in enumerate(articles, start=1):
+        journal = str(article.get("journal") or "").strip()
         citation = {
             "index": position,
             "source": "PubMed",
             "title": str(article.get("title") or "Untitled record"),
+            # The journal when the record carries one, the identifier otherwise. Chosen
+            # from what the record actually has rather than assumed: a record with no
+            # journal must not render as an empty pill.
+            "label": journal or (
+                f"PMID {article['pmid']}" if article.get("pmid") else "PubMed"),
         }
         if article.get("pmid"):
             citation["pmid"] = str(article["pmid"])

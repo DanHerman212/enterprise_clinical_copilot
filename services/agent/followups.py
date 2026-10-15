@@ -32,6 +32,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 # client here would be a second place for those settings to drift, so the private helper
 # is imported deliberately — it is the same service, and the alternative is a copy.
 from services.agent.graph import _build_llm
+from services.agent.message_text import text_of
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,12 @@ _GENERAL_SCOPE = (
     "the evidence itself — what else is published, how strong it is, where it disagrees."
 )
 
+#: A follow-up is one line in a row of clickable rows, so the cap is a length and not a
+#: sentence count: past roughly this point a row stops reading as a control and starts
+#: reading as a paragraph. Over the cap the question is dropped rather than truncated,
+#: because a truncated question is one the reader did not ask.
+_MAX_QUESTION_CHARS = 200
+
 
 def _questions(text: str, limit: int) -> list[str]:
     """The questions in a model reply, or [] when it did not write a usable list.
@@ -95,10 +102,8 @@ def _questions(text: str, limit: int) -> list[str]:
         if not isinstance(item, str):
             continue
         question = " ".join(item.split())
-        # A follow-up is one line in a row of clickable rows. A multi-sentence blob
-        # would render as a paragraph pretending to be a control, so it is dropped
-        # rather than truncated into something the reader did not ask.
-        if not question or len(question) > 200:
+        # See `_MAX_QUESTION_CHARS`: length is the rule, and dropping beats truncating.
+        if not question or len(question) > _MAX_QUESTION_CHARS:
             continue
         questions.append(question)
         if len(questions) >= limit:
@@ -141,5 +146,9 @@ async def suggest(
         logger.info("follow-ups were not proposed trace=- error=%s", type(error).__name__)
         return []
 
-    text = reply.content if isinstance(reply.content, str) else str(reply.content)
-    return _questions(text, FOLLOW_UP_COUNT)
+    # Through `text_of`, not `str(...)`: this model answers with content blocks, so a
+    # naive stringify hands `_questions` the repr of a list — `[{'type': 'text', …}]` —
+    # which has brackets and therefore *looks* parseable and never is. That is the
+    # failure `message_text` exists to prevent, and it silently cost every turn its
+    # follow-ups until it was caught live.
+    return _questions(text_of(reply.content), FOLLOW_UP_COUNT)

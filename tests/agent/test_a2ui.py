@@ -407,6 +407,45 @@ class TestPresentationContract:
         assert out["citation_map"] == {"1": 2, "2": 1}
         assert out["intent_sections"] == []
 
+    def test_a_chart_turn_without_a_resolved_citation_keeps_no_scope(self):
+        """A chart read that resolved nothing cannot claim chart synthesis.
+
+        The scope is a statement about what the answer rests on, and an answer with
+        no note citation has nothing to show — so it is withheld, and the
+        suppression is reported so the BFF can carry it as a flag rather than lose
+        it at this boundary.
+        """
+        out = compose_presentation(
+            "Summarize the recent discharge notes for this admission.",
+            "The patient recovered uneventfully and was discharged home.",
+            [{"name": "rag_search", "args": {"hadm_id": 20924467},
+              "response": {"query": "discharge notes", "passages": []}}],
+        )
+        assert out["scope"] is None
+        assert out["scope_suppressed"] is True
+
+    def test_a_chart_turn_with_a_resolved_citation_keeps_the_scope(self):
+        out = compose_presentation(
+            "Summarize the recent discharge notes for this admission.",
+            "The patient was discharged on warfarin^[1].",
+            [{"name": "rag_search", "args": {"hadm_id": 20924467},
+              "response": GOOD_RAG}],
+        )
+        assert out["scope"] == "patient_chart"
+        assert out["scope_suppressed"] is False
+
+    def test_a_general_turn_without_citations_keeps_its_scope(self):
+        """A general-medical answer legitimately cites nothing, so the rule must
+        not reach it — which is why it waited on the classifier rather than
+        shipping alongside the citation guard."""
+        out = compose_presentation(
+            "What does the literature say about early mobilisation after surgery?",
+            "Early mobilisation shortens length of stay.",
+            [{"name": "search_literature", "response": {"articles": []}}],
+        )
+        assert out["scope"] == "general_evidence"
+        assert out["scope_suppressed"] is False
+
 
 class TestResolvedSources:
     """`sources` is what the browser renders on a footnote click. It must be

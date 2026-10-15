@@ -279,10 +279,19 @@ async def _compose_success(
         else []
     )
 
+    # The guardrails' own flags, plus the one only this layer can see: a chart turn
+    # whose scope was withheld because no note citation resolved. Telemetry first —
+    # evals read it off the stored turn — and it also classifies such a turn's prose
+    # swap as visible rather than silent, which is the honest reading of a settled
+    # answer that no longer claims the chart.
+    flags = list(guarded["flags"])
+    if presentation.get("scope_suppressed"):
+        flags.append("chart_synthesis_without_citations")
+
     payload = {
         "question": question,
         "answer": presentation["answer"],
-        "guardrail_flags": guarded["flags"],
+        "guardrail_flags": flags,
         "tool_calls": trimmed_calls,
         "a2ui": presentation["a2ui"],
         "sources": presentation["sources"],

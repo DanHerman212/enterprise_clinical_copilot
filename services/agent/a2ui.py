@@ -692,6 +692,9 @@ def compose_presentation(question: str, answer: str,
         first-appearance order
       - sources: one resolved {cite, section, text, query} per citation in
         the answer — the browser looks a clicked footnote up by number
+      - scope: what the answer rested on, or None when it rested on nothing —
+        which includes a chart read that resolved no note citation, reported as
+        `scope_suppressed` rather than asserted over prose it cannot evidence
       - a2ui: the composed risk-canvas envelope; its SourceCard is sources[0]
 
     citation_map and intent_sections are inputs to that resolution and are
@@ -712,6 +715,18 @@ def compose_presentation(question: str, answer: str,
     literature = literature_payload(tool_calls)
     sources = resolve_sources(renumbered, remap, rag, intent)
     narrative = _narrative(renumbered, sources, literature)
+
+    scope = turn_scope(tool_calls)
+    # A chart read that resolved no note citation has nothing to substantiate the
+    # claim. The scope says what the answer rests on, not that a chart tool ran, so
+    # it is withheld here rather than asserted over prose it cannot evidence — the
+    # same rule that gives a redirect no scope at all. Reported alongside it so the
+    # BFF can carry the suppression into `guardrail_flags` instead of it ending
+    # silently at this boundary.
+    scope_suppressed = scope == SCOPE_PATIENT and not sources
+    if scope_suppressed:
+        scope = None
+
     return {
         "answer": renumbered,
         "citation_map": remap,
@@ -730,7 +745,8 @@ def compose_presentation(question: str, answer: str,
         # `references` is the narrative's own citation list, so the marker a reader
         # clicks and the row they find at the foot of the turn are the same record by
         # construction rather than by two lists agreeing today.
-        "scope": turn_scope(tool_calls),
+        "scope": scope,
+        "scope_suppressed": scope_suppressed,
         "references": list((narrative or {}).get("citations") or []),
         "a2ui": compose_risk_canvas(
             predict_payload(tool_calls),

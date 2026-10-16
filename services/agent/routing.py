@@ -226,6 +226,30 @@ frequency that does not appear in the text.
 
 Return only the JSON object, with no prose before or after it."""
 
+LABS_FORMATTING = """Describe the laboratory trajectories you were given, for a clinician who
+asked what these measurements did during this admission.
+
+Write two to four sentences, in prose. Say what moved and in which direction, where each
+analyte started, how far it went, and whether it left its reference range. Give the values you
+need to make that concrete, at the precision you were given them: the payload states each
+analyte's values to its own reporting precision, and a value re-rounded in your sentence would
+disagree with the number in the card beside it for no reason.
+
+The trajectories were generated from this admission's own recorded features. They were NOT read
+from a laboratory record. Say so once, plainly, in the course of the answer — the card carries
+the same statement, and a reader who assumes these are measured results has been misled by
+omission. Do not overstate it, and do not repeat it in every sentence.
+
+Describe only what the payload contains. Never invent a value, a trend, a cause or a
+comparison against a normal population that is not in the reference interval you were given.
+Where an analyte is inside its range, say that rather than implying a problem; where a
+trajectory has no reference interval, say what it did without judging it.
+
+Never write an admission id, a note id, or any other identifier into the prose: they are ours,
+not clinical facts, and the reader cannot look them up. Write no heading — this is a short
+answer about a course, not a report. Write nothing about medications, and append no disclaimer
+about missing information."""
+
 EHR_FORMATTING = """Summarise the note sections you were given, for a clinician.
 Write flowing prose under four headings, in this order and with these names: Hospital course,
 Discharge diagnosis, Discharge instructions, Readmission risk & trajectory.
@@ -314,6 +338,27 @@ invent findings, authors, or a topic."""
 
 
 COMMANDS: tuple[Command, ...] = (
+    Command(
+        wire="labs",
+        slash="/labs",
+        tool="get_lab_trends",
+        args={"hadm_id": "{hadm_id}"},
+        # Everything else is refused: this command draws one card from one call, and a
+        # second retrieval on the same turn would be the model reading the chart to
+        # describe the chart. `get_lab_trends` is absent from this set because it is the
+        # tool this command runs, and the rule the set encodes is that no OTHER tool runs.
+        forbidden=frozenset({"predict_readmission", "rag_search", "rag_search_sections",
+                             "discharge_medications", "search_literature"}),
+        formatting=LABS_FORMATTING,
+        # The model's description of the trajectory IS the answer, so it is announced as
+        # it is written — the same grant `/ehr` and `/pubmed` have, and for the same
+        # reason. This command exists because asking for lab trajectories in free text
+        # was the unreliable path (Phase 4B): the deterministic route has to be the one a
+        # clinician reaches for, so it must be at least as good an experience as the free
+        # text it replaces, streaming included.
+        streams_prose=True,
+        prose_is_model_output=True,
+    ),
     Command(
         wire="risk",
         slash="/risk",

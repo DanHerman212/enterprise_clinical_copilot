@@ -26,6 +26,13 @@ CHIP_QUESTIONS = {
     # which is what stops note text reaching a third party. See
     # docs/literature-tool-plan.md.
     "literature": "Search PubMed for recent literature on this condition.",
+    # The lab-trajectory chip (Phase 4B). It exists because the free-text route was the
+    # unreliable one: a question about what a measurement did could reach the reasoning
+    # loop and settle empty, and a deterministic route has to be the better answer, not
+    # the fallback. The wording asks about the course rather than naming an analyte,
+    # because the command draws the panel — a clinician who wants one analyte can click
+    # the driver bar for it, which is the drill-down that produced the request.
+    "labs": "Describe the laboratory trajectories for this patient's admission.",
 }
 
 # Appended when a patient is in scope, so the model never has to ask which

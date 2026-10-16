@@ -115,12 +115,14 @@ def test_the_streaming_set_is_exactly_the_commands_that_asked_for_it():
     """Written as a set rather than as flags read off each entry, so a command
     added later has to decide and this fails until it does.
 
-    Three now, and the two model-prose commands are the Phase 4 change: they were
+    Four now, and the two model-prose commands are the Phase 4 change: they were
     buffered while withholding the text was what carried the risk. `/risk` is still
-    absent, having no prose at all (UX ruling 2026-10-13).
+    absent, having no prose at all (UX ruling 2026-10-13). `/labs` joined in Phase 4B
+    and is model prose: the description of a course is written, and the card draws the
+    values it describes.
     """
     assert {c.wire for c in routing.COMMANDS if c.streams_prose} == {
-        "meds", "summarize", "literature",
+        "meds", "summarize", "literature", "labs",
     }
 
 

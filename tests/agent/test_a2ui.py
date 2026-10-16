@@ -449,28 +449,38 @@ class TestPresentationContract:
     def test_a_comparative_turn_is_general_evidence_not_chart_synthesis(self):
         """The patient's estimate does not turn a literature turn into a chart read.
 
+        `
         `/pubmed` fetches both (Phase 2, 2026-10-16): the records, and this patient's own
         estimate as the baseline the matrix pins above them. Reading only as far as "a
         patient-scoped tool ran" made every comparative turn a chart read with no note
         citations — so it dropped its scope pill AND raised a visible safety swap over an
         answer nothing had been removed from.
+
+        The admission is one the reviewed map carries (Phase 4B), because the matrix is
+        selected by the patient's own phenotype now: a comparison needs an admission whose
+        condition is known, and an id that resolves to nothing draws no table. That is
+        asserted separately; here it is only the vehicle.
         """
         out = compose_presentation(
             "Compare this patient's readmission risk against peer-reviewed clinical "
             "cohorts.",
-            "Her 9.0% sits below the 13.2% pooled for hospitalised heart failure^[1].",
+            "His 9.0% sits below the 13.2% pooled for hospitalised heart failure^[1].",
             [
                 {"name": "search_literature", "args": {"query": "heart failure"},
-                 "response": {"returned": 1, "articles": [{
+                 "response": {"query": "heart failure", "returned": 1, "articles": [{
                      "pmid": "37495280",
                      "title": "Global Comparison of Readmission Rates.",
                      "journal": "JACC",
                      "pub_date": "2023 Aug 01",
                      "abstract": "13.2% were readmitted within 30 days.",
                      "url": "https://pubmed.ncbi.nlm.nih.gov/37495280/"}]}},
-                {"name": "predict_readmission", "args": {"hadm_id": 20924467},
+                {"name": "predict_readmission", "args": {"hadm_id": 90000023},
                  "response": GOOD_PAYLOAD},
             ],
+            # A `/pubmed` turn, which is one of the two commands whose question the
+            # comparison table answers. Without the command the composer cannot know
+            # which surface it is composing for, and draws no table.
+            command="literature",
         )
 
         assert out["scope"] == "general_evidence"

@@ -90,6 +90,8 @@ EXPECTED_COMPONENTS = {
     "meds": "medication_table",
     "summarize": "narrative_with_sources",
     "literature": "literature_cards",
+    # Phase 4B: the lab trajectories, which had no command at all until then.
+    "labs": "lab_trends",
 }
 
 # The caller's own words, for the one command that needs them.

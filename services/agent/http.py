@@ -256,7 +256,11 @@ async def _compose_success(
     # semantics — they belong to the layer that ran the guardrails and saw the
     # tool evidence. Django passes them through; the browser renders them.
     presentation = compose_presentation(
-        question, guarded["answer"], trimmed_calls, state.get("command_payload")
+        question, guarded["answer"], trimmed_calls, state.get("command_payload"),
+        # Which command this turn was, or None for free text. The canvas reserves the
+        # comparative cohort table to the commands whose question it answers, so the
+        # composer has to know which one it is composing for.
+        state.get("command"),
     )
 
     # Proposed from the answer that will actually be served, not from what the model

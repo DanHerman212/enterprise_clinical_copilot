@@ -127,6 +127,10 @@ QUESTION_KIND_LABELS = {
     "meds": "Reading the Medication Question",
     "summarize": "Reading the Summary Request",
     "literature": "Reading the Literature Request",
+    # Phase 4B. A drill-down the clinician reaches from the driver bar is still a
+    # question about a course, so the label says what is being read rather than
+    # naming the card.
+    "labs": "Reading the Laboratory Question",
 }
 
 # One label per tool the MCP server advertises (`services/mcp/server.py`).

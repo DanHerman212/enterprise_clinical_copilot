@@ -46,7 +46,12 @@ from services.agent.citations import (
     renumber_citations,
 )
 from services.agent.feature_labels import display_probability, humanize
-from services.agent.literature_benchmarks import benchmarks_for
+from services.agent.admission_phenotypes import (
+    bucket_for,
+    is_matrix_eligible,
+    phenotype_of_query,
+)
+from services.agent.literature_benchmarks import benchmarks_for_phenotype
 
 # Read off the site's registered catalog: the vendored renderer resolves the
 # custom components against this exact id, and a mismatch means nothing draws.
@@ -430,22 +435,57 @@ def _narrative(answer: str, sources: list[dict], literature: dict | None) -> dic
 _BASELINE_SOURCE = "Enterprise Clinical Copilot"
 
 
-def _comparative_matrix(estimate: dict | None, literature) -> dict | None:
+def _draws_matrix(command: str | None, has_literature: bool, phenotype: str,
+                  query: str) -> bool:
+    """Whether this turn may carry the comparative cohort table at all.
+
+    Reserved to the command whose question it answers. The table exists to qualify a
+    readmission estimate against published cohorts, and only two turns ask that: `/ehr`,
+    which is the briefing the estimate belongs to, and a `/pubmed` turn that is ABOUT the
+    patient's own condition.
+
+    The gate is the command rather than the evidence, and that distinction is the bug this
+    replaces. It used to ask whether a search had run and whether labs had been drawn, and
+    the phenotype resolved from any tool call carrying an admission — so `/meds`, a lab
+    drill-down and every follow-up question drew the table, because all of them read the
+    patient's chart. Observed live: `/meds` and a follow-up about blood transfusions both
+    arrived with a heart-failure cohort table under them, captioned "No readmission
+    estimate was requested for this turn" — the component explaining its own irrelevance,
+    which is the surface telling us it should not have been drawn.
+
+    A command that is not `/ehr` or `/pubmed` therefore draws nothing, including `/risk`
+    (its widget is the whole answer), `/labs` (the trajectories are), `/meds` (the list is)
+    and a free-text turn, which has no command at all. Follow-ups are the case that
+    matters most and are free-text turns: they inherit the patient from the thread they
+    continue, so every one of them carries an admission and none of them asks about
+    cohorts.
+    """
+    wire = str(command or "").strip().lower()
+    if wire == "summarize":
+        return True
+    if wire == "literature":
+        # The condition-lock's other half. Asking about another condition draws the
+        # records and no comparison; asking about this patient's draws both.
+        return bool(has_literature) and phenotype_of_query(query) == phenotype
+    return False
+
+
+def _comparative_matrix(estimate: dict | None, phenotype: str | None) -> dict | None:
     """This patient's estimate set against the published cohorts, or None.
 
-    Rows come from `literature_benchmarks`, keyed by PMID, which is where a record the
-    search returned and a cohort someone curated for it meet. None when no retrieved
-    record has a benchmark — the ordinary outcome of a live search, and the reason the
-    surface falls back to the cards rather than drawing a comparison table with nothing
-    comparable in it.
+    Rows come from `literature_benchmarks`, selected by the admission's resolved
+    phenotype (`admission_phenotypes`). None when the admission resolved to no phenotype,
+    or to one the curated corpus has no cohort for. The PMIDs a search returned have
+    nothing to do with whether the table draws, and that is the Phase 4B change: under the
+    rule this replaces, rows were matched against the records a search returned, no live
+    search ever returned a curated one, and the matrix therefore did not render at all.
 
     A missing estimate does NOT suppress the table. The cohorts are worth reading on
     their own, and the component is told which of the two things it is drawing: with a
     baseline row when there is an estimate, and with a sentence saying so when there is
     not. What it must never do is draw the baseline row with an empty figure in it.
     """
-    articles = (literature or {}).get("articles") if isinstance(literature, dict) else None
-    rows = benchmarks_for(articles if isinstance(articles, list) else [])
+    rows = benchmarks_for_phenotype(phenotype)
     if not rows:
         return None
 
@@ -492,7 +532,10 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
                         literature: dict | None = None,
                         labs: dict | None = None,
                         medications: dict | None = None,
-                        narrative: dict | None = None) -> dict:
+                        narrative: dict | None = None,
+                        phenotype: str = "",
+                        query: str = "",
+                        command: str | None = None) -> dict:
     """Turn one predict (+ rag) payload into the A2UI risk-canvas envelope.
 
     predict is None when the question did not request a readmission estimate
@@ -518,6 +561,19 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
     takes nothing", which is a clinical claim this system has no basis for. With no
     rows the narrative carries the absence alone, exactly as the missing SourceCard
     says nothing rather than explaining itself.
+
+    `phenotype` is the admission's resolved condition, and it is what selects the
+    comparative matrix's cohort rows (`admission_phenotypes`, Phase 4B). Empty means the
+    admission did not resolve, or resolved to a bucket with no comparison policy, and the
+    matrix then draws nothing at all: an unknown condition is the one thing a
+    condition-matched table must not guess at.
+
+    `query` is the clinician's own words on a turn that had them, and it is the second
+    half of the condition-lock: on a literature turn the comparison is drawn only when
+    the query is about the patient's own condition. Asking about heart failure while
+    looking at an orthopedic admission draws the records and nothing else — not heart
+    failure cohorts pinned under her estimate, and not orthopedic cohorts answering a
+    question about heart failure either.
     """
     components: list[dict] = [
         {"id": "root", "component": "Column", "children": []},
@@ -572,16 +628,24 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
     else:
         articles, note, degraded = [], "", False
 
+    # Selected once, before either surface claims the column, because both draw it: the
+    # literature turn above the record list and the risk turn beneath the widget. One
+    # selection means the two placements cannot disagree about which cohorts this patient
+    # is being compared against.
+    #
+    # Whether the turn may carry it at all is `_draws_matrix`'s question, and it is asked
+    # here rather than at either placement so no surface can draw the table on a turn that
+    # did not ask for it.
+    comparison = (
+        _comparative_matrix(estimate, phenotype)
+        if _draws_matrix(command, literature_view is not None, phenotype, query) else None
+    )
+
     if literature_view is not None:
-        # The comparison, when the search returned a record someone has curated a cohort
-        # rate for. It goes above the records: the patient's position among the published
-        # cohorts is the answer to "how does she compare", and the records beneath it are
-        # the sources a reader checks that answer against.
-        #
-        # `literature` and not `articles`: the matrix reads each record's abstract for the
-        # excerpt and the tables above deliberately stop carrying it, so the raw payload is
-        # the only place it survives.
-        comparison = _comparative_matrix(estimate, literature)
+        # The comparison, when this patient's phenotype has curated cohorts. It goes above
+        # the records: the patient's position among the published cohorts is the answer to
+        # "how does she compare", and the records beneath it are the sources a reader
+        # checks that answer against.
         if comparison is not None:
             children.append("comparison")
             components.append(comparison)
@@ -701,6 +765,24 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
                 f"{shown:.0%} 30-day readmission "
                 f"probability ({shown:.2f}), {band} at a {threshold:.2f} threshold."
             )
+
+    # The comparison on a turn with no literature list, which is `/ehr`: the same component
+    # under the risk widget instead of above a record list, because the two turns ask
+    # different questions. `/pubmed` answers "how does she compare, and what is the
+    # evidence", so the cohorts lead and the records follow; `/ehr` answers "what is her
+    # risk", so the widget leads and the cohorts qualify it immediately beneath — which is
+    # the placement the directive asks for and the reason the matrix had to stop being a
+    # literature-turn-only surface.
+    #
+    # A lab turn draws no comparison at all. A drill-down asks what a measurement did, and
+    # a table of published readmission cohorts is an answer to a question nobody asked —
+    # the card is the answer and the prose above it describes the course. Without this the
+    # trajectories arrived under an empty-baseline matrix on every drill-down, which is
+    # what the first composed lab turn did.
+    if (literature_view is None and comparison is not None
+            and not (isinstance(lab_trends, list) and lab_trends)):
+        children.append("comparison")
+        components.append(comparison)
 
     # `/meds` brings its own rows. They are verified against the note text before
     # they reach here (`deterministic.parse_medications`), so the grid draws what was
@@ -874,9 +956,47 @@ def turn_scope(tool_calls: list[dict]) -> str | None:
     return SCOPE_GENERAL
 
 
+def turn_phenotype(tool_calls: list[dict]) -> str:
+    """The phenotypic bucket this turn's admission resolved to, or "".
+
+    Read off the `hadm_id` the tools were actually given, the same way `turn_scope` reads
+    the scope, so a tool added later is classified by what it did. The admission id
+    travels as an argument rather than being passed alongside the calls because this
+    layer's whole job is to derive the surface from the evidence the turn produced.
+
+    Three ways to get nothing back, and the caller cannot tell them apart — which is
+    correct, because the consequence is the same and it is the safe one:
+
+      * no tool carried an admission (a condition-only search, a free-text question);
+      * the admission is not in the reviewed map, so its condition is unknown;
+      * the admission resolved to a bucket whose policy is no comparison, or is not a
+        hospital admission at all.
+
+    The condition-lock is enforced here rather than at the matrix, so a mismatched
+    comparison cannot be drawn by any caller that forgets a check: a `/pubmed` turn whose
+    query is about a condition this patient does not have still carries `hadm_id` for the
+    estimate, and the matrix for it is selected by the PATIENT's phenotype. A query about
+    heart failure on an orthopedic admission therefore draws the orthopedic rows beside
+    her estimate or, when the query is the point, the records alone — never heart failure
+    cohorts pinned under an orthopedic patient.
+    """
+    for call in tool_calls or []:
+        hadm_id = (call.get("args") or {}).get("hadm_id")
+        if not isinstance(hadm_id, int) or isinstance(hadm_id, bool):
+            continue
+        # The first admission the turn used is the one it is about: every call in a turn
+        # carries the same one, so there is nothing here to reconcile between calls.
+        if not is_matrix_eligible(hadm_id):
+            return ""
+        bucket = bucket_for(hadm_id)
+        return bucket.key if bucket else ""
+    return ""
+
+
 def compose_presentation(question: str, answer: str,
                          tool_calls: list[dict],
-                         command_payload: dict | None = None) -> dict:
+                         command_payload: dict | None = None,
+                         command: str | None = None) -> dict:
     """The full presentation contract for an answered question.
 
     One call produces every field the browser consumes, so the answer's
@@ -980,5 +1100,14 @@ def compose_presentation(question: str, answer: str,
             # The narrative chooses its citations from this turn's evidence: the
             # articles for a literature turn, the resolved note passages otherwise.
             narrative=narrative,
+            # The patient's own condition selects the cohort rows, whatever the
+            # question was about (see `turn_phenotype`), and `command` decides whether
+            # this turn is one that carries the table at all (see `_draws_matrix`).
+            phenotype=turn_phenotype(tool_calls),
+            # The clinician's own words, when the turn had any: the other half of the
+            # condition-lock, so a question about a condition this patient does not have
+            # is answered with records and no comparison.
+            query=str((literature or {}).get("query") or "") if isinstance(literature, dict) else "",
+            command=command,
         ),
     }

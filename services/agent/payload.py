@@ -64,6 +64,9 @@ COMMAND_COMPONENTS: dict[str, str] = {
     "meds": "medication_table",
     "summarize": "narrative_with_sources",
     "literature": "literature_cards",
+    # Phase 4B. `/labs` draws the trajectories and nothing else: one tool, one card, and
+    # the prose above it describing the course.
+    "labs": "lab_trends",
 }
 
 # The same mapping for the free-text path, where the tool rather than the command
@@ -76,11 +79,28 @@ TOOL_COMPONENTS: dict[str, str] = {
     "rag_search": "source_cards",
     "rag_search_sections": "source_cards",
     "search_literature": "literature_cards",
+    "get_lab_trends": "lab_trends",
 }
 
 
 def _component(name: str, props: dict[str, Any]) -> dict[str, Any]:
     return {"component": name, "props": props}
+
+
+def _lab_payload(tool_calls: list[dict]) -> dict | None:
+    """The `get_lab_trends` response for this run, or None.
+
+    Local rather than taken from `a2ui`, unlike the three readers above it, because
+    `a2ui` has no need of one: the canvas is handed the lab payload directly by
+    `compose_presentation`, which read it off the calls for its own reasons. This path
+    classifies a turn by tool name and does need to look it up. A second reader for the
+    same key is the small cost, and it is smaller than threading a payload through a
+    module that already receives it.
+    """
+    for call in tool_calls or []:
+        if call.get("name") == "get_lab_trends":
+            return call.get("response") or None
+    return None
 
 
 def _unavailable(payload: dict | None, tool: str) -> dict[str, str]:
@@ -198,6 +218,48 @@ def _literature(tool_calls: list[dict],
     })
 
 
+def _lab_trends(tool_calls: list[dict],
+                _command_payload: dict | None) -> dict[str, Any]:
+    """The laboratory trajectories a turn drew.
+
+    Every value here is generated from the admission's own feature row rather than read
+    from a laboratory table, and `synthetic` travels with the payload so the surface
+    cannot present a drawing as a measurement. `anchored` names the analytes whose values
+    the model was also scored on, which is how a reader tells those apart from the
+    clinical panel that was generated from reference intervals alone.
+    """
+    response = _lab_payload(tool_calls)
+    if not response or "error" in response:
+        return _component("lab_trends",
+                          _unavailable(response, "the laboratory trajectories"))
+    trends = [t for t in response.get("trends") or [] if isinstance(t, dict)]
+    if not trends:
+        return _component("lab_trends", _unavailable(
+            {"message": response.get("note") or "no trajectory was generated"},
+            "the laboratory trajectories"))
+    return _component("lab_trends", {
+        "synthetic": bool(response.get("synthetic")),
+        "note": response.get("note") or "",
+        "analytes": [
+            {
+                "key": trend.get("key"),
+                "label": trend.get("label"),
+                "unit": trend.get("unit"),
+                "reference_low": trend.get("reference_low"),
+                "reference_high": trend.get("reference_high"),
+                "anchored": list(trend.get("anchored") or []),
+                "points": [
+                    {"day": point.get("day"), "value": point.get("value"),
+                     "flag": point.get("flag")}
+                    for point in trend.get("series") or []
+                    if isinstance(point, dict)
+                ],
+            }
+            for trend in trends
+        ],
+    })
+
+
 def _source_cards(tool_calls: list[dict],
                   _command_payload: dict | None) -> dict[str, Any]:
     """The note passages a free-text answer cites.
@@ -230,6 +292,7 @@ _BUILDERS: dict[str, Callable[[list[dict], dict | None], dict[str, Any]]] = {
     "narrative_with_sources": _narrative_with_sources,
     "source_cards": _source_cards,
     "literature_cards": _literature,
+    "lab_trends": _lab_trends,
 }
 
 

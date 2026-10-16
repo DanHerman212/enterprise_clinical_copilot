@@ -46,6 +46,7 @@ from services.agent.citations import (
     renumber_citations,
 )
 from services.agent.feature_labels import display_probability, humanize
+from services.agent.literature_benchmarks import benchmarks_for
 
 # Read off the site's registered catalog: the vendored renderer resolves the
 # custom components against this exact id, and a mismatch means nothing draws.
@@ -123,7 +124,6 @@ def _usable_articles(literature) -> list[dict]:
 
 # Shown when a search ran, matched nothing, and the tool offered no wording of its own.
 _LITERATURE_EMPTY_NOTE = "No matching literature was found for this query."
-
 # Shown when the search could not be performed at all. Deliberately a different
 # sentence from the one above: that one says the evidence does not exist, this one says
 # nobody looked, and a clinician deciding whether to trust an answer needs to know which
@@ -323,6 +323,36 @@ def note_citations(sources: list[dict]) -> list[dict]:
     ]
 
 
+#: How long a literature marker's source token may get before it is cut back.
+#:
+#: A journal name is unbounded — "Journal of the American College of Cardiology" is
+#: forty-seven characters — and an inline marker is a pill set inside a sentence, so an
+#: unbounded label is a pill whose own box wraps to a second line and reads as a broken
+#: one. Asked for by a reader looking at exactly that, 2026-10-16.
+#:
+#: Twenty-four characters keeps "Home healthcare now" and "Patient education and…"
+#: recognisable. The full title is a hover away on the marker's popover and a line below in
+#: the record list, which is where a reader goes to weigh a source anyway.
+_CITE_SOURCE_CHARS = 24
+
+
+def _short_source(name: str) -> str:
+    """A source name cut back to the marker's budget, at a word boundary.
+
+    At a boundary rather than mid-word, and with an ellipsis rather than silently: a cut
+    that lands inside a word reads as a typo, and one with nothing to mark it reads as the
+    whole name.
+    """
+    text = " ".join(str(name or "").split())
+    if len(text) <= _CITE_SOURCE_CHARS:
+        return text
+    cut = text[:_CITE_SOURCE_CHARS]
+    space = cut.rfind(" ")
+    if space > 8:
+        cut = cut[:space]
+    return cut.rstrip(" ,.;:") + "…"
+
+
 def literature_citations(articles: list[dict]) -> list[dict]:
     """One citation per retrieved article, numbered as the summary cites them.
 
@@ -344,6 +374,11 @@ def literature_citations(articles: list[dict]) -> list[dict]:
     The number stays as the wire index because the prose the model wrote is numbered;
     what that number looks like on screen is the console's decision, not the model's.
 
+    The trade made on 2026-10-15 was revisited on 2026-10-16, which is what the paragraph
+    above asked for: the pills WERE reading long. The journal is kept and cut to
+    `_CITE_SOURCE_CHARS`, so the marker still says what kind of source a record is without
+    its box wrapping inside a sentence. The identifier is untouched as the link target.
+
     No excerpt. That was the abstract, kept for a popover that no longer exists on this
     path, and it travelled as a second copy of text the record already carries.
     """
@@ -356,8 +391,9 @@ def literature_citations(articles: list[dict]) -> list[dict]:
             "title": str(article.get("title") or "Untitled record"),
             # The journal when the record carries one, the identifier otherwise. Chosen
             # from what the record actually has rather than assumed: a record with no
-            # journal must not render as an empty pill.
-            "label": journal or (
+            # journal must not render as an empty pill. Cut to a marker's length — see
+            # `_short_source` for why, and for why the cut is marked.
+            "label": _short_source(journal) or (
                 f"PMID {article['pmid']}" if article.get("pmid") else "PubMed"),
         }
         if article.get("pmid"):
@@ -383,10 +419,78 @@ def _narrative(answer: str, sources: list[dict], literature: dict | None) -> dic
     return narrative_surface(answer, note_citations(sources))
 
 
+#: What the pinned row calls the estimate's source.
+#:
+#: Deliberately not the algorithm's name. The directive that asked for this row wrote
+#: "Enterprise Clinical Copilot (XGBoost)", and nothing in the payload says XGBoost: the
+#: tool reports a served model version and a feature source, and no learner. Naming a
+#: learner here would be this layer asserting an implementation detail it cannot
+#: evidence, which is the one kind of claim it must not make. The version IS in the
+#: payload, so the version carries the provenance and the source stays what it is.
+_BASELINE_SOURCE = "Enterprise Clinical Copilot"
+
+
+def _comparative_matrix(estimate: dict | None, literature) -> dict | None:
+    """This patient's estimate set against the published cohorts, or None.
+
+    Rows come from `literature_benchmarks`, keyed by PMID, which is where a record the
+    search returned and a cohort someone curated for it meet. None when no retrieved
+    record has a benchmark — the ordinary outcome of a live search, and the reason the
+    surface falls back to the cards rather than drawing a comparison table with nothing
+    comparable in it.
+
+    A missing estimate does NOT suppress the table. The cohorts are worth reading on
+    their own, and the component is told which of the two things it is drawing: with a
+    baseline row when there is an estimate, and with a sentence saying so when there is
+    not. What it must never do is draw the baseline row with an empty figure in it.
+    """
+    articles = (literature or {}).get("articles") if isinstance(literature, dict) else None
+    rows = benchmarks_for(articles if isinstance(articles, list) else [])
+    if not rows:
+        return None
+
+    # The pills name the factors the way the bars do, looked up in the same map, so one
+    # factor cannot read two ways inside one answer.
+    for row in rows:
+        row["matched_features"] = [humanize(key) for key in row["matched_features"]]
+
+    component: dict = {
+        "id": "comparison",
+        "component": "ComparativeRiskMatrix",
+        "rows": rows,
+        "baseline_note": "",
+    }
+    if estimate is None:
+        component["baseline_note"] = (
+            "No readmission estimate was requested for this turn, so the table shows "
+            "the published cohorts alone."
+        )
+        return component
+
+    component["baseline"] = {
+        "source": _BASELINE_SOURCE,
+        # The figures go over RAW and the component formats them, exactly as the widget
+        # does — same field, same formatter, same rounding — so the row and the bar
+        # beside it cannot print one estimate two ways.
+        "probability": float(estimate["probability"]),
+        "threshold": float(estimate["threshold"]),
+        "decision": int(estimate.get("decision") or 0),
+        "cohort": "Index admission, this patient",
+        "drivers": [
+            humanize(str(factor.get("feature", "")))
+            for factor in (estimate.get("top_factors") or [])
+            if isinstance(factor, dict)
+        ],
+        "provenance": f"Model {estimate.get('model_version') or 'unknown'}",
+    }
+    return component
+
+
 def compose_risk_canvas(predict: dict | None, rag: dict | None,
                         cite: int = 1, sections: tuple[str, ...] = (),
                         source: dict | None = None,
                         literature: dict | None = None,
+                        labs: dict | None = None,
                         medications: dict | None = None,
                         narrative: dict | None = None) -> dict:
     """Turn one predict (+ rag) payload into the A2UI risk-canvas envelope.
@@ -435,6 +539,32 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
             "streaming": bool(narrative.get("streaming")),
         })
 
+    # The lab trajectories, when this turn asked for them. Second in the column and directly
+    # under the narrative, because on a drill-down turn the card IS the answer: the prose
+    # above is the sentence describing a course, and a reader who has to scroll past anything
+    # else to reach the values has been given the conclusion before the evidence.
+    #
+    # `synthetic` travels with the card rather than being decided by the surface. Every value
+    # in it is generated — see `dependencies/labs/synthetic.py` — and the payload states so
+    # in its own contract, so a component cannot present a drawing as a measurement without
+    # contradicting what it was handed.
+    lab_caption = ""
+    lab_trends = (labs or {}).get("trends") if isinstance(labs, dict) else None
+    if isinstance(lab_trends, list) and lab_trends:
+        count = len(lab_trends)
+        lab_caption = (
+            f"{count} laboratory trajector{'y' if count == 1 else 'ies'} across "
+            "this admission."
+        )
+        children.append("labs")
+        components.append({
+            "id": "labs",
+            "component": "LabTrendCard",
+            "trends": lab_trends,
+            "synthetic": bool((labs or {}).get("synthetic")),
+            "note": str((labs or {}).get("note") or ""),
+        })
+
     estimate = _usable_estimate(predict)
     literature_view = _literature_view(literature)
     if literature_view is not None:
@@ -443,6 +573,19 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
         articles, note, degraded = [], "", False
 
     if literature_view is not None:
+        # The comparison, when the search returned a record someone has curated a cohort
+        # rate for. It goes above the records: the patient's position among the published
+        # cohorts is the answer to "how does she compare", and the records beneath it are
+        # the sources a reader checks that answer against.
+        #
+        # `literature` and not `articles`: the matrix reads each record's abstract for the
+        # excerpt and the tables above deliberately stop carrying it, so the raw payload is
+        # the only place it survives.
+        comparison = _comparative_matrix(estimate, literature)
+        if comparison is not None:
+            children.append("comparison")
+            components.append(comparison)
+
         # Literature takes the canvas. This is the swap the feature exists for: the
         # question was about published evidence, so the risk widgets are not merely
         # absent — they are the wrong thing to be looking at. The records are shown
@@ -484,7 +627,12 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
         # big "no risk estimate" heading either — that space belongs to the
         # citation source. The small provenance caption below already says
         # plainly that no estimate was requested.
-        fallback = "No 30-day readmission risk estimate was requested for this question."
+        #
+        # Unless a lab card was drawn, in which case the caption says what the card holds.
+        # "No readmission estimate was requested" is true of a lab drill-down and useless to
+        # a reader who asked about a value, so the sentence follows the surface.
+        fallback = lab_caption or (
+            "No 30-day readmission risk estimate was requested for this question.")
     else:
         probability = float(estimate["probability"])
         threshold = float(estimate["threshold"])
@@ -666,6 +814,22 @@ def rag_payload(tool_calls: list[dict]) -> dict | None:
     return None
 
 
+def lab_trend_payload(tool_calls: list[dict]) -> dict | None:
+    """The `get_lab_trends` response for this run, or None.
+
+    None for a failed call as well as for no call: the card draws a course, and a course
+    with no values in it is not a shorter answer, it is a wrong one. The turn still says
+    what happened — the tool's error reaches the model like any other result.
+    """
+    for call in tool_calls or []:
+        if call.get("name") != "get_lab_trends":
+            continue
+        response = call.get("response") or {}
+        if isinstance(response, dict) and not response.get("error"):
+            return response
+    return None
+
+
 def literature_payload(tool_calls: list[dict]) -> dict | None:
     """The `search_literature` response for this run, or None.
 
@@ -744,17 +908,42 @@ def compose_presentation(question: str, answer: str,
     intent = intent_sections(question)
     rag = rag_payload(tool_calls)
     literature = literature_payload(tool_calls)
+    labs = lab_trend_payload(tool_calls)
     sources = resolve_sources(renumbered, remap, rag, intent)
     narrative = _narrative(renumbered, sources, literature)
 
     scope = turn_scope(tool_calls)
+
+    # A turn that retrieved records answers from them, so it is general medical evidence
+    # even when a supplementary call also fetched this patient's own estimate (Phase 2,
+    # 2026-10-16). The badge exists so a clinician never mistakes published literature for
+    # something the chart supports; badging a comparator turn "Patient Chart Synthesis"
+    # would claim the notes support a sentence drawn from JAMA. The one patient figure such
+    # a turn states is attributed to the model in the table beside it, not to a passage.
+    #
+    # Without this, `/pubmed` read as a chart read that resolved no note citation — the
+    # suppression rule immediately below — so every comparative turn dropped its scope pill
+    # AND raised a visible safety swap over an answer nothing had been removed from. A
+    # false correction is worse than none: it teaches a reader to skip the badge.
+    if scope == SCOPE_PATIENT and _usable_articles(literature):
+        scope = SCOPE_GENERAL
+
     # A chart read that resolved no note citation has nothing to substantiate the
     # claim. The scope says what the answer rests on, not that a chart tool ran, so
     # it is withheld here rather than asserted over prose it cannot evidence — the
     # same rule that gives a redirect no scope at all. Reported alongside it so the
     # BFF can carry the suppression into `guardrail_flags` instead of it ending
     # silently at this boundary.
-    scope_suppressed = scope == SCOPE_PATIENT and not sources
+    #
+    # A lab card is the third channel, and it substantiates too (Phase 3, 2026-10-16). A
+    # drill-down turn reads the patient's chart — `get_lab_trends` takes an admission, so
+    # the scope is `patient_chart` and that is the right badge — but its evidence is a
+    # trajectory rather than a passage, so `sources` is empty and the rule above would have
+    # withheld the scope AND raised a visible safety swap over an answer nothing had been
+    # removed from. The same false correction the comparator turn produced, from the same
+    # cause: a channel added after the rule was written.
+    lab_evidenced = bool((labs or {}).get("trends"))
+    scope_suppressed = scope == SCOPE_PATIENT and not sources and not lab_evidenced
     if scope_suppressed:
         scope = None
 
@@ -786,6 +975,7 @@ def compose_presentation(question: str, answer: str,
             sections=intent,
             source=sources[0] if sources else None,
             literature=literature,
+            labs=labs,
             medications=command_payload,
             # The narrative chooses its citations from this turn's evidence: the
             # articles for a literature turn, the resolved note passages otherwise.

@@ -371,11 +371,22 @@ def _outbound_patient_identifier(
     }
 
 
+def _call_key(name: str, arguments: dict[str, Any]) -> str:
+    """A stable identity for one call, so a repeat can be recognised.
+
+    Sorted keys rather than the dict itself: two calls carrying the same arguments in a
+    different order are the same call, and comparing them as written would let a model
+    defeat the check by reordering its own JSON.
+    """
+    return f"{name}:{json.dumps(arguments, sort_keys=True, default=str)}"
+
+
 async def _execute_tool_calls(
     toolbox: MCPToolbox, calls: list[dict],
     on_event: Callable[[dict[str, Any]], None] | None = None,
     project: Callable[[str, Any], Any] | None = None,
     guard: Callable[[str, dict], dict | None] | None = None,
+    already_called: list[dict] | None = None,
 ) -> tuple[list[BaseMessage], list[RecordedToolCall]]:
     """Run one turn's tool calls, refusing those beyond the per-turn budget.
 
@@ -389,17 +400,45 @@ async def _execute_tool_calls(
     `guard` may refuse a call before it is dispatched, returning the error payload
     the model should see instead. A refused call announces nothing: the stages
     describe work that happened, and this is work that did not.
+
+    `already_called` is the calls THIS TURN has already made whose results are in the
+    transcript, and passing it is what makes the budget a per-turn budget. The reasoning
+    loop invokes this once per iteration with the calls of a single model turn, so the
+    `index` below is 0 every time — and an index-based budget therefore never tripped. A
+    turn made eight calls against a budget of five, looped until the graph's recursion
+    limit, and settled as an EMPTY ANSWER rather than a failure (observed live 2026-10-16,
+    twice, on a lab question).
     """
     messages: list[BaseMessage] = []
     recorded: list[RecordedToolCall] = []
+    prior = list(already_called or [])
+    done = {_call_key(str(call.get("name")), dict(call.get("args") or {}))
+            for call in prior}
     for index, call in enumerate(calls):
         arguments = dict(call.get("args") or {})
-        if index >= MAX_TOOL_CALLS_PER_TURN:
+        key = _call_key(str(call.get("name")), arguments)
+        spent = len(prior) + index
+        if spent >= MAX_TOOL_CALLS_PER_TURN:
+            # The message says what to DO, not only what was refused. A refusal a model
+            # cannot act on is read as a transient failure and retried, which is the loop
+            # this line exists to end.
             payload: dict[str, Any] = {
                 "error": "tool_call_limit",
                 "message": (
-                    f"Per-turn tool budget is {MAX_TOOL_CALLS_PER_TURN} calls; "
-                    "this call was not executed."
+                    f"This turn has already made {spent} tool calls and its budget is "
+                    f"{MAX_TOOL_CALLS_PER_TURN}. Answer from the results you have, or say "
+                    "plainly what you could not determine."
+                ),
+            }
+        elif key in done:
+            # A repeat is a loop, not diligence. The result is already above this call in
+            # the transcript, so returning it again gives the model nothing new to read.
+            payload = {
+                "error": "repeated_tool_call",
+                "message": (
+                    f"{call['name']} has already been called in this turn with these "
+                    "exact arguments, and its result is above. Use that result, or call "
+                    "with different arguments — do not call it again unchanged."
                 ),
             }
         else:
@@ -415,6 +454,7 @@ async def _execute_tool_calls(
                 # is where the payload exists, and only for a call that actually
                 # ran: a refused call announces nothing, result included (rule 3).
                 _emit(on_event, stages.result_event(call["name"], payload))
+        done.add(key)
         recorded.append(validate_recorded_tool_call({
             "name": call["name"], "args": arguments, "response": payload,
         }))
@@ -717,7 +757,10 @@ def build_graph(
         last = state["messages"][-1]
         calls = last.tool_calls if isinstance(last, AIMessage) else []
         messages, recorded = await _execute_tool_calls(
-            toolbox, calls, on_event, guard=guard
+            toolbox, calls, on_event, guard=guard,
+            # Everything this turn has already spent, so the budget is a budget for the
+            # turn rather than for one iteration of the loop around it.
+            already_called=list(state.get("tool_calls") or []),
         )
         return {"messages": messages, "tool_calls": recorded}
 

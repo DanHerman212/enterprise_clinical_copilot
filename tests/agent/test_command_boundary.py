@@ -32,6 +32,7 @@ from services.agent import graph  # noqa: E402
 from services.agent import routing  # noqa: E402
 from services.agent import payload as payload_module  # noqa: E402
 from services.agent.deterministic import (  # noqa: E402
+    _presented_prediction,
     medication_narrative,
     parse_medications,
     run_command,
@@ -256,6 +257,9 @@ def test_the_supplementary_result_reaches_the_formatting_turn():
     reader got a chart summary beside a score with nothing joining them. The division of
     labour that replaces it — the widget owns the score and the bars, the narrative's
     fourth section owns the clinical meaning — only works if the model can see the drivers.
+
+    The drivers it sees are named and directed rather than quantified; that narrowing is
+    the subject of the projection tests below.
     """
     command = routing.command_for("summarize")
     state, box, model = _run_command(command)
@@ -270,6 +274,90 @@ def test_the_supplementary_result_reaches_the_formatting_turn():
     human = model.seen[0][1]
     assert '<tool_result name="predict_readmission">' in human.content
     assert '<tool_result name="rag_search_sections">' in human.content
+
+
+# A prediction payload at the precision the service serves it at: six decimals on the
+# score and the base value, four on a driver contribution. The projection is what narrows
+# it, and what it narrows to is the subject of the tests below.
+SERVED_RISK = {
+    "hadm_id": 90000023,
+    "probability": 0.332758,
+    "threshold": 0.11,
+    "decision": 1,
+    "base_value": 0.333758,
+    "top_factors": [
+        {"feature": "rdw_max", "contribution": 0.316788, "direction": "increases"},
+        {"feature": "rbc_min", "contribution": 0.201144, "direction": "increases"},
+    ],
+    "model_version": "risk-1",
+    "feature_source": "bigquery",
+}
+
+
+def test_the_risk_numbers_reach_the_model_as_stated_strings_only():
+    """The prose is given the strings, not the floats (Phase 1.1, 2026-10-16).
+
+    The leak this closes was guardrail-PERMITTED, which is precisely why it survived: a
+    served probability quoted accurately is a number `verify_risk_numbers` has nothing to
+    strip, so the turn was served with no flags at all and a fourth section reading like a
+    debug dump beside a widget printing 9.0%. Three rounds of prompt wording did not stop
+    it, because a float the model is holding is a float it can paste — so the copy it reads
+    no longer holds one.
+    """
+    projected = _presented_prediction("predict_readmission", dict(SERVED_RISK))
+
+    assert projected["probability_display"] == "33.3%"
+    assert projected["threshold_display"] == "11.0%"
+
+    for withheld in ("probability", "threshold", "base_value"):
+        assert withheld not in projected, f"{withheld} is quotable while it is present"
+
+    # The drivers survive as names and directions: the narrative still has to explain
+    # them, and the widget still has to draw them.
+    assert projected["top_factors"] == [
+        {"feature": "red cell distribution width (RDW)", "direction": "increases"},
+        {"feature": "lowest red blood cell count", "direction": "increases"},
+    ]
+
+    # And the payload handed in is untouched — the caller's copy is not this one.
+    assert SERVED_RISK["probability"] == 0.332758
+
+
+def test_the_execution_record_keeps_the_numbers_the_model_never_saw():
+    """Withholding is a projection, not an edit.
+
+    Load-bearing twice over: the guardrail reads the recorded call and not the model's
+    copy, and a reader asking next week why a turn said 33.3% has to be able to get back
+    to the number that produced it.
+    """
+    command = routing.command_for("summarize")
+    state, _, _ = _run_command(command, payload=dict(SERVED_RISK))
+
+    served = next(call["response"] for call in state["tool_calls"]
+                  if call["name"] == "predict_readmission")
+
+    assert served["probability"] == 0.332758
+    assert served["base_value"] == 0.333758
+    assert served["top_factors"][0]["contribution"] == 0.316788
+
+
+def test_the_summary_prompt_names_the_strings_the_payload_carries():
+    """The instruction and the projection move together.
+
+    A prompt that names a field the payload no longer has is an instruction to invent it,
+    which is the failure this pair exists to prevent — so the two are asserted against each
+    other rather than separately.
+    """
+    formatting = routing.command_for("summarize").formatting
+    projected = _presented_prediction("predict_readmission", dict(SERVED_RISK))
+
+    for field in ("probability_display", "threshold_display"):
+        assert field in formatting, f"the summary prompt does not name {field!r}"
+        assert field in projected, f"the payload does not carry {field!r}"
+
+    # Stated as a prohibition as well as a substitution: the strings are what to write,
+    # and an unrounded decimal is what not to.
+    assert "unrounded" in formatting
 
 
 def test_the_summary_prompt_asks_for_the_fourth_risk_section():
@@ -334,6 +422,40 @@ def test_the_topic_reaches_the_tool_exactly_as_the_caller_wrote_it():
 
     assert box.calls == [("search_literature", {"query": TOPIC})]
     assert state["command"] == "literature"
+
+
+def test_the_literature_command_drops_only_its_score_when_there_is_no_patient():
+    """`/pubmed` has two shapes, and the second one is the older.
+
+    Its primary tool searches the literature and takes no admission, so a clinician
+    reading about a condition with no chart open still gets an answer — the same single
+    call the command has always made. What is missing is the comparison, because a
+    comparison needs a patient to compare, and a dropped call is a call that did not
+    happen rather than one that happened with `None` in it.
+    """
+    command = routing.command_for("literature")
+
+    assert routing.supplementary_arguments(command, None) == []
+    assert routing.supplementary_arguments(command, 90000023) == [
+        ("predict_readmission", {"hadm_id": 90000023})]
+
+
+def test_only_the_literature_command_may_run_short():
+    """The flag is a shape, not a licence.
+
+    Stated as the whole set rather than as one assertion about `/pubmed`, because the
+    failure this prevents is the flag spreading: a command that silently drops a call it
+    declared is a command whose answer depends on what the turn was handed, and that is
+    the implicit variation the deterministic path exists to remove.
+    """
+    flagged = [
+        (command.wire, spec.tool)
+        for command in routing.COMMANDS
+        for spec in command.supplementary
+        if spec.skipped_without_admission
+    ]
+
+    assert flagged == [("literature", "predict_readmission")]
 
 
 # --- the medication extraction ----------------------------------------------

@@ -88,6 +88,76 @@ def test_arguments_are_passed_through_verbatim():
     assert box.calls == [("t", {"kwargs": {"hadm_id": 1}})]
 
 
+# --- the per-turn budget, and the loop it closes (2026-10-16) ---------------
+
+def test_the_budget_counts_the_whole_turn_not_this_invocation():
+    """The reasoning loop calls this once per iteration with ONE call, so the index inside
+    an invocation is always 0 — and a budget read off that index never trips. A turn made
+    eight calls against a budget of five, looped to the graph's recursion limit, and settled
+    as an empty answer rather than a failure. Passing the turn's own calls is what makes the
+    budget a budget.
+    """
+    box = _StubToolbox()
+    spent = [{"name": "rag_search", "args": {"hadm_id": 1}, "response": {}}] * 5
+
+    messages, recorded = asyncio.run(gr._execute_tool_calls(
+        box, [{"name": "get_lab_trends", "id": "c9", "args": {"hadm_id": 1}}],
+        already_called=spent,
+    ))
+
+    assert box.calls == [], "the call went out anyway, so the budget is not a budget"
+    assert recorded[0]["response"]["error"] == "tool_call_limit"
+    # The refusal has to tell the model what to do, or it reads as a transient failure and
+    # is retried — which is the loop this line closes.
+    assert "Answer from the results" in recorded[0]["response"]["message"]
+
+
+def test_a_repeated_identical_call_is_refused():
+    """Six identical lab calls returned nothing the fifth did not."""
+    box = _StubToolbox()
+    prior = [{"name": "get_lab_trends", "args": {"hadm_id": 90000015},
+              "response": {"returned": 1}}]
+
+    messages, recorded = asyncio.run(gr._execute_tool_calls(
+        box, [{"name": "get_lab_trends", "id": "c2", "args": {"hadm_id": 90000015}}],
+        already_called=prior,
+    ))
+
+    assert box.calls == []
+    assert recorded[0]["response"]["error"] == "repeated_tool_call"
+
+
+def test_a_repeat_is_recognised_regardless_of_argument_order():
+    """Reordering the same JSON is the same call, and a check that compared the dicts as
+    written would let a model defeat it by rewriting its own arguments."""
+    box = _StubToolbox()
+    prior = [{"name": "rag_search",
+              "args": {"hadm_id": 1, "query": "meds"}, "response": {}}]
+
+    _, recorded = asyncio.run(gr._execute_tool_calls(
+        box, [{"name": "rag_search", "id": "c3",
+               "args": {"query": "meds", "hadm_id": 1}}],
+        already_called=prior,
+    ))
+
+    assert box.calls == []
+    assert recorded[0]["response"]["error"] == "repeated_tool_call"
+
+
+def test_a_different_argument_is_not_a_repeat():
+    """The rule refuses an UNCHANGED call. Searching again for something else is the work."""
+    box = _StubToolbox()
+    prior = [{"name": "get_lab_trends", "args": {"hadm_id": 90000015}, "response": {}}]
+
+    _, recorded = asyncio.run(gr._execute_tool_calls(
+        box, [{"name": "get_lab_trends", "id": "c4", "args": {"hadm_id": 90000023}}],
+        already_called=prior,
+    ))
+
+    assert box.calls == [("get_lab_trends", {"hadm_id": 90000023})]
+    assert "error" not in recorded[0]["response"]
+
+
 # --- args_schema declaration (ECC-10) -------------------------------------------
 
 def test_tools_declare_the_cleaned_mcp_input_schema():

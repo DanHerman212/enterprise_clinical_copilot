@@ -58,6 +58,93 @@ def test_errored_predict_response_supports_nothing():
     assert flags
 
 
+# --- the comparative matrix (Phase 2, 2026-10-16) -----------------------------
+
+# One captured record, abridged to the sentence a comparator turn quotes. The rate is
+# inside the abstract, which is where `_literature_text` looks for it.
+_LITERATURE_CALL = [{
+    "name": "search_literature",
+    "args": {"query": "congestive heart failure 30-day readmission risk"},
+    "response": {
+        "returned": 1,
+        "articles": [{
+            "pmid": "37495280",
+            "title": "Global Comparison of Readmission Rates for Patients With "
+                     "Heart Failure.",
+            "abstract": ("Of the 1.5 million individuals at risk, 13.2% (95% CI: "
+                         "10.5%-16.1%) were readmitted within 30 days."),
+        }],
+    },
+}]
+
+
+def test_a_cohort_rate_quoted_from_the_retrieved_literature_survives():
+    """The sentence the matrix exists to make, kept intact.
+
+    Without the exemption this became "sits below the pooled rate reported for …" with
+    the figure cut out and a safety swap raised over a correct sentence — on every
+    comparative turn, which is what made it worth a guard change rather than a note.
+    """
+    answer = ("Her 13.1% sits below the 13.2% pooled across 24 reports of "
+              "hospitalised heart failure ^[1].")
+
+    cleaned, flags = g.verify_risk_numbers(
+        answer, _PREDICT_CALL + _LITERATURE_CALL, evidence_text="",
+        literature_text=g._literature_text(_LITERATURE_CALL))
+
+    assert "13.2%" in cleaned
+    assert "13.1%" in cleaned          # the patient's own figure, from the prediction
+    assert flags == []
+
+
+def test_a_rate_the_literature_does_not_state_is_still_stripped():
+    """The exemption is verbatim or it is nothing.
+
+    A comparator turn is where an invented percentage is most tempting and least
+    visible: the sentence around it is about published cohorts, so a number nobody
+    published reads as one with a source.
+    """
+    answer = "Her 13.1% sits below the 9.4% pooled across 24 reports ^[1]."
+
+    cleaned, flags = g.verify_risk_numbers(
+        answer, _PREDICT_CALL + _LITERATURE_CALL, evidence_text="",
+        literature_text=g._literature_text(_LITERATURE_CALL))
+
+    assert "9.4%" not in cleaned
+    assert "13.1%" in cleaned
+    assert "risk_number_unsupported:9.4%" in flags
+
+
+def test_a_dose_in_a_retrieved_abstract_is_not_a_dose_the_note_states():
+    """The exemption is one guard wide, and this is the line it must not cross.
+
+    Asserted through `guard_answer` rather than by calling the med guard directly,
+    because the property being protected is which text reaches which guard. The note
+    passage is real and simply does not mention the drug, so the med guard has evidence
+    to act on — and the only way this answer survives intact is if the abstract's dose
+    was allowed to verify a claim about the patient.
+    """
+    calls = [
+        {"name": "rag_search_sections", "args": {}, "response": {
+            "returned": 1, "passages": [{
+                "id": "note-1", "section": "discharge_instructions",
+                "text": "Continue home medications as previously prescribed.",
+            }],
+        }},
+        {"name": "search_literature", "args": {"query": "q"}, "response": {
+            "returned": 1, "articles": [{
+                "pmid": "1", "title": "T",
+                "abstract": "Patients received warfarin 5 mg daily after discharge.",
+            }],
+        }},
+    ]
+
+    result = g.guard_answer("She was discharged on warfarin 5 mg daily.", calls)
+
+    assert "5 mg" not in result["answer"], result
+    assert "med_dose_mismatch:5 mg" in result["flags"], result["flags"]
+
+
 def test_truncated_but_honest_decimal_passes():
     cleaned, flags = g.verify_risk_numbers("About 0.13.", _PREDICT_CALL)
     assert cleaned == "About 0.13."
@@ -119,6 +206,45 @@ def test_guard_answer_strips_fabricated_risk_with_no_tools():
     out = g.guard_answer("The readmission risk is 0.14.", [])
     assert "0.14" not in out["answer"]
     assert any(f.startswith("risk_number_unsupported:") for f in out["flags"])
+
+
+def test_a_lab_concentration_is_not_a_dose_and_survives_the_med_guard():
+    """A number with a lab denominator is a concentration, not a prescription.
+
+    Observed live on the day the lab card shipped: "11.2 g/dL" matched the dose pattern as
+    "11.2 g", was found nowhere in the retrieved notes, and was stripped — so the prose read
+    "dropped to a low of /dL" and the Evidence-Check badge announced a correction to a
+    sentence that was already correct.
+
+    The other half of the same bug is the more dangerous one: that match also ran over the
+    NOTE text, so a lab value entered the note's dose vocabulary and an invented dose could
+    have been verified by a creatinine.
+    """
+    note = [{"name": "rag_search_sections", "args": {}, "response": {
+        "returned": 1, "passages": [{"id": "n", "section": "brief_hospital_course",
+                                     "text": "Continue home medications."}]}}]
+    answer = "Her hemoglobin dropped to a low of 11.2 g/dL, from 13.0 g/dL."
+
+    out = g.guard_answer(answer, note)
+
+    assert out["answer"] == answer, out
+    assert not any(flag.startswith("med_") for flag in out["flags"]), out["flags"]
+
+
+def test_a_weight_based_dose_is_still_a_dose():
+    """The exclusion names lab denominators, so "40 mg/kg" is still checked.
+
+    Excluding every slash would have been the one-line fix and would have opened a hole
+    exactly where dosing is least forgiving.
+    """
+    note = [{"name": "rag_search_sections", "args": {}, "response": {
+        "returned": 1, "passages": [{"id": "n", "section": "discharge_instructions",
+                                     "text": "Start enoxaparin 40 mg/kg once daily."}]}}]
+
+    out = g.guard_answer("Start enoxaparin 40 mg/kg once daily.", note)
+
+    assert "40 mg" in out["answer"]
+    assert not any(flag.startswith("med_dose_mismatch") for flag in out["flags"]), out["flags"]
 
 
 # --- A follow-up is answered against the whole conversation -------------------

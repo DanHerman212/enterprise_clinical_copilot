@@ -51,7 +51,23 @@ _ANSWER_AGE = re.compile(
 # the same key as the answer's "2000 mcg" — a comma used to break the match and
 # made the verifier drop a CORRECT dose (regression on 24592634/summarize).
 _DOSE_RE = re.compile(
-    r"(?<![\d\-])(\d+(?:,\d{3})*(?:\.\d+)?)\s*(mg|mcg|g|mEq|units?|mL|%)\b(?![-])",
+    r"(?<![\d\-])(\d+(?:,\d{3})*(?:\.\d+)?)\s*(mg|mcg|g|mEq|units?|mL|%)\b"
+    # A unit followed by a lab DENOMINATOR is a concentration, not a dose — and it is both
+    # a false positive and a false negative, which is why the rule is written here.
+    #
+    # False positive: the lab card's "11.2 g/dL" was matched as the dose "11.2 g", failed
+    # verification against the retrieved notes, and was stripped from the prose, leaving
+    # "...dropped to a low of /dL" and a safety swap raised over a correct sentence
+    # (observed live, 2026-10-16, the day the lab tool shipped).
+    #
+    # False negative: the same match in the SOURCE text put "11.2g" into the note's dose
+    # vocabulary, so an answer asserting a dose of 11.2 g would have been verified by a
+    # creatinine rather than by a prescription.
+    #
+    # The denominators are named rather than every slash excluded, because weight-based
+    # dosing is real: "40 mg/kg" is still a dose and is still checked.
+    r"(?!\s*/\s*(?:dL|L|min|uL|\u00b5L|mm3|10\^?3)\b)"
+    r"(?![-])",
     re.IGNORECASE,
 )
 
@@ -248,6 +264,34 @@ def _literature_pmids(tool_calls: list[dict]) -> frozenset[str]:
     return frozenset()
 
 
+def _literature_text(tool_calls: list[dict]) -> str:
+    """The text of every literature record this conversation retrieved.
+
+    The companion to `_literature_slots`, and the reason the risk guard takes a second
+    argument at all — see the note above `_RISK_DECIMAL`. Title as well as abstract,
+    because a rate can be stated in either and this is a substring test rather than a
+    reading.
+
+    Accumulated across every search in the evidence, unlike the citation helpers above,
+    which read the first. A marker addresses one turn's slots; a percentage quoted from
+    an earlier turn's record is still a percentage that was retrieved, and the rule being
+    implemented is "the turn retrieved this number", which does not expire.
+    """
+    chunks: list[str] = []
+    for call in tool_calls or []:
+        if call.get("name") != "search_literature":
+            continue
+        articles = (call.get("response") or {}).get("articles")
+        if not isinstance(articles, list):
+            continue
+        for article in articles:
+            if not isinstance(article, dict):
+                continue
+            chunks.append(str(article.get("title") or ""))
+            chunks.append(str(article.get("abstract") or ""))
+    return "\n".join(chunks)
+
+
 def check_citations(
     answer: str,
     slots: int,
@@ -290,6 +334,27 @@ def check_citations(
 # every risk-shaped number in the answer must match (to its own stated
 # precision) a probability or threshold actually returned by a successful
 # `predict_readmission` call, or it is stripped and flagged.
+#
+# Extended 2026-10-16 (Phase 2) for the comparative matrix, and the extension is narrow
+# on purpose. A comparator turn states published cohort rates — "13.2% pooled across 24
+# reports" — and every one of them is a percentage this guard would otherwise strip: it
+# is not the probability, it is not the threshold, and the note passages do not contain
+# it. The exemption is the one already here for a lab value quoted from a retrieved
+# passage, applied to the other thing the turn retrieved: a number the search returned is
+# not a number the model invented. Without it the matrix could not be described in prose
+# at all, and every comparator turn would raise a visible safety swap over a correct
+# sentence.
+#
+# What this deliberately does NOT do is widen `evidence_text`. The med guard reads that
+# same string, and an abstract inside it would let a dose quoted from a paper pass as a
+# dose the patient's note states. The sources stay separate — notes for the meds, notes
+# plus literature for the risk numbers — and a test holds the line.
+#
+# The residual, named here rather than left to be discovered: a model that writes a
+# retrieved cohort rate AS THE PATIENT'S RISK ("her risk is 13.2%") is not caught,
+# because attribution is not something a substring test can see. The prompt forbids it,
+# and the patient's own figure is only ever handed over as a display string, so this is
+# the third control rather than the only one.
 
 _RISK_DECIMAL = re.compile(r"\b0\.\d{2,6}\b")
 _RISK_PERCENT = re.compile(r"\b(\d{1,2}(?:\.\d{1,2})?)\s*%")
@@ -315,15 +380,19 @@ def _predict_values(tool_calls: list[dict]) -> list[float]:
 
 
 def verify_risk_numbers(
-    answer: str, tool_calls: list[dict], evidence_text: str = ""
+    answer: str, tool_calls: list[dict], evidence_text: str = "",
+    literature_text: str = "",
 ) -> tuple[str, list[str]]:
     """Strip risk-shaped numbers no `predict_readmission` response supports.
 
     Tolerance is half a unit in the number's own last stated decimal place, so
     "0.13" honestly truncates 0.131398 but a fabricated "0.14" fails. Skipped:
     numbers followed by a dose unit, and numbers quoted verbatim from the
-    retrieved passages (lab values like "creatinine 0.9") — those are med/note
-    facts, owned by the other guardrails.
+    retrieved evidence — lab values like "creatinine 0.9" from a note passage, and
+    published cohort rates from a retrieved record. `evidence_text` is the notes and
+    `literature_text` is the records; they are separate parameters because the med guard
+    reads the first and must not be handed the second (see the note above
+    `_RISK_DECIMAL`).
 
     The half-unit tolerance carries a hair of slack for floating point. A served
     value that sits EXACTLY half a unit from the number written (0.125 written as
@@ -345,6 +414,8 @@ def verify_risk_numbers(
             continue
         if evidence_text and token in evidence_text:
             continue
+        if literature_text and token in literature_text:
+            continue
         decimals = len(token.split(".")[1])
         if not supported(float(token), 0.5 * 10 ** -decimals):
             flags.append(f"risk_number_unsupported:{token}")
@@ -352,8 +423,11 @@ def verify_risk_numbers(
     for m in _RISK_PERCENT.finditer(answer):
         num = m.group(1)
         # Quoted verbatim from the notes — a med concentration ("0.05% cream")
-        # or an O2 sat — is a note fact, not a risk claim.
+        # or an O2 sat — is a note fact, not a risk claim. Quoted from a retrieved
+        # record, it is that record's published rate.
         if evidence_text and (f"{num}%" in evidence_text or f"{num} %" in evidence_text):
+            continue
+        if literature_text and (f"{num}%" in literature_text or f"{num} %" in literature_text):
             continue
         decimals = len(num.split(".")[1]) if "." in num else 0
         if not supported(float(num) / 100.0, 0.5 * 10 ** -decimals / 100.0):
@@ -613,7 +687,8 @@ def guard_answer(
     flags: list[str] = []
 
     # Risk numbers first — the one guard that must act even with zero evidence.
-    answer, f = verify_risk_numbers(answer, evidence, full_text)
+    answer, f = verify_risk_numbers(answer, evidence, full_text,
+                                    _literature_text(evidence))
     flags += f
     answer, f = redact_invented_age(answer, passages)
     flags += f

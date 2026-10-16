@@ -106,7 +106,12 @@ gcloud compute ssh "$VM" --zone "$ZONE" --project "$PROJECT" --tunnel-through-ia
   cd $REMOTE
   mv -f '$(basename "$STAGE")' .env
   sudo chmod 600 .env
-  sudo install -D -m 644 $REMOTE/clickhouse-staged/config.d/memory.xml $REMOTE/clickhouse/config.d/memory.xml
+  # Every config.d file, not the one we happened to write first. The scp above already
+  # brings the whole directory across; naming files here is how memory.xml came to be
+  # copied to the VM's staging area and never installed, so the ceiling could be edited
+  # in the repo and never reach the box. A glob cannot go stale that way.
+  sudo cp -f $REMOTE/clickhouse-staged/config.d/*.xml $REMOTE/clickhouse/config.d/ \
+    && sudo chmod 644 $REMOTE/clickhouse/config.d/*.xml
   rm -rf $REMOTE/clickhouse-staged
   sudo docker compose up -d --quiet-pull 2>&1 | tail -6
   echo '--- containers ---'

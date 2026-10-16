@@ -208,11 +208,16 @@ def test_a_stage_is_announced_for_each_executed_tool_call():
 
 def test_a_refused_call_announces_nothing():
     """Calls past the per-turn budget never reach the tool, so they must never
-    be announced: a stage is a claim that work started."""
+    be announced: a stage is a claim that work started.
+
+    The calls are distinct on purpose. Identical ones are refused earlier, by the
+    repeat rule, which would let this pass without the budget being the thing
+    that stopped them.
+    """
     box = _StubToolbox()
     events = []
     calls = [
-        {"name": f"rag_search", "args": {}, "id": str(i)}
+        {"name": "rag_search", "args": {"query": f"q{i}"}, "id": str(i)}
         for i in range(MAX_TOOL_CALLS_PER_TURN + 2)
     ]
 

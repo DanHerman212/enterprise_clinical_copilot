@@ -67,6 +67,141 @@ def _note(envelope):
     return rendered["note"]
 
 
+# --- the comparative matrix (Phase 2, 2026-10-16) ----------------------------
+
+# Two real captures. The first is the CHF corpus's only 30-day cohort rate; the second
+# is the COPD corpus's, and the only record in any corpus that names a factor this
+# patient also has.
+BENCHMARKED = {
+    "pmid": "37495280",
+    "title": "Global Comparison of Readmission Rates for Patients With Heart Failure.",
+    "journal": "Journal of the American College of Cardiology",
+    "pub_date": "2023 Aug 01",
+    "abstract": ("Of the 1.5 million individuals at risk, 13.2% (95% CI: 10.5%-16.1%) "
+                 "were readmitted within 30 days."),
+    "url": "https://pubmed.ncbi.nlm.nih.gov/37495280/",
+}
+
+MATCHING_COHORT = {
+    "pmid": "36528962",
+    "title": "Readmission rate for acute exacerbation of chronic obstructive "
+             "pulmonary disease: A systematic review and meta-analysis.",
+    "journal": "Respiratory medicine",
+    "pub_date": "2023 Jan",
+    "abstract": ("The pooled 30-, 60-, 90-, 180-, and 365-day readmission rates were "
+                 "11%, 17%, 17%, 30%, and 37%, respectively."),
+    "url": "https://pubmed.ncbi.nlm.nih.gov/36528962/",
+}
+
+
+def _search_with(articles):
+    return {"query": "congestive heart failure 30-day readmission risk",
+            "returned": len(articles), "articles": articles}
+
+
+def _matrix(envelope):
+    return next(c for c in _components(envelope)
+                if c["component"] == "ComparativeRiskMatrix")
+
+
+def test_a_curated_cohort_draws_the_comparison_above_the_records():
+    """Order asserted, not merely presence.
+
+    The value is relational — a table of cohort rates below a list of citations reads as
+    an appendix to them — so "it appears" would pass while the feature missed. The first
+    three, not the whole list: the provenance caption trails both and is not the subject.
+    """
+    envelope = compose_risk_canvas(
+        PREDICT, None, literature=_search_with([BENCHMARKED]))
+
+    assert _types(envelope)[:3] == ["Column", "ComparativeRiskMatrix", "LiteratureList"]
+
+
+def test_the_pinned_row_carries_the_patients_figures_and_its_drivers():
+    matrix = _matrix(compose_risk_canvas(
+        PREDICT, None, literature=_search_with([BENCHMARKED])))
+
+    baseline = matrix["baseline"]
+    # Raw, so the component formats them with the same formatter the widget uses.
+    # Pre-rendering them here would be a second implementation of the display
+    # precision, and the two would part on the first change to either.
+    assert baseline["probability"] == 0.2
+    assert baseline["threshold"] == 0.11
+    assert baseline["drivers"] == ["prior inpatient days"]
+    assert baseline["provenance"] == "Model model-x"
+    assert "XGBoost" not in str(baseline), "the learner is not in the payload"
+
+    row = matrix["rows"][0]
+    assert row["pmid"] == "37495280"
+    assert row["reported_rate"] == "13.2%"
+    assert row["horizon_days"] == 30
+    assert row["source"] == "Journal of the American College of Cardiology · 2023"
+    assert "13.2%" in row["excerpt"]
+
+
+def test_a_matched_driver_is_named_the_way_the_bars_name_it():
+    """One factor, one name — the rule the label map exists for, applied to a pill.
+
+    The cohort says "number of hospitalizations in the previous year"; the pill says what
+    the driver bar beside the patient says, because both go through `humanize`.
+    """
+    matrix = _matrix(compose_risk_canvas(
+        PREDICT, None, literature=_search_with([MATCHING_COHORT])))
+
+    assert matrix["rows"][0]["matched_features"] == ["prior inpatient days"]
+
+
+def test_a_record_with_no_curated_cohort_draws_no_comparison():
+    """The live-search case, asserted as behaviour rather than left to be discovered.
+
+    A curated rate belongs to a PMID and a live query returns other PMIDs, so this is the
+    ordinary outcome online — and it is not a defect: the records draw exactly as they
+    always have, which is what makes fixture and live the same surface code.
+    """
+    envelope = compose_risk_canvas(PREDICT, None, literature=_search())
+
+    assert "ComparativeRiskMatrix" not in _types(envelope)
+    assert "LiteratureList" in _types(envelope)
+
+
+def test_the_table_draws_without_an_estimate_and_says_which_it_is():
+    """A patient-less `/pubmed` turn still has cohorts worth reading.
+
+    What it must not do is draw the pinned row with a blank figure in it, so the row is
+    absent and a sentence stands where it would have been.
+    """
+    matrix = _matrix(compose_risk_canvas(
+        None, None, literature=_search_with([BENCHMARKED])))
+
+    assert "baseline" not in matrix
+    assert matrix["baseline_note"].strip()
+    assert "No readmission estimate" in matrix["baseline_note"]
+
+
+def test_a_long_journal_name_is_cut_to_the_marker_budget():
+    """A pill sits inside a sentence, so its label has a length budget (2026-10-16).
+
+    Reported from the live turn: a button wraps its own text by default, so "Journal of the
+    American College of Cardiology" broke the pill's box across two lines and the rounded
+    border read as a pill cut in half. The journal was kept and bounded rather than
+    replaced by the identifier again — the full title is on the marker's popover and in the
+    record list beneath the answer.
+    """
+    citations = literature_citations([
+        {**ARTICLE, "journal": "Journal of the American College of Cardiology"},
+        {**ARTICLE, "journal": "Home healthcare now"},
+    ])
+
+    long_label = citations[0]["label"]
+    assert len(long_label) <= 25, long_label          # 24 characters, plus the ellipsis
+    # Marked, not silently cut: an unmarked cut reads as the whole name.
+    assert long_label.endswith("…")
+    assert "Journal of the American College of Cardiology".startswith(
+        long_label[:-1].rstrip())
+    # A name inside the budget is passed through whole and unmarked.
+    assert citations[1]["label"] == "Home healthcare now"
+
+
 # --- selecting the payload -------------------------------------------------
 
 def test_literature_payload_finds_the_search():

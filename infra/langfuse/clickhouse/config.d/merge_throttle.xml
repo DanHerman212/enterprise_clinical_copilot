@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<!--
+  Merge throttle for the Langfuse data plane.
+
+  Why this file exists. `memory.xml` states its own purpose as "the server now refuses
+  work under pressure instead of growing until the kernel kills it", and names the merge
+  scheduler as "the main consumer to be throttled" — but it sets only
+  `max_server_memory_usage`, so nothing ever throttled a merge. Raising that ceiling from
+  1.6 GB to 3 GB on 2026-10-15 therefore did not close the loop, it postponed it. By
+  2026-10-16 ClickHouse was being killed roughly once a minute, `RestartCount` 1101, each
+  kill at anon-rss ≈ 4.05–4.12 GB against the 4 GB cgroup, with `MergeMutate` named as the
+  process that invoked the OOM killer.
+
+  Why the merge and not the ceiling. The ceiling has now been raised twice — 2 GB, then
+  4 GB — and the workload grew to fill it both times. The reason is that the memory a
+  merge needs but ClickHouse does not track (thread stacks, allocator arenas, page cache
+  over the parts being rewritten) scales with the size of the merge itself, so no fixed
+  margin is large enough: whatever is left over is what the next merge tries to use.
+  Bounding the merge bounds the growth. Raising the ceiling only moves the wall.
+
+  `max_bytes_to_merge_at_once` belongs under `<merge_tree>`, not at the root. It is a
+  MergeTree TABLE setting, and a copy at the root of this drop-in is ignored — with a log
+  warning, no error — which looks exactly like the file having had no effect.
+  `background_pool_size` is a server setting and lives at the root.
+
+  100 MB is deliberately small. A backlog then drains as many small merges instead of a
+  few enormous ones: more I/O, bounded memory. `background_pool_size=1` runs them one at a
+  time, so the peak is one merge's worth rather than N of them arriving together. Both are
+  recovery settings — they can be raised once the backlog is gone and retention keeps it
+  gone.
+
+  Paired with: `memory.xml`, which holds the server ceiling. The lower of the two governs,
+  so neither file should be changed without reading the other.
+-->
+<clickhouse>
+    <background_pool_size>1</background_pool_size>
+    <merge_tree>
+        <max_bytes_to_merge_at_once>104857600</max_bytes_to_merge_at_once>
+    </merge_tree>
+</clickhouse>

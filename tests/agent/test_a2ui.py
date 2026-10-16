@@ -446,6 +446,41 @@ class TestPresentationContract:
         assert out["scope"] == "general_evidence"
         assert out["scope_suppressed"] is False
 
+    def test_a_comparative_turn_is_general_evidence_not_chart_synthesis(self):
+        """The patient's estimate does not turn a literature turn into a chart read.
+
+        `/pubmed` fetches both (Phase 2, 2026-10-16): the records, and this patient's own
+        estimate as the baseline the matrix pins above them. Reading only as far as "a
+        patient-scoped tool ran" made every comparative turn a chart read with no note
+        citations — so it dropped its scope pill AND raised a visible safety swap over an
+        answer nothing had been removed from.
+        """
+        out = compose_presentation(
+            "Compare this patient's readmission risk against peer-reviewed clinical "
+            "cohorts.",
+            "Her 9.0% sits below the 13.2% pooled for hospitalised heart failure^[1].",
+            [
+                {"name": "search_literature", "args": {"query": "heart failure"},
+                 "response": {"returned": 1, "articles": [{
+                     "pmid": "37495280",
+                     "title": "Global Comparison of Readmission Rates.",
+                     "journal": "JACC",
+                     "pub_date": "2023 Aug 01",
+                     "abstract": "13.2% were readmitted within 30 days.",
+                     "url": "https://pubmed.ncbi.nlm.nih.gov/37495280/"}]}},
+                {"name": "predict_readmission", "args": {"hadm_id": 20924467},
+                 "response": GOOD_PAYLOAD},
+            ],
+        )
+
+        assert out["scope"] == "general_evidence"
+        assert out["scope_suppressed"] is False
+        # And the table is drawn, so the one claim about this patient has somewhere to
+        # sit beside the rate it is being compared with.
+        types = [c["component"] for c in
+                 out["a2ui"]["messages"][1]["updateComponents"]["components"]]
+        assert "ComparativeRiskMatrix" in types
+
 
 class TestUnifiedEhrRiskTurn:
     """`/ehr` is the one composite command: one turn, a narrative and a risk

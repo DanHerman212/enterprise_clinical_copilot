@@ -83,6 +83,18 @@ class ToolSpec:
 
     tool: str
     args: dict
+    #: Whether this call is skipped when the turn has no admission.
+    #:
+    #: Off by default, and deliberately: a command whose supplementary call needs an
+    #: admission needs the admission, and a turn that cannot run its declared calls is
+    #: refused rather than quietly run short. `/pubmed` sets it True, and it is the only
+    #: one — its primary tool searches the literature, which takes no patient, so the
+    #: command has a real second shape and `search_literature` is the same call in both.
+    #:
+    #: What the flag must not become is a general "best effort" rule. A skipped call is a
+    #: comparison this turn cannot make, and the surface is required to say so rather
+    #: than draw a matrix with no baseline in it and leave the reader to notice.
+    skipped_without_admission: bool = False
 
 
 @dataclass(frozen=True)
@@ -116,10 +128,11 @@ class Command:
     #: the first answer in their head while they wait for the second. One turn also
     #: keeps the figure and the prose that qualifies it inside one guardrail pass.
     #:
-    #: A supplementary call's result is recorded for the composer and withheld from
-    #: the formatting turn: the canvas prints the score exactly, and a model handed
-    #: the payload would restate it in the narrative — the duplication the risk
-    #: sentence was deleted for.
+    #: A supplementary call's result reaches the formatting turn like any other — see
+    #: `deterministic.run_command`, and the note there on why the withholding that once
+    #: stood in that path was reversed. This docstring asserted the old behaviour for a
+    #: day after it stopped being true, which is the failure a comment of this kind is
+    #: meant to prevent.
     supplementary: tuple[ToolSpec, ...] = ()
     #: Sections this command may cite, when it is a section command.
     sections: tuple[str, ...] = ()
@@ -232,11 +245,18 @@ the named drivers mean clinically, how they connect to the hospital course and t
 plan, and what they imply for follow-up. Name each driver exactly as the risk result names it,
 so the sentence and the bar beside it describe one factor one way.
 
-Quote a figure only in the form the risk result states it. Do not round it, re-derive it, or
-compute a percentage, a count or a score of your own: the widget prints the score to a
-precision this prose cannot reproduce, and a number here that disagrees with the number beside
-it is worse than no number at all. Describe magnitude qualitatively — a leading driver, a
-modest contributor — unless the stated string is what makes the sentence true.
+State the readmission risk using ONLY the `probability_display` and `threshold_display` strings
+the risk result gives you, or describe the risk qualitatively. Never write an unrounded
+floating-point number, and never write a figure of your own: the raw values are not in the
+result you were given, so a decimal you produce was not read from anywhere. Do not round a
+number, do not re-derive one, and do not compute a percentage, a count or a score of your own —
+the widget prints the score to a precision this prose cannot reproduce, and a number here that
+disagrees with the number beside it is worse than no number at all.
+
+The drivers are given to you as names and directions, without magnitudes. Say which led and
+what they mean for the follow-up plan, and describe magnitude qualitatively — a leading driver,
+a modest contributor — from how the factors rank and which way they point. The bars beside
+your sentence carry the quantities.
 
 Cite with an inline marker of the form ^[1], ^[2], ^[3]: the FIRST passage you were given is
 ^[1], the second is ^[2], and so on, in the order the passages appear in the result. Put the
@@ -259,6 +279,22 @@ has the question in front of them, and a sentence that repeats it is the first t
 
 Ground every claim in the records. If the evidence is thin, mixed, or only partly answers the
 question, say that plainly rather than generalising past it.
+
+When a readmission-risk result for this patient is given to you as well, the turn is a
+comparison and the comparison is what the answer is for. Say where this patient's estimate sits
+against the published rates — above them, below them, or among them — and state the patient's own
+estimate using ONLY the `probability_display` string the risk result gives you, exactly as it
+writes it. Name the population each rate belongs to, because the record's cohort and this patient
+are two different groups: a published rate is a reference point, never a claim about her, and a
+sentence that lets the two blur is the failure this section must not make. A rate you quote must
+be the figure the record states — do not average two rates into a new one, and do not compute a
+difference the records do not state themselves.
+
+Explain the comparison from this patient's own drivers, naming each as the risk result names it.
+Where a record identifies a factor this patient also has, say so. Where none of them does, say
+that the records do not address her drivers — an alignment the records do not make is one your
+prose may not supply. If no usable risk result was given, write no comparison at all: a difference
+needs two figures and you have one.
 
 Cite with an inline marker of the form ^[1], ^[2], ^[3]: the FIRST record you were given is ^[1],
 the second is ^[2], and so on, in the order the records appear. Put the marker immediately after
@@ -284,7 +320,7 @@ COMMANDS: tuple[Command, ...] = (
         tool="predict_readmission",
         args={"hadm_id": "{hadm_id}"},
         forbidden=frozenset({"rag_search", "rag_search_sections", "discharge_medications",
-                             "search_literature"}),
+                             "search_literature", "get_lab_trends"}),
         # The answer is the surface, and there is no prose at all: see `prose`.
         prose=False,
     ),
@@ -294,7 +330,7 @@ COMMANDS: tuple[Command, ...] = (
         tool="discharge_medications",
         args={"hadm_id": "{hadm_id}"},
         forbidden=frozenset({"predict_readmission", "rag_search", "rag_search_sections",
-                             "search_literature"}),
+                             "search_literature", "get_lab_trends"}),
         formatting=MEDS_FORMATTING,
         # Prose to announce, and the model's reply is not it: the narrative is written
         # in code, so `prose_is_model_output` stays False and the turn does not stream.
@@ -311,7 +347,7 @@ COMMANDS: tuple[Command, ...] = (
         # `predict_readmission` is absent from this set because this command runs
         # it. Every other command's tool is still refused here.
         forbidden=frozenset({"rag_search", "discharge_medications",
-                             "search_literature"}),
+                             "search_literature", "get_lab_trends"}),
         sections=SUMMARY_SECTIONS,
         formatting=EHR_FORMATTING,
         # The model's cited summary is the answer, so it is announced as it is written.
@@ -330,8 +366,27 @@ COMMANDS: tuple[Command, ...] = (
         # clinician: there is nothing for the agent to fill it with that would
         # not be a search of the patient's chart in order to invent one.
         topic_arg="query",
-        forbidden=frozenset({"predict_readmission", "rag_search", "rag_search_sections",
-                             "discharge_medications"}),
+        # ...and the comparison it draws needs the patient (Phase 2, 2026-10-16).
+        # The comparative matrix sets the patient's own estimate against published
+        # cohort rates, so the turn fetches both. The privacy boundary is unchanged
+        # and is the point of the split: `search_literature` is still handed the
+        # clinician's words and nothing else — the admission goes to a second call
+        # inside this process, never to the third party.
+        #
+        # The second call is skipped when no patient is in context rather than making
+        # the command require one. This is the only command whose primary tool takes no
+        # admission, and that shape is a documented capability — a clinician reading
+        # about a condition with no chart open — so it stays: with a patient the turn is
+        # a comparison, without one it is the literature search it has always been, and
+        # the surface is required to say which. See `ToolSpec.skipped_without_admission`.
+        supplementary=(
+            ToolSpec("predict_readmission", {"hadm_id": "{hadm_id}"},
+                     skipped_without_admission=True),
+        ),
+        # `predict_readmission` is absent from this set because this command runs it.
+        # Every other command's tool is still refused here.
+        forbidden=frozenset({"rag_search", "rag_search_sections",
+                             "discharge_medications", "get_lab_trends"}),
         formatting=LITERATURE_FORMATTING,
         # The synthesis is the answer, and it cites PMIDs the citation layer resolves
         # after the turn: same swap protocol as `/ehr`.
@@ -363,6 +418,11 @@ FREETEXT_TOOLS: frozenset[str] = frozenset({
     "rag_search",
     "rag_search_sections",
     "search_literature",
+    # Phase 3 (2026-10-16). A clicked risk driver arrives here as a question about a lab
+    # value, and a question about a lab value is answered from a trajectory rather than
+    # from a note passage. Admitting it is what lets the drill-down work at all: without
+    # it the click would be answered in prose and the card would never be composed.
+    "get_lab_trends",
 })
 
 
@@ -399,9 +459,18 @@ def _templated_arguments(args: dict, hadm_id: int | None,
 
 def supplementary_arguments(
         command: Command, hadm_id: int | None) -> list[tuple[str, dict]]:
-    """`(tool, arguments)` for each of this command's supplementary calls."""
-    return [(spec.tool, _templated_arguments(spec.args, hadm_id, command))
-            for spec in command.supplementary]
+    """`(tool, arguments)` for each of this command's supplementary calls.
+
+    A call flagged `skipped_without_admission` is left out when there is no admission to
+    fill its arguments, which is what lets `/pubmed` answer a patient-less literature
+    search with the one call it has always made. Tested in both directions: the skip must
+    not become the silent default for a command that needs the patient.
+    """
+    return [
+        (spec.tool, _templated_arguments(spec.args, hadm_id, command))
+        for spec in command.supplementary
+        if not (spec.skipped_without_admission and hadm_id is None)
+    ]
 
 
 def tool_arguments(command: Command, hadm_id: int | None,

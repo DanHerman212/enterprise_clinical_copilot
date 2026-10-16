@@ -25,6 +25,7 @@ from .dependencies.features import FEATURE_SOURCE
 from .runtime import requires_cloud_run_auth
 from .tools import (
     discharge_medications,
+    get_lab_trends,
     predict_readmission,
     rag_search,
     rag_search_sections,
@@ -82,7 +83,12 @@ server = MCPServer(
         "section, every chunk of it, when the complete list matters. Use "
         "search_literature "
         "to find recent published evidence on a clinical question; it takes "
-        "de-identified search terms and no patient identifier."
+        "de-identified search terms and no patient identifier. Use "
+        "get_lab_trends to show what a laboratory measurement did across an "
+        "admission — an admission-to-discharge series with its reference "
+        "interval — when a question is about a lab value or a clicked risk "
+        "driver names one. The series is generated from the admission's own "
+        "features, and the values the model was scored on are reproduced exactly."
     ),
 )
 server.add_tool(predict_readmission)
@@ -90,6 +96,7 @@ server.add_tool(rag_search)
 server.add_tool(rag_search_sections)
 server.add_tool(discharge_medications)
 server.add_tool(search_literature)
+server.add_tool(get_lab_trends)
 
 
 @server.custom_route("/health", methods=["GET"])

@@ -51,6 +51,12 @@ services:
       # and the failure only surfaced when someone opened the UI. A server-level
       # cap turns that into a refused query, which is loud and survivable.
       - ./clickhouse/config.d/memory.xml:/etc/clickhouse-server/config.d/memory.xml:ro
+      # The merge throttle. `memory.xml` bounds the server's total and names the merge
+      # scheduler as the consumer to be throttled; this file is what actually throttles
+      # it, by bounding the size of a single merge. Two files rather than one because
+      # they are read by different parts of ClickHouse and a change to either has to be
+      # made with the other in view.
+      - ./clickhouse/config.d/merge_throttle.xml:/etc/clickhouse-server/config.d/merge_throttle.xml:ro
     ports:
       - "8123:8123"
       - "9000:9000"

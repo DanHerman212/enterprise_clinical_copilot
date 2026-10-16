@@ -111,8 +111,13 @@ class LiteratureResult(TypedDict):
 # attached, so there is no note text among its results for the store to be careful
 # with in the first place.
 RE_DERIVABLE_TOOLS = frozenset(
+    # `get_lab_trends` joins them (Phase 3, 2026-10-16) and is the clearest case of the
+    # rule: its series are generated from the admission's own feature row by a seeded
+    # function, so asking again returns the same numbers by construction rather than by
+    # luck. It also carries no note prose — values, intervals and flags — so there is
+    # nothing in its result for the store to be careful with.
     {"rag_search", "rag_search_sections", "discharge_medications",
-     "search_literature"}
+     "search_literature", "get_lab_trends"}
 )
 RESULT_KEPT_TOOLS = frozenset({"predict_readmission"})
 

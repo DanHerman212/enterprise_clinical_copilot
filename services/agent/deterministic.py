@@ -181,13 +181,29 @@ def _presented_prediction(name: str, payload: Any) -> Any:
     "Rdw Max" on its bar and `rdw_max` in the sentence describing it. One factor, one name,
     whichever name the map happens to know.
 
-    The score is NOT rounded here. It used to be, to the two decimals the old bar
-    drew. The widget now prints one decimal of a percentage, and a model handed a
-    pre-rounded number cannot print that digit: given 0.33 it wrote "33.0%" while
-    the widget beside it drew 33.2%. The served value goes to the model instead,
-    and EHR_FORMATTING states which form to write it in. The guardrail still
-    checks the prose against the SERVED value, so what the model writes is checked
-    against the same number it was given.
+    The numbers are STATED, not handed over. This projection used to pass the served
+    floats through and ask the prompt to render them in the right form; the prompt asked
+    three times and the leak survived all three, because a float the model is holding is
+    a float it can paste. So the copy the model reads carries `probability_display` and
+    `threshold_display` — the score and the threshold written the way the widget prints
+    them — and carries no `probability`, `threshold` or `base_value` at all.
+
+    Withheld rather than rounded. A display string is the same number written as the
+    reader will see it written, which is a different thing from a rounded float the
+    model then has to print a digit of: this projection used to pre-round, and given
+    0.33 the model wrote "33.0%" beside a widget drawing 33.2%, which is why the
+    rounding was removed in the first place. Given "33.2%" there is no digit to lose.
+
+    The drivers keep their names and their direction and lose their magnitudes. The
+    narrative says which factors led and what they mean; the widget draws how much. A
+    raw contribution was quotable too, and a number the guardrail does not recognise as
+    the score is stripped and shown as a safety swap — so withholding it also removes a
+    way for a good answer to be visibly withdrawn from a reader mid-sentence.
+
+    `EHR_FORMATTING` names both display strings, and the guardrail still checks the prose
+    against the SERVED value, because it reads the recorded call and not this copy. It
+    accepts the display strings: one decimal of a percentage is exactly half a unit in
+    its own last place, which is the tolerance `verify_risk_numbers` allows.
 
     Applied to the model's copy only. The recorded call keeps what the service
     returned, so the execution record and the caller's payload still say what the
@@ -196,14 +212,45 @@ def _presented_prediction(name: str, payload: Any) -> Any:
     if name != "predict_readmission" or not isinstance(payload, dict):
         return payload
     projected = dict(payload)
+
+    # The two numbers a clinician can quote, in the form the interface writes them.
+    for field, display in (("probability", "probability_display"),
+                           ("threshold", "threshold_display")):
+        value = payload.get(field)
+        if _is_number(value):
+            projected[display] = f"{float(value) * 100:.1f}%"
+
+    # ...and the floats they were derived from, removed rather than described as
+    # unquotable. A prompt rule is a request; a key that is not there is not.
+    for field in ("probability", "threshold", "base_value"):
+        projected.pop(field, None)
+
     factors = payload.get("top_factors")
     if isinstance(factors, list):
-        projected["top_factors"] = [
-            {**factor, "feature": humanize(str(factor.get("feature", "")))}
-            if isinstance(factor, dict) else factor
-            for factor in factors
-        ]
+        projected["top_factors"] = [_presented_factor(factor) for factor in factors]
     return projected
+
+
+def _is_number(value: Any) -> bool:
+    """A real number, rather than a bool wearing one's type."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _presented_factor(factor: Any) -> Any:
+    """One risk driver, named and directed, with no magnitude to quote.
+
+    Rebuilt field by field rather than copied and edited, because the field that has to
+    go is the one a `{**factor}` spread would keep. The magnitude is not withheld for
+    want of a use — the widget draws it as a bar length — but because it is not this
+    turn's to state.
+    """
+    if not isinstance(factor, dict):
+        return factor
+    return {
+        "feature": humanize(str(factor.get("feature", ""))),
+        **({"direction": factor["direction"]}
+           if isinstance(factor.get("direction"), str) else {}),
+    }
 
 
 def _extract_json_object(text: str) -> dict[str, Any] | None:

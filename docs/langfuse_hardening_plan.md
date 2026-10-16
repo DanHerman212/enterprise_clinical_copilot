@@ -1,9 +1,11 @@
 # Langfuse hardening — a durable fix for the observability platform
 
-Status: **in progress — paused 2026-10-15 after Phase 2.** Phases 0 and 2 are complete
-and verified; Phases 1, 3, 4 and 5 remain. Paused deliberately, to finish the UX work
-first: the rating feature is what makes the acceptance test meaningful, and the platform
-is healthy as it stands, so stopping here costs nothing.
+Status: **in progress — re-pinned 2026-10-16, paused again for the UX workshop.** Phases 0
+and 2 are complete; Phases 1, 3, 4 and 5 remain. It was paused the first time on 2026-10-15 on
+the assessment that "the platform is healthy as it stands". **That assessment was wrong.** The
+2026-10-16 session — recorded at the foot of this document — found the store in a restart loop,
+roughly one restart every 40 seconds. The resize bought headroom, not health, which is what the
+section below already predicted it would do.
 
 Written 2026-10-15. Supersedes nothing; extends the incident record in
 `docs/architecture/layer-10-observability.md` and the notes in
@@ -272,3 +274,77 @@ Resizing alone is not the durable fix, and this document should not be read that
 Two of the five items above (1.1, 1.2) are free and take minutes; two of them (4.1,
 4.2) are reliability bugs that more memory only makes rarer. The resize is necessary
 and it is the biggest single lever. It is not sufficient on its own.
+
+---
+
+## Session record — 2026-10-16: the loop is still live, and bounding the merge did not break it
+
+**Verified on the VM, not inferred.**
+
+| Fact | Value |
+|---|---|
+| Machine type | `e2-standard-2` — the Phase 2 resize is in place |
+| Host memory at the time | 7 GB total, ~6 GB available — the host is not the constraint |
+| `langfuse-clickhouse` `RestartCount` | 1101 at first reading; 41 more within the session |
+| Restart interval | ~40–53 s |
+| Kill signature | `constraint=CONSTRAINT_MEMCG`, `oom_memcg=...docker-06ba3f9a...scope`, `task=clickhouse-serv` |
+| `anon-rss` at kill | 4.05–4.12 GB, against a 4 GB cgroup cap |
+| What invokes the OOM killer | `MergeMutate` (once `TraceCollector`) |
+| `docker inspect` OOM flag | `oom=false` *despite* the kernel kills — **Phase 4.2 confirmed**, not hypothesised |
+
+**The resize did not close the loop, and this document predicted exactly that.** The kill
+signature is identical to the 2026-10-15 baseline — same cgroup attribution, same process,
+merges as the invoker — only at 4 GB instead of 2 GB. The ceiling has now been raised twice
+and the workload grew to fill it both times. Phase 3 is not the follow-up to Phase 2; it is
+the fix.
+
+**Phase 3.2 attempted, and ineffective.** A merge throttle was added
+(`clickhouse/config.d/merge_throttle.xml`): `background_pool_size=1` at the root, and
+`max_bytes_to_merge_at_once=104857600` under `<merge_tree>`. Note the nesting — that setting is
+a MergeTree *table* setting, so at the root of a drop-in it is ignored, with a log warning and no
+error, which looks exactly like the file having had no effect. The file installs and ClickHouse
+merges it (the container log names it), but the OOM loop continued unchanged, still with
+`MergeMutate` as the invoker.
+
+**Why it may not have helped — unestablished, and not guessed at.** A 100 MB merge should not
+need 4 GB, and `MergeMutate` is the pool for mutations as well as merges. Whether the setting
+took effect (read `system.merge_tree_settings`) and whether the OOM is a merge or a mutation
+(read `system.merges.is_mutation`) were both attempted and neither could be answered: the
+container refuses connections too often to query. **That is where the next session should
+start**, before any further configuration change.
+
+**Recommended pivot: stop bounding the merge and remove the backlog.** Phase 3.1 retention is
+the lever that has not been tried, and Langfuse has its own mechanism for it (`CLICKHOUSE_TTL_DAYS`,
+applied through its own migrations) — which needs no hand-written ClickHouse SQL and so does not
+require catching a 53-second window. Pair it with pausing the worker, so ingestion stops adding
+work while merges catch up. The variable name should be confirmed against this Langfuse version
+before it is used.
+
+**Option A — raising the cgroup cap to 6 GB — declined, with the arithmetic.** The host is 7 GB
+and the other four containers hold about 1.9 GB, so 6 GB oversubscribes the box (7.9 GB > 7 GB)
+and risks the host-wide OOM that `mem_limit` was introduced to contain. It also does not address
+growth. If relief is wanted while retention lands, **5 GB** fits.
+
+### `selfheal.sh` audit — 2026-10-16
+
+- **Invocation:** systemd timer, `Type=oneshot`, `User=root`, `ExecStart=/opt/langfuse/selfheal.sh`;
+source of truth is the repository file.
+- **Concurrency: safe.** `flock -n 9` then exit — two runs cannot overlap.
+- **Grace: partial.** `STARTUP_GRACE_SECONDS=90` guards the ClickHouse *probe* path only; the
+`unhealthy` branch acts with no grace. In practice a restarting container reports
+`health: starting`, which it does not flag.
+- **Backoff: none.** A persisting fault is actioned again on every five-minute tick.
+- **Hard kills: confirmed.** `docker compose up -d --force-recreate` is a stop/remove/start with a
+10 s timeout, repeated against a ClickHouse replaying its write-ahead log.
+
+Recommended and not yet made: have it skip ClickHouse while the container is `restarting` or
+`health: starting`, since Docker is already recovering it in that state and a force-recreate only
+interrupts the replay.
+
+### Uncommitted at the moment of the pin
+
+`clickhouse/config.d/merge_throttle.xml` (new), its mount in `docker-compose.yml`, and a change to
+`vm_stack.sh` that installs **every** `config.d/*.xml` instead of naming `memory.xml`. That last
+change is worth keeping whatever happens to the throttle: the scp already copied the whole
+directory, and the hardcoded `install` line is precisely how `memory.xml` came to be copied but
+never installed.

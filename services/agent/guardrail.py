@@ -292,6 +292,67 @@ def _literature_text(tool_calls: list[dict]) -> str:
     return "\n".join(chunks)
 
 
+def _lab_text(tool_calls: list[dict]) -> str:
+    """The numeric content of every laboratory trajectory this conversation drew.
+
+    The third channel `verify_risk_numbers` takes, and the remedy for a straight defect
+    rather than a new surface. RDW is reported in `%`, so a lab turn writes "the RDW rose
+    from 12.0% to 15.6%" — and those two numbers come from `get_lab_trends`, which is
+    neither the notes nor a published record, so both were stripped as unsupported risk
+    claims: the sentence was served as "the RDW rose from to" under a visible safety swap
+    (observed live 2026-10-16, Phase 3 verification). The numbers a turn retrieved are not
+    numbers the model invented, whichever tool retrieved them.
+
+    Values are rendered the way the card renders them — value immediately against its unit,
+    plus a spaced form — because the guard's percentage branch tests substrings like "12.0%"
+    and "11.5 %". Reference bounds are included for the same reason: a trajectory's own
+    interval is drawn from the panel, so "the reference range is 11.5%-14.5%" is a
+    retrieved fact and not a risk claim.
+
+    Each value is rendered at the series' OWN reporting precision AND in its shortest form,
+    and the first of those is not cosmetic. `f"{12.0:g}"` is "12", so rendering this way
+    dropped the trailing zero and left "12.0%" ungrounded — the value stripped by the very
+    channel added to protect it, which a live turn found before a test did. The shortest
+    form is kept alongside because "12" and "12.0" are the same number, and the guard is
+    asking whether the number was retrieved, not how it was typeset.
+
+    Accumulated across every trajectory in the evidence, like the literature text, and for
+    the same reason: a value quoted from an earlier turn's series is still a value that was
+    retrieved.
+    """
+    chunks: list[str] = []
+    for call in tool_calls or []:
+        if call.get("name") != "get_lab_trends":
+            continue
+        response = call.get("response") or {}
+        if not isinstance(response, dict):
+            continue
+        trends = response.get("trends")
+        if not isinstance(trends, list):
+            continue
+        for series in trends:
+            if not isinstance(series, dict):
+                continue
+            unit = str(series.get("unit") or "")
+            precision = series.get("decimals")
+            if not isinstance(precision, int) or isinstance(precision, bool):
+                precision = None
+            numbers = [p.get("value") for p in series.get("series") or []
+                       if isinstance(p, dict)]
+            numbers += [series.get("reference_low"), series.get("reference_high")]
+            for value in numbers:
+                if not isinstance(value, (int, float)) or isinstance(value, bool):
+                    continue
+                forms = {f"{value:g}"}
+                if precision is not None and precision >= 0:
+                    # The payload's own precision first: 12.0, not 12 (see the docstring).
+                    forms.add(f"{float(value):.{precision}f}")
+                for text in forms:
+                    chunks.append(f"{text}{unit}")
+                    chunks.append(f"{text} {unit}")
+    return "\n".join(chunks)
+
+
 def check_citations(
     answer: str,
     slots: int,
@@ -345,10 +406,27 @@ def check_citations(
 # at all, and every comparator turn would raise a visible safety swap over a correct
 # sentence.
 #
+# Extended again 2026-10-16 (Phase 4B) for the laboratory trajectories. This one is a
+# defect rather than a new surface, and it is the third instance of the same shape: a tool
+# channel is added, and a guard written before it strips that channel's numbers. RDW is
+# reported in `%`, so a lab turn writes "the RDW rose from 12.0% to 15.6%" — retrieved by
+# `get_lab_trends`, belonging to neither of the two texts above, therefore read as risk
+# claims with nothing behind them and removed. The remedy is a third channel, because the
+# numbers a turn retrieved are not numbers the model invented whichever tool fetched them.
+#
 # What this deliberately does NOT do is widen `evidence_text`. The med guard reads that
 # same string, and an abstract inside it would let a dose quoted from a paper pass as a
-# dose the patient's note states. The sources stay separate — notes for the meds, notes
-# plus literature for the risk numbers — and a test holds the line.
+# dose the patient's note states. The sources stay separate — notes for the meds, and the
+# notes, the records and the trajectories each as their own argument for the risk guard —
+# and a test holds the line.
+#
+# The residual this widens, named rather than left to be found: a fabricated figure that
+# coincides exactly with a value in one of the retrieved texts passes. That was already
+# true of the notes and the records; the trajectories are a third place for the
+# coincidence to fall (a made-up "0.87" behind a creatinine of 0.87). Narrowing the check
+# to only the shapes this guard expects is what stripped the RDW values in the first place,
+# so the trade is taken deliberately and the patient's own figures are still handed over
+# only as display strings.
 #
 # The residual, named here rather than left to be discovered: a model that writes a
 # retrieved cohort rate AS THE PATIENT'S RISK ("her risk is 13.2%") is not caught,
@@ -381,18 +459,22 @@ def _predict_values(tool_calls: list[dict]) -> list[float]:
 
 def verify_risk_numbers(
     answer: str, tool_calls: list[dict], evidence_text: str = "",
-    literature_text: str = "",
+    literature_text: str = "", lab_text: str = "",
 ) -> tuple[str, list[str]]:
     """Strip risk-shaped numbers no `predict_readmission` response supports.
 
     Tolerance is half a unit in the number's own last stated decimal place, so
     "0.13" honestly truncates 0.131398 but a fabricated "0.14" fails. Skipped:
-    numbers followed by a dose unit, and numbers quoted verbatim from the
-    retrieved evidence — lab values like "creatinine 0.9" from a note passage, and
-    published cohort rates from a retrieved record. `evidence_text` is the notes and
-    `literature_text` is the records; they are separate parameters because the med guard
-    reads the first and must not be handed the second (see the note above
-    `_RISK_DECIMAL`).
+    numbers followed by a dose unit, and numbers quoted verbatim from what the
+    turn retrieved — lab values like "creatinine 0.9" from a note passage,
+    published cohort rates from a retrieved record, and the values and reference
+    bounds of a generated trajectory, which is where an RDW of "15.6%" comes from.
+
+    Three texts, three channels, deliberately separate arguments rather than one merged
+    string: `evidence_text` is the notes, `literature_text` is the published records and
+    `lab_text` is the trajectories. The med guard is handed the first ALONE, and an
+    abstract or a generated panel inside it would let a dose pass that the patient's note
+    never states (see the note above `_RISK_DECIMAL`).
 
     The half-unit tolerance carries a hair of slack for floating point. A served
     value that sits EXACTLY half a unit from the number written (0.125 written as
@@ -416,6 +498,8 @@ def verify_risk_numbers(
             continue
         if literature_text and token in literature_text:
             continue
+        if lab_text and token in lab_text:
+            continue
         decimals = len(token.split(".")[1])
         if not supported(float(token), 0.5 * 10 ** -decimals):
             flags.append(f"risk_number_unsupported:{token}")
@@ -428,6 +512,11 @@ def verify_risk_numbers(
         if evidence_text and (f"{num}%" in evidence_text or f"{num} %" in evidence_text):
             continue
         if literature_text and (f"{num}%" in literature_text or f"{num} %" in literature_text):
+            continue
+        # The RDW case: a percentage the turn retrieved from a trajectory, not a risk
+        # claim about the patient. Without this the numbers were stripped and the prose
+        # served as "the RDW rose from to" (see `_lab_text`).
+        if lab_text and (f"{num}%" in lab_text or f"{num} %" in lab_text):
             continue
         decimals = len(num.split(".")[1]) if "." in num else 0
         if not supported(float(num) / 100.0, 0.5 * 10 ** -decimals / 100.0):
@@ -688,7 +777,7 @@ def guard_answer(
 
     # Risk numbers first — the one guard that must act even with zero evidence.
     answer, f = verify_risk_numbers(answer, evidence, full_text,
-                                    _literature_text(evidence))
+                                    _literature_text(evidence), _lab_text(evidence))
     flags += f
     answer, f = redact_invented_age(answer, passages)
     flags += f

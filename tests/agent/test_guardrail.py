@@ -151,6 +151,152 @@ def test_truncated_but_honest_decimal_passes():
     assert flags == []
 
 
+# --- the third channel: laboratory trajectories (Phase 4B, 2026-10-16) ---------
+
+# The real shape `get_lab_trends` returns, abridged to two analytes. RDW's unit is `%`,
+# which is the whole problem: a lab turn writes percentages, and before this channel
+# existed every one of them was read as a claim about readmission risk.
+_LAB_CALL = [{
+    "name": "get_lab_trends",
+    "args": {"hadm_id": 90000015},
+    "response": {
+        "hadm_id": 90000015, "returned": 2, "synthetic": True,
+        "trends": [
+            {"key": "rdw", "label": "RDW", "unit": "%",
+             "reference_low": 11.5, "reference_high": 14.5, "decimals": 1,
+             "anchored": ["rdw_max"],
+             "series": [{"day": 0.0, "value": 12.0, "flag": "normal"},
+                        {"day": 1.3, "value": 13.1, "flag": "normal"},
+                        {"day": 2.7, "value": 14.1, "flag": "normal"},
+                        {"day": 4.0, "value": 15.6, "flag": "high"}]},
+            {"key": "creatinine", "label": "Creatinine", "unit": "mg/dL",
+             "reference_low": 0.5, "reference_high": 1.1, "decimals": 2,
+             "anchored": [],
+             "series": [{"day": 0.0, "value": 0.87, "flag": "normal"},
+                        {"day": 4.0, "value": 1.04, "flag": "normal"}]},
+        ],
+    },
+}]
+
+
+def test_an_rdw_percentage_from_a_trajectory_is_not_a_risk_number():
+    """The exact sentence the directive names, and the exact corruption it found.
+
+    RDW is reported in `%` and comes from `get_lab_trends` — neither the notes nor a
+    record — so both figures were stripped as unsupported risk claims and the sentence was
+    served as "The RDW increased from to, moving into the high range" under a visible
+    safety swap.
+
+    No prediction in the calls, deliberately. With one present this test passed while the
+    defect was still there: `_PREDICT_CALL`'s threshold is 0.12, and `12.0%` is 0.12, so
+    the number was grounded by the threshold rather than by the trajectory it came from.
+    """
+    answer = "The RDW increased from 12.0% to 15.6%, moving into the high range."
+
+    cleaned, flags = g.verify_risk_numbers(
+        answer, _LAB_CALL, lab_text=g._lab_text(_LAB_CALL))
+
+    assert cleaned == answer, cleaned
+    assert flags == [], flags
+
+
+def test_the_reference_interval_of_a_trajectory_is_grounded_too():
+    """A trajectory's own interval is drawn from the panel, so quoting it is reporting
+    what was retrieved — not a claim about the patient's risk."""
+    answer = "Her RDW of 15.6% is above the reference range of 11.5%-14.5%."
+
+    cleaned, flags = g.verify_risk_numbers(
+        answer, _LAB_CALL, lab_text=g._lab_text(_LAB_CALL))
+
+    assert cleaned == answer, cleaned
+    assert flags == []
+
+
+def test_a_percentage_the_trajectory_does_not_carry_is_still_stripped():
+    """The channel is verbatim or it is nothing, exactly like the literature one.
+
+    Otherwise this fix would be indistinguishable from switching the guard off: a
+    percentage that appears in no trajectory is still a percentage nobody produced.
+    """
+    answer = "The RDW increased to 17.4%, which is high."
+
+    cleaned, flags = g.verify_risk_numbers(
+        answer, _LAB_CALL, lab_text=g._lab_text(_LAB_CALL))
+
+    assert "17.4%" not in cleaned
+    assert "risk_number_unsupported:17.4%" in flags
+
+
+def test_a_lab_decimal_written_bare_of_units_is_grounded():
+    """The decimal branch's version of the same defect, and why the trajectory channel is
+    checked there too rather than only against `%`.
+
+    `_UNIT_TAIL` saves a lab value written with its unit; one written without it
+    ("creatinine peaked at 0.87") reaches the decimal branch, which is looking for
+    probabilities.
+    """
+    grounded, flags = g.verify_risk_numbers(
+        "Creatinine peaked at 0.87 during the admission.", _LAB_CALL,
+        lab_text=g._lab_text(_LAB_CALL))
+
+    assert grounded == "Creatinine peaked at 0.87 during the admission."
+    assert flags == []
+
+    # ...and the widening did not blind the branch: a figure in no channel is still caught.
+    stripped, flags = g.verify_risk_numbers(
+        "Creatinine peaked at 0.83 during the admission.", _LAB_CALL,
+        lab_text=g._lab_text(_LAB_CALL))
+
+    assert "0.83" not in stripped
+    assert "risk_number_unsupported:0.83" in flags
+
+
+def test_guard_answer_wires_the_trajectory_channel_through():
+    """End to end through the entry point the chain actually calls.
+
+    A flag-free result is what keeps the Evidence-Check badge off, because the badge is
+    raised from `guardrail_flags` — so "the prose settled without a swap" and "no flags"
+    are the same statement here. A test on `verify_risk_numbers` alone would pass while
+    `guard_answer` still handed the guard nothing for labs.
+    """
+    result = g.guard_answer(
+        "The RDW increased from 12.0% to 15.6%, moving into the high range.",
+        _LAB_CALL,
+    )
+
+    assert result["answer"] == (
+        "The RDW increased from 12.0% to 15.6%, moving into the high range.")
+    assert result["flags"] == [], result["flags"]
+
+
+def test_the_med_guard_still_cannot_see_the_trajectories():
+    """The channels are separate arguments, and this is the property that keeps them so.
+
+    The same line the literature channel had to hold: `evidence_text` is the notes, handed
+    to the med guard alone. Merging the third channel into it — the tempting shortcut, one
+    string instead of three — would let a dose-shaped value from a generated panel verify a
+    medication claim the patient's own note never states.
+    """
+    calls = [
+        {"name": "rag_search_sections", "args": {}, "response": {
+            "returned": 1, "passages": [{
+                "id": "note-1", "section": "discharge_instructions",
+                "text": "Continue home medications as previously prescribed.",
+            }],
+        }},
+        {"name": "get_lab_trends", "args": {}, "response": {
+            "trends": [{"key": "creatinine", "label": "Creatinine", "unit": "g",
+                        "reference_low": 0.5, "reference_high": 1.1,
+                        "series": [{"day": 0.0, "value": 5.0, "flag": "normal"}]}],
+        }},
+    ]
+
+    result = g.guard_answer("She was discharged on warfarin 5 g daily.", calls)
+
+    assert "5 g" not in result["answer"], result
+    assert "med_dose_mismatch:5 g" in result["flags"], result["flags"]
+
+
 def test_the_number_the_interface_shows_is_always_supported():
     """The display precision and the guardrail's tolerance are checked against
     each other, because they are two independent constants that have to agree.

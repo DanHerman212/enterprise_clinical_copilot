@@ -99,6 +99,34 @@ def test_a_turn_with_no_signal_is_still_unavailable():
     assert reason is None
 
 
+def test_a_clean_finish_with_no_text_is_an_abstention_not_a_failure():
+    """STOP with an empty candidate is the model choosing not to speak.
+
+    Nothing broke: no dependency failed, no token cap was hit. Reporting it as an
+    outage told the caller to retry a decision that is stable at temperature 0, and
+    it turned a prompt-injection probe into a 502 on a service that had handled the
+    probe safely (observed live, `inj-04`, 2026-10-17).
+    """
+    assert model_turn.silent_refusal(_turn(finish_reason="STOP")) == (
+        model_turn.SILENT_TURN_SENTENCE
+    )
+    # The sentence has to be a useful answer in its own right, because for a probe
+    # that is all the caller will ever see.
+    assert "don't have an answer" in model_turn.SILENT_TURN_SENTENCE.lower()
+
+
+def test_an_empty_turn_with_no_reported_reason_is_not_called_an_abstention():
+    """Absent from a candidate is not the same as chosen, and guessing hides faults.
+
+    A missing finish reason means the response did not arrive coherently. Treating
+    that as the model's decision would report a broken turn as a polite refusal.
+    """
+    assert model_turn.silent_refusal(_turn()) is None
+    assert model_turn.silent_refusal(_turn(finish_reason="MAX_TOKENS")) is None
+    assert model_turn.silent_refusal(_turn(finish_reason="SAFETY")) is None
+    assert model_turn.silent_refusal(_turn(finish_reason="MALFORMED_RESPONSE")) is None
+
+
 # --- through the route, and into the record ---------------------------------
 
 def test_a_refusal_reaches_the_caller_as_a_refusal():

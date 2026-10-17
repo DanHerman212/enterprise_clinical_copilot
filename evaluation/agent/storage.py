@@ -39,30 +39,63 @@ def destination(run_tag: str, local: Path) -> str:
 def sync_eval_to_gcs(run_tag: str, files: list[Path]) -> list[str] | None:
     """Copy `files` into the run's prefix. Returns the URIs, or None on failure.
 
-    Uses `gcloud storage cp` rather than the Python client: the eval scripts already
-    require an authenticated gcloud (they call a Cloud Run service), and the client
-    library would add a dependency for four lines of copying.
+    Two transports, because this runs in two places. The client library is used when
+    it is importable, which is the case in the job container where there is no gcloud
+    CLI at all. `gcloud storage cp` remains the fallback for a laptop that has an
+    authenticated CLI but never installed the library — that is how every report
+    before the job existed was published, and breaking it to gain a container would
+    make the container the only way to check the container.
     """
     present = [Path(f) for f in files if Path(f).is_file()]
     if not present:
         logger.warning("eval upload skipped: no artifacts to send for run %s", run_tag)
         return None
 
-    uris: list[str] = []
     try:
-        for local in present:
-            uri = destination(run_tag, local)
-            subprocess.run(
-                ["gcloud", "storage", "cp", str(local), uri],
-                check=True, capture_output=True, timeout=300,
-            )
-            uris.append(uri)
-            logger.info("eval artifact uploaded: %s", uri)
+        upload = _client_upload() or _cli_upload()
     except Exception:  # noqa: BLE001 — a failed copy must not fail the run
         logger.warning("eval upload failed for run %s; artifacts remain local",
                        run_tag, exc_info=True)
         return None
+
+    uris: list[str] = []
+    for local in present:
+        uri = destination(run_tag, local)
+        try:
+            upload(local, uri)
+        except Exception:  # noqa: BLE001 — same reason, per file
+            logger.warning("eval artifact failed: %s", uri, exc_info=True)
+            return None
+        uris.append(uri)
+        logger.info("eval artifact uploaded: %s", uri)
     return uris
+
+
+def _client_upload():
+    """Upload through google-cloud-storage, or None when it is not installed."""
+    try:
+        from google.cloud import storage  # noqa: PLC0415 — optional transport
+    except ImportError:
+        return None
+
+    def upload(local: Path, uri: str) -> None:
+        client = storage.Client()
+        bucket = client.bucket(BUCKET)
+        key = uri.split(f"gs://{BUCKET}/", 1)[1]
+        bucket.blob(key).upload_from_filename(str(local), timeout=300)
+
+    return upload
+
+
+def _cli_upload():
+    """Upload through the gcloud CLI, the transport a laptop already has."""
+    def upload(local: Path, uri: str) -> None:
+        subprocess.run(
+            ["gcloud", "storage", "cp", str(local), uri],
+            check=True, capture_output=True, timeout=300,
+        )
+
+    return upload
 
 
 def upload_if_asked(args, files: list[Path]) -> None:

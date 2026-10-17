@@ -273,12 +273,24 @@ async def _compose_success(
         # cases need different words: a truncated answer is worth retrying, a
         # refusal by the content filters is not — at temperature 0 the same
         # question reaches the same decision (ECC-12).
-        code, sentence, reason = model_turn.classify(final_message(state))
-        logger.error(
-            "agent produced no final answer text trace=%s code=%s finish_reason=%s",
-            trace, code, reason,
-        )
-        raise AgentAnswerUnavailable(sentence, code=code, finish_reason=reason)
+        message = final_message(state)
+        silent = model_turn.silent_refusal(message)
+        if silent is not None:
+            # A clean finish with nothing in it is the model choosing not to speak,
+            # not the service failing. Serving it as an abstention keeps a safety
+            # probe from being reported as an outage — and the sentence still tells
+            # the caller what this assistant does answer.
+            logger.warning(
+                "agent finished without text; serving an abstention trace=%s", trace,
+            )
+            text = silent
+        else:
+            code, sentence, reason = model_turn.classify(message)
+            logger.error(
+                "agent produced no final answer text trace=%s code=%s finish_reason=%s",
+                trace, code, reason,
+            )
+            raise AgentAnswerUnavailable(sentence, code=code, finish_reason=reason)
 
     # The guardrails see this turn's calls AND the replayed turns' calls, because
     # a follow-up is answered against both: the earlier turns are in the

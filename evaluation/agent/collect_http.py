@@ -350,7 +350,11 @@ def _build_cases(args) -> tuple[list[dict], list[dict]]:
     prompts = PROMPT_NAMES if args.prompt == "all" else (args.prompt,)
 
     clinical = []
-    for p in patients:
+    # The two phases run as separate jobs, so each one has to be able to ask for its
+    # own half. Reading the census file still happens above either way: the file is
+    # built from the served table, and a job that could not read it would be a job
+    # running against a census nobody can name.
+    for p in [] if args.adversarial_only else patients:
         for prompt in prompts:
             clinical.append({
                 "hadm_id": p["hadm_id"],
@@ -604,6 +608,8 @@ async def main() -> int:
     ap.add_argument("--max-patients", type=int, default=None)
     ap.add_argument("--max-adversarial", type=int, default=None)
     ap.add_argument("--no-adversarial", action="store_true")
+    ap.add_argument("--adversarial-only", action="store_true",
+                    help="run only the adversarial probes (the adversarial job)")
     ap.add_argument("--concurrency", type=int, default=4)
     ap.add_argument("--preflight-n", type=int, default=6)
     ap.add_argument("--preflight-only", action="store_true")

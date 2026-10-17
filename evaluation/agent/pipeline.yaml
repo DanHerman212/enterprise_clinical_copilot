@@ -1,0 +1,111 @@
+# The evaluation pipeline: build, deploy, execute, gate. Nothing here is typed by a
+# person at runtime.
+#
+#   gcloud builds submit --config evaluation/agent/pipeline.yaml \
+#       --substitutions=_TAG=$(git rev-parse --short HEAD)
+#
+# What this adds over `cloudbuild.yaml`: that file builds an image and stops, leaving
+# someone to deploy a job and run an execution by hand. A gate that a human remembers
+# to run is not a gate. Here the executions ARE the build steps, `--wait` makes Cloud
+# Build wait for them, and a failing gate exits non-zero, which fails the build and
+# blocks whatever comes next.
+#
+# Gate order is deliberate: adversarial first because it is twenty probes and two
+# minutes, and it is the phase that catches a boundary defect. There is no point
+# spending the clinical census on an agent that will fail the cheap gate.
+
+steps:
+  - id: build-harness
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --file=evaluation/agent/Dockerfile
+      - --tag=${_IMAGE}:${_TAG}
+      - --label=commit=${_TAG}
+      - .
+
+  - id: push-harness
+    name: gcr.io/cloud-builders/docker
+    args: [push, ${_IMAGE}:${_TAG}]
+
+  # Both jobs are redeployed every pipeline run, from the image this build just
+  # produced. A job left pointing at an older image is a gate measuring code that is
+  # no longer what would ship.
+  - id: deploy-jobs
+    name: gcr.io/cloud-builders/gcloud
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        for PHASE in adversarial clinical; do
+          echo "deploying eval-$PHASE from ${_IMAGE}:${_TAG}"
+          gcloud run jobs deploy "eval-$PHASE" \
+            --image "${_IMAGE}:${_TAG}" \
+            --region "${_REGION}" \
+            --service-account "${_RUNNER_SA}" \
+            --set-env-vars "PHASE=$PHASE,AGENT_URL=${_AGENT_URL},CONCURRENCY=${_CONCURRENCY},PROJECT_ID=$PROJECT_ID,LANGFUSE_HOST=${_LANGFUSE_HOST}" \
+            --set-secrets "LANGFUSE_PUBLIC_KEY=${_LF_PUBLIC_SECRET}:latest,LANGFUSE_SECRET_KEY=${_LF_SECRET_SECRET}:latest" \
+            --max-retries 0 \
+            --task-timeout "${_TASK_TIMEOUT}" \
+            --memory 1Gi --cpu 1 --tasks 1 \
+            --quiet
+        done
+
+  # Gate A — the fast-fail proof. Twenty probes, the phase that catches a boundary or a
+  # fabrication defect before the census spends anything.
+  - id: gate-adversarial
+    name: gcr.io/cloud-builders/gcloud
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        gcloud run jobs execute eval-adversarial \
+          --region "${_REGION}" \
+          --update-env-vars "RUN_TAG=${_RUN_TAG}-adv" \
+          --wait
+
+  # Gate B/C — the clinical phase. `_MAX_PATIENTS` empty means the full census; a value
+  # makes it a pilot, which is how the same pipeline is used for both.
+  - id: gate-clinical
+    name: gcr.io/cloud-builders/gcloud
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        EXTRA=""
+        if [ -n "${_MAX_PATIENTS}" ]; then
+          EXTRA=",MAX_PATIENTS=${_MAX_PATIENTS}"
+        fi
+        gcloud run jobs execute eval-clinical \
+          --region "${_REGION}" \
+          --update-env-vars "RUN_TAG=${_RUN_TAG}-clinical${EXTRA}" \
+          --wait
+
+substitutions:
+  _IMAGE: us-east1-docker.pkg.dev/trim-icon-498815-a0/ecc-eval/harness
+  _TAG: manual
+  _RUN_TAG: manual
+  _REGION: us-east1
+  _AGENT_URL: https://agent-jamycsjjzq-ue.a.run.app
+  _RUNNER_SA: ecc-eval-runner@trim-icon-498815-a0.iam.gserviceaccount.com
+  _CONCURRENCY: "4"
+  _TASK_TIMEOUT: "3600"
+  # Score attachment: the judge writes its verdicts onto the trace each answer
+  # produced. Reusing the agent's own secrets rather than a second copy means one
+  # rotation, and the host is an env var because only the keys are secret.
+  _LANGFUSE_HOST: https://observability.danielmherman.com
+  _LF_PUBLIC_SECRET: langfuse-project-public-key
+  _LF_SECRET_SECRET: langfuse-project-secret-key
+  # Empty = the whole clinical census. Set to 3 for a pilot.
+  _MAX_PATIENTS: ""
+
+options:
+  machineType: E2_HIGHCPU_8
+  logging: CLOUD_LOGGING_ONLY
+
+# The adversarial gate is twenty probes and the clinical gate is the census; together
+# they can exceed the default hour.
+timeout: 10800s

@@ -243,6 +243,12 @@ def _judge(client, system: str, user: str) -> dict:
         quota = "429" in last or "RESOURCE_EXHAUSTED" in last
         if attempt >= attempts - 1 or (quota and attempt >= 4):
             break
+        # Printed, not swallowed. A 13-minute retry ladder (six attempts x 120s) with
+        # nothing on stdout is indistinguishable from a hung job, and it was reported as
+        # one: the adversarial gate appeared stuck at 19/20 for over ten minutes while it
+        # was in fact waiting out this ladder. A gate nobody can read is a gate nobody
+        # trusts.
+        print(f"  judge retry {attempt + 1}/{attempts} after {last[:120]}", flush=True)
         time.sleep(min(60, (10 * 2 ** attempt) if quota else (2 ** attempt)))
     return {"error": last}
 

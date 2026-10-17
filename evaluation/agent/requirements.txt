@@ -4,7 +4,13 @@
 #
 # google-cloud-storage is here because the job writes its artifacts directly rather
 # than shelling out to the gcloud CLI, which a slim container does not have.
+#
+# langfuse is here because the judge attaches its verdicts to the trace each answer
+# produced. It was missing, so inside the job `_langfuse_client()` would have raised on
+# import even with credentials mounted — the score attachment could not have worked in
+# the cloud at all, and reported itself as OFF for a reason that looked like config.
 httpx==0.28.1
 google-genai==2.17.0
 google-cloud-bigquery==3.41.0
 google-cloud-storage==2.19.0
+langfuse==4.14.4

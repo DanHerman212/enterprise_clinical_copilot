@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from typing import Callable
@@ -113,7 +114,44 @@ async def _question_or_error(
             {"error": exc.code, "message": exc.message},
             status_code=exc.status_code,
         )
+    refused = _unknown_command(parsed)
+    if refused is not None:
+        return None, refused
     return _route_free_text(parsed), None
+
+
+#: The shape of a typed command, anchored at the start of the question.
+_SLASH_TOKEN = re.compile(r"^/([A-Za-z0-9_-]+)")
+
+
+def _unknown_command(parsed: dict) -> JSONResponse | None:
+    """Refuse a command-shaped question that names no command, before the chain runs.
+
+    A slash token at the start of a question is the caller asking for a command by
+    name. When no command answers to it, the honest reply is the list of names that
+    do — not a reasoning turn that searches the chart, spends the tool budget and
+    reports a `Reconciled` badge for what is a typo.
+
+    Deliberately a 400 rather than a composed answer: nothing was retrieved, so there
+    is no surface to draw and no citation to resolve, and the caller's request really
+    was malformed. The message is user-facing text, which is what lets the site relay
+    it verbatim instead of replacing it with a generic failure.
+    """
+    if parsed.get("kind"):
+        # A chip or palette selection is an explicit command; it was already resolved.
+        return None
+    match = _SLASH_TOKEN.match((parsed.get("question") or "").strip())
+    if match is None:
+        return None
+    token = "/" + match.group(1).lower()
+    if routing.command_for_slash(token) is not None:
+        return None
+    available = ", ".join(sorted(c.slash for c in routing.COMMANDS))
+    return JSONResponse(
+        {"error": "unknown_command",
+         "message": f"There is no {token} command. Available commands: {available}."},
+        status_code=400,
+    )
 
 
 def _route_free_text(parsed: dict) -> dict:

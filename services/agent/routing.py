@@ -487,6 +487,21 @@ def command_for(wire: str) -> Command:
         raise UnknownCommand(wire) from None
 
 
+def command_for_slash(slash: str) -> Command | None:
+    """The command a typed `/name` refers to, or None when nothing answers to it.
+
+    Exists so a mistyped command can be refused at the seam instead of being answered
+    as a question. `/ehrr` used to run an 18-step reasoning turn, spend the whole tool
+    budget and come back with a `Reconciled` badge — a correction notice shown for a
+    typo (2026-10-17).
+    """
+    token = (slash or "").strip().lower()
+    for command in COMMANDS:
+        if command.slash == token:
+            return command
+    return None
+
+
 def is_command(wire: str | None) -> bool:
     """Whether this intent is one of the deterministic commands."""
     return wire is not None and wire in BY_WIRE
@@ -612,6 +627,42 @@ def asks_for_administrative_detail(question: str) -> bool:
     return False
 
 
+#: Words that mean the caller wants published evidence, not a record extraction.
+#:
+#: The free-text router matches a small vocabulary of extraction words, and on
+#: 2026-10-17 that vocabulary cost an answer: a clicked follow-up asked "What does
+#: current clinical literature suggest regarding the efficacy of this specific
+#: combination of medications…" and the word "medications" sent it to /meds, which
+#: answers with the extraction list. The reader asked for evidence and got the chart.
+#:
+#: A literature cue ABSTAINS rather than routing to /pubmed. The cue only says the
+#: question is not an extraction request; whether the answer comes from the literature
+#: or from the notes is still the reasoning loop's decision, and routing on a cue would
+#: be a second guess dressed up as a rule.
+_LITERATURE_CUES: tuple[tuple[str, ...], ...] = (
+    ("literature",), ("evidence",),
+    ("study",), ("studies",),
+    ("trial",), ("trials",),
+    ("meta", "analysis"), ("metaanalysis",),
+    ("systematic", "review"),
+    ("pubmed",), ("guideline",), ("guidelines",),
+    ("efficacy",), ("effectiveness",), ("benchmark",), ("benchmarks",),
+)
+
+
+def _contains_literature_cue(tokens: list[str]) -> bool:
+    """Whether the question asks for published evidence rather than a record value."""
+    for cue in _LITERATURE_CUES:
+        span = len(cue)
+        if span == 1:
+            if cue[0] in tokens:
+                return True
+        elif any(tokens[i:i + span] == list(cue)
+                 for i in range(len(tokens) - span + 1)):
+            return True
+    return False
+
+
 def classify_free_text(question: str) -> str | None:
     """The command wire a free-text question is asking for, or None.
 
@@ -630,6 +681,10 @@ def classify_free_text(question: str) -> str | None:
     # A control's own question is answered by the loop that the control names, not
     # by whichever keyword happens to be in its label.
     if _contains_affordance_template(tokens):
+        return None
+    # An evidence question is not an extraction request, whatever nouns it uses.
+    # "…efficacy of this combination of medications" is the case that lost an answer.
+    if _contains_literature_cue(tokens):
         return None
     # Exact tokens, never substrings. `"lab" in text` also fires on "elaborate",
     # "collaborate" and "syllable", and a router that hijacks those is worse than
@@ -662,6 +717,19 @@ def _templated_arguments(args: dict, hadm_id: int | None,
     return {k: (hadm_id if v == "{hadm_id}" else v) for k, v in args.items()}
 
 
+#: Records in the demo cohort that are outpatient notes, not inpatient stays.
+#:
+#: A 30-day readmission risk and a discharge medication list are clinically
+#: non-applicable to a speech-therapy or rehab progress note: there was no admission to
+#: be readmitted after. The model will still score them, because the feature row exists,
+#: and `/ehr` used to draw "Readmission risk & trajectory" with a 5.7% widget for a
+#: patient whose entire chart is three voice-therapy sessions (2026-10-17).
+#:
+#: Declared here, in the one module that owns the command vocabulary, so the surface and
+#: the eval harness can both read it rather than each carrying a copy.
+OUTPATIENT_HADM_IDS = frozenset({90000028, 90000040, 90000051, 90000054, 90000073})
+
+
 def supplementary_arguments(
         command: Command, hadm_id: int | None) -> list[tuple[str, dict]]:
     """`(tool, arguments)` for each of this command's supplementary calls.
@@ -670,11 +738,16 @@ def supplementary_arguments(
     fill its arguments, which is what lets `/pubmed` answer a patient-less literature
     search with the one call it has always made. Tested in both directions: the skip must
     not become the silent default for a command that needs the patient.
+
+    The readmission estimate is also left out for an OUTPATIENT record: scoring an
+    outpatient note answers a question nobody asked, and the number then has to be drawn
+    somewhere. See `OUTPATIENT_HADM_IDS`.
     """
     return [
         (spec.tool, _templated_arguments(spec.args, hadm_id, command))
         for spec in command.supplementary
         if not (spec.skipped_without_admission and hadm_id is None)
+        and not (spec.tool == "predict_readmission" and hadm_id in OUTPATIENT_HADM_IDS)
     ]
 
 

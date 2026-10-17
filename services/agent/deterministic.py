@@ -55,7 +55,12 @@ from services.agent.contracts import RecordedToolCall
 from services.agent.feature_labels import humanize
 from services.agent.message_text import text_of
 from services.agent.prompts import SYSTEM_PROMPT
-from services.agent.routing import Command, supplementary_arguments, tool_arguments
+from services.agent.routing import (
+    OUTPATIENT_HADM_IDS,
+    Command,
+    supplementary_arguments,
+    tool_arguments,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -295,6 +300,21 @@ def medication_narrative(verified: list[dict[str, str]], returned_passages: int)
     )
 
 
+_NO_READMISSION = (
+    "NO READMISSION ESTIMATE: this record is an outpatient note, not an inpatient "
+    "admission, so no readmission risk was computed and none is applicable. Do not "
+    "write a 'Readmission risk & trajectory' section, do not state a risk percentage, "
+    "and do not describe risk drivers. Say in one sentence instead that readmission "
+    "risk does not apply to an outpatient record."
+)
+
+
+def _formatter_input(tool_messages: list[Any], outpatient: bool) -> str:
+    """What the formatting turn reads: the tool results, plus the outpatient caveat."""
+    text = "\n\n".join(str(m.content) for m in tool_messages)
+    return f"{text}\n\n{_NO_READMISSION}" if outpatient else text
+
+
 async def _formatting_turn(
     llm: Any,
     prompt: list[Any],
@@ -349,6 +369,7 @@ async def run_command(
     callbacks: list[Any] | None = None,
     replayed_calls: list[RecordedToolCall] | None = None,
     prose_stream: bool = False,
+    trace_metadata: dict | None = None,
 ) -> dict[str, Any]:
     """Run one command to completion and return a state the pipeline understands.
 
@@ -377,11 +398,19 @@ async def run_command(
     # a second, and it takes one so a single turn can put the readmission score beside
     # the narrative it qualifies.
     calls = [{"name": command.tool, "args": arguments, "id": f"{command.wire}-1"}]
+    supplementary = supplementary_arguments(command, hadm_id)
     calls += [
         {"name": name, "args": extra, "id": f"{command.wire}-{index}"}
-        for index, (name, extra) in
-        enumerate(supplementary_arguments(command, hadm_id), start=2)
+        for index, (name, extra) in enumerate(supplementary, start=2)
     ]
+    # An outpatient note has no readmission to estimate, so the estimate was not
+    # requested. Say so in the formatter's input: without it the model writes the
+    # fourth section from the notes, which is how a speech-therapy progress note came
+    # back with a "Readmission risk & trajectory" paragraph (2026-10-17).
+    outpatient = (
+        hadm_id in OUTPATIENT_HADM_IDS
+        and any(spec.tool == "predict_readmission" for spec in command.supplementary)
+    )
     tool_messages, recorded = await _execute_tool_calls(
         toolbox, calls, on_event, project=_presented_prediction,
         # This path opens `command.<wire>` around the whole turn, so its tool spans
@@ -426,7 +455,9 @@ async def run_command(
         }
 
     llm = _build_llm(model)  # no bind_tools: a formatting turn cannot call anything
-    config = {"callbacks": list(callbacks)} if callbacks else None
+    config = {"callbacks": list(callbacks)} if callbacks else {}
+    if trace_metadata:
+        config["metadata"] = dict(trace_metadata)
     # Streaming is a capability the CALLER asks for (`routing.Command.streams_prose`).
     # A caller that has not asked gets exactly the frames it got before streaming
     # existed — which matters while a canvas that renders stages would print an
@@ -448,7 +479,7 @@ async def run_command(
         llm,
         [
             SystemMessage(content=f"{FORMATTER_PREAMBLE}\n\n{command.formatting}"),
-            HumanMessage(content="\n\n".join(str(m.content) for m in tool_messages)),
+            HumanMessage(content=_formatter_input(tool_messages, outpatient)),
         ],
         config=config,
         announce=_announce if streams and command.prose_is_model_output else None,

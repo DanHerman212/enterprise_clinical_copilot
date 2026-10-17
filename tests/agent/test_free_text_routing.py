@@ -75,6 +75,63 @@ def test_the_affordance_rule_does_not_swallow_a_real_lab_question():
         "What did her hemoglobin and sodium do during this admission?") == "labs"
 
 
+@pytest.mark.parametrize("question", [
+    # The A5 follow-up that lost its answer on 2026-10-17: a request for published
+    # evidence, routed to /meds because it contained the word "medications".
+    "What does current clinical literature suggest regarding the efficacy of this "
+    "specific combination of medications for the patient's primary diagnosis?",
+    "Is there evidence that these lab values predict readmission?",
+    "What do the guidelines say about metoprolol dosing?",
+    "Are there studies comparing these two drugs?",
+    "Find a meta-analysis on lab monitoring after discharge.",
+])
+def test_a_question_asking_for_evidence_is_not_routed_to_an_extraction(question):
+    assert routing.classify_free_text(question) is None
+
+
+def test_a_plain_medication_or_lab_request_still_routes():
+    """The abstention must not cost the questions the router exists for."""
+    assert routing.classify_free_text("Show me the discharge medications") == "meds"
+    assert routing.classify_free_text("What was her creatinine?") == "labs"
+
+
+def test_a_mistyped_command_is_refused_before_the_chain_runs():
+    """`/ehrr` used to run an 18-step turn and raise a `Reconciled` badge."""
+    import json
+
+    response = http._unknown_command({"question": "/ehrr", "kind": None})
+
+    assert response is not None
+    assert response.status_code == 400
+    body = json.loads(response.body)
+    assert body["error"] == "unknown_command"
+    # The message has to name the way out, or the caller is told only that they failed.
+    for slash in ("/ehr", "/labs", "/meds", "/risk", "/pubmed"):
+        assert slash in body["message"]
+    assert "Reconciled" not in body["message"]
+
+
+@pytest.mark.parametrize("parsed", [
+    {"question": "/ehr", "kind": None},          # a real command, typed
+    {"question": "/ehrr", "kind": "summarize"},  # a chip already resolved it
+    {"question": "What is the readmission risk?", "kind": None},
+    {"question": "/risk of falls overnight", "kind": None},  # prose that starts with /
+])
+def test_nothing_else_is_refused_as_an_unknown_command(parsed):
+    assert http._unknown_command(parsed) is None
+
+
+def test_an_outpatient_record_gets_no_readmission_estimate():
+    """A speech-therapy progress note has no admission to be readmitted after."""
+    summarize = routing.command_for("summarize")
+
+    outpatient_calls = routing.supplementary_arguments(summarize, 90000054)
+    inpatient_calls = routing.supplementary_arguments(summarize, 90000015)
+
+    assert all(name != "predict_readmission" for name, _ in outpatient_calls)
+    assert any(name == "predict_readmission" for name, _ in inpatient_calls)
+
+
 @pytest.mark.parametrize("question,expected", [
     # Answerable from the pre-flight manifest, so the graph must not force a note
     # search. This is the question that produced 17.29 days and then had it

@@ -482,6 +482,10 @@ def main() -> int:
                          "score write are network-bound, so this divides the "
                          "waiting rather than adding capacity: 1 restores the "
                          "strictly sequential pass.")
+    ap.add_argument("--upload-gcs", action="store_true",
+                    help="copy the judged output and report to gs://ecc-eval-artifacts")
+    ap.add_argument("--run-tag", default=None,
+                    help="label for this run, e.g. eval-pilot-101726")
     args = ap.parse_args()
 
     if args.mode == "adversarial":
@@ -684,7 +688,27 @@ def main() -> int:
     print(f"  safety failures: {report['safety_failures']}")
     print(f"  agent errors: {verdict['agent_error']}")
     print(f"  wrote {report_path}")
+    _upload_artifacts(args, [traces_path, judged_path, report_path])
     return 0
+
+
+def _upload_artifacts(args, files) -> None:
+    """Copy the judged output and report to the bucket when asked. Never raises."""
+    if not getattr(args, "upload_gcs", False):
+        return
+    try:
+        import sys
+        from pathlib import Path
+
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from storage import sync_eval_to_gcs  # noqa: PLC0415
+
+        tag = getattr(args, "run_tag", None) or "unlabelled"
+        sent = sync_eval_to_gcs(tag, [Path(f) for f in files if f])
+        print(f"  artifacts: {len(sent)} uploaded to gs://ecc-eval-artifacts/runs/{tag}/"
+              if sent else "  artifacts: upload skipped (see log)")
+    except Exception:  # noqa: BLE001 — a copy must never fail the run
+        print("  artifacts: upload skipped (see log)")
 
 
 if __name__ == "__main__":

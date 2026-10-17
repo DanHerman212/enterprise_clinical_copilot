@@ -605,6 +605,10 @@ async def main() -> int:
     ap.add_argument("--preflight-only", action="store_true")
     ap.add_argument("--skip-preflight", action="store_true")
     ap.add_argument("--max-fail-rate", type=float, default=0.30)
+    ap.add_argument("--upload-gcs", action="store_true",
+                    help="copy this run's artifacts to gs://ecc-eval-artifacts")
+    ap.add_argument("--run-tag", default=None,
+                    help="label for this run, e.g. eval-pilot-101726")
     ap.add_argument("--check-every", type=int, default=20)
     args = ap.parse_args()
 
@@ -663,6 +667,27 @@ async def main() -> int:
         return rc
     finally:
         await client.aclose()
+        _upload_artifacts(args)
+
+
+def _upload_artifacts(args) -> None:
+    """Copy this run's artifacts to the bucket when `--upload-gcs` was given.
+
+    Called from `finally` so a run that fails the final gate still ships what it did
+    collect: the partial run is exactly what a failure investigation needs.
+    """
+    if not getattr(args, "upload_gcs", False):
+        return
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from storage import sync_eval_to_gcs  # noqa: PLC0415
+
+        tag = getattr(args, "run_tag", None) or "unlabelled"
+        sent = sync_eval_to_gcs(tag, [Path(args.out), Path(args.adversarial_out)])
+        print(f"  artifacts: {len(sent)} uploaded to gs://ecc-eval-artifacts/runs/{tag}/"
+              if sent else "  artifacts: upload skipped (see log)", flush=True)
+    except Exception:  # noqa: BLE001 — a copy must never fail the run
+        print("  artifacts: upload skipped (see log)", flush=True)
 
 
 if __name__ == "__main__":

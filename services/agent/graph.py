@@ -868,6 +868,31 @@ def _context_block(admission_context: str) -> str:
     return f"\n\n{text}" if text else ""
 
 
+def _trace_metadata(hadm_id: int | None, question_kind: str | None) -> dict:
+    """What a Langfuse trace needs in order to be found again by patient.
+
+    Without this a trace carried only SDK instrumentation keys, so the question the
+    eval gates actually ask — "show me every trace for this case" — had no answer:
+    `sessionId` and `userId` were None and there was no admission anywhere on it.
+
+    The admission goes on as a `hadm:` tag (filterable) and as metadata (readable).
+    A conversation-scoped session id would need the site to send one; the agent is
+    stateless and is not given it today, so it is deliberately absent rather than
+    invented from the admission.
+    """
+    tags: list[str] = []
+    meta: dict[str, str] = {}
+    if hadm_id is not None:
+        tags.append(f"hadm:{hadm_id}")
+        meta["hadm_id"] = str(hadm_id)
+    if question_kind:
+        tags.append(f"command:{question_kind}")
+        meta["command"] = str(question_kind)
+    if tags:
+        meta["langfuse_tags"] = tags  # type: ignore[assignment]
+    return meta
+
+
 async def ask(
     toolbox: MCPToolbox,
     question: str,
@@ -929,6 +954,7 @@ async def ask(
                 on_event=on_event,
                 callbacks=[tracing] if tracing is not None else None,
                 prose_stream=prose_stream,
+                trace_metadata=_trace_metadata(hadm_id, question_kind),
             )
         command_state["langfuse_trace_id"] = observability.trace_id(tracing)
         return command_state
@@ -946,6 +972,11 @@ async def ask(
     )
 
     config: dict = {"recursion_limit": RECURSION_LIMIT}
+    trace_meta = _trace_metadata(hadm_id, question_kind)
+    if trace_meta:
+        # Langfuse reads `langfuse_tags` from run metadata; the other keys ride along
+        # so the admission and command are visible on the trace itself.
+        config["metadata"] = trace_meta
     if name is not None:
         config["run_name"] = name
     if tags:

@@ -396,6 +396,63 @@ def test_a_clean_literature_query_is_dispatched():
     assert [event["stage"] for event in events] == ["tool", "result"]
 
 
+def _scoped_call(tool, args, hadm_id):
+    box = _RecordingBox()
+    guard = lambda name, a: graph._outbound_patient_identifier(name, a, hadm_id)  # noqa: E731
+    messages, recorded = asyncio.run(graph._execute_tool_calls(
+        box, [{"name": tool, "args": args, "id": "1"}], [].append, guard=guard,
+    ))
+    return box, messages, recorded
+
+
+def test_a_retrieval_naming_another_admission_is_not_dispatched():
+    """The turn's admission is fixed by the request, not by the model.
+
+    `rag_search` resolves whatever id it is given, so a model that names a different
+    admission reads another patient's chart during this patient's turn. Verified
+    against the live tool: hadm_id 90000015 returned five passages of another
+    patient's discharge summary in a turn about 90000002. Under injection the probe
+    does not have to invent an id — naming a real one is enough.
+    """
+    box, messages, recorded = _scoped_call(
+        "rag_search", {"hadm_id": 90000015, "query": "discharge diagnosis"}, 90000002,
+    )
+
+    assert box.calls == [], "another patient's record was read"
+    assert "patient_scope_refused" in messages[0].content
+    assert recorded[0]["response"]["error"] == "patient_scope_refused"
+
+
+def test_an_invented_admission_on_a_turn_about_no_patient_is_not_dispatched():
+    """A turn with no patient has no admission to read, invented or otherwise."""
+    box, messages, _ = _scoped_call(
+        "rag_search", {"hadm_id": 10000002, "query": "notes"}, None,
+    )
+
+    assert box.calls == []
+    assert "patient_scope_refused" in messages[0].content
+
+
+def test_the_turns_own_admission_is_dispatched_either_way_round():
+    """A model that writes the id as a string is asking for the same patient.
+
+    Comparing without normalising would refuse a correct call for a type, which is a
+    guard that costs the answer it exists to protect.
+    """
+    box, _, _ = _scoped_call(
+        "rag_search", {"hadm_id": "90000002", "query": "notes"}, 90000002,
+    )
+
+    assert box.calls == [("rag_search", {"hadm_id": "90000002", "query": "notes"})]
+
+
+def test_a_tool_scoped_to_the_turns_own_admission_is_dispatched():
+    """The guard checks ids the model chose, not tools that take none."""
+    box, _, _ = _scoped_call("get_admission_profile", {"hadm_id": 90000002}, 90000002)
+
+    assert box.calls == [("get_admission_profile", {"hadm_id": 90000002})]
+
+
 def test_the_identifier_check_is_scoped_to_what_leaves_the_service():
     """A note search is internal: an admission id in ITS query is how retrieval
     works, and refusing that would break the thing being protected."""

@@ -143,6 +143,9 @@ TOOL_LABELS = {
     "rag_search_sections": "Reading the Note Sections",
     "discharge_medications": "Reading the Discharge Medications",
     "search_literature": "Searching the Literature",
+    # The pre-flight manifest is normally hydrated before the model runs, so its
+    # label is only ever drawn when the model asks for it itself.
+    "get_admission_profile": "Reading the Admission Profile",
 }
 
 # Used when the MCP server advertises a tool this table has not been taught.

@@ -112,6 +112,7 @@ def test_every_advertised_tool_has_a_progress_label():
         discharge_medications,
         search_literature,
     )
+    from services.mcp.tools.admission_profile import get_admission_profile
 
     advertised = {
         predict_readmission.__name__,
@@ -119,6 +120,9 @@ def test_every_advertised_tool_has_a_progress_label():
         rag_search_sections.__name__,
         discharge_medications.__name__,
         search_literature.__name__,
+        # Normally hydrated before the model runs, but it is an advertised tool and
+        # the model may ask for it, which draws the label.
+        get_admission_profile.__name__,
     }
     assert advertised == set(stages.TOOL_LABELS), (
         "a label is missing for a tool the server advertises, or a label names a "

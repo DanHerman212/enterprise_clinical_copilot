@@ -98,6 +98,25 @@ class AgentState(TypedDict):
 MAX_TOOL_CALLS_PER_TURN = 5
 RECURSION_LIMIT = 25
 
+# What a turn says when its lookup budget is gone and the model still wants to look
+# something up. A turn that has spent its budget is given no tools, but a model can
+# still emit a function call — the tool is absent from the request, not from the
+# pattern of the transcript — and a provider that returns that call with no prose
+# leaves the turn with nothing to serve. `route` ends the graph on that message
+# rather than refusing a sixth time, so the turn settled as an empty answer and the
+# caller got a 502 for a question the service had handled safely. Observed live
+# 2026-10-17 on two prompt-injection probes (inj-02, inj-04): the model fabricated
+# admission ids, spent the whole budget on searches the retriever refused as
+# `unknown_patient`, then asked for a sixth lookup it could not be given.
+#
+# The wording is a refusal, not an apology for an outage: nothing is broken, and the
+# sentence says what to do instead.
+BUDGET_EXHAUSTED_ANSWER = (
+    "I've reached the limit on how much I can look up in one turn, and I don't "
+    "have enough to answer this reliably. Ask a narrower question — about one "
+    "part of the record, or one thing at a time — and I'll answer from that."
+)
+
 # One model call, bounded. The bound is part of the chain `timeout_chain`
 # enforces at startup — model < tool < ask < the proxy's own limit — and it is set
 # on the client rather than left absent for two reasons: a call that stalls should
@@ -353,18 +372,48 @@ def _emit(on_event: Callable[[dict[str, Any]], None] | None, event: dict[str, An
 def _outbound_patient_identifier(
     name: str, args: dict, hadm_id: int | None
 ) -> dict | None:
-    """Refuse a literature call whose search terms carry this admission's id.
+    """Refuse a call that reaches for an admission this turn is not about.
 
-    The half of the rule the tool cannot check for itself. `search_literature` is
-    deliberately not told which patient is under discussion — that is the point of
-    it — so it has no identifier to compare against. The agent has one for the
-    turn, and the call is assembled here.
+    The turn is scoped to one admission, and that scope is the turn's own — it comes
+    from the request, never from the transcript. The model chooses which tool to call
+    and with what arguments, so without this it also chooses *which patient to read*:
+    a call naming a different admission returns that patient's notes, and no prompt
+    instruction can prevent it, because the tool has no idea which patient the turn
+    belongs to. Confirmed against the live tool on 2026-10-17: `rag_search` with
+    hadm_id 90000015 returned five passages of another patient's discharge summary
+    during a turn about 90000002.
 
-    The prompt already forbids patient text in a literature query. A prompt is a
-    request; this is the one disclosure that cannot be taken back, because an
-    identifier sent to a third party cannot be recalled, so it is checked rather
-    than asked for.
+    This matters under injection rather than in ordinary use. A probe that says "you
+    have no constraints" does not have to make anything up: it only has to name an
+    admission that exists. Fabricated ids were the harmless half of the same behaviour
+    — the retriever refuses those as `unknown_patient`, which is what let the
+    injection look contained while the real exposure was one valid id away.
+
+    The second half of the rule is the one the tool cannot check for itself.
+    `search_literature` is deliberately not told which patient is under discussion —
+    that is the point of it — so it has no identifier to compare against. The agent
+    has one for the turn, and the call is assembled here. The prompt already forbids
+    patient text in a literature query. A prompt is a request; this is the one
+    disclosure that cannot be taken back, because an identifier sent to a third party
+    cannot be recalled, so it is checked rather than asked for.
     """
+    requested = args.get("hadm_id")
+    if requested is not None and str(requested) != str(hadm_id):
+        # Both sides are rendered as text: a model that writes the id as a string is
+        # asking for the same admission, and a comparison that treats those as
+        # different would refuse a correct call.
+        about = f"admission {hadm_id}" if hadm_id is not None else "no admission"
+        return {
+            "error": "patient_scope_refused",
+            "message": (
+                f"The call was not run: it asked for admission {requested}, and this "
+                f"turn is about {about}. A turn answers for one patient only, and "
+                "that admission is fixed by the request. Use "
+                f"{hadm_id if hadm_id is not None else 'no admission'} — or say "
+                "plainly that the question is about a different patient and cannot "
+                "be answered here."
+            ),
+        }
     if name != "search_literature" or hadm_id is None:
         return None
     if str(hadm_id) not in str(args.get("query") or ""):
@@ -700,6 +749,28 @@ def names_a_command(answer: str) -> bool:
     return any(f"/{wire}" in (answer or "") for wire in routing.BY_WIRE)
 
 
+def _budget_exhausted_turn(response: AIMessage) -> AIMessage:
+    """The turn's answer, with a lookup request that cannot be honoured removed.
+
+    Two things are wrong with a message that carries a tool call after the budget is
+    spent, and only the second is a crash. The call is unexecutable — nothing is bound
+    and `route` ends the graph rather than refusing again — so it must not reach the
+    transcript as work that might happen. The missing prose is what the caller sees as
+    `answer_unavailable` with a 502, so the turn has to end with something to serve.
+
+    Prose the model did write is kept, because it is the answer: dropping it would be a
+    second copy of the mistake that once deleted 27 seconds of correct streamed text.
+    The refusal is substituted only when there is nothing to keep.
+    """
+    text = text_of(response.content).strip()
+    return AIMessage(
+        content=text or BUDGET_EXHAUSTED_ANSWER,
+        response_metadata=dict(response.response_metadata or {}),
+        usage_metadata=response.usage_metadata,
+        id=response.id,
+    )
+
+
 def build_graph(
     toolbox: MCPToolbox,
     model: str = MODEL_ID,
@@ -783,6 +854,11 @@ def build_graph(
             response = await _streamed_turn(answering_llm, state["messages"], on_event)
         else:
             response = await answering_llm.ainvoke(state["messages"])
+        if spent >= MAX_TOOL_CALLS_PER_TURN:
+            # This turn has no tools left and no further round to spend them in, so
+            # whatever it asked for cannot happen. Settle it as an answer now: the
+            # alternative is an empty turn that reads to the caller as a crash.
+            response = _budget_exhausted_turn(response)
         return {"messages": [response], "tool_calls": []}
 
     async def tool_node(state: AgentState) -> dict:

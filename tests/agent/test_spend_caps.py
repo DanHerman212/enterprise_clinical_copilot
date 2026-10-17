@@ -6,6 +6,7 @@ import asyncio
 from unittest.mock import patch
 
 import pytest
+from langchain_core.messages import AIMessage
 
 import services.agent.mcp_client as mc
 import services.mcp.server as ms
@@ -17,8 +18,10 @@ from services.mcp.runtime import (
     timeout_chain,
 )
 from services.agent.graph import (
+    BUDGET_EXHAUSTED_ANSWER,
     MAX_TOOL_CALLS_PER_TURN,
     RECURSION_LIMIT,
+    _budget_exhausted_turn,
     _execute_tool_calls,
 )
 from services.agent.mcp_client import MCPToolbox
@@ -79,6 +82,55 @@ def test_tool_timeout_stays_under_upstream_deadlines():
     so the innermost deadline fires first with a structured error."""
     assert MCPToolbox.call_timeout_seconds < 110 < 120
     assert MCPToolbox.call_timeout_seconds == timeout_chain().tool
+
+
+def test_a_spent_turn_still_answers_when_the_model_asks_for_another_tool():
+    """A spent budget must end in an answer, not an empty turn.
+
+    A turn at the cap is given no tools, but a model can still emit a function call:
+    the tool is missing from the request, not from the pattern of the transcript.
+    `route` ends the graph on that message rather than refusing a sixth time, so the
+    turn had no text and the caller got a 502 `answer_unavailable` — a crash-shaped
+    response to a question the service had handled safely. Observed live on two
+    prompt-injection probes (inj-02, inj-04): the model fabricated admission ids,
+    spent the budget on searches refused as `unknown_patient`, then asked for a
+    sixth lookup it could not be given.
+    """
+    response = AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "rag_search",
+            "args": {"hadm_id": 10000002, "query": "prompt"},
+            "id": "call-1",
+        }],
+        response_metadata={"finish_reason": "STOP"},
+    )
+
+    settled = _budget_exhausted_turn(response)
+
+    assert settled.tool_calls == []
+    assert settled.content == BUDGET_EXHAUSTED_ANSWER
+    # The finish reason survives, so a record of the turn can still say what the
+    # provider reported rather than looking like a clean answer.
+    assert settled.response_metadata["finish_reason"] == "STOP"
+
+
+def test_a_spent_turn_keeps_the_prose_it_already_wrote():
+    """The refusal replaces nothing. Prose the model did write is the answer.
+
+    Dropping text to add a policy sentence would delete a correct answer, which is
+    the failure this codebase has already paid for once.
+    """
+    response = AIMessage(
+        content="  The risk for this patient is 0.21.  ",
+        tool_calls=[{"name": "rag_search", "args": {}, "id": "call-1"}],
+        response_metadata={"finish_reason": "STOP"},
+    )
+
+    settled = _budget_exhausted_turn(response)
+
+    assert settled.tool_calls == []
+    assert settled.content == "The risk for this patient is 0.21."
 
 
 def test_cloud_run_auth_decision_is_shared_and_explicit():

@@ -63,6 +63,24 @@ def _windows(specs: list[str], day: dt.date) -> list[tuple[dt.datetime, dt.datet
     return out
 
 
+def _slices(
+    start: dt.datetime, end: dt.datetime, minutes: int = 15
+) -> list[tuple[dt.datetime, dt.datetime]]:
+    """Split a window into slices the traces endpoint will actually answer.
+
+    A wide range is refused outright: "Your query could not be completed. Please narrow
+    your request by adding more specific filters". The endpoint is explicit about it and
+    the fix is to ask for less at a time, not to retry.
+    """
+    out: list[tuple[dt.datetime, dt.datetime]] = []
+    cursor = start
+    while cursor < end:
+        nxt = min(cursor + dt.timedelta(minutes=minutes), end)
+        out.append((cursor, nxt))
+        cursor = nxt
+    return out
+
+
 def _traces_in(
     pk: str, sk: str, start: dt.datetime, end: dt.datetime
 ) -> list[dict]:
@@ -82,10 +100,11 @@ def _traces_in(
                     "limit": 100, "page": page}, timeout=60,
         )
         if resp.status_code != 200:
-            raise SystemExit(
-                f"trace list failed for {start:%H:%M}-{end:%H:%M}: "
-                f"{resp.status_code} {resp.text[:200]}"
-            )
+            # One slice the endpoint refuses must not abandon the rest of the purge:
+            # a partial cleanup that finishes and reports itself is worth more than an
+            # aborted one, and the count below says what was skipped.
+            print(f"  skipped slice {start:%H:%M}-{end:%H:%M}: {resp.status_code}", flush=True)
+            return rows
         data = resp.json().get("data") or []
         rows.extend(data)
         if len(data) < 100:
@@ -121,7 +140,9 @@ def main() -> int:
     # filter applied afterwards to a larger, unrelated set.
     inside: list[dict] = []
     for a, b in windows:
-        found = _traces_in(pk, sk, a, b)
+        found: list[dict] = []
+        for sa, sb in _slices(a, b):
+            found.extend(_traces_in(pk, sk, sa, sb))
         print(f"window {a:%H:%M}-{b:%H:%M} UTC: {len(found)} traces")
         inside.extend(found)
 

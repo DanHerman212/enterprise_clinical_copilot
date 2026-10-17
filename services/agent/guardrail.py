@@ -28,6 +28,7 @@ verifies it does not modify the 265 passing answers (no regression on passes).
 
 from __future__ import annotations
 
+import json
 import re
 
 # --- Redacted age -----------------------------------------------------------
@@ -744,6 +745,157 @@ def verify_med_freqs_per_med(answer: str, med_text: str) -> tuple[str, list[str]
     return cleaned.strip(), flags
 
 
+# --- Disposition and lab claims must be in the record ------------------------
+#
+# A follow-up is where this went wrong. Turn 2 of a risk conversation was asked
+# "what is driving that?" and answered that the patient "was discharged to a skilled
+# nursing facility", citing the hospital-course passage. That passage says
+# "arrangements were made for discharge to a rehabilitation program". The citation
+# resolved, so the citation guard passed; the claim itself was invented, and a
+# different disposition is a different readmission risk (observed live 2026-10-17,
+# hadm 90000003, twice — once on the risk follow-up and once on "what was the
+# outcome?").
+#
+# The same run invented a lab trajectory under adversarial pressure: "eGFR declined
+# from 117 to 94" and "creatinine rose from 0.55 to 1.06 mg/dL", where the tool
+# output was truncated before the end of the values (inj/fab-01).
+#
+# These are checked as categories rather than as phrases, because "SNF" and
+# "skilled nursing facility" are one claim, and "rehabilitation program" is a
+# different one. A phrase check would pass an answer that renamed the disposition.
+_DISPOSITIONS = {
+    "skilled_nursing": re.compile(
+        r"\bskilled nursing facilit(?:y|ies)\b|\bsnf\b", re.IGNORECASE),
+    "rehabilitation": re.compile(
+        r"\bdischarg\w*\s+to\s+(?:an?\s+|the\s+)?(?:inpatient\s+|acute\s+)?"
+        r"rehab(?:ilitation)?\b"
+        r"|\brehabilitation\s+(?:program|facility|unit|center)\b"
+        r"|\binpatient rehab\b",
+        re.IGNORECASE),
+    "home": re.compile(
+        r"\bdischarg\w*\s+to\s+(?:his\s+|her\s+|their\s+)?home\b"
+        r"|\bsent home\b|\bhome with (?:home )?health\b|\bhome health\b",
+        re.IGNORECASE),
+    "hospice": re.compile(r"\bhospice\b|\bcomfort care\b", re.IGNORECASE),
+    "long_term_acute": re.compile(
+        r"\blong[- ]term acute care\b|\bltac\b", re.IGNORECASE),
+    "assisted_living": re.compile(r"\bassisted living\b", re.IGNORECASE),
+    "expired": re.compile(
+        r"\b(?:patient )?(?:expired|died|deceased)\b|\bdeath\b", re.IGNORECASE),
+    "psychiatric": re.compile(
+        r"\bpsychiatric\s+(?:facility|unit|hospital|ward)\b", re.IGNORECASE),
+}
+
+# A value with a lab unit is a measurement, and a measurement that is not in the
+# record was made up. Percent is included because eGFR and ejection fraction are
+# both reported that way; risk percentages are removed by the risk guard first, so
+# what reaches here is a clinical measurement rather than the score.
+_LAB_VALUE = re.compile(
+    r"\b(\d{1,4}(?:\.\d{1,2})?)\s*"
+    r"(mg/dl|mmol/l|meq/l|ml/min(?:/1\.73\s*m2)?|g/dl|mg/l|ng/ml|pg/ml|iu/l|u/l|"
+    r"units?/l|mmhg|%)\b",
+    re.IGNORECASE,
+)
+
+# Within this many characters before a disposition phrase, a negation makes the
+# sentence a denial rather than a claim: "she was not discharged home" asserts
+# nothing about being discharged home, and stripping it would delete a correct
+# answer for saying the opposite of the thing it is accused of.
+_NEGATION = re.compile(r"\b(?:not|never|no longer|wasn't|isn't|without)\b", re.IGNORECASE)
+_NEGATION_WINDOW = 30
+
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+
+# Served when every claim in an answer was removed, because an empty answer is not
+# an answer: the caller has to be told the record does not support the question.
+GUARDED_ABSTENTION = (
+    "I can't confirm that from this patient's record. The note I can see does not "
+    "document it, and I won't state it as if it did. Ask about another part of the "
+    "record and I'll answer from what is documented."
+)
+
+
+def _asserted(category: str, sentence: str, pattern: re.Pattern) -> bool:
+    """True when this sentence claims the disposition, rather than denying it."""
+    for match in pattern.finditer(sentence):
+        window = sentence[max(0, match.start() - _NEGATION_WINDOW):match.start()]
+        if _NEGATION.search(window):
+            continue
+        return True
+    return False
+
+
+def verify_dispositions(answer: str, evidence_text: str) -> tuple[str, list[str]]:
+    """Drop sentences that assert a disposition the record does not contain.
+
+    Grounding is by category, and the evidence is everything the conversation
+    retrieved plus anything a tool returned — a disposition quoted from an earlier
+    turn's passage is still a quoted disposition.
+    """
+    supported = {
+        name for name, pattern in _DISPOSITIONS.items()
+        if pattern.search(evidence_text or "")
+    }
+    flags: list[str] = []
+    kept: list[str] = []
+    for sentence in _SENTENCE_SPLIT.split(answer or ""):
+        unsupported = [
+            name for name, pattern in _DISPOSITIONS.items()
+            if name not in supported and _asserted(name, sentence, pattern)
+        ]
+        if unsupported:
+            flags.append(f"disposition_unsupported:{unsupported[0]}")
+            continue
+        kept.append(sentence)
+    if not flags:
+        return answer, []
+    return " ".join(kept).strip(), flags
+
+
+def _value_present(number: str, haystack: str) -> bool:
+    """True when this exact measurement appears, not merely as part of a longer one.
+
+    A plain substring test finds "11.2" inside "111.2" and would let an invented
+    value through on the strength of a different number that happens to contain it.
+    """
+    return re.search(
+        rf"(?<![\d.]){re.escape(number)}(?![\d])", haystack or ""
+    ) is not None
+
+
+def verify_lab_values(
+    answer: str, evidence_text: str, lab_text: str = "", payload_text: str = ""
+) -> tuple[str, list[str]]:
+    """Drop sentences that state a measurement the record does not contain.
+
+    The whole sentence goes rather than just the number: "creatinine rose from 0.55
+    to 1.06 mg/dL" with the 1.06 removed reads as if the rise ended nowhere, and a
+    clinician cannot tell a redaction from a typo. A sentence without its evidence
+    is not a sentence worth serving.
+
+    `payload_text` is every tool response this conversation received, as text. A
+    measurement a tool returned is evidence wherever in its payload it sits — the
+    risk explanation quotes `top_factors`, which is the model reading a value the
+    system itself computed, and grounding that only against notes and lab trends
+    would delete correct prose.
+    """
+    haystack = f"{evidence_text or ''}\n{lab_text or ''}\n{payload_text or ''}"
+    flags: list[str] = []
+    kept: list[str] = []
+    for sentence in _SENTENCE_SPLIT.split(answer or ""):
+        missing = [
+            m.group(0) for m in _LAB_VALUE.finditer(sentence)
+            if not _value_present(m.group(1), haystack)
+        ]
+        if missing:
+            flags.append(f"lab_value_unsupported:{missing[0].strip()}")
+            continue
+        kept.append(sentence)
+    if not flags:
+        return answer, []
+    return " ".join(kept).strip(), flags
+
+
 def guard_answer(
     answer: str,
     tool_calls: list[dict],
@@ -774,6 +926,7 @@ def guard_answer(
     passages, med_source = _passage_sections(evidence)
     full_text = "\n".join(p.get("text") or "" for p in passages)
     flags: list[str] = []
+    original = answer
 
     # Risk numbers first — the one guard that must act even with zero evidence.
     answer, f = verify_risk_numbers(answer, evidence, full_text,
@@ -787,6 +940,13 @@ def guard_answer(
     # Per-med freq verification against the med's OWN discharge entry (P3.2).
     answer, f = verify_med_freqs_per_med(answer, med_source)
     flags += f
+    # A disposition and a measurement are the two claims a reader will act on
+    # without re-reading the note, so both have to be in the note.
+    answer, f = verify_dispositions(answer, full_text)
+    flags += f
+    answer, f = verify_lab_values(answer, full_text, _lab_text(evidence),
+                                  json.dumps(evidence, default=str))
+    flags += f
     flags += flag_invented_dates(answer, passages)
     turn_passages, _ = _passage_sections(tool_calls)
     # Passages for a note turn, articles for a literature turn: both are citation slots.
@@ -796,5 +956,13 @@ def guard_answer(
     slots = len(turn_passages) or _literature_slots(tool_calls)
     answer, f = check_citations(answer, slots, _literature_pmids(tool_calls))
     flags += f
+
+    if not answer.strip() and (original or "").strip():
+        # Every claim the model made was unsupported, and what is left is nothing.
+        # Serving an empty answer would look like a rendering failure; serving the
+        # original would serve the invention. The caller is told the record does not
+        # support the question, which is the true statement about the turn.
+        answer = GUARDED_ABSTENTION
+        flags.append("abstained_after_guard")
 
     return {"answer": answer, "flags": sorted(set(flags))}

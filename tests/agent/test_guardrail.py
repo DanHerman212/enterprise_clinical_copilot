@@ -365,6 +365,12 @@ def test_a_lab_concentration_is_not_a_dose_and_survives_the_med_guard():
     The other half of the same bug is the more dangerous one: that match also ran over the
     NOTE text, so a lab value entered the note's dose vocabulary and an invented dose could
     have been verified by a creatinine.
+
+    The expectation below changed on 2026-10-17, in one direction only. This fixture's note
+    says nothing about haemoglobin, so the value is genuinely ungrounded and the lab guard
+    now removes the sentence — the gap that let a follow-up invent an eGFR trajectory in the
+    pilot. What this test still protects is the half it was written for: a concentration must
+    never be read as a dose, so no `med_*` flag may fire.
     """
     note = [{"name": "rag_search_sections", "args": {}, "response": {
         "returned": 1, "passages": [{"id": "n", "section": "brief_hospital_course",
@@ -373,8 +379,24 @@ def test_a_lab_concentration_is_not_a_dose_and_survives_the_med_guard():
 
     out = g.guard_answer(answer, note)
 
-    assert out["answer"] == answer, out
     assert not any(flag.startswith("med_") for flag in out["flags"]), out["flags"]
+    assert any(flag.startswith("lab_value_unsupported") for flag in out["flags"]), (
+        out["flags"]
+    )
+
+
+def test_a_lab_value_the_note_documents_is_served_unchanged():
+    """The other side of the same guard: grounded measurements must survive it."""
+    note = [{"name": "rag_search_sections", "args": {}, "response": {
+        "returned": 1, "passages": [{"id": "n", "section": "brief_hospital_course",
+                                     "text": "Hemoglobin fell to 11.2 g/dL from "
+                                             "13.0 g/dL."}]}}]
+    answer = "Her hemoglobin dropped to a low of 11.2 g/dL, from 13.0 g/dL."
+
+    out = g.guard_answer(answer, note)
+
+    assert out["answer"] == answer, out
+    assert not any(flag.startswith("lab_") for flag in out["flags"]), out["flags"]
 
 
 def test_a_weight_based_dose_is_still_a_dose():
@@ -864,3 +886,91 @@ def test_match_entry_uses_dose_to_disambiguate():
     e = g._match_entry(chunk, g._norm_doses(chunk), entries)
     assert e is not None
     assert e["doses"] == {"500mg"}
+
+# --- dispositions and measurements must be in the record ---------------------
+
+def _note(text, section="brief_hospital_course"):
+    return [{"name": "rag_search_sections", "args": {}, "response": {
+        "returned": 1, "passages": [{"id": "n", "section": section, "text": text}]}}]
+
+
+REHAB_NOTE = _note(
+    "The patient remained medically stable during her hospital stay and arrangements "
+    "were made for discharge to a rehabilitation program given her recent falls."
+)
+
+
+def test_a_disposition_the_note_does_not_say_is_removed():
+    """The pilot's safety failure, reproduced as a test.
+
+    Turn 2 of a risk conversation answered "discharged to a skilled nursing facility"
+    citing the hospital-course passage, which says "discharge to a rehabilitation
+    program". The citation resolved, so the citation guard passed it; the claim was
+    invented, and SNF and inpatient rehab are different readmission risks.
+    """
+    answer = ("She was discharged to a skilled nursing facility due to her recent "
+              "falls ^[1].")
+
+    out = g.guard_answer(answer, REHAB_NOTE)
+
+    assert "skilled nursing" not in out["answer"].lower(), out
+    assert "disposition_unsupported:skilled_nursing" in out["flags"], out["flags"]
+
+
+def test_a_disposition_the_note_does_say_is_served():
+    answer = "Arrangements were made for discharge to a rehabilitation program ^[1]."
+
+    out = g.guard_answer(answer, REHAB_NOTE)
+
+    assert "rehabilitation program" in out["answer"], out
+    assert not any(f.startswith("disposition_") for f in out["flags"]), out["flags"]
+
+
+def test_a_denied_disposition_is_not_a_claim():
+    """'She was not discharged home' asserts nothing about being discharged home.
+
+    Stripping it would delete a correct answer for saying the opposite of the thing it
+    is accused of claiming.
+    """
+    answer = "She was not discharged home from this admission."
+
+    out = g.guard_answer(answer, REHAB_NOTE)
+
+    assert "not discharged home" in out["answer"], out
+    assert not any(f.startswith("disposition_") for f in out["flags"]), out["flags"]
+
+
+def test_an_answer_that_is_only_an_invented_disposition_abstains():
+    """Removing every claim must leave an honest sentence, not an empty answer."""
+    answer = "She was discharged to a skilled nursing facility ^[1]."
+
+    out = g.guard_answer(answer, REHAB_NOTE)
+
+    assert out["answer"] == g.GUARDED_ABSTENTION, out
+    assert "abstained_after_guard" in out["flags"], out["flags"]
+
+
+def test_an_invented_lab_trajectory_is_removed():
+    """fab-01: eGFR and creatinine endpoints the tool output never contained."""
+    note = _note("Renal function was monitored; the note does not report the "
+                 "laboratory results.")
+    answer = ("Her eGFR declined from 117 to 94 mL/min/1.73m2 and creatinine rose "
+              "from 0.55 to 1.06 mg/dL.")
+
+    out = g.guard_answer(answer, note)
+
+    assert "94" not in out["answer"], out
+    assert any(f.startswith("lab_value_unsupported") for f in out["flags"]), out["flags"]
+
+
+def test_a_lab_value_carried_by_a_tool_payload_is_grounded():
+    """A measurement a tool returned is evidence, wherever in the payload it sits."""
+    note = [{"name": "predict_readmission", "args": {"hadm_id": 1}, "response": {
+        "probability": 0.24, "threshold": 0.11,
+        "top_factors": [{"feature": "creatinine_max", "value": 1.06, "unit": "mg/dL"}],
+    }}]
+    answer = "Creatinine peaked at 1.06 mg/dL during the stay."
+
+    out = g.guard_answer(answer, note)
+
+    assert out["answer"] == answer, out

@@ -163,6 +163,39 @@ def _renumber_citations(answer: str) -> tuple[str, dict[int, int]]:
     return "".join(out), old_to_new
 
 
+#: Any `^[...]` marker at all, valid or not. Used to find the ones that are not
+#: citations so they can be removed rather than printed.
+_ANY_MARKER_RE = re.compile(r"\^\[[^\]]*\]")
+
+#: What a marker must look like to be KEPT: a note-passage number or set of them,
+#: or a literature PMID badge. Everything else is a model invention and is dropped.
+#: The PMID form is here deliberately — it is a citation the interface draws as its
+#: own badge, and a filter that only knew about numbers would delete it.
+_KNOWN_MARKER_RE = re.compile(
+    r"\^\[\s*(?:\d+(?:\s*,\s*\d+)*|\d+\s*-\s*\d+|PMID:\s*\d+(?:\s*,\s*\d+)*)\s*\]",
+    re.IGNORECASE,
+)
+
+
+def _drop_unknown_markers(answer: str) -> str:
+    """Remove `^[...]` markers that are neither a passage number nor a PMID badge.
+
+    The model sometimes writes the passage's identity instead of its number —
+    `^[brief_hospital_course]` rather than `^[2]` — and `_CITATION_RE` does not
+    match it, so the renumbering pass skipped it and the reader was shown the raw
+    braces in the middle of a clinical sentence (seen 2026-10-17, from a turn whose
+    note section was cited by name). Raw markup in the prose is worse than a
+    missing citation: it reads as corruption, and the claim it was attached to is
+    still checked by the guardrails either way.
+    """
+    if "^[" not in (answer or ""):
+        return answer
+    return _ANY_MARKER_RE.sub(
+        lambda m: m.group(0) if _KNOWN_MARKER_RE.fullmatch(m.group(0)) else "",
+        answer,
+    )
+
+
 def renumber_citations(answer: str) -> str:
     """Renumber ^[n] markers to first-appearance order (1, 2, 3, ...).
 
@@ -177,8 +210,12 @@ def renumber_citations(answer: str) -> str:
     between them — the model dumping every returned passage onto one claim) to
     a single marker, since a row of citations on one claim has no per-claim
     granularity to preserve.
+
+    Finally, any marker left over that is not a number is dropped rather than
+    printed: a `^[section_name]` the model invented is not a citation, and letting
+    it through puts raw markup in front of a clinician.
     """
-    return _renumber_citations(answer)[0]
+    return _drop_unknown_markers(_renumber_citations(answer)[0])
 
 
 def cited_numbers(answer: str) -> list[int]:

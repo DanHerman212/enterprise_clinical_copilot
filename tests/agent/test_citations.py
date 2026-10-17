@@ -51,6 +51,33 @@ class TestLiteratureCitations:
 
         assert renumber_citations(answer) == answer
 
+    def test_a_section_name_the_model_invented_is_removed_rather_than_printed(self):
+        """`^[brief_hospital_course]` is not a citation, and it must not be shown.
+
+        Seen on the demo screen 2026-10-17: the model cited a passage by its section
+        slug instead of its number, no pass matched it, and the reader got the raw
+        braces mid-sentence. A missing citation is recoverable; markup in prose reads
+        as corruption.
+        """
+        answer = (
+            "She used the CPM machine for longer sessions ^{0}[brief_hospital_course]. "
+            "Overall she progressed well.^[3]"
+        ).format("^")
+
+        cleaned = renumber_citations(answer)
+
+        assert "brief_hospital_course" not in cleaned
+        assert "^[3]" in cleaned or "^[1]" in cleaned
+
+    def test_a_real_pmid_badge_survives_the_unknown_marker_filter(self):
+        """The filter keeps PMID badges; only inventions are dropped."""
+        answer = "A trial agrees.^[PMID: 34793857] Another claim.^[made_up_section]"
+
+        cleaned = renumber_citations(answer)
+
+        assert "^[PMID: 34793857]" in cleaned
+        assert "made_up_section" not in cleaned
+
     def test_a_pmid_badge_contributes_no_note_citation(self):
         answer = "The note documents this^[1] and a trial agrees.^[PMID: 31234567]"
 

@@ -26,7 +26,7 @@ steps:
 
   - id: push-harness
     name: gcr.io/cloud-builders/docker
-    args: [push, ${_IMAGE}:${_TAG}]
+    args: ["push", "${_IMAGE}:${_TAG}"]
 
   # Both jobs are redeployed every pipeline run, from the image this build just
   # produced. A job left pointing at an older image is a gate measuring code that is
@@ -39,12 +39,12 @@ steps:
       - |
         set -euo pipefail
         for PHASE in adversarial clinical; do
-          echo "deploying eval-$PHASE from ${_IMAGE}:${_TAG}"
-          gcloud run jobs deploy "eval-$PHASE" \
+          echo "deploying eval-$$PHASE from ${_IMAGE}:${_TAG}"
+          gcloud run jobs deploy "eval-$$PHASE" \
             --image "${_IMAGE}:${_TAG}" \
             --region "${_REGION}" \
             --service-account "${_RUNNER_SA}" \
-            --set-env-vars "PHASE=$PHASE,AGENT_URL=${_AGENT_URL},CONCURRENCY=${_CONCURRENCY},PROJECT_ID=$PROJECT_ID,LANGFUSE_HOST=${_LANGFUSE_HOST}" \
+            --set-env-vars "PHASE=$$PHASE,AGENT_URL=${_AGENT_URL},CONCURRENCY=${_CONCURRENCY},PROJECT_ID=${PROJECT_ID},LANGFUSE_HOST=${_LANGFUSE_HOST}" \
             --set-secrets "LANGFUSE_PUBLIC_KEY=${_LF_PUBLIC_SECRET}:latest,LANGFUSE_SECRET_KEY=${_LF_SECRET_SECRET}:latest" \
             --max-retries 0 \
             --task-timeout "${_TASK_TIMEOUT}" \
@@ -81,7 +81,7 @@ steps:
         fi
         gcloud run jobs execute eval-clinical \
           --region "${_REGION}" \
-          --update-env-vars "RUN_TAG=${_RUN_TAG}-clinical${EXTRA}" \
+          --update-env-vars "RUN_TAG=${_RUN_TAG}-clinical$$EXTRA" \
           --wait
 
 substitutions:

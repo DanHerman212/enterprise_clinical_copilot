@@ -162,7 +162,8 @@ class AgentResponseError(ValueError):
 # `CONVERSATION_FIELDS` below, which says why rather than leaving the caller to
 # infer it from an answer that quietly lost its context.
 ACCEPTED_REQUEST_FIELDS = frozenset(
-    {"question", "hadm_id", "chip", "turns", "stream_prose", "follow_ups"}
+    {"question", "hadm_id", "chip", "turns", "stream_prose", "follow_ups",
+     "run_tag"}
 )
 
 # Names a caller reaches for when it expects the agent to remember the
@@ -464,6 +465,24 @@ def parse_agent_request(body: Any, *, max_question_chars: int) -> AgentRequest:
             "invalid_request", "'stream_prose' must be a boolean", 400
         )
 
+    # What produced this turn, when the caller is a batch run rather than a person.
+    # The evaluation harness sends its run label here and the agent puts it on the
+    # trace, so an evaluation's answers can be found and scored by tag instead of by
+    # guessing at a time window — which is what had to happen before this existed, and
+    # it meant "delete this run's traces" could not be answered without risking a
+    # production turn. Constrained because it becomes a telemetry tag: no spaces, no
+    # separators that a tag query would split on, and bounded so one request cannot
+    # write an unbounded label.
+    run_tag = body.get("run_tag")
+    if run_tag is not None:
+        if not isinstance(run_tag, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", run_tag):
+            raise AgentRequestError(
+                "invalid_request",
+                "'run_tag' must be 1-64 characters of letters, digits, dot, dash or "
+                "underscore",
+                400,
+            )
+
     # Asked for rather than assumed, and type-checked the same way. The caller that
     # wants this is the one drawing a row of clickable questions under the answer; the
     # evaluation loop is not, and should not pay a model call per question for a row it
@@ -527,7 +546,7 @@ def parse_agent_request(body: Any, *, max_question_chars: int) -> AgentRequest:
             f"Limit is {max_question_chars} characters.",
             413,
         )
-    return {
+    parsed = {
         "question": composed,
         "kind": chip,
         "hadm_id": hadm_id,
@@ -536,6 +555,12 @@ def parse_agent_request(body: Any, *, max_question_chars: int) -> AgentRequest:
         "stream_prose": stream_prose,
         "follow_ups": follow_ups,
     }
+    # Only when one was sent. A person's turn carries no run label, and a field that is
+    # always present but usually None makes "is this an evaluation turn?" a question
+    # about a value instead of about a key.
+    if run_tag is not None:
+        parsed["run_tag"] = run_tag
+    return parsed
 
 
 def _draws_the_answer(payload: dict) -> bool:

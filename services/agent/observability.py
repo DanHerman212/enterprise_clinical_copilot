@@ -36,6 +36,7 @@ A teardown of the Langfuse stack must not take the evidence with it.
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import logging
 import os
 
@@ -44,6 +45,24 @@ logger = logging.getLogger(__name__)
 # All three are required. A host without keys, or keys without a host, would
 # otherwise half-configure the SDK and produce traces that go nowhere.
 _ENV_VARS = ("LANGFUSE_HOST", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY")
+
+# Which batch run, if any, this turn belongs to. A clinician's turn has no value, and
+# that absence is what makes the tag mean "this came from an evaluation". Carried in a
+# context variable rather than as an `ask` argument: `ask` is the seam every test double
+# already mirrors, and adding a keyword there meant sixteen fakes had to grow a field
+# they do not care about.
+_RUN_TAG: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "run_tag", default=None
+)
+
+
+def set_run_tag(tag: str | None) -> None:
+    """Label the current turn. Called once per request, before any span opens."""
+    _RUN_TAG.set(tag or None)
+
+
+def current_run_tag() -> str | None:
+    return _RUN_TAG.get()
 
 
 def configured() -> bool:

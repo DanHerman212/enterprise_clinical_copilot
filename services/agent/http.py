@@ -37,6 +37,7 @@ from services.agent.contracts import (
 from services.agent.graph import ask, final_message, final_text
 from services.agent.guardrail import guard_answer
 from services.agent.mcp_client import MCP_TRANSPORT, toolbox
+from services.agent import observability
 from services.agent.payload import build_ui_components
 from services.mcp.runtime import requires_cloud_run_auth, timeout_chain
 
@@ -497,6 +498,12 @@ async def _run_chain(
     """
     async with asyncio.timeout(ASK_TIMEOUT_SECONDS):
         async with toolbox() as box:
+            # Label this turn for telemetry before anything can emit a span. Set here
+            # rather than passed down because `ask` is the boundary every route and
+            # every test double already stands on: adding a keyword to it meant
+            # editing sixteen fakes to accept a field they do not care about, and a
+            # request-scoped value is what a context variable is for.
+            observability.set_run_tag(parsed.get("run_tag"))
             # Pre-flight, before the model runs: the structured features behind
             # this admission's risk score, stated as verified ground truth. The
             # model never spends a tool call on it, and a failure here leaves the

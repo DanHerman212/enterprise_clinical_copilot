@@ -65,7 +65,7 @@ DIMS = ["fidelity", "grounding", "citation", "responsiveness", "safety", "contex
 # 2026-08-19: the run stalled ~18min at trace 117/300 with no output). The
 # timeout makes a hang raise (-> retried, then flagged) instead of stalling the
 # whole judge. Mirrors collect.py's per-ask timeout.
-_JUDGE_TIMEOUT_SECONDS = 120
+_JUDGE_TIMEOUT_SECONDS = int(os.environ.get("JUDGE_TIMEOUT_SECONDS", "45"))
 
 # P2 fix (2026-08-14, after human judge-validation showed kappa=0): the judge
 # must see the FULL evidence the agent saw. v1 truncated each passage to 400
@@ -241,15 +241,22 @@ def _judge(client, system: str, user: str) -> dict:
             return out
         last = out["error"]
         quota = "429" in last or "RESOURCE_EXHAUSTED" in last
+        timed_out = last.startswith("no response within")
         if attempt >= attempts - 1 or (quota and attempt >= 4):
             break
-        # Printed, not swallowed. A 13-minute retry ladder (six attempts x 120s) with
-        # nothing on stdout is indistinguishable from a hung job, and it was reported as
-        # one: the adversarial gate appeared stuck at 19/20 for over ten minutes while it
-        # was in fact waiting out this ladder. A gate nobody can read is a gate nobody
-        # trusts.
+        # A call that never answered is not a quota window. Waiting it out and trying
+        # again at the same ceiling cost 13 minutes per answer (six attempts of 120s
+        # plus backoff) and made a two-minute gate look hung for a quarter of an hour
+        # — observed 2026-10-17, where the gate was read as broken when it was only
+        # slow. A timeout gets one quick retry and then becomes an unjudged answer,
+        # which the gate already fails on.
+        if timed_out and attempt >= 1:
+            break
+        # Printed, not swallowed. A retry ladder with nothing on stdout is
+        # indistinguishable from a hung job.
         print(f"  judge retry {attempt + 1}/{attempts} after {last[:120]}", flush=True)
-        time.sleep(min(60, (10 * 2 ** attempt) if quota else (2 ** attempt)))
+        if not timed_out:
+            time.sleep(min(60, (10 * 2 ** attempt) if quota else (2 ** attempt)))
     return {"error": last}
 
 

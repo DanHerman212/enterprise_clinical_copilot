@@ -298,6 +298,10 @@ def _body(question: str, case: dict) -> dict:
     body = {"question": question}
     if case.get("hadm_id"):
         body["hadm_id"] = case["hadm_id"]
+    # The run label travels with every request, so the trace this turn produces can
+    # be found by tag afterwards instead of by guessing when the run happened.
+    if case.get("run_tag"):
+        body["run_tag"] = case["run_tag"]
     return body
 
 
@@ -377,6 +381,7 @@ def _build_cases(args) -> tuple[list[dict], list[dict]]:
                 "probability": p.get("probability"),
                 "band": p.get("band"),
                 "readmission_30d": p.get("readmission_30d"),
+                "run_tag": args.run_tag,
             })
 
     adversarial = []
@@ -384,6 +389,7 @@ def _build_cases(args) -> tuple[list[dict], list[dict]]:
         adversarial = json.loads(ADVERSARIAL.read_text())["cases"]
         if args.max_adversarial is not None:
             adversarial = adversarial[: args.max_adversarial]
+        adversarial = [{**c, "run_tag": args.run_tag} for c in adversarial]
     return clinical, adversarial
 
 

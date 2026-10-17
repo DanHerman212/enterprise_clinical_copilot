@@ -944,8 +944,10 @@ def _context_block(admission_context: str) -> str:
     return f"\n\n{text}" if text else ""
 
 
-def _trace_metadata(hadm_id: int | None, question_kind: str | None) -> dict:
-    """What a Langfuse trace needs in order to be found again by patient.
+def _trace_metadata(
+    hadm_id: int | None, question_kind: str | None, run_tag: str | None = None
+) -> dict:
+    """What a Langfuse trace needs in order to be found again by patient or by run.
 
     Without this a trace carried only SDK instrumentation keys, so the question the
     eval gates actually ask — "show me every trace for this case" — had no answer:
@@ -955,15 +957,27 @@ def _trace_metadata(hadm_id: int | None, question_kind: str | None) -> dict:
     A conversation-scoped session id would need the site to send one; the agent is
     stateless and is not given it today, so it is deliberately absent rather than
     invented from the admission.
+
+    `run:` is the same idea for a batch run. An evaluation turn and a clinician's turn
+    were indistinguishable in the trace list — both named `LangGraph`, both tagged with
+    the admission — so "which traces belong to that eval" could only be answered by
+    guessing at a time window (observed 2026-10-17, when a cleanup had to do exactly
+    that and could not prove it had spared production traffic).
     """
     tags: list[str] = []
     meta: dict[str, str] = {}
+    # The request's own label wins; the context variable is what carries it here
+    # without changing `ask`'s signature.
+    run_tag = run_tag or observability.current_run_tag()
     if hadm_id is not None:
         tags.append(f"hadm:{hadm_id}")
         meta["hadm_id"] = str(hadm_id)
     if question_kind:
         tags.append(f"command:{question_kind}")
         meta["command"] = str(question_kind)
+    if run_tag:
+        tags.append(f"run:{run_tag}")
+        meta["run_tag"] = str(run_tag)
     if tags:
         meta["langfuse_tags"] = tags  # type: ignore[assignment]
     return meta
@@ -982,6 +996,7 @@ async def ask(
     turns: list[dict[str, str]] | None = None,
     prose_stream: bool = False,
     admission_context: str = "",
+    run_tag: str | None = None,
 ) -> dict:
     """Run one question to completion. Returns the final state.
 
@@ -1030,7 +1045,7 @@ async def ask(
                 on_event=on_event,
                 callbacks=[tracing] if tracing is not None else None,
                 prose_stream=prose_stream,
-                trace_metadata=_trace_metadata(hadm_id, question_kind),
+                trace_metadata=_trace_metadata(hadm_id, question_kind, run_tag),
             )
         command_state["langfuse_trace_id"] = observability.trace_id(tracing)
         return command_state
@@ -1048,7 +1063,7 @@ async def ask(
     )
 
     config: dict = {"recursion_limit": RECURSION_LIMIT}
-    trace_meta = _trace_metadata(hadm_id, question_kind)
+    trace_meta = _trace_metadata(hadm_id, question_kind, run_tag)
     if trace_meta:
         # Langfuse reads `langfuse_tags` from run metadata; the other keys ride along
         # so the admission and command are visible on the trace itself.

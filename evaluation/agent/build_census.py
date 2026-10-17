@@ -1,0 +1,210 @@
+"""Build the evaluation census from the table the deployment actually serves.
+
+Why this reads BigQuery instead of a cohort JSON
+------------------------------------------------
+The earlier builder read `results/hybrid_cohort_v2.json`, a generated artifact
+that is gitignored and was not backed up: it is gone, and so is the
+`hybrid_notes.json` upstream of it. Regenerating the chain means re-running
+Gemini extraction over 89 notes and re-scoring, which would produce a *different*
+cohort than the one the deployment serves — a census that no longer describes
+production.
+
+`readmission.hybrid_features` is the feature store the agent reads at request
+time. Its distinct `hadm_id` values are, by definition, the admissions this
+system can answer for. Sourcing the census from it makes the case set a
+statement about the served population rather than about a stale file.
+
+What the arithmetic must show
+-----------------------------
+    87 served admissions
+     5 outpatient encounters   (no inpatient risk score is computable)
+    82 inpatient admissions   <- the clinical census
+
+The five outpatient ids live in `services.agent.routing.OUTPATIENT_HADM_IDS`
+and are imported, never re-typed: that frozenset is also what suppresses the risk
+score at request time, so the harness and the product cannot drift apart about
+which encounters are outpatient.
+
+Outpatient admissions are written to their own file rather than dropped. They are
+the evidence for risk suppression, and an assertion that needs its inputs to
+exist in an artifact is worth more than one that depends on whoever remembers the
+ids.
+
+`probability` and `readmission_30d` are carried when the cohort JSON is available
+and left null otherwise. They stratify the report; they do not affect judging —
+the judge reads the probability out of the `predict_readmission` tool response,
+not out of the case file.
+
+Usage (from repo root):
+    .venv/bin/python evaluation/agent/build_census.py
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+HARNESS = HERE.parents[1]
+if str(HARNESS) not in sys.path:
+    sys.path.insert(0, str(HARNESS))
+
+RESULTS = HERE / "results"
+COHORT = RESULTS / "hybrid_cohort_v2.json"
+OUT = RESULTS / "cases_82.json"
+OUT_OUTPATIENT = RESULTS / "cases_outpatient.json"
+
+PROJECT = "trim-icon-498815-a0"
+FEATURES = f"`{PROJECT}.readmission.hybrid_features`"
+
+# The same cut points sample.py samples against, so "low / borderline / high"
+# means the same thing in both case sets.
+BANDS = (("low", 0.0, 0.10), ("borderline", 0.10, 0.20), ("high", 0.20, 1.01))
+
+# The three clinical prompts the harness has always asked. Kept verbatim and in
+# this order because the wording is part of the case set's identity: change it
+# and the pass rate stops being comparable with any earlier run.
+PROMPTS = ("risk", "meds", "summarize")
+
+# Derived from the feature table: an id present here is an id the agent can
+# answer for.
+SERVED_SQL = f"""
+SELECT DISTINCT hadm_id
+FROM {FEATURES}
+WHERE hadm_id IS NOT NULL
+ORDER BY hadm_id
+"""
+
+
+def band_for(probability: float | None) -> str:
+    if probability is None:
+        return "unscored"
+    for name, lo, hi in BANDS:
+        if lo <= probability < hi:
+            return name
+    return "high"
+
+
+def served_hadm_ids() -> list[int]:
+    from google.cloud import bigquery  # noqa: PLC0415 — keeps --help offline
+
+    client = bigquery.Client(project=PROJECT)
+    return sorted(row["hadm_id"] for row in client.query(SERVED_SQL).result())
+
+
+def labels_by_hadm_id() -> dict[int, dict]:
+    """probability/label per admission, when the old cohort artifact survives."""
+    if not COHORT.exists():
+        return {}
+    try:
+        payload = json.loads(COHORT.read_text())
+    except (OSError, ValueError):
+        return {}
+    return {
+        p["hadm_id"]: {
+            "probability": p.get("probability"),
+            "readmission_30d": p.get("readmission_30d"),
+        }
+        for p in payload.get("patients", [])
+        if "hadm_id" in p
+    }
+
+
+def case_for(hadm_id: int, labels: dict[int, dict]) -> dict:
+    known = labels.get(hadm_id, {})
+    probability = known.get("probability")
+    return {
+        "hadm_id": hadm_id,
+        "probability": probability,
+        "band": band_for(probability),
+        # Kept because it is what makes an error rate interpretable: a "high
+        # risk" miss and a "low risk" miss are not the same finding, and the
+        # label is the only way to tell which one a failure was.
+        "readmission_30d": known.get("readmission_30d"),
+    }
+
+
+def payload_for(cases: list[dict], kind: str, extra: dict | None = None) -> dict:
+    counts: dict[str, int] = {}
+    for c in cases:
+        counts[c["band"]] = counts.get(c["band"], 0) + 1
+    prompts = list(PROMPTS) if kind == "clinical" else []
+    payload = {
+        "kind": kind,
+        "source": f"{PROJECT}.readmission.hybrid_features",
+        "built": datetime.now(timezone.utc).isoformat(),
+        "n": len(cases),
+        "prompts": prompts,
+        "cases_expected": len(cases) * len(prompts),
+        "labels_positive": sum(1 for c in cases if c.get("readmission_30d") == 1),
+        "band_counts": counts,
+        "patients": cases,
+    }
+    if extra:
+        payload.update(extra)
+    return payload
+
+
+def main() -> int:
+    from services.agent.routing import OUTPATIENT_HADM_IDS  # noqa: PLC0415
+
+    served = served_hadm_ids()
+    labels = labels_by_hadm_id()
+
+    outpatient = [h for h in served if h in OUTPATIENT_HADM_IDS]
+    inpatient = [h for h in served if h not in OUTPATIENT_HADM_IDS]
+
+    # A census that silently shrinks is worse than one that fails: if either side
+    # of this split stops matching, the served table changed underneath us and
+    # the pass rate would quietly start describing a different population.
+    missing = OUTPATIENT_HADM_IDS - set(served)
+    if missing:
+        print(f"WARNING: outpatient ids not served: {sorted(missing)}")
+
+    clinical_cases = [case_for(h, labels) for h in inpatient]
+    outpatient_cases = [case_for(h, labels) for h in outpatient]
+
+    RESULTS.mkdir(parents=True, exist_ok=True)
+    clinical_payload = payload_for(
+        clinical_cases,
+        "clinical",
+        extra={
+            "census": (
+                f"{len(served)} served - {len(outpatient)} outpatient "
+                f"= {len(inpatient)} inpatient"
+            ),
+            "served_n": len(served),
+            "outpatient_n": len(outpatient),
+        },
+    )
+    OUT.write_text(json.dumps(clinical_payload, indent=2) + "\n")
+
+    outpatient_payload = payload_for(
+        outpatient_cases,
+        "outpatient",
+        extra={
+            "note": (
+                "Outpatient encounters. No inpatient readmission risk is "
+                "computable for these, so they are excluded from the clinical "
+                "census and evaluated for risk suppression instead."
+            )
+        },
+    )
+    OUT_OUTPATIENT.write_text(json.dumps(outpatient_payload, indent=2) + "\n")
+
+    print(f"served {len(served)} admissions")
+    print(f"  clinical census {len(inpatient)} -> {OUT}")
+    print(f"  outpatient      {len(outpatient)} -> {OUT_OUTPATIENT}")
+    print(f"  bands {clinical_payload['band_counts']}")
+    print(f"  cases to run {clinical_payload['cases_expected']} "
+          f"({len(inpatient)} x {len(PROMPTS)} prompts)")
+    if not labels:
+        print("  note: cohort JSON absent, probability/label left null "
+              "(report strata will read 'unscored')")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

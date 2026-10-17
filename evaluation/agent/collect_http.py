@@ -27,7 +27,7 @@ Usage (harness root):
     # a pilot: three patients x three prompts, plus a first adversarial batch
     .venv/bin/python evaluation/agent/collect_http.py --max-patients 3
 
-    # the full run (267 clinical + 20 adversarial), resumable
+    # the full census (82 x 3 = 246 clinical + 20 adversarial), resumable
     .venv/bin/python evaluation/agent/collect_http.py
 """
 
@@ -57,7 +57,11 @@ from services.agent.contracts import (  # noqa: E402
 )
 
 RESULTS = HERE / "results"
-CASES = RESULTS / "cases_89.json"
+# The clinical census: 82 inpatient admissions, built from the served feature
+# table by build_census.py. The five outpatient encounters are written
+# alongside it but are not part of this set — they have no inpatient risk score
+# to grade.
+CASES = RESULTS / "cases_82.json"
 ADVERSARIAL = HERE / "adversarial_cases.json"
 OUT = RESULTS / "traces_http.jsonl"
 ADV_OUT = RESULTS / "adversarial_http.jsonl"

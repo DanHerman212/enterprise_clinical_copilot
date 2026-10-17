@@ -175,7 +175,7 @@ def test_the_table_draws_with_no_search_in_the_turn_at_all():
     assert "LiteratureList" not in _types(envelope)
 
 
-def test_the_pinned_row_carries_the_patients_figures_and_its_drivers():
+def test_the_pinned_row_carries_the_patients_figures_and_its_provenance():
     matrix = _matrix(compose_risk_canvas(
         PREDICT, None, phenotype="heart_failure_cardiorenal", command="summarize"))
 
@@ -185,7 +185,9 @@ def test_the_pinned_row_carries_the_patients_figures_and_its_drivers():
     # precision, and the two would part on the first change to either.
     assert baseline["probability"] == 0.2
     assert baseline["threshold"] == 0.11
-    assert baseline["drivers"] == ["prior inpatient days"]
+    # The shared-factors column is gone (Phase 4C §1.2), and the pinned row lost it
+    # with the others: the bars above the table are where drivers are read.
+    assert "drivers" not in baseline
     assert baseline["provenance"] == "Model model-x"
     assert "XGBoost" not in str(baseline), "the learner is not in the payload"
 
@@ -214,22 +216,28 @@ def test_the_orbopedic_bucket_now_has_a_row():
     assert row["reported_rate"] == "3.4%"
     assert row["evidence_tier"] == "Retrospective Cohort"
     assert row["source"] == "The Journal of Arthroplasty · 2022"
-    # The cohort's own driver is prior non-elective utilisation, which this patient's
-    # row measures as ED visits and admissions — so the pills are populated, and they
-    # carry the same names the driver bars carry.
-    assert row["matched_features"] == ["recent ED visits", "prior admissions"]
+    # No shared-factors column: the driver bars above the table carry this, and a
+    # second rendering of the same evidence read as a second source.
+    assert "matched_features" not in row
 
 
-def test_a_matched_driver_is_named_the_way_the_bars_name_it():
-    """One factor, one name — the rule the label map exists for, applied to a pill.
+def test_no_row_carries_a_second_copy_of_the_drivers():
+    """The three-column contract, asserted across a phenotype with several rows.
 
-    The cohort says "number of hospitalizations in the previous year"; the pill says what
-    the driver bar beside the patient says, because both go through `humanize`.
+    Phase 4C §1.2 removed the `Shared risk factors` column entirely, including from the
+    pinned baseline row — the matrix is `Source | Rate | Cohort` and nothing else. The
+    reason is a contract rather than a preference: the SHAP bars directly above the
+    table already name each driver and its direction, so a flat pill list repeating
+    them is the same evidence twice, and two renderings of one source read as two
+    sources.
     """
     matrix = _matrix(compose_risk_canvas(PREDICT, None, phenotype="copd_respiratory",
                                          command="summarize"))
 
-    assert matrix["rows"][0]["matched_features"] == ["prior inpatient days"]
+    assert matrix["rows"], "the COPD phenotype should still draw rows"
+    for row in matrix["rows"]:
+        assert "matched_features" not in row
+    assert "drivers" not in matrix["baseline"]
 
 
 def test_rows_are_ordered_strongest_evidence_first():

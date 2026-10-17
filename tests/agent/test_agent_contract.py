@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from services.agent.admission_context import PREFLIGHT_TOOLS
 from services.agent.contracts import (
     RE_DERIVABLE_TOOLS,
     RESULT_KEPT_TOOLS,
@@ -426,8 +427,12 @@ def test_every_registered_tool_is_classified_as_derivable_or_kept():
     registered = set(re.findall(r"server\.add_tool\((\w+)\)", server))
 
     assert registered, "no tools found — has registration moved?"
-    assert registered == RE_DERIVABLE_TOOLS | RESULT_KEPT_TOOLS
+    assert registered == RE_DERIVABLE_TOOLS | RESULT_KEPT_TOOLS | PREFLIGHT_TOOLS
     assert not RE_DERIVABLE_TOOLS & RESULT_KEPT_TOOLS
+    # A pre-flight tool's payload is folded into the prompt and forgotten, so it is
+    # neither re-derivable (nothing was asked of the model) nor kept (nothing of it
+    # reaches the client).
+    assert not PREFLIGHT_TOOLS & (RE_DERIVABLE_TOOLS | RESULT_KEPT_TOOLS)
 
 
 def test_validate_agent_success_rejects_missing_sources():

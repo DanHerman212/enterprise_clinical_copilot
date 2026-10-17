@@ -7,6 +7,7 @@ the same table with no standing infrastructure.
 """
 
 from .base import FeatureRow, FeatureSource, to_instance, to_vector
+from .profile import decode_profile
 
 # Reported in every prediction payload so the provenance of a score is visible.
 FEATURE_SOURCE = "bigquery"
@@ -15,6 +16,7 @@ __all__ = [
     "FEATURE_SOURCE",
     "FeatureRow",
     "FeatureSource",
+    "decode_profile",
     "get_feature_source",
     "to_instance",
     "to_vector",

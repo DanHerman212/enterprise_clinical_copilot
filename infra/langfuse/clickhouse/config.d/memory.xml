@@ -37,7 +37,25 @@
   governs.
 -->
 <clickhouse>
-    <max_server_memory_usage>3000000000</max_server_memory_usage>
+    <!-- 3 GB -> 4 GB on 2026-10-17, moved with the cgroup cap in
+         docker-compose.yml (4g -> 5g). The two must move together: the lower of
+         them governs, and a ceiling the cgroup cannot fund is a countdown rather
+         than a limit. The ~1 GB margin for what ClickHouse does not track itself
+         — thread stacks, allocator arenas, page cache over the data directory —
+         is deliberately unchanged, because it is that margin that was consumed
+         at 1.6 GB inside 2 GB and again at 3 GB inside 4 GB.
+
+         4 GB -> 5 GB later the same day, with the cgroup at 6g. At 4 GB the
+         server's own tracked usage settled ABOVE its ceiling — 4.03 GiB of
+         allocations against a 3.73 GiB maximum — and the overcommit tracker then
+         refused everything: the Langfuse trace list and score reads died with
+         Code 241 and the API reported "Request timed out", including queries over
+         `system.parts` that return a handful of rows. The working set is elevated
+         by a merge backlog (23 concurrent merges, ~970 parts) that the earlier
+         restart loop created, so the ceiling has to sit above the merges' real
+         footprint rather than exactly at the data's. The margin above the cgroup
+         is raised with it, to ~1.34 GB. -->
+    <max_server_memory_usage>5000000000</max_server_memory_usage>
 
     <!-- Keep the caches small relative to the ceiling above: together they
          would otherwise be allowed to occupy most of it. At 384 MB they are

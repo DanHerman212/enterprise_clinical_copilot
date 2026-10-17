@@ -23,8 +23,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
-from services.agent import chain, model_turn, stages
-from services.agent import followups
+from services.agent import chain, model_turn, routing, stages
+from services.agent import admission_context, followups
 from services.agent.a2ui import compose_presentation
 from services.agent.contracts import (
     RE_DERIVABLE_TOOLS,
@@ -113,7 +113,36 @@ async def _question_or_error(
             {"error": exc.code, "message": exc.message},
             status_code=exc.status_code,
         )
-    return parsed, None
+    return _route_free_text(parsed), None
+
+
+def _route_free_text(parsed: dict) -> dict:
+    """Send a free-text question to the command that owns it, when one clearly does.
+
+    Applied here, at the seam between the request and the chain, so the graph never
+    learns that routing exists. `parsed["kind"]` is the field the chain already
+    reads as the command, so setting it is the whole mechanism: the bound tool runs,
+    the formatting prompt applies, and the surface is composed by the same code that
+    answers a clicked chip.
+
+    A caller that chose a chip is left exactly as it is. The router is for questions
+    nobody classified, and overriding an explicit choice would be the router
+    disagreeing with the person using it.
+
+    `routed_to` rides along so the console can say which command answered. It is
+    kept out of `kind` rather than redundant with it because the two mean different
+    things: `kind` is the command the chain runs, `routed_to` is the fact that the
+    command was chosen for the reader rather than by them.
+    """
+    if parsed.get("kind"):
+        return parsed
+    wire = routing.classify_free_text(parsed.get("question") or "")
+    if wire is None:
+        return parsed
+    routed = dict(parsed)
+    routed["kind"] = wire
+    routed["routed_to"] = wire
+    return routed
 
 
 class AgentAnswerUnavailable(Exception):
@@ -418,16 +447,25 @@ async def _run_chain(
     """
     async with asyncio.timeout(ASK_TIMEOUT_SECONDS):
         async with toolbox() as box:
-            return await ask(
-                box,
-                parsed["question"],
-                question_kind=parsed["kind"],
-                hadm_id=parsed["hadm_id"],
-                topic=parsed["topic"],
-                on_event=on_event,
-                turns=parsed["turns"],
-                prose_stream=parsed["stream_prose"],
-            )
+            # Pre-flight, before the model runs: the structured features behind
+            # this admission's risk score, stated as verified ground truth. The
+            # model never spends a tool call on it, and a failure here leaves the
+            # prompt exactly as it was rather than failing the turn.
+            context = await admission_context.hydrate(box, parsed.get("hadm_id"))
+            options: dict = {
+                "question_kind": parsed["kind"],
+                "hadm_id": parsed["hadm_id"],
+                "topic": parsed["topic"],
+                "on_event": on_event,
+                "turns": parsed["turns"],
+                "prose_stream": parsed["stream_prose"],
+            }
+            if context:
+                # Only when there is one. A turn without a profile stays exactly
+                # the call it always was, which is what keeps hydration an
+                # addition rather than a required new dependency of every turn.
+                options["admission_context"] = context
+            return await ask(box, parsed["question"], **options)
 
 
 async def health(request: Request) -> JSONResponse:
@@ -527,6 +565,12 @@ async def ask_route(request: Request) -> JSONResponse:
         # question about a log line or about a trace, and never about both.
         langfuse_trace_id=state.get("langfuse_trace_id") or "",
     )
+    # The command a free-text question was routed to, when it was routed at all.
+    # Carried on the payload because the console draws it as a pill beside the turn:
+    # the reader is told which command answered them rather than left to infer it
+    # from the shape of the answer.
+    if parsed.get("routed_to"):
+        payload["routed_to"] = parsed["routed_to"]
     return JSONResponse(payload)
 
 
@@ -756,6 +800,10 @@ async def _stream_chain(
         if swap is not None:
             yield _sse(stages.STAGE_PROSE_SETTLED, stages.prose_settled_event(swap))
 
+        # Same field as the blocking route, and for the same reason: the console draws
+        # the pill from the answer it receives, and the console receives this one.
+        if parsed.get("routed_to"):
+            payload["routed_to"] = parsed["routed_to"]
         log.record(
             trace, parsed["question"], "ok",
             finish_reason=model_turn.finish_reason(final_message(state)),

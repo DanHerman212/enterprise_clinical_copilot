@@ -25,6 +25,7 @@ from .dependencies.features import FEATURE_SOURCE
 from .runtime import requires_cloud_run_auth
 from .tools import (
     discharge_medications,
+    get_admission_profile,
     get_lab_trends,
     predict_readmission,
     rag_search,
@@ -97,6 +98,7 @@ server.add_tool(rag_search_sections)
 server.add_tool(discharge_medications)
 server.add_tool(search_literature)
 server.add_tool(get_lab_trends)
+server.add_tool(get_admission_profile)
 
 
 @server.custom_route("/health", methods=["GET"])

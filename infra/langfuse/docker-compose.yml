@@ -32,12 +32,18 @@ services:
     restart: unless-stopped
     # Safety net below the server's own cap: a runaway contained here cannot
     # starve Redis, MinIO and the worker. Sized against the 8 GB host the VM was
-    # moved to on 2026-10-15 — the four other containers hold about 1.9 GB, so
-    # 4 GB here leaves them room and still covers the 3 GB server cap in
-    # memory.xml plus roughly 1 GB of untracked allocations. On the previous
-    # 3.9 GB host this cap was the binding constraint, and ClickHouse was OOM
-    # killed ~76 times a day while nominally inside its own lower limit.
-    mem_limit: 4g
+    # moved to on 2026-10-15.
+    #
+    # 4 GB -> 5 GB on 2026-10-17. This is relief, not a fix, and the plan says so:
+    # the cap has now been raised twice and the workload filled it both times, so
+    # the durable change is retention (Phase 3.1) and this only has to hold until
+    # that lands. What made a further raise defensible is that the earlier figure
+    # was an assumption and this one is measured: `free -m` reads 7950 MB total
+    # with 6429 MB available, and the other four containers together hold about
+    # 1.0 GB (worker 550 MB, MinIO 414 MB, redis 29 MB, proxy 21 MB), not the
+    # ~1.9 GB assumed on 2026-10-15. 5 GB here leaves ~1.7 GB of headroom on the
+    # box, where the 6 GB declined on the old arithmetic would have left none.
+    mem_limit: 6g
     environment:
       CLICKHOUSE_DB: default
       CLICKHOUSE_USER: default
@@ -57,6 +63,16 @@ services:
       # they are read by different parts of ClickHouse and a change to either has to be
       # made with the other in view.
       - ./clickhouse/config.d/merge_throttle.xml:/etc/clickhouse-server/config.d/merge_throttle.xml:ro
+      # What happens when a query would exceed the cap above. Without this file the
+      # cap is a wall: aggregation and sorting are RAM-only by default, so the
+      # trace list and score reads died with Code 241 and the API reported a
+      # timeout. See the file's own comment.
+      #
+      # `users.d`, not `config.d`. These are PROFILE settings, and `users.xml` ships
+      # its own `<profiles><default>` block which overrides anything a config.d file
+      # says: mounted at config.d the same values were accepted at startup and
+      # `system.settings` still reported 0.
+      - ./clickhouse/config.d/query_memory.xml:/etc/clickhouse-server/users.d/query_memory.xml:ro
     ports:
       - "8123:8123"
       - "9000:9000"

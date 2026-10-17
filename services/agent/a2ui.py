@@ -485,14 +485,24 @@ def _comparative_matrix(estimate: dict | None, phenotype: str | None) -> dict | 
     baseline row when there is an estimate, and with a sentence saying so when there is
     not. What it must never do is draw the baseline row with an empty figure in it.
     """
-    rows = benchmarks_for_phenotype(phenotype)
-    if not rows:
+    benchmarks = benchmarks_for_phenotype(phenotype)
+    if not benchmarks:
         return None
+    # `matched_features` is dropped here rather than sent and ignored. The component's
+    # schema is `.strict()`, so a field it no longer renders is not a harmless extra —
+    # it fails the parse and the table does not draw at all.
+    rows = [
+        {key: value for key, value in row.items() if key != "matched_features"}
+        for row in benchmarks
+    ]
 
-    # The pills name the factors the way the bars do, looked up in the same map, so one
-    # factor cannot read two ways inside one answer.
-    for row in rows:
-        row["matched_features"] = [humanize(key) for key in row["matched_features"]]
+    # The rows carry no "matched risk factors" column any more (Phase 4C §1.2). The
+    # driver bars directly above the table already show which factors move this
+    # patient's estimate and in which direction, so repeating them as flat pills in a
+    # fourth column was the same evidence twice — and two renderings of one source read
+    # as two sources, which is the misreading the citation contract exists to prevent,
+    # one surface down. The benchmark still records `matched_features`; nothing in this
+    # envelope sends it, and the component's schema no longer accepts it.
 
     component: dict = {
         "id": "comparison",
@@ -516,11 +526,6 @@ def _comparative_matrix(estimate: dict | None, phenotype: str | None) -> dict | 
         "threshold": float(estimate["threshold"]),
         "decision": int(estimate.get("decision") or 0),
         "cohort": "Index admission, this patient",
-        "drivers": [
-            humanize(str(factor.get("feature", "")))
-            for factor in (estimate.get("top_factors") or [])
-            if isinstance(factor, dict)
-        ],
         "provenance": f"Model {estimate.get('model_version') or 'unknown'}",
     }
     return component

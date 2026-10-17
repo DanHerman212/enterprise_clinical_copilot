@@ -48,6 +48,7 @@ from dataclasses import dataclass, field
 # The section vocabulary, not the chunker. The agent's image ships the vocabulary
 # module and not the chunker, so importing this constant from `chunking` failed the
 # container at startup and the deploy silently served the previous revision.
+from services.agent.admission_context import PREFLIGHT_TOOLS
 from services.mcp.retrieval.sections import SUMMARY_SECTIONS
 
 
@@ -348,7 +349,8 @@ COMMANDS: tuple[Command, ...] = (
         # describe the chart. `get_lab_trends` is absent from this set because it is the
         # tool this command runs, and the rule the set encodes is that no OTHER tool runs.
         forbidden=frozenset({"predict_readmission", "rag_search", "rag_search_sections",
-                             "discharge_medications", "search_literature"}),
+                             "discharge_medications", "search_literature"})
+                  | PREFLIGHT_TOOLS,
         formatting=LABS_FORMATTING,
         # The model's description of the trajectory IS the answer, so it is announced as
         # it is written — the same grant `/ehr` and `/pubmed` have, and for the same
@@ -365,7 +367,7 @@ COMMANDS: tuple[Command, ...] = (
         tool="predict_readmission",
         args={"hadm_id": "{hadm_id}"},
         forbidden=frozenset({"rag_search", "rag_search_sections", "discharge_medications",
-                             "search_literature", "get_lab_trends"}),
+                             "search_literature", "get_lab_trends"}) | PREFLIGHT_TOOLS,
         # The answer is the surface, and there is no prose at all: see `prose`.
         prose=False,
     ),
@@ -375,7 +377,7 @@ COMMANDS: tuple[Command, ...] = (
         tool="discharge_medications",
         args={"hadm_id": "{hadm_id}"},
         forbidden=frozenset({"predict_readmission", "rag_search", "rag_search_sections",
-                             "search_literature", "get_lab_trends"}),
+                             "search_literature", "get_lab_trends"}) | PREFLIGHT_TOOLS,
         formatting=MEDS_FORMATTING,
         # Prose to announce, and the model's reply is not it: the narrative is written
         # in code, so `prose_is_model_output` stays False and the turn does not stream.
@@ -392,7 +394,7 @@ COMMANDS: tuple[Command, ...] = (
         # `predict_readmission` is absent from this set because this command runs
         # it. Every other command's tool is still refused here.
         forbidden=frozenset({"rag_search", "discharge_medications",
-                             "search_literature", "get_lab_trends"}),
+                             "search_literature", "get_lab_trends"}) | PREFLIGHT_TOOLS,
         sections=SUMMARY_SECTIONS,
         formatting=EHR_FORMATTING,
         # The model's cited summary is the answer, so it is announced as it is written.
@@ -431,7 +433,7 @@ COMMANDS: tuple[Command, ...] = (
         # `predict_readmission` is absent from this set because this command runs it.
         # Every other command's tool is still refused here.
         forbidden=frozenset({"rag_search", "rag_search_sections",
-                             "discharge_medications", "get_lab_trends"}),
+                             "discharge_medications", "get_lab_trends"}) | PREFLIGHT_TOOLS,
         formatting=LITERATURE_FORMATTING,
         # The synthesis is the answer, and it cites PMIDs the citation layer resolves
         # after the turn: same swap protocol as `/ehr`.
@@ -488,6 +490,164 @@ def command_for(wire: str) -> Command:
 def is_command(wire: str | None) -> bool:
     """Whether this intent is one of the deterministic commands."""
     return wire is not None and wire in BY_WIRE
+
+
+#: Vocabulary that makes a free-text question a request for a command's answer.
+#:
+#: Ordered, and the first match wins. `meds` before `labs` is the conservative
+#: reading: a question that mentions both is usually asking for the list, and a
+#: medication list is the narrower, more checkable answer of the two.
+#:
+#: Words, not a model — and that is the point of the whole change. The redirect
+#: this replaces was a sentence in a prompt competing with the rest of the prompt,
+#: and on 2026-10-17 it lost: a free-text risk question started calling
+#: `rag_search` instead of naming /risk, purely because a new paragraph shifted the
+#: balance. A word list fails the other way, by abstaining, and an abstention
+#: leaves the question with the reasoning loop — exactly where it went before.
+#:
+#: `risk` is deliberately absent. Its redirect still holds through the prompt and
+#: is asserted by the live tests, so routing it here would be a behaviour change
+#: with no defect behind it.
+#: Punctuation becomes a space before tokenising, so `hemoglobin,` and `(RDW)` are the
+#: words they look like. Everything the matcher sees is then `[a-z0-9]+` runs.
+_PUNCTUATION = str.maketrans({ch: " " for ch in ".,;:!?()[]{}\"'/\\-–—"})
+
+_FREE_TEXT_ROUTES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("meds", (
+        "medication", "medications", "meds", "prescription", "prescriptions",
+        "dosing", "dose", "doses", "drug", "drugs", "regimen", "pharmacy",
+    )),
+    ("labs", (
+        "lab", "labs", "laboratory", "hemoglobin", "haemoglobin", "sodium",
+        "potassium", "creatinine", "platelet", "platelets", "monocyte",
+        "monocytes", "hematocrit", "haematocrit", "rdw",
+        "red cell distribution", "bilirubin", "albumin", "lactate", "glucose",
+    )),
+)
+
+#: Question templates a canvas control composes for itself, which the router must
+#: never answer on the reader's behalf.
+#:
+#: A clicked risk driver is not a typed question. It arrives through the same door as
+#: one — `askFollowUp` fills the composer and submits the form, so the wire carries
+#: free text and nothing else — but the reader chose a control that already means
+#: "explain this driver in this chart". On 2026-10-17 the router could not tell the two
+#: apart and answered the RDW driver control with the whole lab panel, because the
+#: template contains the word `rdw`; the reader asked why a number matters and was
+#: shown every trajectory in the admission.
+#:
+#: The durable fix is an `intent` field on the request, so an affordance says what it
+#: is instead of being recognised by its wording. Until the composer carries one, the
+#: templates the surface emits are listed here, and a match abstains — which leaves the
+#: question with the reasoning loop, exactly as an unrecognised question would.
+_AFFORDANCE_TEMPLATES: tuple[tuple[str, ...], ...] = (
+    # `driverQuestion(label)` in the renderer's RiskInfluencers widget.
+    ("as", "a", "readmission", "risk", "driver"),
+)
+
+
+
+def _contains_affordance_template(tokens: list[str]) -> bool:
+    """Whether these tokens came from a control rather than a person."""
+    for template in _AFFORDANCE_TEMPLATES:
+        span = len(template)
+        if any(tokens[i:i + span] == list(template)
+               for i in range(len(tokens) - span + 1)):
+            return True
+    return False
+
+
+#: Vocabulary of questions the pre-flight feature manifest answers on its own.
+#:
+#: Not a router — nothing here decides what the answer IS. The model still writes it.
+#: This decides one thing only: whether the graph may skip the retrieval it otherwise
+#: forces on an answer that called no tool.
+#:
+#: That force exists to stop the model answering a question about the chart from
+#: memory. But the manifest is evidence, and it is the only evidence for these fields:
+#: a discharge note never states a length of stay, an admission type or an insurer. So
+#: on 2026-10-17 the force fired on "what is the patient length of stay?", sent the
+#: model looking through notes that cannot contain the number, and replaced the correct
+#: answer (17.29 days, from the row the model was scored on) with "the discharge note
+#: does not document this" — because only the LAST message becomes the answer.
+#:
+#: Phrases, matched as whole tokens like the free-text router, because "age" is inside
+#: "dosage" and "los" is inside "closely".
+_ADMINISTRATIVE_PHRASES: tuple[str, ...] = (
+    "length of stay", "los", "days in hospital", "how long was the stay",
+    "admission type", "type of admission", "admitted as", "emergency or elective",
+    "discharge location", "discharged to", "discharge disposition",
+    "insurance", "insurer", "payer",
+    "age", "how old", "anchor age",
+    "sex", "gender", "male or female",
+    "prior admission", "prior admissions", "previous admissions", "admission count",
+    "prior inpatient days", "inpatient days before",
+    "ed visits", "emergency department visits",
+    "race", "ethnicity",
+)
+
+
+def asks_for_administrative_detail(question: str) -> bool:
+    """Whether this question is answered by the feature manifest rather than the notes.
+
+    Used to withhold the forced retrieval, never to answer: a false positive means
+    the model is allowed to reply from the manifest, and the manifest is verified
+    ground truth for exactly this vocabulary. A false negative costs the searches it
+    cost before this existed.
+    """
+    tokens = (question or "").lower().translate(_PUNCTUATION).split()
+    if not tokens:
+        return False
+    if _contains_affordance_template(tokens):
+        return False
+    for phrase in _ADMINISTRATIVE_PHRASES:
+        words = phrase.split()
+        span = len(words)
+        if span == 1:
+            if words[0] in tokens:
+                return True
+        elif any(tokens[i:i + span] == words
+                 for i in range(len(tokens) - span + 1)):
+            return True
+    return False
+
+
+def classify_free_text(question: str) -> str | None:
+    """The command wire a free-text question is asking for, or None.
+
+    Returns the WIRE name (`"meds"`, `"labs"`) rather than a slash command, because
+    the wire name is what `parse_agent_request` calls `kind` and what
+    `state["command"]` holds. Handing that back means the caller assigns one field
+    and the entire deterministic path follows — the bound tool, the formatting
+    prompt, the composed surface — exactly as if the chip had been clicked.
+
+    None means "not obviously one of these", and the caller leaves the question
+    where it was: with the reasoning loop, which can still answer it from the notes.
+    """
+    tokens = (question or "").lower().translate(_PUNCTUATION).split()
+    if not tokens:
+        return None
+    # A control's own question is answered by the loop that the control names, not
+    # by whichever keyword happens to be in its label.
+    if _contains_affordance_template(tokens):
+        return None
+    # Exact tokens, never substrings. `"lab" in text` also fires on "elaborate",
+    # "collaborate" and "syllable", and a router that hijacks those is worse than
+    # no router: the wrong command answers confidently and the reader is told their
+    # question was understood. A phrase is matched as a run of tokens, so
+    # "red cell distribution" still works without a regex character class that
+    # would have to be escaped correctly for every entry in the table.
+    for wire, phrases in _FREE_TEXT_ROUTES:
+        for phrase in phrases:
+            words = phrase.split()
+            span = len(words)
+            if span == 1:
+                if words[0] in tokens:
+                    return wire
+            elif any(tokens[i:i + span] == words
+                     for i in range(len(tokens) - span + 1)):
+                return wire
+    return None
 
 
 def _templated_arguments(args: dict, hadm_id: int | None,

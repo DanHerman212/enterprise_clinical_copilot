@@ -18,23 +18,66 @@
   margin is large enough: whatever is left over is what the next merge tries to use.
   Bounding the merge bounds the growth. Raising the ceiling only moves the wall.
 
-  `max_bytes_to_merge_at_once` belongs under `<merge_tree>`, not at the root. It is a
-  MergeTree TABLE setting, and a copy at the root of this drop-in is ignored — with a log
-  warning, no error — which looks exactly like the file having had no effect.
-  `background_pool_size` is a server setting and lives at the root.
+  REMOVED 2026-10-17 — `max_bytes_to_merge_at_once`, and it was never doing anything
+  except preventing the server from starting. It is not a MergeTree setting in
+  ClickHouse 25.12, and `sanityChecks` rejects it during startup:
 
-  100 MB is deliberately small. A backlog then drains as many small merges instead of a
-  few enormous ones: more I/O, bounded memory. `background_pool_size=1` runs them one at a
-  time, so the peak is one merge's worth rather than N of them arriving together. Both are
-  recovery settings — they can be raised once the backlog is gone and retention keeps it
-  gone.
+      Code: 115. DB::Exception: Unknown setting 'max_bytes_to_merge_at_once':
+      in MergeTree config. (UNKNOWN_SETTING)
+      ... MergeTreeSettings::loadFromConfig ... sanityChecks ... Server::main
+
+  That exception is fatal, so the process exits, Docker restarts it, and it exits
+  again — a crash loop with a period of about 40-50 seconds. It is indistinguishable
+  from the OOM loop this file was written to stop, by timing, by `RestartCount`, and
+  by the fact that a query is refused. It was not that loop. `docker inspect` said
+  `OOMKilled=false`, which was the truth rather than a Docker bug, and raising the
+  cgroup cap from 4 GB to 5 GB on the same day changed nothing because memory was
+  never the constraint any more.
+
+  What made this hard to see is that the file's own claim is correct in the general
+  case — a MergeTree setting belongs under `<merge_tree>` — and the nesting here was
+  written exactly that way. The setting was simply removed from ClickHouse after the
+  version this reasoning was formed against. The lesson is in the method, not the
+  setting: the 2026-10-16 note that "the OOM loop continued unchanged" after this
+  file landed was measured from OUTSIDE the container, by trying to query it. The
+  container's own err log named the cause on the first line that mattered.
+
+  `background_pool_size` is a SERVER setting, is valid at the root, and is what
+  serialises merges. It stays.
+
+  Still true, and still the durable fix: bounding merges was never the answer to a
+  store that keeps growing. Retention is — Langfuse's own `CLICKHOUSE_TTL_DAYS`,
+  applied through its migrations (Phase 3.1). This file now does only the one thing
+  that is safe, and leaves the backlog to retention.
 
   Paired with: `memory.xml`, which holds the server ceiling. The lower of the two governs,
   so neither file should be changed without reading the other.
 -->
 <clickhouse>
-    <background_pool_size>1</background_pool_size>
-    <merge_tree>
-        <max_bytes_to_merge_at_once>104857600</max_bytes_to_merge_at_once>
-    </merge_tree>
+    <!--
+      Intentionally empty.
+
+      `background_pool_size=1` lived here too, and it is invalid against ClickHouse
+      25.12's own defaults. With the pool at one, the server refuses to start
+      because the mutation gate is set to 20 and a pool of one can never have
+      twenty free entries:
+
+          Code: 36. DB::Exception: The value of
+          'number_of_free_entries_in_pool_to_execute_mutation' setting (20)
+          (default values are defined in <merge_tree> section of config.xml ...
+
+      So both settings this file carried were fatal rather than merely
+      ineffective, and each one masked the next — removing the unknown MergeTree
+      setting is what let this one surface. A drop-in that fails a startup sanity
+      check presents as an OOM loop: the process exits, Docker restarts it, and
+      nothing about the timing or the restart counter distinguishes the two.
+
+      The file is kept, empty, because the mount and this record are worth more
+      than the two lines were. Anything added here later must be read back from
+      `system.server_settings` or `system.merge_tree_settings` for the RUNNING
+      version before it is committed, not taken from documentation for another one.
+
+      The lever that actually bounds this store is retention, not merge sizing —
+      see Phase 3.1 of `docs/langfuse_hardening_plan.md`.
+    -->
 </clickhouse>

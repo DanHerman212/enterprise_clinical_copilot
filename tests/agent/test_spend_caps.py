@@ -58,8 +58,20 @@ def test_tool_calls_beyond_the_per_turn_budget_are_refused():
     assert len(messages) == n
 
 
-def test_recursion_limit_is_a_small_explicit_bound():
-    assert RECURSION_LIMIT <= 10
+def test_the_tool_budget_is_the_binding_constraint_not_the_recursion_breaker():
+    """A turn must be able to spend its whole tool budget and still answer.
+
+    LangGraph counts every node transition, so each tool round costs two supersteps
+    (agent, tools) before the next round can start. A limit of 10 fired on the fourth
+    round of an ordinary ReAct turn on 2026-10-17 — twice — and because it fired after
+    the answer had already streamed, the turn died as `agent_failed` with a correct
+    partial answer on screen. The breaker therefore has to clear the budget with room
+    for the answering round that follows the refusal, while staying a small explicit
+    bound of its own. `MAX_TOOL_CALLS_PER_TURN` is what bounds billable tool spend;
+    this is only the value at which a runaway graph is stopped.
+    """
+    assert RECURSION_LIMIT >= 2 * MAX_TOOL_CALLS_PER_TURN + 2
+    assert RECURSION_LIMIT <= 30
 
 
 def test_tool_timeout_stays_under_upstream_deadlines():

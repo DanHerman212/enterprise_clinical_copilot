@@ -84,10 +84,19 @@ class AgentState(TypedDict):
 
 # Spend bounds (ECC-02). One question is one tool call in every designed flow;
 # these caps exist so a pathological model turn cannot buy unbounded Vertex/
-# BigQuery spend. RECURSION_LIMIT counts LangGraph supersteps: agent -> tools
-# -> agent is 3, so 10 allows ~4 tool rounds before the graph raises.
+# BigQuery spend.
+#
+# MAX_TOOL_CALLS_PER_TURN is the binding constraint, and it is the one that ends the
+# loop: the sixth call is refused with an instruction to answer from what the turn
+# already has. RECURSION_LIMIT is a circuit breaker behind it, NOT the loop control.
+# LangGraph counts every node transition, so one tool round costs three supersteps
+# (`agent -> tools -> agent`), and a limit of 10 fired on the fourth round of an
+# ordinary ReAct turn — on 2026-10-17, twice, after 27 seconds of correct prose had
+# already been streamed to the reader, which the failure then deleted. 25 leaves the
+# five-call budget room to be refused and answered, and still bounds a graph that
+# somehow keeps asking for tools after the budget is spent.
 MAX_TOOL_CALLS_PER_TURN = 5
-RECURSION_LIMIT = 10
+RECURSION_LIMIT = 25
 
 # One model call, bounded. The bound is part of the chain `timeout_chain`
 # enforces at startup — model < tool < ask < the proxy's own limit — and it is set
@@ -687,6 +696,7 @@ def build_graph(
     question_kind: str | None = None,
     guard: Callable[[str, dict], dict | None] | None = None,
     prose_stream: bool = False,
+    manifest_answers_question: bool = False,
 ):
     """Compile the graph. `on_event` receives progress stages; None disables them.
 
@@ -746,7 +756,18 @@ def build_graph(
         # medication question is answered by naming the command that owns it and calling
         # nothing, and forcing a tool call there would make the model read the notes and
         # answer the very question the boundary says it must not answer.
-        answering_llm = llm_retrieving if state["retrieval_demanded"] else llm
+        #
+        # When the budget is spent, NOTHING is bound. A refusal the model can ignore is
+        # not a bound: on 2026-10-17 a turn answered a question correctly and then asked
+        # for the same search three more times, each refused with "answer from the
+        # results you have", until the graph hit its recursion limit and the run failed
+        # with a correct answer already on screen. Binding nothing is the same boundary
+        # the command path uses — enforced by the absence of anything to call.
+        spent = len(state.get("tool_calls") or [])
+        if spent >= MAX_TOOL_CALLS_PER_TURN:
+            answering_llm = chat_model
+        else:
+            answering_llm = llm_retrieving if state["retrieval_demanded"] else llm
         if prose_stream and on_event is not None:
             response = await _streamed_turn(answering_llm, state["messages"], on_event)
         else:
@@ -777,6 +798,12 @@ def build_graph(
     def route(state: AgentState) -> str:
         last = state["messages"][-1]
         if isinstance(last, AIMessage) and last.tool_calls:
+            # Nothing is bound once the budget is spent, so this should be
+            # unreachable — and it stays here because "should be unreachable" is how
+            # a loop gets to the recursion limit. A turn that still asks for a tool
+            # after its budget is over is ended, not refused again.
+            if len(state.get("tool_calls") or []) >= MAX_TOOL_CALLS_PER_TURN:
+                return END
             return "tools"
         # No tool call, so the turn is finished — unless it is an answer about the chart
         # written without reading the chart. The four ways that is not the case: something
@@ -793,6 +820,13 @@ def build_graph(
             # nothing and would surface the second failure in place of the first.
             return END
         if names_a_command(answer):
+            return END
+        if manifest_answers_question:
+            # The manifest is the evidence for this question. Forcing a note search
+            # cannot improve the answer — the notes do not carry the field — and it
+            # is not harmless: the forced round's reply becomes the settled answer,
+            # so the correct one is replaced by an abstention. See
+            # `routing.asks_for_administrative_detail`.
             return END
         return "demand_retrieval"
 
@@ -811,6 +845,18 @@ def build_graph(
     return graph.compile()
 
 
+def _context_block(admission_context: str) -> str:
+    """The pre-flight manifest, appended to the system prompt.
+
+    Appended rather than sent as a second system message: a turn then has exactly
+    one instruction message, which is what every provider accepts, and the block
+    reads as a continuation of the rules it is qualifying rather than as a peer
+    of them.
+    """
+    text = (admission_context or "").strip()
+    return f"\n\n{text}" if text else ""
+
+
 async def ask(
     toolbox: MCPToolbox,
     question: str,
@@ -823,6 +869,7 @@ async def ask(
     topic: str | None = None,
     turns: list[dict[str, str]] | None = None,
     prose_stream: bool = False,
+    admission_context: str = "",
 ) -> dict:
     """Run one question to completion. Returns the final state.
 
@@ -876,6 +923,10 @@ async def ask(
         # leave the service (UX Phase 1B).
         guard=lambda name, args: _outbound_patient_identifier(name, args, hadm_id),
         prose_stream=prose_stream,
+        # Computed once, here, because it is a property of this turn: a question the
+        # pre-flight manifest answers, in a turn that carries the manifest.
+        manifest_answers_question=bool(admission_context)
+        and routing.asks_for_administrative_detail(question),
     )
 
     config: dict = {"recursion_limit": RECURSION_LIMIT}
@@ -899,7 +950,7 @@ async def ask(
     state = await graph.ainvoke(
         {
             "messages": [
-                SystemMessage(content=SYSTEM_PROMPT),
+                SystemMessage(content=SYSTEM_PROMPT + _context_block(admission_context)),
                 *replayed,
                 HumanMessage(content=question),
             ],

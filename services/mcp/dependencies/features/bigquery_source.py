@@ -12,6 +12,7 @@ from google.cloud import bigquery
 from ...config import ENTITY_ID_COLUMN, PROJECT, TABLE
 from .base import FeatureRow
 from .manifest import feature_order
+from .profile import decode_profile
 
 
 class BigQueryFeatureSource:
@@ -58,3 +59,21 @@ class BigQueryFeatureSource:
             for col, value in row.items()
             if col in expected
         }
+
+    def fetch_profile(self, hadm_id: int) -> dict[str, str]:
+        """The admission's administrative profile, decoded from its own row.
+
+        The same statement `fetch` issues, and the same row: the profile is not a
+        second source of truth, it is the row the model was scored on read back
+        as words. Doing it in one table is what makes the answer traceable to the
+        score — a demographics join from elsewhere could disagree with the
+        features that produced the number and there would be no way to tell.
+        """
+        query = f"SELECT * FROM {self._table} WHERE {ENTITY_ID_COLUMN} = @hid LIMIT 1"
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ScalarQueryParameter("hid", "INT64", hadm_id)]
+        )
+        rows = list(self._client.query(query, job_config=job_config).result())
+        if not rows:
+            raise KeyError(f"No row found for {ENTITY_ID_COLUMN}={hadm_id}")
+        return decode_profile(dict(rows[0].items()))

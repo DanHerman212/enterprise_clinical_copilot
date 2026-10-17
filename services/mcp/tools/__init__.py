@@ -1,5 +1,6 @@
 """MCP tools. Each module exposes plain functions; server.py registers them."""
 
+from .admission_profile import get_admission_profile
 from .labs import get_lab_trends
 from .literature import search_literature
 from .prediction import predict_readmission
@@ -12,4 +13,5 @@ __all__ = [
     "discharge_medications",
     "search_literature",
     "get_lab_trends",
+    "get_admission_profile",
 ]

@@ -28,6 +28,20 @@ class PredictionResult(TypedDict):
     feature_source: str
 
 
+class AdmissionProfileResult(TypedDict):
+    """The readable profile behind one risk score.
+
+    Every value is a string, including the counts, because an absent value is
+    reported as "Not recorded" rather than as null: this payload is read aloud
+    into a prompt, and a null in prose reads as a formatting fault rather than
+    as a fact the record does not carry.
+    """
+
+    hadm_id: int
+    profile: dict[str, str]
+    feature_source: str
+
+
 class RetrievalPassage(TypedDict):
     id: str
     section: str

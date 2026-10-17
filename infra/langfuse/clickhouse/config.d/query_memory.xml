@@ -1,0 +1,38 @@
+<clickhouse>
+    <!-- Spill heavy aggregations and sorts to disk instead of failing in RAM.
+
+         Root cause, 2026-10-17. The Langfuse web service kept answering with
+         "Your query could not be completed... Request timed out", and every one of
+         those was the same ClickHouse exception underneath:
+
+             Code: 241. DB::Exception: (total) memory limit exceeded:
+             would use 3.22 GiB (attempt to allocate chunk of 4.16 MiB)
+
+         against a 4 GB server cap set in `memory.xml`. ClickHouse's external
+         memory settings default to 0, which DISABLES them: a GROUP BY or ORDER BY
+         is executed in RAM and either fits or dies. So the cap was doing its job
+         and the query had no second option. The API then reported the death as a
+         timeout, which reads like a network or upstream problem and sent the
+         investigation at the wrong layer for an hour.
+
+         The box has 21 GB of free disk, so letting these queries spill is the
+         honest fix. The alternative — giving ClickHouse a larger slice of a 7.9 GB
+         VM shared with ClickHouse, Redis, MinIO, the worker and the Cloud SQL
+         proxy — buys a bigger ceiling without removing the failure.
+
+         MOUNTED AT `users.d`, NOT `config.d`. These are profile settings, and the
+         image's `users.xml` ships its own `<profiles><default>` block. At config.d
+         the values were accepted at startup and `system.settings` still reported 0
+         — the mount looked right and did nothing. This file's location in the repo
+         is unchanged; only the mount target differs.
+
+         1 GB per operator sits well below the 4 GB server cap and well above the
+         working set of an ordinary query, so the thresholds only bite on the
+         pathological queries, which are precisely the ones that were dying. -->
+    <profiles>
+        <default>
+            <max_bytes_before_external_group_by>1000000000</max_bytes_before_external_group_by>
+            <max_bytes_before_external_sort>1000000000</max_bytes_before_external_sort>
+        </default>
+    </profiles>
+</clickhouse>

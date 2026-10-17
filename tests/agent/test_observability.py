@@ -39,8 +39,14 @@ def with_keys(monkeypatch):
         monkeypatch.setenv(name, value)
 
 
-def test_unconfigured_is_off_without_a_handler():
-    """No keys: no handler, and nothing to explain."""
+def test_unconfigured_is_off_without_a_handler(no_keys):
+    """No keys: no handler, and nothing to explain.
+
+    `no_keys` is explicit rather than implied by the ambient environment. It was
+    implicit until 2026-10-17, when a shell that had exported the real credentials
+    for a live run made this test fail — the test was asserting a property of the
+    process it happened to be started in, not of the code.
+    """
     assert observability.handler() is None
 
 

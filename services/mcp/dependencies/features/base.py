@@ -28,6 +28,17 @@ class FeatureSource(Protocol):
     def fetch(self, hadm_id: int) -> FeatureRow:
         ...
 
+    def fetch_profile(self, hadm_id: int) -> dict[str, str]:
+        """The same row, read back as words rather than as a model vector.
+
+        A separate method because it answers a different question with a
+        different shape. `fetch` exists to be ordered into the booster's input
+        and is deliberately lossy — one-hot columns become parent features and
+        every value becomes a float — so a caller asking "what was this
+        patient's admission type?" cannot use it at all.
+        """
+        ...
+
     def exists(self, hadm_id: int) -> bool:
         """Whether this admission is in the source at all.
 

@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from langchain_core.messages import AIMessage  # noqa: E402
 
 from services.agent import graph, routing  # noqa: E402
+from services.agent.admission_context import PREFLIGHT_TOOLS  # noqa: E402
 from services.agent.mcp_client import (  # noqa: E402
     MCPToolbox,
     _external_argument_refusal,
@@ -76,7 +77,11 @@ def test_every_registered_tool_is_reachable_from_some_path():
     """
     command_tools = {command.tool for command in routing.COMMANDS}
 
-    assert command_tools | routing.FREETEXT_TOOLS == set(REGISTERED_TOOLS)
+    # The pre-flight tools are reachable by a third path — the caller's own call,
+    # before the model runs — so the union has three terms, and a new tool still has
+    # to belong to exactly one of them.
+    assert (command_tools | routing.FREETEXT_TOOLS
+            | set(PREFLIGHT_TOOLS)) == set(REGISTERED_TOOLS)
 
 
 def test_a_command_tool_is_the_reason_text_tool_is_hidden():

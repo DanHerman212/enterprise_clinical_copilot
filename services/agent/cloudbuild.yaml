@@ -51,8 +51,14 @@ steps:
         # renamed UI must not be able to stop a deploy or an answer. An empty
         # host is also exactly the off switch — see
         # services/agent/observability.py, where unconfigured means disabled.
-        LANGFUSE_HOST=$$(gcloud run services describe langfuse-web \
-          --region "${_REGION}" --format='value(status.url)' 2>/dev/null || true)
+        # The canonical hostname, not the service URL. Both reach the same backend,
+        # but a deploy that resolved `langfuse-web`'s run.app URL meant the agent and
+        # the person checking the UI were naming the same project two different ways,
+        # and "is the agent traced?" became a question about hostnames. One name for
+        # one project. The empty-host off switch still exists for a deploy without
+        # Langfuse at all (see services/agent/observability.py), it is just no longer
+        # reachable by accident when a service lookup fails.
+        LANGFUSE_HOST=https://observability.danielmherman.com
         gcloud run deploy agent \
           --image "${_IMAGE}" \
           --region "${_REGION}" \

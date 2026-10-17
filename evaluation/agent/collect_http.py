@@ -77,14 +77,25 @@ TRUNCATION_MARK = "\n[earlier answer truncated for replay]"
 _ASK_TIMEOUT_SECONDS = 240
 
 
-def _identity_token() -> str:
+def _identity_token(audience: str | None = None) -> str:
     """An identity token for the private agent.
 
-    Shelling out to gcloud rather than minting the token in-process because that
-    is what the site does (`demo/agent_client.py`) and it keeps one story about
-    how this service is authenticated. The audience is the service URL itself,
-    which is also what the Cloud Run IAM check compares against.
+    Two sources, because this runs in two places. Inside a Cloud Run job there is no
+    gcloud CLI at all — the token comes from the metadata server, for the job's own
+    service account, with the service URL as the audience the IAM check compares
+    against. On a laptop that call has no metadata server and raises, so the CLI
+    remains the fallback; it is also what the site does (`demo/agent_client.py`), which
+    keeps one story about how this service is authenticated.
     """
+    try:
+        from google.auth.transport import requests as google_requests  # noqa: PLC0415
+        from google.oauth2 import id_token  # noqa: PLC0415
+
+        if audience:
+            return id_token.fetch_id_token(google_requests.Request(), audience)
+    except Exception:  # noqa: BLE001 — no metadata server; fall through to the CLI
+        pass
+
     proc = subprocess.run(
         ["gcloud", "auth", "print-identity-token"],
         capture_output=True, text=True,
@@ -106,7 +117,7 @@ class AgentClient:
     async def _refresh(self) -> None:
         async with self._lock:
             # Another task may have refreshed while this one waited.
-            self._token = await asyncio.to_thread(_identity_token)
+            self._token = await asyncio.to_thread(_identity_token, self.base_url)
 
     async def ask(self, body: dict) -> tuple[int, dict]:
         """Return (status_code, json_body). Raises on transport failure.
@@ -631,7 +642,7 @@ async def main() -> int:
           f"= {len(clinical) + len(adversarial)} cases "
           f"(concurrency {args.concurrency})", flush=True)
 
-    client = AgentClient(args.agent_url, _identity_token())
+    client = AgentClient(args.agent_url, _identity_token(args.agent_url))
     try:
         if not args.skip_preflight:
             rc = await _preflight(client, args)

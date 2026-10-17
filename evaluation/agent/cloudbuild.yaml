@@ -19,8 +19,11 @@ images:
 
 substitutions:
   # Its own repository, not `readmission/`: the agent image and the thing that judges
-  # the agent must not be confusable at a glance.
-  _IMAGE: us-east1-docker.pkg.dev/${PROJECT_ID}/ecc-eval/harness
+  # the agent must not be confusable at a glance. The project is written out because
+  # `${PROJECT_ID}` inside a substitution default is NOT expanded — a default of
+  # `.../${PROJECT_ID}/...` reaches Docker as that literal string and the build fails
+  # with "could not parse reference".
+  _IMAGE: us-east1-docker.pkg.dev/trim-icon-498815-a0/ecc-eval/harness
   _TAG: manual
 
 options:

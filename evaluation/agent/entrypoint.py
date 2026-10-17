@@ -55,28 +55,40 @@ def _run(argv: list[str]) -> int:
 def _paths(phase: str, tag: str) -> dict[str, Path]:
     """Where this phase's artifacts live inside the container.
 
-    Named per phase so the two jobs can never overwrite one another's files even if
-    they were ever pointed at a shared volume.
+    `scratch` is the half of the run this phase does not want. `collect_http.py` writes
+    both of its outputs unconditionally, so pointing the unwanted one at the wanted
+    path would mean two writers and one file — and on a resumed run the collector reads
+    its output back to skip traced cases, which would make one phase's cases look like
+    the other's.
     """
     if phase == "clinical":
         return {
             "traces": RESULTS / f"traces_clinical_{tag}.jsonl",
+            "scratch": RESULTS / f"adversarial_skipped_{tag}.jsonl",
             "judged": RESULTS / f"judged_clinical_{tag}.jsonl",
             "report": RESULTS / f"report_clinical_{tag}.json",
         }
     return {
         "traces": RESULTS / f"adversarial_{tag}.jsonl",
+        "scratch": RESULTS / f"traces_skipped_{tag}.jsonl",
         "judged": RESULTS / f"adversarial_judged_{tag}.jsonl",
         "report": RESULTS / f"adv_report_{tag}.json",
     }
 
 
 def _collect_argv(phase: str, agent_url: str, tag: str, paths: dict, concurrency: int) -> list[str]:
+    # Which of the two outputs is the run, and which is the one this phase does not
+    # want, depends on the phase.
+    out, adv_out = (
+        (paths["traces"], paths["scratch"])
+        if phase == "clinical"
+        else (paths["scratch"], paths["traces"])
+    )
     argv = [
         sys.executable, "collect_http.py",
         "--agent-url", agent_url,
-        "--out", str(paths["traces"]),
-        "--adversarial-out", str(paths["traces"]),
+        "--out", str(out),
+        "--adversarial-out", str(adv_out),
         "--concurrency", str(concurrency),
         "--run-tag", tag,
         "--upload-gcs",

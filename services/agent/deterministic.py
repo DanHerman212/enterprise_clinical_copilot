@@ -384,6 +384,10 @@ async def run_command(
     ]
     tool_messages, recorded = await _execute_tool_calls(
         toolbox, calls, on_event, project=_presented_prediction,
+        # This path opens `command.<wire>` around the whole turn, so its tool spans
+        # have a parent to nest under. The reasoning loop does not, and spanning there
+        # produced a separate root trace per tool.
+        traced=True,
     )
 
     # Every result this turn produced goes to the formatting turn, supplementary calls

@@ -396,6 +396,7 @@ async def _execute_tool_calls(
     project: Callable[[str, Any], Any] | None = None,
     guard: Callable[[str, dict], dict | None] | None = None,
     already_called: list[dict] | None = None,
+    traced: bool = False,
 ) -> tuple[list[BaseMessage], list[RecordedToolCall]]:
     """Run one turn's tool calls, refusing those beyond the per-turn budget.
 
@@ -458,7 +459,17 @@ async def _execute_tool_calls(
                 # script of what should happen. A refused call (the branches
                 # above) announces nothing, because nothing was called.
                 _emit(on_event, stages.tool_event(call["name"]))
-                payload = await toolbox.call(call["name"], arguments)
+                # Spanned ONLY when the caller has an outer span open — the command
+                # path, which opens `command.<wire>` around the whole turn. In the
+                # reasoning loop the trace belongs to LangChain's callback handler and
+                # a span opened here does not inherit it: Langfuse gave each tool its
+                # own root and the list filled with `tool.rag_search` traces sharing
+                # one timestamp. Observed live 2026-10-17.
+                if traced:
+                    with observability.observation(f"tool.{call['name']}"):
+                        payload = await toolbox.call(call["name"], arguments)
+                else:
+                    payload = await toolbox.call(call["name"], arguments)
                 # What came back, in the call's own terms. Emitted here because this
                 # is where the payload exists, and only for a call that actually
                 # ran: a refused call announces nothing, result included (rule 3).
@@ -903,17 +914,22 @@ async def ask(
     # (UX Phase 1).
     if routing.is_command(question_kind):
         tracing = observability.handler()
-        command_state = await run_command(
-            toolbox,
-            routing.command_for(question_kind),
-            hadm_id,
-            topic=topic,
-            question=question,
-            model=model,
-            on_event=on_event,
-            callbacks=[tracing] if tracing is not None else None,
-            prose_stream=prose_stream,
-        )
+        # One span over the whole command, so the turn has a tree: the tool calls
+        # and the formatting generation nest under it, and Langfuse can draw the
+        # graph. Without it this path emitted a single parentless generation and
+        # every command trace had an empty Graph view.
+        with observability.observation(f"command.{question_kind}"):
+            command_state = await run_command(
+                toolbox,
+                routing.command_for(question_kind),
+                hadm_id,
+                topic=topic,
+                question=question,
+                model=model,
+                on_event=on_event,
+                callbacks=[tracing] if tracing is not None else None,
+                prose_stream=prose_stream,
+            )
         command_state["langfuse_trace_id"] = observability.trace_id(tracing)
         return command_state
 

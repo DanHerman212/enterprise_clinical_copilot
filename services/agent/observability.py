@@ -35,6 +35,7 @@ A teardown of the Langfuse stack must not take the evidence with it.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 
@@ -70,6 +71,38 @@ def handler():
             exc_info=True,
         )
         return None
+
+
+@contextlib.contextmanager
+def observation(name: str, *, as_type: str = "span"):
+    """A span to hold work that LangChain does not already trace.
+
+    `CallbackHandler` reports model and tool runs, which is everything the reasoning
+    loop does. The deterministic command path is not a LangChain run at all — it calls
+    its tool and then makes one formatting turn — so a `/ehr` turn produced a trace
+    with exactly ONE observation and no parent. Langfuse disables its Graph view when
+    there is no hierarchy to draw, so the turns most worth reviewing were the ones
+    with nothing to review.
+
+    Yields None when unconfigured, and never raises (rule 1). A span is a convenience
+    for a reader; the answer outranks it.
+    """
+    manager = None
+    if configured():
+        try:
+            import langfuse
+
+            manager = langfuse.get_client().start_as_current_observation(
+                as_type=as_type, name=name,
+            )
+        except Exception:  # noqa: BLE001 — rule 1
+            logger.warning("could not open the langfuse span %r", name, exc_info=True)
+            manager = None
+    if manager is None:
+        yield None
+        return
+    with manager as span:
+        yield span
 
 
 def trace_id(handler=None) -> str:

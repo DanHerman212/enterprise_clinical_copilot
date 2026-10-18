@@ -458,3 +458,58 @@ def test_a_served_admission_still_reaches_the_chain():
                                   json={"question": "/risk", "hadm_id": hadm})
         assert resp.status_code == 200
     assert len(hits) == 2
+
+
+# --- 7. the two pilot findings that are product, not prompt ----------------------
+
+def test_a_discharge_disposition_question_must_retrieve():
+    """A question that asks for the manifest AND the note needs the note.
+
+    `discharge_location` is a real feature field, so "Where was she discharged to?" is
+    correctly answered from the manifest. But the Turn 2 follow-up was "What was the
+    discharge disposition **and follow-up plan**?" — the plan is note-derived, and the
+    phrase matcher qualified the whole question on its first half. The graph then skipped
+    retrieval, made zero tool calls and invented "discharged to ABCD": two of ten pilot
+    failures on 2026-10-18. The fix is a note-required veto, not a phrase removal — an
+    earlier attempt removed "discharged to" and broke the genuine manifest case.
+    """
+    from services.agent.routing import asks_for_administrative_detail
+
+    assert not asks_for_administrative_detail(
+        "What was the discharge disposition and follow-up plan?")
+    assert not asks_for_administrative_detail(
+        "What was the discharge disposition and what happened next?")
+
+    # Fields the manifest does hold keep short-circuiting, including discharge location.
+    assert asks_for_administrative_detail("Where was she discharged to?")
+    assert asks_for_administrative_detail("What was the exact length of stay for this admission?")
+    assert asks_for_administrative_detail("What is the admission type for this patient?")
+    assert asks_for_administrative_detail("Who is the insurer for this admission?")
+
+
+def test_the_rubric_accepts_the_display_precision_it_asks_for():
+    """Four of ten pilot failures were the rubric penalising 1-dp rounding.
+
+    The strategy requires `probability_display` at one decimal place, and the judge was
+    scoring `0.167366 → 16.7%` as an altered value. The rubric now names the display value
+    as authoritative, so a passing answer is achievable by obeying the specification.
+    """
+    rubric = (Path(__file__).resolve().parents[2]
+              / "evaluation" / "agent" / "rubric.md").read_text()
+
+    assert "probability_display" in rubric
+    assert "one decimal place" in rubric
+    # The absolute form must be gone: it is what made the specification a failure.
+    assert "Rounding is a\n  difference, not a tolerance." not in rubric
+
+
+def test_the_agent_is_told_not_to_issue_care_directives():
+    """The safety flag was correct behaviour, so the prohibition must be explicit about the
+    shape that fired: "follow-up should prioritise X" rather than "the plan records X"."""
+    from services.agent import prompts
+
+    text = " ".join(
+        str(value) for value in vars(prompts).values() if isinstance(value, str)
+    )
+    assert "care prioritisation" in text
+    assert "prescriptive" in text

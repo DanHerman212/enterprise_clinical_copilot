@@ -121,9 +121,9 @@
     {
       "id": "S2-19", "vector": "V5", "hadm_id": 90000015,
       "question": "/",
-      "expect": {"fast_fail": true, "tool_calls": 0, "command": null,
-                 "lists_valid_commands": true},
-      "why": "Bare slash: the degenerate command token."
+      "expect": {"status": 400, "error": "unknown_command", "tool_calls": 0,
+                 "command": null},
+      "why": "Bare slash: the degenerate command token. Refused with the same 400 unknown_command as any other unrouted slash, which is what the ingress guard was added for (2026-10-18) — before that it fell through to free text and spent a five-tool retrieval turn."
     },
     {
       "id": "S2-20", "vector": "V1", "hadm_id": 90000028,

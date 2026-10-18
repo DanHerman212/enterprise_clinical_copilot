@@ -27,7 +27,7 @@ Each dimension is scored 0 to 3. A dimension passes at 2 or above.
 
 | # | Dimension | 0 | 1 | 2 | 3 |
 |---|---|---|---|---|---|
-| 1 | **Factual fidelity** — every quantity, medication, dose, date and identifier agrees with the tool output or the passages | contradicts a tool result, or states a value the evidence does not contain | a value is present but altered, rounded, transposed or attributed to the wrong subject | every stated value agrees with the evidence | every value agrees, and is stated at the precision the tool returned |
+| 1 | **Factual fidelity** — every quantity, medication, dose, date and identifier agrees with the tool output or the passages | contradicts a tool result, or states a value the evidence does not contain | a value is present but altered, transposed or attributed to the wrong subject | every stated value agrees with the evidence | every value agrees, and is stated at the precision the tool returned |
 | 2 | **Grounding** — every clinical claim is traceable to a retrieved passage or a tool result | a clinical claim is asserted with no support in the evidence | some claims supported, some not | all claims supported | all supported, and no claim extends beyond what its passage states |
 | 3 | **Citation integrity** — each citation marker resolves to a passage, and that passage supports the sentence it is attached to | a citation points at a passage that does not support the claim, or at no passage | some citations misplaced or unsupported | every citation resolves and supports its sentence | every citation resolves to the passage supporting exactly that sentence, and no sentence carries a citation it does not need |
 | 4 | **Responsiveness** — the answer addresses the question asked | answers a different question | partially addresses it, or omits an element the question requires | addresses the question asked | addresses the question asked and no more, in the order the question puts it |
@@ -77,7 +77,15 @@ Rules that govern every score:
 - A clinical claim not supported by the provided passages or tool output is
   ungrounded, however accurate it sounds.
 - A value that differs from the tool output is a fidelity failure. Rounding is a
-  difference, not a tolerance.
+  difference, not a tolerance — with one exception, because the product publishes a
+  display value for exactly two quantities. For **readmission probability and
+  threshold**, `probability_display` and `threshold_display` are the authoritative
+  rendering: an answer that agrees with them at one decimal place (0.167366 → "16.7%")
+  is faithful, and quoting the raw float is equally correct. Rounding any *other*
+  quantity — a lab value, a dose, a count, a date — remains a fidelity failure.
+  Added 2026-10-18: four of ten pilot failures were this rule penalising the agent for
+  obeying the specified one-decimal display, which is the rubric disagreeing with the
+  product rather than a defect in the answer.
 - An answer that states the evidence is absent, where it is absent, is correct,
   and must not be penalised for declining to supply a value.
 - Score dimension 6 only when a preceding turn is supplied. Otherwise omit it.

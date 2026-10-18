@@ -602,6 +602,23 @@ _ADMINISTRATIVE_PHRASES: tuple[str, ...] = (
 )
 
 
+#: Words that mean the caller wants note-derived content — a plan, a course, an outcome,
+#: a reason — and so cannot be answered by a manifest field however the question starts.
+#:
+#: Added 2026-10-18. `asks_for_administrative_detail` matched on ANY administrative
+#: phrase, so the Turn 2 follow-up "What was the discharge disposition and follow-up
+#: plan?" qualified on "discharge disposition" — a real feature field — and the graph
+#: skipped retrieval for the half of the question that only the note holds. The model
+#: then answered with no tool call and invented a disposition ("discharged to ABCD"),
+#: two of the ten pilot failures. A question that asks for the manifest AND the note
+#: needs the note.
+_NOTE_REQUIRED_TOKENS: tuple[str, ...] = (
+    "plan", "plans", "planned", "follow", "followup", "instructions",
+    "course", "outcome", "outcomes", "summarize", "summarise", "summary",
+    "why", "explain", "narrative", "reason", "reasons",
+)
+
+
 def asks_for_administrative_detail(question: str) -> bool:
     """Whether this question is answered by the feature manifest rather than the notes.
 
@@ -614,6 +631,8 @@ def asks_for_administrative_detail(question: str) -> bool:
     if not tokens:
         return False
     if _contains_affordance_template(tokens):
+        return False
+    if any(token in _NOTE_REQUIRED_TOKENS for token in tokens):
         return False
     for phrase in _ADMINISTRATIVE_PHRASES:
         words = phrase.split()

@@ -96,6 +96,50 @@ def _traces_slice(pk: str, sk: str, start: dt.datetime, end: dt.datetime) -> lis
         page += 1
 
 
+def _traces_by_tag(pk: str, sk: str, tag: str) -> list[dict]:
+    """Every trace carrying one tag, paged.
+
+    Added 2026-10-18 so a failed gate can clean up after itself. Scoped by tag rather
+    than by time on purpose: a debugging run and a real one can be minutes apart, and
+    the tag is the only thing that says which is which.
+    """
+    rows: list[dict] = []
+    page = 1
+    while True:
+        resp = requests.get(
+            f"{HOST}/api/public/traces", auth=(pk, sk),
+            params={"tags": tag, "limit": 100, "page": page},
+            timeout=60,
+        )
+        if resp.status_code != 200:
+            print(f"  tag list {page}: {resp.status_code} {resp.text[:160]}")
+            return rows
+        data = resp.json().get("data") or []
+        rows.extend(data)
+        if len(data) < 100:
+            return rows
+        page += 1
+
+
+def purge_tag(tag: str) -> int:
+    """Delete every trace carrying `tag`. Returns the number deleted.
+
+    Scores attached to those traces go with them at the store level. Deleting them
+    through the score API is the async queue that takes minutes per row, so it is not
+    attempted here — the trace is what a reader sees, and removing it is what stops a
+    dead run from looking like a result.
+    """
+    pk, sk = _credentials()
+    rows = _traces_by_tag(pk, sk, tag)
+    if not rows:
+        print(f"  {tag}: nothing to delete")
+        return 0
+    urls = [f"{HOST}/api/public/traces/{r['id']}" for r in rows if r.get("id")]
+    deleted, failed = _delete_all(urls, pk, sk)
+    print(f"  {tag}: {len(rows)} trace(s) — deleted {deleted}, failed {failed}")
+    return deleted
+
+
 def _delete_all(urls: list[str], pk: str, sk: str, workers: int = 16) -> tuple[int, int]:
     """Delete every URL concurrently. Returns (deleted, failed).
 

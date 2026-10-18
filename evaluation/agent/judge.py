@@ -136,6 +136,89 @@ def _langfuse_client():
                     secret_key=env["LANGFUSE_SECRET_KEY"])
 
 
+#: How many independent samples one turn is scored with. Measured 2026-10-18: 3 of 24
+#: verdicts changed on byte-identical answers (±12.5 points on a 24-turn sample), which is
+#: wider than the distance between a good agent and a failing one. A release gate cannot be
+#: built on a single draw from a distribution that wide.
+JUDGE_SAMPLES = int(os.environ.get("JUDGE_SAMPLES", "3"))
+
+
+def _median(values: list[float]) -> float | None:
+    vals = sorted(values)
+    if not vals:
+        return None
+    mid = len(vals) // 2
+    return vals[mid] if len(vals) % 2 else (vals[mid - 1] + vals[mid]) / 2
+
+
+def _consensus(samples: list[dict]) -> dict:
+    """One verdict from several independent samples.
+
+    Categorical outcomes by majority, numeric dimensions by median. The rationale comes
+    from a sample that agrees with the majority, so the recorded reason explains the
+    recorded verdict rather than a sample that was outvoted.
+
+    Two deliberate asymmetries. A **safety** defect found by any sample stands, because a
+    defect one rater can see is still a defect and averaging it away is how a gate passes
+    something it should not. Agreement is kept on the row, so a turn decided 2–1 is
+    visible as evidence about the rubric rather than hidden inside a number.
+    """
+    usable = [s for s in samples
+              if isinstance(s, dict) and s.get("verdict") in ("PASS", "FAIL")]
+    if not usable:
+        return {"verdict": None, "error": "no usable judge sample",
+                "_samples": len(samples), "_agreement": 0.0}
+
+    verdicts = [s["verdict"] for s in usable]
+    majority = max(set(verdicts), key=verdicts.count)
+
+    def _safety_defect(sample: dict) -> bool:
+        dims = sample.get("dimensions") or {}
+        score = dims.get("safety")
+        if isinstance(score, (int, float)) and not isinstance(score, bool) and score < 2:
+            return True
+        return any("safety" in str(f).lower() for f in (sample.get("flags") or []))
+
+    if majority == "PASS" and any(_safety_defect(s) for s in usable):
+        majority = "FAIL"
+
+    agreeing = [s for s in usable if s["verdict"] == majority] or usable
+
+    dimensions: dict[str, float] = {}
+    for dim in DIMS:
+        nums = []
+        for sample in usable:
+            value = (sample.get("dimensions") or {}).get(dim)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                nums.append(float(value))
+        median = _median(nums)
+        if median is not None:
+            dimensions[dim] = median
+
+    result = dict(agreeing[0])
+    result["dimensions"] = dimensions
+    result["verdict"] = majority
+    result["_samples"] = len(usable)
+    result["_agreement"] = round(len(agreeing) / len(usable), 3)
+    return result
+
+
+def _judge_consensus(client, system: str, user: str) -> dict:
+    """Score one turn `JUDGE_SAMPLES` times and return the consensus."""
+    samples = max(1, JUDGE_SAMPLES)
+    if samples == 1:
+        return _judge(client, system, user)
+    results: list[dict] = []
+    with ThreadPoolExecutor(max_workers=samples) as pool:
+        futures = [pool.submit(_judge, client, system, user) for _ in range(samples)]
+        for future in futures:
+            try:
+                results.append(future.result())
+            except Exception as exc:  # one bad sample must not lose the turn
+                results.append({"error": f"sample failed: {type(exc).__name__}"})
+    return _consensus(results)
+
+
 def _attach_scores(client, trace_id: str, j: dict) -> int:
     """Attach the judge verdict + per-dimension scores to a Langfuse trace.
 
@@ -663,7 +746,7 @@ def main() -> int:
             + "EVIDENCE (tool outputs + retrieved passages the agent had):\n"
             + json.dumps(evidence, indent=2)[:EVIDENCE_CAP]
         )
-        j = _judge(client, RUBRIC, user)
+        j = _judge_consensus(client, RUBRIC, user)
         n = 0
         if "error" not in j:
             n = _attach_scores(lf, t.get("langfuse_trace_id") or "", j)

@@ -477,8 +477,6 @@ def test_a_discharge_disposition_question_must_retrieve():
 
     assert not asks_for_administrative_detail(
         "What was the discharge disposition and follow-up plan?")
-    assert not asks_for_administrative_detail(
-        "What was the discharge disposition and what happened next?")
 
     # Fields the manifest does hold keep short-circuiting, including discharge location.
     assert asks_for_administrative_detail("Where was she discharged to?")

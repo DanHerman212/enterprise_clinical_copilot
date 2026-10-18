@@ -304,6 +304,12 @@ def test_stream_sends_stages_then_one_answer_frame():
         # and `references` are derived from the tool calls and the resolved
         # citations, so they are always present and cost nothing.
         "follow_ups", "scope", "references",
+        # Routing state (2026-10-18). `command` is which command answered and
+        # `routed_to` is the fact that free-text routing chose it rather than the
+        # reader typing it; both are always present, `routed_to` as null on a slash
+        # command. Withheld routing state made "did the command run?" unanswerable
+        # from the wire, so the evaluation could not assert it.
+        "command", "routed_to",
     }
     assert answer["answer"].strip()
     # The narrative and the citations are the legacy fields under the contract's

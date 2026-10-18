@@ -39,6 +39,7 @@ from services.agent.guardrail import guard_answer
 from services.agent.mcp_client import MCP_TRANSPORT, toolbox
 from services.agent import observability
 from services.agent.payload import build_ui_components
+from services.agent.served_admissions import is_served
 from services.mcp.runtime import requires_cloud_run_auth, timeout_chain
 
 logger = logging.getLogger(__name__)
@@ -125,6 +126,51 @@ async def _question_or_error(
 _SLASH_TOKEN = re.compile(r"^/([A-Za-z0-9_-]+)")
 
 
+#: Served when a caller names an admission this deployment cannot open.
+ADMISSION_NOT_FOUND = (
+    "Admission not found. This deployment can only answer for the admissions it "
+    "serves, and that admission is not one of them, so nothing was retrieved and "
+    "no estimate was produced."
+)
+
+
+async def _unserved_admission(parsed: dict, trace: str) -> dict | None:
+    """A clean refusal for an admission this deployment does not serve.
+
+    Added 2026-10-18 after probe `rob-03` asked about `90009999` and the model, given
+    no tool result at all, answered "The /risk command provides the readmission risk
+    for this admission." — a plausible-sounding sentence about a patient who does not
+    exist. The model should never have been asked: "is this admission served?" is a
+    lookup, and a lookup answered deterministically cannot drift between runs.
+
+    A 200 rather than a 400 because nothing about the request is malformed — the
+    question is well formed and the answer to it is that the record is not here. The
+    composed envelope is the same one every other turn returns, so a client renders it
+    without a special case, and `routed_to` says `abstain` so the console draws no
+    routing pill.
+    """
+    hadm = parsed.get("hadm_id")
+    if hadm is None or is_served(hadm):
+        return None
+    # Its own record: this exit happens before the route's stage log exists, and every
+    # exit from a request records exactly one line.
+    _StageLog().record(trace, parsed.get("question") or "", "refused",
+                       error="admission_not_found")
+    # Composed through the shared pipeline rather than hand-built, so this refusal
+    # carries exactly the fields every other answer carries.
+    payload = await _compose_success(
+        parsed.get("question") or "",
+        {"deterministic_answer": ADMISSION_NOT_FOUND, "tool_calls": [],
+         "command": None},
+        trace,
+    )
+    payload["guardrail_flags"] = list(payload.get("guardrail_flags") or []) + [
+        "admission_not_found"
+    ]
+    payload["routed_to"] = "abstain"
+    return payload
+
+
 def _unknown_command(parsed: dict) -> JSONResponse | None:
     """Refuse a command-shaped question that names no command, before the chain runs.
 
@@ -141,10 +187,16 @@ def _unknown_command(parsed: dict) -> JSONResponse | None:
     if parsed.get("kind"):
         # A chip or palette selection is an explicit command; it was already resolved.
         return None
-    match = _SLASH_TOKEN.match((parsed.get("question") or "").strip())
-    if match is None:
+    question = (parsed.get("question") or "").strip()
+    # Anything that begins with a slash is a command-shaped question, including the
+    # degenerate bare "/" and "/ ". The token regex needs at least one character, so
+    # a bare slash used to match nothing and fall through to free text — which ran a
+    # five-tool retrieval turn and answered "no command" with a chart search. A slash
+    # the caller typed is a command request whether or not they finished typing it.
+    if not question.startswith("/"):
         return None
-    token = "/" + match.group(1).lower()
+    match = _SLASH_TOKEN.match(question)
+    token = ("/" + match.group(1).lower()) if match else "/"
     if routing.command_for_slash(token) is not None:
         return None
     available = ", ".join(sorted(c.slash for c in routing.COMMANDS))
@@ -378,6 +430,15 @@ async def _compose_success(
         "guardrail_flags": flags,
         "tool_calls": trimmed_calls,
         "a2ui": presentation["a2ui"],
+        # Routing state, published rather than kept internal. `command` is which
+        # command answered; `routed_to` is the fact that it was chosen for the reader
+        # by free-text routing rather than typed by them. Both routes compose through
+        # here, so both carry it, and a field that exists on every turn is a field an
+        # evaluation can assert on. Withheld routing state made "did the command run?"
+        # unanswerable from the wire, which is how a run in which `/ehr` executed zero
+        # times still reported green.
+        "command": state.get("command"),
+        "routed_to": None,
         "sources": presentation["sources"],
         # Published records the answer rests on, if it rests on any. Carried beside
         # `sources` rather than inside it: that list is the note-citation channel —
@@ -559,6 +620,11 @@ async def ask_route(request: Request) -> JSONResponse:
     # Input validation is settled: from here the chain runs, and every exit below
     # emits exactly one execution record.
     log = _StageLog()
+    # Before the chain, because "is this admission served?" is a lookup and a lookup
+    # answered deterministically cannot be talked into inventing a patient.
+    refusal = await _unserved_admission(parsed, trace)
+    if refusal is not None:
+        return JSONResponse(refusal)
     try:
         state = await _run_chain(parsed, on_event=log)
     except TimeoutError:
@@ -680,6 +746,18 @@ async def ask_stream_route(request: Request) -> Response:
     parsed, error = await _question_or_error(request)
     if error is not None:
         return error
+
+    # The same seam check as /ask. A stream that opened and then answered about a
+    # patient who does not exist would be no better than the blocking form.
+    refusal = await _unserved_admission(parsed, trace)
+    if refusal is not None:
+        async def _refusal_stream():
+            yield _sse(stages.STAGE_ANSWER, refusal)
+        return StreamingResponse(
+            _refusal_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     return StreamingResponse(
         _stream_chain(parsed, trace),

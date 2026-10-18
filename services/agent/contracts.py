@@ -308,10 +308,18 @@ def _parse_turns(value: Any, max_question_chars: int) -> list[dict[str, str]]:
                 f"{max_question_chars} character limit.",
                 413,
             )
-        if not isinstance(answer, str) or not answer.strip():
+        # A turn whose command answered with a widget and no prose carries an empty
+        # `answer` legiti­mately: `/risk` renders the score and the driver bars and
+        # states no sentence, by design. Requiring non-empty text made every such turn
+        # unreplayable, so a follow-up about a risk score was refused with 400 before
+        # the model ever saw it — a conversation that cannot continue past the command
+        # a user most often wants to ask about. The turn's evidence travels in
+        # `tool_calls`, where a prediction payload is kept precisely so the score
+        # behind the answer can be replayed rather than re-billed.
+        if not isinstance(answer, str):
             raise AgentRequestError(
                 "invalid_request",
-                f"'turns[{index}].answer' must be a non-empty string",
+                f"'turns[{index}].answer' must be a string",
                 400,
             )
         if len(answer) > MAX_TURN_ANSWER_CHARS:

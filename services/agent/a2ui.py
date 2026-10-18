@@ -49,6 +49,7 @@ from services.agent.feature_labels import display_probability, humanize
 from services.agent.admission_phenotypes import (
     bucket_for,
     is_matrix_eligible,
+    NON_ADMISSION,
     phenotype_of_query,
 )
 from services.agent.literature_benchmarks import benchmarks_for_phenotype
@@ -540,7 +541,8 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
                         narrative: dict | None = None,
                         phenotype: str = "",
                         query: str = "",
-                        command: str | None = None) -> dict:
+                        command: str | None = None,
+                        eligible: bool = True) -> dict:
     """Turn one predict (+ rag) payload into the A2UI risk-canvas envelope.
 
     predict is None when the question did not request a readmission estimate
@@ -847,8 +849,7 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
                            "text": prov_text,
                            "variant": "caption"})
 
-    # Retired 2026-10-13 (UX ruling): the cited narrative carries the passage text per
-    # sentence, as an interactive marker the reader opens. The card showed the same
+    # Retired 2026-10-13 (UX ruling): the cited narrative carries the passage text per    # sentence, as an interactive marker the reader opens. The card showed the same
     # evidence a second time, in a second place, disconnected from the sentence it
     # supported — redundant weight next to a better affordance. The comment below is
     # kept because it records why the card appeared only sometimes:
@@ -858,6 +859,26 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
     # (sticky) and the discharge notes stay in view however long the session
     # gets. No card when there is no passage to cite: an empty citation slot is
     # not evidence of a fault and does not need to say anything.
+
+    # Outpatient suppression (2026-10-18). `/ehr` never drew this widget on an
+    # outpatient note because it never ran a prediction there; the explicit `/risk`
+    # command did, and rendered a full 30-day inpatient estimate — probability, band and
+    # driver bars — for a record with no admission. Suppression is applied here, after
+    # composition, because every branch above can add the widget and a second guard in
+    # each of them would be five places to keep in step.
+    if not eligible:
+        components = [c for c in components
+                      if c.get("component") != "RiskInfluencers"]
+        children = [cid for cid in children if cid != "risk"]
+        outpatient_note = (
+            "Readmission risk does not apply to this record. It is an outpatient "
+            "note, not an inpatient admission, and the 30-day model is defined over "
+            "inpatient stays."
+        )
+        components.append({"id": "risk_outpatient", "component": "Text",
+                           "text": outpatient_note, "variant": "h2"})
+        children.append("risk_outpatient")
+        fallback = outpatient_note
 
     return {
         "surface_id": SURFACE_ID,
@@ -875,6 +896,25 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
         ],
         "fallback_text": fallback,
     }
+
+
+def admission_eligible(tool_calls: list[dict]) -> bool:
+    """Whether the record this turn is about is an admission at all.
+
+    Narrow on purpose: this is *not* `is_matrix_eligible`, which additionally requires a
+    curated phenotype bucket before the comparative table may be drawn. Using that wider
+    rule suppressed the risk widget for every admission whose condition had not been
+    curated — most of the real corpus — which is a different question from whether an
+    inpatient readmission estimate applies to the record.
+
+    Defaults to True when no admission is named: a literature or free-text turn without a
+    `hadm_id` is not making an inpatient claim, so there is nothing to suppress.
+    """
+    for call in tool_calls or []:
+        hadm = (call.get("args") or {}).get("hadm_id")
+        if isinstance(hadm, int) and not isinstance(hadm, bool):
+            return hadm not in NON_ADMISSION
+    return True
 
 
 def predict_payload(tool_calls: list[dict]) -> dict | None:
@@ -1068,7 +1108,27 @@ def compose_presentation(question: str, answer: str,
     # removed from. The same false correction the comparator turn produced, from the same
     # cause: a channel added after the rule was written.
     lab_evidenced = bool((labs or {}).get("trends"))
-    scope_suppressed = scope == SCOPE_PATIENT and not sources and not lab_evidenced
+    # A command's own structured result is a fourth channel (2026-10-18). `/risk` answers
+    # from the model estimate and `/meds` from an extraction verified against the note,
+    # so `sources` is empty on both by construction — not because a citation failed to
+    # resolve — and the rule above withheld the scope and raised a visible safety swap
+    # over an answer nothing had been removed from. Identical false positive to the
+    # comparator and lab turns, from the identical cause: a channel added after the rule
+    # was written.
+    #
+    # Deliberately limited to the commands whose payload IS their evidence. `/ehr` also
+    # carries a payload (the estimate it compares against) but its prose is a note
+    # synthesis, so an uncited `/ehr` answering is still the thing this flag exists to
+    # report.
+    payload_evidenced = bool(command_payload) and command in ("risk", "meds")
+    # A widget-only turn has no prose to evidence. Flagging "synthesis without
+    # citations" against an empty sentence describes an omission that did not happen:
+    # the canvas is the answer, and the reader was never shown a claim needing
+    # attribution.
+    no_prose = not (renumbered or "").strip()
+    scope_suppressed = (scope == SCOPE_PATIENT and not sources
+                        and not lab_evidenced and not payload_evidenced
+                        and not no_prose)
     if scope_suppressed:
         scope = None
 
@@ -1109,6 +1169,7 @@ def compose_presentation(question: str, answer: str,
             # question was about (see `turn_phenotype`), and `command` decides whether
             # this turn is one that carries the table at all (see `_draws_matrix`).
             phenotype=turn_phenotype(tool_calls),
+            eligible=admission_eligible(tool_calls),
             # The clinician's own words, when the turn had any: the other half of the
             # condition-lock, so a question about a condition this patient does not have
             # is answered with records and no comparison.

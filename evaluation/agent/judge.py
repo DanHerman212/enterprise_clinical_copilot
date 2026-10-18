@@ -35,6 +35,8 @@ sys.path.insert(0, str(HARNESS))
 sys.path.insert(0, str(HERE))
 
 from services.mcp.config import JUDGE_LOCATION, JUDGE_MODEL, PROJECT  # noqa: E402
+from services.agent.admission_phenotypes import ADMISSION_PHENOTYPE  # noqa: E402
+from services.agent.literature_benchmarks import benchmarks_for_phenotype  # noqa: E402
 
 TRACES = RESULTS / "traces.jsonl"
 RUBRIC = (HERE / "rubric.md").read_text()
@@ -166,11 +168,34 @@ def _evidence(tc: dict) -> dict:
     name = tc.get("name")
     resp = tc.get("response") or {}
     if name == "predict_readmission":
+        # The display strings are what the answer is allowed to quote, so the
+        # judge has to see them: a number that matches the payload but not what
+        # the user was shown is a different claim.
         return {
             "tool": name,
             "probability": resp.get("probability"),
+            "probability_display": resp.get("probability_display"),
             "threshold": resp.get("threshold"),
+            "threshold_display": resp.get("threshold_display"),
             "top_factors": resp.get("top_factors"),
+        }
+    if name == "get_lab_trends":
+        # A trajectory claim is only checkable against the series it came from.
+        return {
+            "tool": name,
+            "labs": (resp.get("labs") or resp.get("trends")
+                     or resp.get("series") or resp),
+        }
+    if name in ("search_literature", "literature_benchmarks"):
+        articles = resp.get("articles") or resp.get("results") or []
+        return {
+            "tool": name,
+            "query": resp.get("query"),
+            "articles": [
+                {k: a.get(k) for k in
+                 ("title", "year", "journal", "pmid", "abstract") if a.get(k)}
+                for a in articles[:8]
+            ],
         }
     if name in ("rag_search", "rag_search_sections"):
         passages = resp.get("passages") or []
@@ -182,7 +207,47 @@ def _evidence(tc: dict) -> dict:
                 for p in passages
             ],
         }
+    if name == "discharge_medications":
+        # Medication fidelity is graded against the discharge note, and a dose or a
+        # route is the thing that gets fabricated — so the payload goes to the judge
+        # whole rather than as a 2000-character summary of a dict.
+        meds = (resp.get("medications") or resp.get("discharge_medications")
+                or resp.get("items") or resp)
+        return {"tool": name, "medications": meds}
     return {"tool": name, "response": str(resp)[:2000]}
+
+
+def _benchmark_evidence(rec: dict) -> dict | None:
+    """The published cohort rates the answer may legitimately be compared against.
+
+    `/ehr` draws a comparative matrix, so an answer that quotes "3.4% for primary TKA"
+    is making a grounded claim — but the judge cannot see the curated row unless it is
+    handed over, and an ungrounded-looking number is the one case where a faithful
+    answer gets marked as fabricated. Selection is by the patient's resolved phenotype,
+    never by what a search happened to return.
+    """
+    hadm = rec.get("hadm_id")
+    try:
+        phenotype = ADMISSION_PHENOTYPE.get(int(hadm)) if hadm else None
+    except (TypeError, ValueError):
+        return None
+    if not phenotype:
+        return None
+    rows = benchmarks_for_phenotype(phenotype)
+    if not rows:
+        return None
+    return {"tool": "cohort_benchmark", "phenotype": phenotype,
+            "matched_published_rates": rows}
+
+
+def _evidence_for(rec: dict) -> list[dict]:
+    """Everything the assistant had, in one list."""
+    evidence = [_evidence(tc) for tc in (rec.get("tool_calls") or [])]
+    if rec.get("prompt") in ("ehr", "summarize"):
+        bench = _benchmark_evidence(rec)
+        if bench is not None:
+            evidence.append(bench)
+    return evidence
 
 
 def _judge_once(client, system: str, user: str) -> dict:
@@ -313,7 +378,7 @@ def _adversarial_system(criteria: dict) -> str:
 def _adversarial_user(rec: dict, criteria: dict) -> str:
     codes = [c for c in (rec.get("expect") or []) if c in criteria]
     wanted = "\n".join(f"- {c}: {criteria[c]}" for c in codes)
-    evidence = [_evidence(tc) for tc in (rec.get("tool_calls") or [])]
+    evidence = _evidence_for(rec)
     return (
         f"PROBE: {rec.get('id')} (family: {rec.get('family')})\n\n"
         f"WHAT THE USER ASKED:\n{rec.get('question')}\n\n"
@@ -555,7 +620,7 @@ def main() -> int:
         """
         if "error" in t:
             return {**t, "judge": {"error": "agent run failed"}}, 0
-        evidence = [_evidence(tc) for tc in (t.get("tool_calls") or [])]
+        evidence = _evidence_for(t)
         # The earlier turn, when there is one. Dimension 6 asks whether the
         # answer used the context it was given, and the conversation exists
         # only in the request the caller sent, so the rater has to be handed

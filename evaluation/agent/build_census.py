@@ -63,10 +63,11 @@ FEATURES = f"`{PROJECT}.readmission.hybrid_features`"
 # means the same thing in both case sets.
 BANDS = (("low", 0.0, 0.10), ("borderline", 0.10, 0.20), ("high", 0.20, 1.01))
 
-# The three clinical prompts the harness has always asked. Kept verbatim and in
-# this order because the wording is part of the case set's identity: change it
-# and the pass rate stops being comparable with any earlier run.
-PROMPTS = ("risk", "meds", "summarize")
+# The clinical prompts the census is counted against. Imported rather than restated:
+# this file used to carry its own tuple of three, with the old `summarize` key, so the
+# census printed "82 x 3 prompts" while the collector ran four paths. One list, owned by
+# prompt_set, or the two disagree and the disagreement looks like a missing case.
+from prompt_set import CENSUS_PROMPTS as PROMPTS  # noqa: E402
 
 # Derived from the feature table: an id present here is an id the agent can
 # answer for.

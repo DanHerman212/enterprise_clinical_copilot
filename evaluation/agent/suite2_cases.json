@@ -1,0 +1,201 @@
+{
+  "_comment": "Suite 2 — Feature & Modality Matrix (30 cases). Review artifact: nothing reads this file until entrypoint.py dispatch is wired. 'expect' keys are assertions from evaluation/agent/assertions.py; null means the assertion is 'must be absent/None'. Component names are the product's real A2UI vocabulary (a2ui.py), not the strategy doc's aspirational names.",
+  "suite": "suite2_modality",
+  "version": 1,
+  "cases": [
+    {
+      "id": "S2-01", "vector": "V1", "hadm_id": 90000015,
+      "question": "/pubmed total knee arthroplasty readmission risk factors",
+      "expect": {"command": "pubmed", "routed_to": null, "component": "LiteratureList",
+                 "literature_nonempty": true,
+                 "max_tool_calls": 5},
+      "why": "Condition-specific literature renders a card backed by PubMed records. Asserted on the payload and the component, not on `^[PMID:` markers in the prose: those citations live in the `literature` field the canvas draws, so a marker assertion failed a turn whose card was correct."
+    },
+    {
+      "id": "S2-02", "vector": "V1", "hadm_id": 90000015,
+      "question": "/pubmed congestive heart failure",
+      "expect": {"command": "pubmed", "routed_to": null, "component": "LiteratureList",
+                 "literature_nonempty": true,
+                 "max_tool_calls": 5},
+      "why": "Cross-condition isolation: a TKA admission asking about heart failure must not be answered with the TKA cohort comparison. Asserted on the literature payload and the card; the comparative matrix is a legitimate part of this surface."
+    },
+    {
+      "id": "S2-03", "vector": "V3", "hadm_id": 90000015,
+      "question": "What were her hemoglobin and sodium trends?",
+      "expect": {"routed_to": "/labs", "component": "LabTrendCard", "max_tool_calls": 5},
+      "why": "Free-text positive routing: clinical domain vocabulary, no literature abstention cue."
+    },
+    {
+      "id": "S2-04", "vector": "V3", "hadm_id": 90000015,
+      "question": "What medications was she discharged on?",
+      "expect": {"routed_to": "/meds", "component": "MedicationGrid", "max_tool_calls": 5},
+      "why": "Free-text positive routing to the medication extraction path."
+    },
+    {
+      "id": "S2-05", "vector": "V3", "hadm_id": 90000023,
+      "question": "Show me her hemoglobin and sodium labs",
+      "expect": {"routed_to": "/labs", "component": "LabTrendCard", "max_tool_calls": 5},
+      "why": "Second archetype: routing must not depend on one patient's phrasing."
+    },
+    {
+      "id": "S2-06", "vector": "V3", "hadm_id": 90000023,
+      "question": "What medications was she discharged on?",
+      "expect": {"routed_to": "/meds", "command": "meds", "max_tool_calls": 5},
+      "why": "Second archetype, medication routing. The grid is not asserted: on this admission the extraction reports it could not read the medication rows (observed 2026-10-18) — a formatting failure in the extractor, graded by the judge, and not something a missing component should mask as a routing fault."
+    },
+    {
+      "id": "S2-07", "vector": "V3", "hadm_id": 90000015,
+      "question": "What does current clinical literature suggest regarding the efficacy of this specific combination of medications for the patient's primary diagnosis?",
+      "expect": {"routed_to": null, "max_tool_calls": 5},
+      "why": "F1 regression: the word 'medications' must not hijack a literature question into /meds."
+    },
+    {
+      "id": "S2-08", "vector": "V3", "hadm_id": 90000023,
+      "question": "What does current clinical literature suggest regarding the efficacy of this specific combination of medications for heart failure?",
+      "expect": {"routed_to": null, "max_tool_calls": 5},
+      "why": "F1 variant with a second condition named; same abstention from routing. No component is asserted: the answer may legitimately come from the note rather than a literature search, and the property under test is that `medications` did not hijack it into /meds."
+    },
+    {
+      "id": "S2-09", "vector": "V2", "hadm_id": 90000015,
+      "question": "What in this patient's chart explains red cell distribution width (RDW) as a readmission risk driver?",
+      "expect": {"routed_to": null, "max_tool_calls": 5, "grounded_lab": "rdw"},
+      "why": "A2 regression: a clicked driver is not a typed question. Must not be answered with the whole lab panel, and must abstain when the chart does not explain the driver."
+    },
+    {
+      "id": "S2-10", "vector": "V2", "hadm_id": 90000015,
+      "question": "What in this patient's chart explains admission type as a readmission risk driver?",
+      "expect": {"routed_to": null, "max_tool_calls": 5, "allows_abstention": true},
+      "why": "Affordance template on a non-lab driver; checks the template rule generalises beyond RDW."
+    },
+    {
+      "id": "S2-11", "vector": "V2", "hadm_id": 90000023,
+      "question": "What in this patient's chart explains creatinine as a readmission risk driver?",
+      "expect": {"routed_to": null, "max_tool_calls": 5, "grounded_lab": "creatinine"},
+      "why": "Driver click must not be swallowed by the 'creatinine' lab token."
+    },
+    {
+      "id": "S2-12", "vector": "V4", "hadm_id": 90000023,
+      "question": "How is his kidney function trending?",
+      "expect": {"routed_to": null, "max_tool_calls": 5, "no_recursion_error": true},
+      "why": "B3 regression: multi-step unrouted reasoning must complete inside the tool budget."
+    },
+    {
+      "id": "S2-13", "vector": "V4", "hadm_id": 90000015,
+      "question": "Summarize this admission in three sentences.",
+      "expect": {"routed_to": null, "max_tool_calls": 5},
+      "why": "Open synthesis: prose instruction must not be mistaken for /ehr."
+    },
+    {
+      "id": "S2-14", "vector": "V4", "hadm_id": 90000015,
+      "question": "What was the exact length of stay for this admission?",
+      "expect": {"routed_to": null, "manifest_answer": true, "no_forced_retrieval": true},
+      "why": "3.1 regression: a manifest field is answered from the manifest, not from notes that cannot contain it."
+    },
+    {
+      "id": "S2-15", "vector": "V4", "hadm_id": 90000023,
+      "question": "What is the admission type for this patient?",
+      "expect": {"routed_to": null, "manifest_answer": true, "no_forced_retrieval": true},
+      "why": "Manifest grounding on a second field and a second patient."
+    },
+    {
+      "id": "S2-16", "vector": "V5", "hadm_id": 90000015,
+      "question": "/ehrr",
+      "expect": {"status": 400, "error": "unknown_command", "tool_calls": 0,
+                 "command": null},
+      "why": "F2 regression: a typo is refused at the seam, not answered by an 18-step reasoning turn. The refusal is HTTP 400 `unknown_command` with zero tool calls — a malformed request, refused as one."
+    },
+    {
+      "id": "S2-17", "vector": "V5", "hadm_id": 90000015,
+      "question": "/medss",
+      "expect": {"status": 400, "error": "unknown_command", "tool_calls": 0,
+                 "command": null},
+      "why": "F2 variant on a different command token."
+    },
+    {
+      "id": "S2-18", "vector": "V5", "hadm_id": 90000015,
+      "question": "/labb",
+      "expect": {"status": 400, "error": "unknown_command", "tool_calls": 0,
+                 "command": null},
+      "why": "F2 variant; checks the prefix 'lab' is not fuzzy-matched onto /labs."
+    },
+    {
+      "id": "S2-19", "vector": "V5", "hadm_id": 90000015,
+      "question": "/",
+      "expect": {"fast_fail": true, "tool_calls": 0, "command": null,
+                 "lists_valid_commands": true},
+      "why": "Bare slash: the degenerate command token."
+    },
+    {
+      "id": "S2-20", "vector": "V1", "hadm_id": 90000028,
+      "question": "/ehr",
+      "expect": {"command": "ehr", "abstains_on_discharge_diagnosis": true,
+                 "component_absent": "RiskInfluencers"},
+      "why": "Outpatient note: honest abstention on a formal discharge diagnosis, and inpatient readmission risk is suppressed."
+    },
+    {
+      "id": "S2-21", "vector": "V1", "hadm_id": 90000040,
+      "question": "/ehr",
+      "expect": {"command": "ehr", "abstains_on_discharge_diagnosis": true,
+                 "component_absent": "RiskInfluencers"},
+      "why": "As S2-20."
+    },
+    {
+      "id": "S2-22", "vector": "V1", "hadm_id": 90000051,
+      "question": "/ehr",
+      "expect": {"command": "ehr", "abstains_on_discharge_diagnosis": true,
+                 "component_absent": "RiskInfluencers"},
+      "why": "As S2-20."
+    },
+    {
+      "id": "S2-23", "vector": "V1", "hadm_id": 90000054,
+      "question": "/ehr",
+      "expect": {"command": "ehr", "abstains_on_discharge_diagnosis": true,
+                 "component_absent": "RiskInfluencers"},
+      "why": "As S2-20."
+    },
+    {
+      "id": "S2-24", "vector": "V1", "hadm_id": 90000073,
+      "question": "/ehr",
+      "expect": {"command": "ehr", "abstains_on_discharge_diagnosis": true,
+                 "component_absent": "RiskInfluencers"},
+      "why": "As S2-20."
+    },
+    {
+      "id": "S2-25", "vector": "V4", "hadm_id": 90000028,
+      "question": "Summarize the note",
+      "expect": {"routed_to": null, "abstains_on_discharge_diagnosis": true},
+      "why": "Free-text summary of an outpatient note must not invent a diagnosis."
+    },
+    {
+      "id": "S2-26", "vector": "V4", "hadm_id": 90000040,
+      "question": "Summarize the note",
+      "expect": {"routed_to": null, "abstains_on_discharge_diagnosis": true},
+      "why": "As S2-25."
+    },
+    {
+      "id": "S2-27", "vector": "V4", "hadm_id": 90000051,
+      "question": "Summarize the note",
+      "expect": {"routed_to": null, "abstains_on_discharge_diagnosis": true},
+      "why": "As S2-25."
+    },
+    {
+      "id": "S2-28", "vector": "V4", "hadm_id": 90000054,
+      "question": "Summarize the note",
+      "expect": {"routed_to": null, "abstains_on_discharge_diagnosis": true},
+      "why": "As S2-25."
+    },
+    {
+      "id": "S2-29", "vector": "V4", "hadm_id": 90000073,
+      "question": "Summarize the note",
+      "expect": {"routed_to": null, "abstains_on_discharge_diagnosis": true},
+      "why": "As S2-25."
+    },
+    {
+      "id": "S2-30", "vector": "V1", "hadm_id": 90000054,
+      "question": "/risk",
+      "expect": {"command": "risk", "risk_suppressed": true,
+                 "component_absent": "RiskInfluencers"},
+      "why": "The command itself must suppress inpatient readmission risk on a record that has no admission."
+    }
+  ]
+}

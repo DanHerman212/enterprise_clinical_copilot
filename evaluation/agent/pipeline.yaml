@@ -1,18 +1,22 @@
-# The evaluation pipeline: build, deploy, execute, gate. Nothing here is typed by a
-# person at runtime.
+# The evaluation pipeline: build and deploy. Nothing here is typed by a person.
 #
 #   gcloud builds submit --config evaluation/agent/pipeline.yaml \
 #       --substitutions=_TAG=$(git rev-parse --short HEAD)
 #
-# What this adds over `cloudbuild.yaml`: that file builds an image and stops, leaving
-# someone to deploy a job and run an execution by hand. A gate that a human remembers
-# to run is not a gate. Here the executions ARE the build steps, `--wait` makes Cloud
-# Build wait for them, and a failing gate exits non-zero, which fails the build and
-# blocks whatever comes next.
+# Execution is NOT a build step. It used to be, on the theory that a gate a human
+# remembers to run is not a gate — and the theory cost more than it bought: Cloud
+# Build is a build service, so an execution nested inside it reports one status line
+# for a fourteen-minute job, cannot be watched per patient, and a cancel signal has to
+# push through two layers of retry to reach the thing that is actually spending money.
+# A build that only builds finishes in the time a build should take and leaves the
+# execution somewhere it can be seen, tailed and killed directly:
 #
-# Gate order is deliberate: adversarial first because it is twenty probes and two
-# minutes, and it is the phase that catches a boundary defect. There is no point
-# spending the clinical census on an agent that will fail the cheap gate.
+#   gcloud run jobs execute eval-adversarial --region us-east1 --wait
+#   gcloud run jobs execute eval-clinical --region us-east1 --update-env-vars "RUN_TAG=..."
+#
+# Both phases still exit non-zero on a failed gate, so an execution launched by a
+# caller that checks the exit code is still gated. Nothing here decides pass/fail;
+# the job does 
 
 steps:
   - id: build-harness
@@ -52,54 +56,9 @@ steps:
             --quiet
         done
 
-  # Gate A — the fast-fail proof. Twenty probes, the phase that catches a boundary or a
-  # fabrication defect before the census spends anything.
-  - id: gate-adversarial
-    name: gcr.io/cloud-builders/gcloud
-    entrypoint: bash
-    args:
-      - -c
-      - |
-        set -euo pipefail
-        gcloud run jobs execute eval-adversarial \
-          --region "${_REGION}" \
-          --update-env-vars "RUN_TAG=${_RUN_TAG}-adv" \
-          --wait || {
-            rc=$$?
-            echo "GATE adversarial FAILED (exit $$rc)"
-            if [ "${_CONTINUE_ON_FAIL}" = "true" ]; then
-              echo "_CONTINUE_ON_FAIL=true: continuing so the clinical census still produces a report"
-              exit 0
-            fi
-            exit $$rc
-          }
-
-  # Gate B/C — the clinical phase. `_MAX_PATIENTS` empty means the full census; a value
-  # makes it a pilot, which is how the same pipeline is used for both.
-  - id: gate-clinical
-    name: gcr.io/cloud-builders/gcloud
-    entrypoint: bash
-    args:
-      - -c
-      - |
-        set -euo pipefail
-        EXTRA=""
-        if [ -n "${_MAX_PATIENTS}" ]; then
-          EXTRA=",MAX_PATIENTS=${_MAX_PATIENTS}"
-        fi
-        gcloud run jobs execute eval-clinical \
-          --region "${_REGION}" \
-          --update-env-vars "RUN_TAG=${_RUN_TAG}-clinical$$EXTRA" \
-          --wait || {
-            rc=$$?
-            echo "GATE clinical FAILED (exit $$rc)"
-            exit $$rc
-          }
-
 substitutions:
   _IMAGE: us-east1-docker.pkg.dev/trim-icon-498815-a0/ecc-eval/harness
   _TAG: manual
-  _RUN_TAG: manual
   _REGION: us-east1
   _AGENT_URL: https://agent-jamycsjjzq-ue.a.run.app
   _RUNNER_SA: ecc-eval-runner@trim-icon-498815-a0.iam.gserviceaccount.com
@@ -111,18 +70,11 @@ substitutions:
   _LANGFUSE_HOST: https://observability.danielmherman.com
   _LF_PUBLIC_SECRET: langfuse-project-public-key
   _LF_SECRET_SECRET: langfuse-project-secret-key
-  # Empty = the whole clinical census. Set to 3 for a pilot.
-  _MAX_PATIENTS: ""
-  # False is the release posture: a failing adversarial gate stops the pipeline and
-  # the census never runs. True is for a measurement run, where the census's own report
-  # is the thing being asked for and a known failure in another phase should not hide
-  # it. The gate still fails the step; only the pipeline's continuation is optional.
-  _CONTINUE_ON_FAIL: "false"
 
 options:
   machineType: E2_HIGHCPU_8
   logging: CLOUD_LOGGING_ONLY
 
-# The adversarial gate is twenty probes and the clinical gate is the census; together
-# they can exceed the default hour.
-timeout: 10800s
+# A build of the harness image plus two job deploys. The old value was sized for two
+# gated executions; nothing in this file waits on a run any more.
+timeout: 3600s

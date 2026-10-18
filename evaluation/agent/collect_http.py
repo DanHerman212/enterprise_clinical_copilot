@@ -49,7 +49,15 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parents[1]))
 
 from health import classify_trace, format_summary, retrieval_failed, summarize  # noqa: E402
-from prompt_set import PROMPT_NAMES, follow_up_for, question_for  # noqa: E402
+from prompt_set import (  # noqa: E402
+    COMMAND_FROM_WIRE,
+    COMMAND_TOOLS,
+    COVERAGE_COMMANDS,
+    PROMPT_NAMES,
+    SLASH_COMMANDS,
+    follow_up_for,
+    question_for,
+)
 from services.agent.contracts import (  # noqa: E402
     MAX_REPLAYED_TOOL_CALLS,
     MAX_TOOL_NAME_CHARS,
@@ -62,6 +70,9 @@ RESULTS = HERE / "results"
 # alongside it but are not part of this set — they have no inpatient risk score
 # to grade.
 CASES = RESULTS / "cases_82.json"
+#: The targeted modality matrix. A separate file from the census because these are
+#: single-turn probes chosen to exercise one vector each, not admissions to sweep.
+SUITE2 = HERE / "suite2_cases.json"
 ADVERSARIAL = HERE / "adversarial_cases.json"
 OUT = RESULTS / "traces_http.jsonl"
 ADV_OUT = RESULTS / "adversarial_http.jsonl"
@@ -144,6 +155,31 @@ class AgentClient:
                 return resp.status_code, {"_raw": resp.text[:2000]}
         return 401, {"error": "unauthenticated"}
 
+    async def stream(self, body: dict) -> tuple[int, list[tuple[str, dict]]]:
+        """POST with `stream_prose` and collect the SSE frames.
+
+        Only the preflight uses this. The batch census stays blocking, because the
+        Reconciliation badge is an SSE stage that a blocking caller never receives —
+        so the census records `reconciled: None` (meaning "not observable here")
+        rather than implying the badge did not fire.
+        """
+        events: list[tuple[str, dict]] = []
+        async with self._client.stream(
+            "POST", f"{self.base_url}/ask/stream", json={**body, "stream_prose": True},
+            headers={"Authorization": f"Bearer {self._token}",
+                     "Accept": "text/event-stream"},
+        ) as resp:
+            stage = ""
+            async for line in resp.aiter_lines():
+                if line.startswith("event: "):
+                    stage = line[len("event: "):].strip()
+                elif line.startswith("data: "):
+                    try:
+                        events.append((stage, json.loads(line[len("data: "):])))
+                    except json.JSONDecodeError:
+                        continue
+            return resp.status_code, events
+
     async def aclose(self) -> None:
         await self._client.aclose()
 
@@ -218,8 +254,31 @@ def replay_turn(asked: str, record: dict) -> dict:
     }
 
 
+def _components(node, out: set[str] | None = None) -> list[str]:
+    """Every A2UI component name in an envelope, however deeply nested.
+
+    The envelope is A2UI messages, not a flat list: the components live under
+    `updateComponents.components`, and the root is a `Column` whose children carry
+    the card. Walking generically means a surface that gains a wrapper does not
+    silently report zero components to an assertion that is looking for one.
+    """
+    if out is None:
+        out = set()
+    if isinstance(node, dict):
+        name = node.get("component")
+        if isinstance(name, str):
+            out.add(name)
+        for value in node.values():
+            _components(value, out)
+    elif isinstance(node, list):
+        for item in node:
+            _components(item, out)
+    return sorted(out)
+
+
 def _record_from_response(case: dict, status: int, payload: dict,
-                          turn: int = 1, question: str | None = None) -> dict:
+                          turn: int = 1, question: str | None = None,
+                          reconciled: str | None = None) -> dict:
     """One trace record, in the shape judge.py reads.
 
     Field names match `collect.py` exactly — `hadm_id`, `prompt`, `question`,
@@ -237,10 +296,17 @@ def _record_from_response(case: dict, status: int, payload: dict,
         "transport": "http",
         "status": status,
     }
-    if "id" in case:  # adversarial
+    # Three case shapes reach here, and `id` alone does not identify which: a Suite 2
+    # modality case carries an `id` and no `family`. Keying the adversarial branch on
+    # `"id" in case` raised KeyError: 'family' on the pilot's first Suite 2 request and
+    # took the whole run down, so each shape is named by the field only it has.
+    if "family" in case:  # adversarial probe
         rec.update({"id": case["id"], "family": case["family"],
                     "prompt": "adversarial", "expect": case["expect"]})
-    else:
+    elif "id" in case:  # Suite 2 targeted modality case
+        rec.update({"id": case["id"], "prompt": case.get("prompt") or "suite2",
+                    "expect": case.get("expect") or {}})
+    else:  # census case
         rec.update({"prompt": case["prompt"], "probability": case.get("probability"),
                     "band": case.get("band"),
                     "readmission_30d": case.get("readmission_30d")})
@@ -260,6 +326,39 @@ def _record_from_response(case: dict, status: int, payload: dict,
     rec["guardrail_flags"] = payload.get("guardrail_flags") or []
     rec["model"] = payload.get("model")
     rec["code_revision"] = payload.get("code_revision")
+    # Structural telemetry, read from the envelope rather than inferred from the
+    # prose. Everything downstream — coverage, routing, component and fast-fail
+    # assertions — runs on these fields, so a command that fell through to the
+    # reasoning loop is visible as data instead of looking like a healthy turn.
+    wire_command = payload.get("command")
+    # Reported in the harness's own vocabulary. `/ehr` crosses the wire as
+    # `summarize`, and an assertion comparing "ehr" to "summarize" would report a
+    # command that ran perfectly well as missing.
+    rec["command_wire"] = wire_command
+    rec["command_executed"] = COMMAND_FROM_WIRE.get(wire_command, wire_command)
+    # `routed_to` arrives un-slashed ("labs"); the case files and the product's own
+    # routing pill both speak with one ("/labs"), so it is normalised once here.
+    routed = payload.get("routed_to")
+    rec["routed_to"] = f"/{routed.lstrip('/')}" if routed else None
+    rec["a2ui_components"] = _components(payload.get("a2ui"))
+    # Literature records the canvas draws, counted from the payload rather than from
+    # the prose: a PMID citation is a record in this list, not a marker in the answer.
+    lit = payload.get("literature")
+    if isinstance(lit, dict):
+        lit = lit.get("articles") or lit.get("results") or []
+    rec["literature_count"] = len(lit) if isinstance(lit, list) else 0
+    # The Reconciled badge is the SSE stage `prose_settled`, which only a caller that
+    # asked to watch prose arrive ever receives. A blocking collection therefore
+    # records None, and None here means "not observable on this path", not "nothing
+    # moved" — the distinction the assertion reads.
+    rec["reconciled"] = reconciled
+    if case.get("run_tag"):
+        # Client-side grouping so Turn 1 and Turn 2 of one trajectory are
+        # inspectable together. The agent holds no session state, so this is the
+        # harness's own key and travels only in trace metadata.
+        rec["session"] = (
+            f"{case['run_tag']}:{rec.get('hadm_id')}:{rec.get('prompt')}"
+        )
     if payload.get("langfuse_trace_id"):
         rec["langfuse_trace_id"] = payload["langfuse_trace_id"]
     return rec
@@ -356,6 +455,32 @@ def _reachability(recs: list[dict]) -> dict:
     return {"n": len(recs), "transport_error": transport, "non_200": non_200,
             "unusable": transport + non_200,
             "unusable_rate": (transport + non_200) / n}
+
+
+def _suite2_cases(args) -> list[dict]:
+    """The targeted modality cases, in the same shape the collector runs.
+
+    One turn each, and no follow-up: each case exists to assert one thing about one
+    vector — that a click is not routed, that a typo is refused, that an outpatient
+    note abstains — and a second turn would add a referent the assertion does not
+    depend on.
+    """
+    if not SUITE2.exists():
+        return []
+    payload = json.loads(SUITE2.read_text())
+    cases: list[dict] = []
+    for spec in payload.get("cases") or []:
+        case = {
+            "id": spec["id"],
+            "hadm_id": spec.get("hadm_id"),
+            "prompt": "suite2",
+            "question": spec["question"],
+            "expect": spec.get("expect") or {},
+        }
+        if args.run_tag:
+            case["run_tag"] = args.run_tag
+        cases.append(case)
+    return cases
 
 
 def _build_cases(args) -> tuple[list[dict], list[dict]]:
@@ -519,6 +644,89 @@ async def _run_set(client, cases, out_path: Path, args, label: str,
     return 0
 
 
+async def _route_coverage(client, hadm_id: int) -> int:
+    """Assert every covered command actually runs, before the batch is allowed.
+
+    The check the last run did not have. Retrieval health says the deployment can read
+    the corpus; it says nothing about whether a command was invoked at all, and a
+    command that silently did not run is indistinguishable from a healthy free-text
+    turn. `/ehr` ran zero times across 246 turns while every preflight gate reported
+    green, because the harness sent the command's prose instead of its slash form and
+    prose has no route to `/ehr`.
+
+    One patient, every covered command, and the tool each one must reach.
+    """
+    print(
+        "PREFLIGHT: route coverage — one patient, every covered command …",
+        flush=True,
+    )
+    rc = 0
+    for prompt in COVERAGE_COMMANDS:
+        # Composed rather than looked up: `/pubmed` is not a question until it has a
+        # query, and a bare `/pubmed` would fail for the wrong reason.
+        question = question_for(prompt, hadm_id)
+        case = {"hadm_id": hadm_id, "prompt": prompt, "question": question}
+        rec = await _answer(client, case, 1, question, _body(question, case))
+        tools = {c.get("name") for c in rec.get("tool_calls") or []}
+        expected = COMMAND_TOOLS[prompt]
+        # Two conditions, because either alone is a false pass. The tool says work
+        # happened; `command` says the product agrees *which* command ran. A turn that
+        # reached the right tool through the reasoning loop has the first and not the
+        # second, and that is precisely the failure this gate exists to catch.
+        command_ok = rec.get("command_executed") == prompt
+        ok = rec.get("status") == 200 and bool(tools & expected) and command_ok
+        print(
+            f"  {SLASH_COMMANDS[prompt]:9} status={rec.get('status')} "
+            f"command={rec.get('command_executed')!r} tools={sorted(tools)} "
+            + ("OK" if ok else f"MISSING {sorted(expected) if not tools & expected else 'command-match'}"),
+            flush=True,
+        )
+        if not ok:
+            rc = 1
+    if rc:
+        print(
+            "PREFLIGHT: FAIL — a covered command did not execute. The rest of this run "
+            "would measure the reasoning loop instead of the product. Not starting.",
+            flush=True,
+        )
+    return rc
+
+
+async def _stream_probe(client, hadm_id: int) -> int:
+    """One streaming turn, to prove the SSE path exists rather than assume it.
+
+    The Reconciliation badge is the `prose_settled` stage, which only a caller that
+    asked to watch prose arrive ever receives. The census is blocking, so this is the
+    only place the badge path is exercised at all.
+
+    Whether the badge *fired* is reported and deliberately not asserted: a clean
+    answer legitimately has nothing to reconcile, so requiring the frame would fail
+    every good turn. What is asserted is that the stream produced an answer — a
+    stream that yields no frames is a broken transport, not a quiet turn.
+    """
+    print("PREFLIGHT: one streaming turn, checking the prose_settled stage …",
+          flush=True)
+    try:
+        status, events = await client.stream(
+            {"question": "/ehr", "hadm_id": hadm_id})
+    except Exception as exc:  # transport-level
+        print(f"PREFLIGHT: FAIL — the stream raised {type(exc).__name__}: {exc}",
+              flush=True)
+        return 1
+    stages = [stage for stage, _ in events]
+    settled = [data for stage, data in events if stage == "prose_settled"]
+    print(f"  status={status} frames={len(events)} stages={sorted(set(stages))}",
+          flush=True)
+    print(f"  prose_settled: {'fired ' + str(settled) if settled else 'absent (clean turn)'}",
+          flush=True)
+    if status != 200 or not events:
+        print("PREFLIGHT: FAIL — the streaming path produced no frames. The badge "
+              "cannot be observed at all, so the evaluation would be silent about "
+              "it. Not starting.", flush=True)
+        return 1
+    return 0
+
+
 async def _preflight(client, args) -> int:
     """Smoke the deployed path before the long run.
 
@@ -530,6 +738,14 @@ async def _preflight(client, args) -> int:
     """
     payload = json.loads(CASES.read_text())
     patients = payload["patients"][: args.preflight_n]
+    # Cheapest gate first, and the one that actually failed last time. Retrieval
+    # health cannot distinguish "the command answered" from "the reasoning loop
+    # answered on the command's behalf", so the commands are asserted directly
+    # before anything is measured.
+    if await _route_coverage(client, patients[0]["hadm_id"]):
+        return 1
+    if await _stream_probe(client, patients[0]["hadm_id"]):
+        return 1
     cases = [{"hadm_id": p["hadm_id"], "prompt": "meds",
               "question": question_for("meds", p["hadm_id"])} for p in patients]
     print(f"PREFLIGHT: {len(cases)} smoke questions against the deployment …",
@@ -625,6 +841,9 @@ async def main() -> int:
     ap.add_argument("--max-patients", type=int, default=None)
     ap.add_argument("--max-adversarial", type=int, default=None)
     ap.add_argument("--no-adversarial", action="store_true")
+    ap.add_argument("--suite2", action="store_true",
+                    help="also run the targeted modality matrix (suite2_cases.json)")
+    ap.add_argument("--suite2-out", default=str(RESULTS / "suite2.jsonl"))
     ap.add_argument("--adversarial-only", action="store_true",
                     help="run only the adversarial probes (the adversarial job)")
     ap.add_argument("--concurrency", type=int, default=4)
@@ -660,6 +879,11 @@ async def main() -> int:
         rc = 0
         if clinical:
             rc |= await _run_set(client, clinical, Path(args.out), args, "clinical")
+        if args.suite2 and rc == 0:
+            suite2 = _suite2_cases(args)
+            print(f"planned: {len(suite2)} suite-2 modality cases", flush=True)
+            rc |= await _run_set(client, suite2, Path(args.suite2_out), args,
+                                 "suite2", gate_retrieval=False)
         if adversarial and rc == 0:
             rc |= await _run_set(client, adversarial, Path(args.adversarial_out),
                                  args, "adversarial", gate_retrieval=False)

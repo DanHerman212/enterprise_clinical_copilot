@@ -39,6 +39,9 @@ RESULTS = HERE / "results"
 
 PHASES = ("clinical", "adversarial")
 
+#: 82 inpatient admissions x 4 census paths x 2 turns.
+EXPECTED_CENSUS_TURNS = 82 * 4 * 2
+
 
 def _env(name: str, default: str | None = None) -> str | None:
     value = os.environ.get(name)
@@ -64,12 +67,14 @@ def _paths(phase: str, tag: str) -> dict[str, Path]:
     if phase == "clinical":
         return {
             "traces": RESULTS / f"traces_clinical_{tag}.jsonl",
+            "suite2": RESULTS / f"suite2_{tag}.jsonl",
             "scratch": RESULTS / f"adversarial_skipped_{tag}.jsonl",
             "judged": RESULTS / f"judged_clinical_{tag}.jsonl",
             "report": RESULTS / f"report_clinical_{tag}.json",
         }
     return {
         "traces": RESULTS / f"adversarial_{tag}.jsonl",
+        "suite2": None,
         "scratch": RESULTS / f"traces_skipped_{tag}.jsonl",
         "judged": RESULTS / f"adversarial_judged_{tag}.jsonl",
         "report": RESULTS / f"adv_report_{tag}.json",
@@ -99,6 +104,13 @@ def _collect_argv(phase: str, agent_url: str, tag: str, paths: dict, concurrency
         argv.append("--no-adversarial")
         if (limit := _env("MAX_PATIENTS")):
             argv += ["--max-patients", limit]
+        if _env("PREFLIGHT_ONLY") == "1":
+            argv.append("--preflight-only")
+        elif _env("SUITE2") != "0" and paths.get("suite2") is not None:
+            # The modality matrix rides with the census job. It is the only place
+            # `/pubmed` and the affordance/boundary probes run, so a census without
+            # it cannot claim command coverage.
+            argv += ["--suite2", "--suite2-out", str(paths["suite2"])]
     else:
         argv.append("--adversarial-only")
     return argv
@@ -185,6 +197,75 @@ def _gate(report_path: Path) -> tuple[bool, dict]:
     return passed, summary
 
 
+def _read_jsonl(path: Path) -> list[dict]:
+    """Records from one JSONL file, skipping lines that do not parse."""
+    if not path or not path.exists():
+        return []
+    rows: list[dict] = []
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return rows
+
+
+def _structural_gate(phase: str, tag: str, paths: dict) -> tuple[bool, dict]:
+    """Deterministic assertions over this run, before anything is judged.
+
+    These are the checks that do not need a model: did the command execute, did the
+    routing land where the case said, did the surface emit the component, did the
+    settled prose leak JSON or an unresolved citation. A run that fails here is not
+    worth judging, which is the whole reason it runs first.
+    """
+    import assertions  # local: keeps the CLI importable without the package on path
+
+    recs = _read_jsonl(paths["traces"])
+    specs = None
+    if phase == "clinical":
+        recs = recs + _read_jsonl(paths.get("suite2"))
+        suite2 = HERE / "suite2_cases.json"
+        if suite2.exists():
+            specs = json.loads(suite2.read_text()).get("cases") or []
+
+    result = assertions.check_all(recs, specs)
+    if phase == "clinical":
+        # Coverage only means something where the commands are the point. The
+        # adversarial phase never runs a command, and asserting coverage over it
+        # would fail every clean adversarial run.
+        extra = assertions.check_command_coverage(recs)
+        result["failures"] = (result.get("failures") or []) + extra
+        result["count"] = len(result["failures"])
+        result["by_check"] = assertions._tally(result["failures"])
+
+    # The census denominator is 82 inpatient admissions x 4 paths x 2 turns. A run
+    # that quietly collected fewer is not a smaller census, it is a partial one, and
+    # a pass rate over an unknown subset is not a release signal.
+    if phase == "clinical" and not _env("MAX_PATIENTS"):
+        expected = EXPECTED_CENSUS_TURNS
+        got = len(_read_jsonl(paths["traces"]))
+        result["census_turns"] = {"expected": expected, "collected": got}
+        if got < expected:
+            result["failures"].append({
+                "case": "census", "check": "denominator",
+                "detail": f"{got} turns collected, expected {expected}",
+            })
+            result["count"] = len(result["failures"])
+
+    out = RESULTS / f"assertions_{phase}_{tag}.json"
+    out.write_text(json.dumps(result, indent=2) + "\n")
+    print("\n=== STRUCTURAL ASSERTIONS ===", flush=True)
+    print(f"records checked: {result.get('checked')}  failures: {result.get('count')}",
+          flush=True)
+    for f in (result.get("failures") or [])[:25]:
+        print(f"  [{f['check']}] {f['case']}: {f['detail']}", flush=True)
+    if result.get("count"):
+        print(f"  (full list in {out.name})", flush=True)
+    return result.get("count") == 0, result
+
+
 def main() -> int:
     phase = _env("PHASE")
     agent_url = _env("AGENT_URL")
@@ -215,6 +296,19 @@ def main() -> int:
         # The collector gates its own run on reachability. A run that could not reach
         # the deployment is not a run that passed.
         print(f"GATE: collection failed (exit {rc}) — do not judge this run", flush=True)
+        return 1
+
+    if _env("PREFLIGHT_ONLY") == "1":
+        # Gate 1 stops here: the preflight has already asserted route coverage and the
+        # streaming path, and its exit status is the gate.
+        print("\nGATE: PASSED — preflight", flush=True)
+        return 0
+
+    struct_ok, struct = _structural_gate(phase, tag, paths)
+    if not struct_ok:
+        print(f"GATE: FAILED — {struct.get('count')} structural assertion(s). These are "
+              "envelope facts, not grading, so the run is wrong rather than merely "
+              "poor. Not judging.", flush=True)
         return 1
 
     if _run(_judge_argv(phase, tag, paths, workers)) != 0:

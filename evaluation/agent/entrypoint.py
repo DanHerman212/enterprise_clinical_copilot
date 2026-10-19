@@ -16,6 +16,8 @@ Environment (all read here, so a job's configuration is visible in one place):
     CONCURRENCY      in-flight requests                default 4
     MIN_PASS_RATE    gate: verdict pass rate           default 0.85
     SKIP_CENSUS      "1" to reuse an existing census   default unset
+    EVAL_CASES_DIR   directory holding the static case files, so a fixture edit
+                     needs no image build              default: the image's copies
 
 Exit status is the gate: 0 only when the report was produced AND its thresholds were
 met. That is what makes a Cloud Build step blocking rather than advisory.
@@ -53,6 +55,103 @@ def _run(argv: list[str]) -> int:
     proc = subprocess.run(argv, cwd=HERE)
     print(f"  exit {proc.returncode}", flush=True)
     return proc.returncode
+
+
+def _fixture(name: str) -> Path:
+    """Where a static case file lives for this run.
+
+    `EVAL_CASES_DIR` exists so that editing a fixture does not need an image build. The
+    Cloud Run job mounts `gs://ecc-eval-artifacts` at that path, so a case file can be
+    changed by copying an object instead of rebuilding and redeploying.
+
+    The fallback to the copy baked into the image is deliberate: a job configured with
+    a mount that is empty or mis-prefixed should evaluate the shipped fixtures, not
+    collect nothing and report a clean run over zero cases.
+    """
+    override = _env("EVAL_CASES_DIR")
+    if override:
+        candidate = Path(override) / name
+        if candidate.exists():
+            return candidate
+        print(f"EVAL_CASES_DIR is set but {candidate} is missing; "
+              "falling back to the image copy", flush=True)
+    return HERE / name
+
+
+def _jsonl_rows(path: Path | None) -> list[dict]:
+    """Rows from a JSONL file, counting what it could not read.
+
+    Unlike `_read_jsonl`, a corrupt line here is announced rather than swallowed: this
+    feeds the judge, so a silently skipped line is a silently smaller denominator, and
+    a pass rate over an unknown subset is not a release signal.
+    """
+    if not path or not path.exists():
+        return []
+    rows: list[dict] = []
+    bad = 0
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            bad += 1
+    if bad:
+        print(f"  WARNING: {bad} unparsable line(s) skipped in {path.name}", flush=True)
+    return rows
+
+
+def _expected_refusal(rec: dict) -> bool:
+    """True when the service refused exactly as the case said it would.
+
+    Suite 2 carries boundary probes whose correct behaviour is a 400
+    (`unknown_command`). The collector records those as `contract_refusal` with no
+    answer, and there is nothing for a judge to grade: judge.py records a refusal as
+    `no answer: ...`, which the report counts as an agent error — so judging them
+    would report four *correct* behaviours as four agent failures.
+    `assertions.py` already checks `expect.status` and `expect.error` exactly, which is
+    the right instrument for a contract boundary. A refusal the case did NOT predict
+    still reaches the judge, because that one is a real failure and must stay visible.
+    """
+    if not rec.get("contract_refusal"):
+        return False
+    expect = rec.get("expect") or {}
+    want_status = expect.get("status")
+    want_error = expect.get("error")
+    if want_status is None and want_error is None:
+        return False
+    if want_status is not None and rec.get("status") != want_status:
+        return False
+    if want_error is not None and str(rec.get("error")) != str(want_error):
+        return False
+    return True
+
+
+def _merge_for_judging(paths: dict, tag: str) -> Path:
+    """One JSONL of everything this run wants judged.
+
+    Parse-then-emit, never text concatenation: two JSONL files joined as bytes produce
+    one corrupt line when the first does not end in a newline, and judge.py reads its
+    input with a bare `json.loads` per line, so that corruption is a crash rather than
+    a skipped row. Rows keep their original fields, so the judge still sees `turn`,
+    `expect` and the conversation it is asked to rate.
+    """
+    rows: list[dict] = []
+    dropped = 0
+    for key in ("traces", "suite2"):
+        # Only Suite 2 has expected refusals by design. Applied to the adversarial
+        # probes the same rule would quietly shrink a 20-probe run.
+        filter_refusals = key == "suite2"
+        for rec in _jsonl_rows(paths.get(key)):
+            if filter_refusals and _expected_refusal(rec):
+                dropped += 1
+                continue
+            rows.append(rec)
+    out = RESULTS / f"traces_to_judge_{tag}.jsonl"
+    out.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    print(f"judging {len(rows)} record(s); {dropped} expected refusal(s) left to the "
+          "structural assertions", flush=True)
+    return out
 
 
 def _paths(phase: str, tag: str) -> dict[str, Path]:
@@ -120,7 +219,7 @@ def _judge_argv(phase: str, tag: str, paths: dict, workers: int) -> list[str]:
     return [
         sys.executable, "judge.py",
         "--mode", phase,
-        "--in", str(paths["traces"]),
+        "--in", str(_merge_for_judging(paths, tag)),
         "--out", str(paths["judged"]),
         "--report", str(paths["report"]),
         "--workers", str(workers),
@@ -186,6 +285,9 @@ def _gate(report_path: Path) -> tuple[bool, dict]:
         "unjudged": unjudged,
         "dimensions": report.get("dimensions"),
         "by_family": report.get("by_family"),
+        # Suite 2 is reported, not gated: it is a different population (see
+        # judge._aggregate), and the release threshold is written for the census.
+        "suite2": (report.get("by_suite") or {}).get("suite2"),
     }
     if isinstance(unjudged, int) and unjudged > 0:
         return False, {**summary, "error": f"{unjudged} answer(s) were never judged"}
@@ -226,7 +328,7 @@ def _structural_gate(phase: str, tag: str, paths: dict) -> tuple[bool, dict]:
     specs = None
     if phase == "clinical":
         recs = recs + _read_jsonl(paths.get("suite2"))
-        suite2 = HERE / "suite2_cases.json"
+        suite2 = _fixture("suite2_cases.json")
         if suite2.exists():
             specs = json.loads(suite2.read_text()).get("cases") or []
 

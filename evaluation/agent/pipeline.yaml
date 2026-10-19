@@ -35,6 +35,17 @@ steps:
   # Both jobs are redeployed every pipeline run, from the image this build just
   # produced. A job left pointing at an older image is a gate measuring code that is
   # no longer what would ship.
+  #
+  # The artifacts bucket is mounted read-only at /mnt/gcs and EVAL_CASES_DIR points at
+  # its `fixtures/` prefix, so a case file can be changed by copying an object instead
+  # of rebuilding this image. The harness falls back to the copies baked into the
+  # image when that prefix is empty, so a fresh bucket evaluates the shipped fixtures
+  # rather than collecting nothing.
+  #
+  # Note that this makes the bucket a second source of truth for `suite2_cases.json`,
+  # `adversarial_cases.json` and `cases_82.json`: git stays authoritative, and a run
+  # reading a stale object will say so only if you ask which file it opened. Upload the
+  # fixture deliberately (`scripts/sync_fixtures.sh`) before a run that depends on it.
   - id: deploy-jobs
     name: gcr.io/cloud-builders/gcloud
     entrypoint: bash
@@ -48,8 +59,10 @@ steps:
             --image "${_IMAGE}:${_TAG}" \
             --region "${_REGION}" \
             --service-account "${_RUNNER_SA}" \
-            --set-env-vars "PHASE=$$PHASE,AGENT_URL=${_AGENT_URL},CONCURRENCY=${_CONCURRENCY},PROJECT_ID=${PROJECT_ID},LANGFUSE_HOST=${_LANGFUSE_HOST}" \
+            --set-env-vars "PHASE=$$PHASE,AGENT_URL=${_AGENT_URL},CONCURRENCY=${_CONCURRENCY},PROJECT_ID=${PROJECT_ID},LANGFUSE_HOST=${_LANGFUSE_HOST},EVAL_CASES_DIR=${_FIXTURES_DIR}" \
             --set-secrets "LANGFUSE_PUBLIC_KEY=${_LF_PUBLIC_SECRET}:latest,LANGFUSE_SECRET_KEY=${_LF_SECRET_SECRET}:latest" \
+            --add-volume "name=artifacts,type=cloud-storage,bucket=${_ARTIFACTS_BUCKET},readonly=true" \
+            --add-volume-mount "volume=artifacts,mount-path=${_ARTIFACTS_MOUNT}" \
             --max-retries 0 \
             --task-timeout "${_TASK_TIMEOUT}" \
             --memory 1Gi --cpu 1 --tasks 1 \
@@ -60,6 +73,10 @@ substitutions:
   _IMAGE: us-east1-docker.pkg.dev/trim-icon-498815-a0/ecc-eval/harness
   _TAG: manual
   _REGION: us-east1
+  # Case fixtures live outside the image (see the deploy-jobs comment above).
+  _ARTIFACTS_BUCKET: ecc-eval-artifacts
+  _ARTIFACTS_MOUNT: /mnt/gcs
+  _FIXTURES_DIR: /mnt/gcs/fixtures
   _AGENT_URL: https://agent-jamycsjjzq-ue.a.run.app
   _RUNNER_SA: ecc-eval-runner@trim-icon-498815-a0.iam.gserviceaccount.com
   _CONCURRENCY: "4"

@@ -65,15 +65,34 @@ from services.agent.contracts import (  # noqa: E402
 )
 
 RESULTS = HERE / "results"
+
+# Static case files resolve through EVAL_CASES_DIR when it is set, so editing a fixture
+# does not require an image rebuild: the Cloud Run job mounts the artifacts bucket at
+# that path and a case change becomes a copy instead of a build. Unset — the default,
+# and every local run — the copies baked into the image are used, and `cases_82.json`
+# keeps living under `results/` because `build_census.py` writes it there each run.
+_FIXTURES = (os.environ.get("EVAL_CASES_DIR") or "").strip()
+_FIXTURE_DIR = Path(_FIXTURES) if _FIXTURES else None
+
+
+def _case_file(name: str, default: Path) -> Path:
+    """The mounted copy when there is one, else the copy shipped with the image."""
+    if _FIXTURE_DIR is not None:
+        candidate = _FIXTURE_DIR / name
+        if candidate.exists():
+            return candidate
+    return default
+
+
 # The clinical census: 82 inpatient admissions, built from the served feature
 # table by build_census.py. The five outpatient encounters are written
 # alongside it but are not part of this set — they have no inpatient risk score
 # to grade.
-CASES = RESULTS / "cases_82.json"
+CASES = _case_file("cases_82.json", RESULTS / "cases_82.json")
 #: The targeted modality matrix. A separate file from the census because these are
 #: single-turn probes chosen to exercise one vector each, not admissions to sweep.
-SUITE2 = HERE / "suite2_cases.json"
-ADVERSARIAL = HERE / "adversarial_cases.json"
+SUITE2 = _case_file("suite2_cases.json", HERE / "suite2_cases.json")
+ADVERSARIAL = _case_file("adversarial_cases.json", HERE / "adversarial_cases.json")
 OUT = RESULTS / "traces_http.jsonl"
 ADV_OUT = RESULTS / "adversarial_http.jsonl"
 
@@ -302,14 +321,16 @@ def _record_from_response(case: dict, status: int, payload: dict,
     # took the whole run down, so each shape is named by the field only it has.
     if "family" in case:  # adversarial probe
         rec.update({"id": case["id"], "family": case["family"],
-                    "prompt": "adversarial", "expect": case["expect"]})
+                    "prompt": "adversarial", "expect": case["expect"],
+                    "suite": "adversarial"})
     elif "id" in case:  # Suite 2 targeted modality case
         rec.update({"id": case["id"], "prompt": case.get("prompt") or "suite2",
-                    "expect": case.get("expect") or {}})
+                    "expect": case.get("expect") or {}, "suite": "suite2"})
     else:  # census case
         rec.update({"prompt": case["prompt"], "probability": case.get("probability"),
                     "band": case.get("band"),
-                    "readmission_30d": case.get("readmission_30d")})
+                    "readmission_30d": case.get("readmission_30d"),
+                    "suite": "census"})
 
     if status != 200:
         # A refusal by the contract. Recorded with the code and message the

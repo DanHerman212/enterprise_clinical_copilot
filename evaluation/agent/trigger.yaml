@@ -1,0 +1,59 @@
+# Cloud Build trigger: build the evaluation-harness image on every push to main.
+#
+# Deploy / update with:
+#
+#   gcloud builds triggers import --source=evaluation/agent/trigger.yaml \
+#       --project trim-icon-498815-a0 --region us-east1
+#
+# Notes on why this file looks the way it does — three corrections against the
+# first draft of this config, each of which would have failed silently or loudly:
+#
+# 1. This is a **2nd gen** trigger, expressed as a `BuildTrigger` resource with
+#    `repositoryEventConfig`. The 1st gen `github: {owner, name, push}` shape does
+#    not match how this project is wired: all three working triggers
+#    (deploy-agent-on-push, deploy-mcp-on-push, deploy-on-push) are 2nd gen,
+#    regional us-east1, and bound to the Cloud Build connection `danielmherman`.
+#    A 1st gen trigger would need a separate GitHub App install and token.
+#
+# 2. The repository is `DanHerman212/enterprise_clinical_copilot`, not the
+#    `danielmherman/readmission` placeholder. The connection carries two repos
+#    (DanHerman212-danielmherman and DanHerman212-enterprise_clinical_copilot), so
+#    the full resource name is the only unambiguous reference.
+#
+# 3. There is no `gcloud builds triggers create github --config-file` flag.
+#    `triggers import --source` takes a Trigger resource directly, which is what
+#    this file is.
+#
+# The build itself only builds and pushes an image — `evaluation/agent/cloudbuild.yaml`
+# has no `gcloud run` step, and the pipeline that actually executes the harness is
+# `evaluation/agent/pipeline.yaml`, a separate manual submission. So this trigger
+# cannot start a paid eval run; it only keeps the image reproducible from a commit.
+name: deploy-harness-on-push
+description: Build and push the evaluation harness image on main push.
+
+# 2nd gen repository wiring. `filename` is the build config inside the repo.
+filename: evaluation/agent/cloudbuild.yaml
+repositoryEventConfig:
+  repository: projects/trim-icon-498815-a0/locations/us-east1/connections/danielmherman/repositories/DanHerman212-enterprise_clinical_copilot
+  repositoryType: GITHUB
+  push:
+    branch: ^main$
+
+# The harness image must be rebuilt whenever harness code changes — and also when
+# the service code it imports changes, because the image bakes in copies of
+# `services.agent.*` and `services.mcp.config`. Filtering to only
+# `services/agent/contracts.py` and `routing.py` would leave a harness whose
+# assertions no longer match the agent it judges.
+includedFiles:
+  - "evaluation/agent/**"
+  - "services/agent/**"
+  - "services/mcp/**"
+
+substitutions:
+  # _IMAGE is NOT set here: cloudbuild.yaml defaults it to
+  # us-east1-docker.pkg.dev/trim-icon-498815-a0/ecc-eval/harness, which is an
+  # existing Docker repo. Overriding it in one place only is what keeps the two
+  # from drifting.
+  _TAG: $COMMIT_SHA
+
+serviceAccount: projects/trim-icon-498815-a0/serviceAccounts/cicd-deployer@trim-icon-498815-a0.iam.gserviceaccount.com

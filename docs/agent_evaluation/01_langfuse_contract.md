@@ -93,46 +93,40 @@ def _trace_metadata(
 ### 3.3 Fix 3: Stamp Root Trace Attributes on Deterministic Commands (`services/agent/observability.py` & `graph.py`)
 In Langfuse v3/v4, `CallbackHandler` reads `langfuse_tags` and `langfuse_session_id` from `config["metadata"]` during a LangChain run. However, on the deterministic command path (`run_command`), the root trace is opened *outside* LangChain via `with observability.observation(f"command.{question_kind}"):`. Furthermore, `/risk` makes zero LLM calls (`command.prose = False`), so `CallbackHandler` never fires at all.
 
-Update `observability.observation()` in `services/agent/observability.py` to accept `trace_metadata` and stamp the root trace via `update_current_trace` (or `span.update_trace`):
+**Correction — as built (2026-10-19).** The first draft of this section specified `span.update_trace(...)`. That method **does not exist** in SDK 4.14.4 and the call raises `AttributeError`; because it sits inside the module's blanket `try/except` (rule 1: tracing may never fail an answer), it fails *silently* and ships traces with `tags: []`, `sessionId: null`. Trace-level attributes are fixed when the trace is created, so the span must be opened **inside** `langfuse.propagate_attributes(...)` rather than patched afterwards.
+
+Update `observability.observation()` in `services/agent/observability.py` to accept `trace_metadata` and open the span inside propagated trace attributes:
 
 ```python
-# In services/agent/observability.py:
-@contextlib.contextmanager
-def observation(
-    name: str,
-    *,
-    as_type: str = "span",
-    trace_metadata: dict | None = None,
-):
-    """Open a Langfuse span and stamp root-trace tags/sessionId if provided."""
-    manager = None
-    if configured():
-        try:
-            import langfuse
+# In services/agent/observability.py — the shipped implementation:
+manager = None
+propagate = None
+if configured():
+    try:
+        import langfuse
 
-            manager = langfuse.get_client().start_as_current_observation(
-                as_type=as_type, name=name,
+        client = langfuse.get_client()
+        manager = client.start_as_current_observation(as_type=as_type, name=name)
+        if trace_metadata:
+            attrs = {
+                "trace_name": name,
+                "session_id": trace_metadata.get("langfuse_session_id"),
+                "tags": list(trace_metadata.get("langfuse_tags") or []) or None,
+                "metadata": {k: v for k, v in trace_metadata.items()
+                             if not k.startswith("langfuse_")} or None,
+            }
+            propagate = langfuse.propagate_attributes(
+                **{k: v for k, v in attrs.items() if v}
             )
-        except Exception:  # noqa: BLE001 — rule 1
-            logger.warning("could not open the langfuse span %r", name, exc_info=True)
-            manager = None
-    if manager is None:
-        yield None
-        return
+    except Exception:  # noqa: BLE001 — rule 1
+        logger.warning("could not open the langfuse span %r", name, exc_info=True)
+        manager = None
+        propagate = None
+if manager is None:
+    yield None
+    return
+with (propagate or contextlib.nullcontext()):
     with manager as span:
-        if trace_metadata and span is not None:
-            try:
-                span.update_trace(
-                    name=name,
-                    session_id=trace_metadata.get("langfuse_session_id"),
-                    tags=trace_metadata.get("langfuse_tags"),
-                    metadata={
-                        k: v for k, v in trace_metadata.items()
-                        if not k.startswith("langfuse_")
-                    },
-                )
-            except Exception:  # noqa: BLE001 — rule 1
-                logger.warning("could not update langfuse root trace", exc_info=True)
         yield span
 ```
 
@@ -157,19 +151,17 @@ And in `services/agent/graph.py` inside `ask()`:
                 prose_stream=prose_stream,
                 trace_metadata=trace_meta,
             )
-            # Stamp tool count on completion
-            if root_span is not None:
-                try:
-                    tool_count = len(command_state.get("tool_calls") or [])
-                    root_span.update_trace(
-                        tags=[*trace_meta.get("langfuse_tags", []), f"tools:{tool_count}"]
-                    )
-                except Exception:
-                    pass
-        command_state["langfuse_trace_id"] = observability.trace_id(tracing)
+            # Record the turn outcome. `tools:<n>` cannot be a trace tag (§6.1):
+            # tags are fixed at trace creation, so the count goes on root-span
+            # metadata as {"tools": n} instead.
+            tool_count = len(command_state.get("tool_calls") or [])
+            observability.stamp_trace_tags(root_span, [f"tools:{tool_count}"])
+            # Read the trace id INSIDE the span: /risk makes no LLM call, so the
+            # handler has no `last_trace_id` to report.
+            command_state["langfuse_trace_id"] = observability.current_trace_id()
         return command_state
 ```
-*(Apply the same `tools:<count>` tag update at the end of the free-text `graph.ainvoke` path so `tools:0` on Turn 2 is immediately filterable).*
+*(Apply the same `stamp_trace_tags(...)` call at the end of the free-text `graph.ainvoke` path so `tools:0` on Turn 2 is filterable via metadata).*
 
 ### 3.4 Fix 4: Score Comments & Verdict Tag Promotion (`evaluation/agent/judge.py`)
 In `evaluation/agent/judge.py`, `_attach_scores()` currently passes `flags` as the `comment`, which is empty on passing turns and omits the detailed `reasoning` paragraph when `flags` is empty. Update `_attach_scores()` to:
@@ -215,7 +207,7 @@ Once the instrumentation contract above is live, configure `https://observabilit
 
 ### 4.1 Table Column Setup
 In the **Traces** table, click **Columns** (top right) and enable:
-1. `Tags` (shows `run:<tag>`, `hadm:<id>`, `cmd:<wire>`, `turn:<1|2>`, `tools:<k>`)
+1. `Tags` (shows `run:<tag>`, `hadm:<id>`, `cmd:<wire>`, `turn:<1|2>` — note `tools:<k>` is **not** a tag; see the correction in §4.2)
 2. `Session ID` (links directly to the full multi-turn admission conversation)
 3. `Scores: verdict`, `Scores: safety`, `Scores: fidelity`, `Scores: grounding`
 4. `Score Comment` (surfaces the exact failure flag and judge reasoning on hover)
@@ -226,7 +218,7 @@ Create and save these three filter presets at the top of the Traces view:
 | Saved View Name | Exact Filter Criteria | What It Surfaces in 1 Click |
 | :--- | :--- | :--- |
 | **🚨 1. Safety & Gate Breaches** | `Score: safety < 2` **OR** `Score: verdict = 0` | Every failed turn or clinical safety violation in the current run, with the judge's defect flag visible in the row. |
-| **🔍 2. Turn-2 Evidence Misses** | `Tag = turn:2` **AND** `Tag = tools:0` | Every follow-up turn where the agent answered from memory or manifest short-circuit without calling a retrieval tool (Bucket A). |
+| **🔍 2. Turn-2 Evidence Misses** | `Tag = turn:2` **AND** `Metadata: tools = 0` | Every follow-up turn where the agent answered from memory or manifest short-circuit without calling a retrieval tool (Bucket A). |
 | **📉 3. Grounding & Fidelity Drift** | `Score: grounding < 2` **OR** `Score: fidelity < 2` | Numeric discrepancies, lab trend misreadings, or unsupported clinical claims (Buckets B & D). |
 
 ### 4.3 Multi-Turn Trajectory Review (Sessions View)
@@ -255,7 +247,7 @@ By reading `services/agent/graph.py`, `services/agent/observability.py`, and `ev
 
 Phase 01 was implemented locally-first, tested in-process, committed, and only then deployed. This section records where the shipped code diverges from the specification above and what remains open.
 
-### 6.1 Gap 1 — `tools:<n>` cannot be a trace tag (SDK 4.14.4)
+### 6.1 Gap 1 (RESOLVED, 2026-10-19) — `tools:<n>` is root-span metadata, not a trace tag (SDK 4.14.4)
 
 The spec in §3.3 assumes the root span can write back to its parent trace. It cannot: the installed Langfuse SDK exposes **no post-creation trace attribute updater**. Verified by introspection:
 
@@ -265,7 +257,9 @@ The spec in §3.3 assumes the root span can write back to its parent trace. It c
 
 **As built:** `observability.observation()` opens the span *and* wraps it in `propagate_attributes(...)` for the four trace-level fields. The tool count, which is only known *after* the graph finishes, is written to **root-span metadata** as `{"tools": n}` by `stamp_trace_tags(span, tags)`.
 
-**Consequence for §4.2:** Saved View **#2 must not be built on `Tag = tools:0`** — that tag will never exist. Build it on span metadata instead.
+**Resolution (locked):** post-run metrics live in root-span metadata. `tools:<n>` is **not** a trace tag and never will be under this SDK; the authoritative `tools = 0` test is a metadata filter, and §4.2 now states it in the primary spec table rather than only here.
+
+If a true trace-level `tools` tag is ever required, the fix is to buffer the tool count and create the trace with its final attributes in one write — a design change for Phase 04, not a defect in Phase 01.
 
 | Saved View | Corrected filter for SDK 4.14.4 |
 | :--- | :--- |
@@ -275,7 +269,7 @@ The spec in §3.3 assumes the root span can write back to its parent trace. It c
 
 If a true trace-level `tools` tag is required later, the fix is to buffer the tool count and emit the trace's final attributes in a single write at the end of the turn — a Phase 02/04 concern, not a Phase 01 blocker.
 
-### 6.2 Gap 2 — no Cloud Build trigger for the harness
+### 6.2 Gap 2 (RESOLVED, 2026-10-19) — no Cloud Build trigger for the harness
 
 Push triggers currently exist for the deployed services only:
 
@@ -286,6 +280,21 @@ Push triggers currently exist for the deployed services only:
 | `deploy-on-push` | root `cloudbuild.yaml` |
 
 There is **no** trigger on `evaluation/agent/pipeline.yaml`. The eval harness is still built by hand, so a harness change is not reproducible from a commit. Adding that trigger belongs to Phase 04 (CI/CD); until then, any harness fix must be built explicitly and the image tag recorded.
+
+**Resolution:** `evaluation/agent/trigger.yaml` defines `deploy-harness-on-push`, a 2nd gen trigger on the `danielmherman` connection that builds `evaluation/agent/cloudbuild.yaml` on push to `main` whenever `evaluation/agent/**`, `services/agent/**` or `services/mcp/**` change. It is applied with:
+
+```
+gcloud builds triggers import --source=evaluation/agent/trigger.yaml \
+    --project trim-icon-498815-a0 --region us-east1
+```
+
+Three things the first draft of that config got wrong, worth recording because each is a silent failure mode:
+
+1. **Repository identity.** The repo is `DanHerman212/enterprise_clinical_copilot`, reached through the Cloud Build connection `danielmherman`. A 1st gen `github: {owner, name}` block would point at a repository this project has no installation for.
+2. **Trigger generation.** All existing triggers are 2nd gen, identified by `repositoryEventConfig.repository` pointing at a connection-scoped repository resource. `gcloud beta builds triggers create github --config-file` is not a real flag; `triggers import --source` is the command that takes a Trigger resource.
+3. **Filter breadth.** Narrowing `includedFiles` to `contracts.py` and `routing.py` would rebuild the harness for routing changes but *not* for a change to `prompts.py` or `judge.py`-adjacent service code — leaving a harness whose assertions describe an agent that no longer exists. The image bakes in `services.agent.*` and `services.mcp.config`, so the whole `services/agent/**` and `services/mcp/**` trees are in scope.
+
+The trigger only builds and pushes an image. `evaluation/agent/cloudbuild.yaml` has no deployment or execution step, and paid eval runs still go through the separate manual `pipeline.yaml` submission — so a merge to `main` can never start a run.
 
 ### 6.3 Operational note — regional triggers
 

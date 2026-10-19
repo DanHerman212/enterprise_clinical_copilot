@@ -249,4 +249,70 @@ By reading `services/agent/graph.py`, `services/agent/observability.py`, and `ev
 - **Why `/risk` traces were invisible or empty:** `/risk` has `prose=False`, so `run_command` returns early before `_build_llm` is ever called. Because `trace_metadata` was only passed to `llm.ainvoke(..., config=config)`, `/risk` never received any tags or metadata at all! Passing `trace_metadata` directly into `observability.observation()` fixes all deterministic commands at the root span.
 - **Why Turn 2 traces disappeared when filtering by `run:<tag>`:** `collect_http.py` line 404 hardcoded `{"question": case["follow_up"], "hadm_id": case.get("hadm_id"), "turns": [replayed]}` without calling `_body()`, dropping `run_tag` on every single follow-up turn in the evaluation.
 
+---
+
+## 6. As-Built Notes & Known Gaps
+
+Phase 01 was implemented locally-first, tested in-process, committed, and only then deployed. This section records where the shipped code diverges from the specification above and what remains open.
+
+### 6.1 Gap 1 — `tools:<n>` cannot be a trace tag (SDK 4.14.4)
+
+The spec in §3.3 assumes the root span can write back to its parent trace. It cannot: the installed Langfuse SDK exposes **no post-creation trace attribute updater**. Verified by introspection:
+
+- `LangfuseSpan` has **no** `update_trace` method (first implementation attempt raised `AttributeError`, which was swallowed by the surrounding try/except and produced silently empty traces).
+- `LangfuseClient` exposes `create_trace_id`, `get_current_trace_id`, `score_current_trace`, `set_current_trace_io`, `update_current_generation` — none of which mutate trace tags after creation.
+- Trace-level attributes can only be set **at trace creation**, via `langfuse.propagate_attributes(trace_name=..., session_id=..., tags=..., metadata=...)`.
+
+**As built:** `observability.observation()` opens the span *and* wraps it in `propagate_attributes(...)` for the four trace-level fields. The tool count, which is only known *after* the graph finishes, is written to **root-span metadata** as `{"tools": n}` by `stamp_trace_tags(span, tags)`.
+
+**Consequence for §4.2:** Saved View **#2 must not be built on `Tag = tools:0`** — that tag will never exist. Build it on span metadata instead.
+
+| Saved View | Corrected filter for SDK 4.14.4 |
+| :--- | :--- |
+| 🚨 1. Safety & Gate Breaches | `Score: safety < 2` **OR** `Score: verdict = 0` (unchanged) |
+| 🔍 2. Turn-2 Evidence Misses | `Tag = turn:2` **AND** `Metadata: tools = 0` |
+| 📉 3. Grounding & Fidelity Drift | `Score: grounding < 2` **OR** `Score: fidelity < 2` (unchanged) |
+
+If a true trace-level `tools` tag is required later, the fix is to buffer the tool count and emit the trace's final attributes in a single write at the end of the turn — a Phase 02/04 concern, not a Phase 01 blocker.
+
+### 6.2 Gap 2 — no Cloud Build trigger for the harness
+
+Push triggers currently exist for the deployed services only:
+
+| Trigger | Builds |
+| :--- | :--- |
+| `deploy-agent-on-push` | `services/agent/cloudbuild.yaml` |
+| `deploy-mcp-on-push` | `services/mcp/cloudbuild.yaml` |
+| `deploy-on-push` | root `cloudbuild.yaml` |
+
+There is **no** trigger on `evaluation/agent/pipeline.yaml`. The eval harness is still built by hand, so a harness change is not reproducible from a commit. Adding that trigger belongs to Phase 04 (CI/CD); until then, any harness fix must be built explicitly and the image tag recorded.
+
+### 6.3 Operational note — regional triggers
+
+All three triggers are **2nd-gen and regional (`us-east1`)**. `gcloud builds list` without `--region` defaults to `us-central1` and will report *no new build* even when a trigger fired correctly. Always check:
+
+```
+gcloud builds list --project trim-icon-498815-a0 --region us-east1 --limit 5 \
+  --format="table(id,status,substitutions.TRIGGER_NAME,substitutions.COMMIT_SHA)"
+```
+
+This cost a false "the trigger didn't fire" conclusion during Phase 01 verification.
+
+### 6.4 Live verification evidence (commit `e8c587b`, revision `agent-00148-dl4`)
+
+Three new tests were added (the spec asked for two; `test_live_traffic_gets_no_invented_session` guards the deliberate decision that untagged production traffic must **not** be given a fabricated session id). Full suite: 884 passed, 1 skipped.
+
+End-to-end check against the deployed service — `POST /ask {"question":"/risk","hadm_id":90000015,"run_tag":"phase1-verify"}`:
+
+| Field | Observed | Required |
+| :--- | :--- | :--- |
+| trace name | `command.risk` | ✓ root span now carries attributes without an LLM call |
+| tags | `command:risk`, `hadm:90000015`, `run:phase1-verify`, `turn:1` | ✓ |
+| sessionId | `phase1-verify:hadm_90000015` | ✓ sessions group per admission |
+| returned `langfuse_trace_id` | `2881690a92df910f1375272a7739775f` (non-empty) | ✓ usable as a join key in harness reports |
+| root-span metadata | `{"tools": 1}` | ✓ tools recorded (as metadata, per §6.1) |
+| child spans | `tool.predict_readmission` | ✓ |
+
+This trace was the first non-empty `/risk` trace in the project. Note it was produced with an authenticated request (`Authorization: Bearer $(gcloud auth print-identity-token)`); an anonymous POST returns 403 from Cloud Run, not from the agent.
+
 Review **`01-langfuse_telemetry_and_trace_contract.md`** above—if this looks solid to you, we can move straight into generating **`02-harness_architecture_and_assertions.md`**!

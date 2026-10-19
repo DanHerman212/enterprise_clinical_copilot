@@ -945,7 +945,8 @@ def _context_block(admission_context: str) -> str:
 
 
 def _trace_metadata(
-    hadm_id: int | None, question_kind: str | None, run_tag: str | None = None
+    hadm_id: int | None, question_kind: str | None, run_tag: str | None = None,
+    turns: list[dict[str, str]] | None = None,
 ) -> dict:
     """What a Langfuse trace needs in order to be found again by patient or by run.
 
@@ -965,10 +966,19 @@ def _trace_metadata(
     that and could not prove it had spared production traffic).
     """
     tags: list[str] = []
-    meta: dict[str, str] = {}
+    meta: dict[str, object] = {}
     # The request's own label wins; the context variable is what carries it here
     # without changing `ask`'s signature.
     run_tag = run_tag or observability.current_run_tag()
+
+    # Which turn of the conversation this is, derived from the replay the caller sent
+    # rather than counted locally: the agent holds nothing between requests, so the
+    # transcript is the only honest source — the same reasoning that decides the stage
+    # labels. A first turn carries no `turns`, so it is turn 1.
+    turn_index = 1 + len(turns or [])
+    tags.append(f"turn:{turn_index}")
+    meta["turn"] = turn_index
+
     if hadm_id is not None:
         tags.append(f"hadm:{hadm_id}")
         meta["hadm_id"] = str(hadm_id)
@@ -978,8 +988,14 @@ def _trace_metadata(
     if run_tag:
         tags.append(f"run:{run_tag}")
         meta["run_tag"] = str(run_tag)
-    if tags:
-        meta["langfuse_tags"] = tags  # type: ignore[assignment]
+        # Eval turns are grouped per admission *within a run*: `{run}:hadm_{id}`.
+        # Live traffic carries no run tag and is deliberately given no session id —
+        # the agent is stateless and is not told what a conversation is, and inventing
+        # one from the admission would lump every past turn of that patient into one
+        # endless session, which is a worse lie than no grouping at all.
+        if hadm_id is not None:
+            meta["langfuse_session_id"] = f"{run_tag}:hadm_{hadm_id}"
+    meta["langfuse_tags"] = tags
     return meta
 
 
@@ -1034,7 +1050,13 @@ async def ask(
         # and the formatting generation nest under it, and Langfuse can draw the
         # graph. Without it this path emitted a single parentless generation and
         # every command trace had an empty Graph view.
-        with observability.observation(f"command.{question_kind}"):
+        #
+        # The span is also the ROOT TRACE, so the metadata goes on here rather than
+        # only into the formatting model's config: `/risk` makes no LLM call at all,
+        # so a trace whose tags depended on a model run carried none.
+        command_meta = _trace_metadata(hadm_id, question_kind, run_tag, turns)
+        with observability.observation(f"command.{question_kind}",
+                                       trace_metadata=command_meta) as root_span:
             command_state = await run_command(
                 toolbox,
                 routing.command_for(question_kind),
@@ -1045,7 +1067,14 @@ async def ask(
                 on_event=on_event,
                 callbacks=[tracing] if tracing is not None else None,
                 prose_stream=prose_stream,
-                trace_metadata=_trace_metadata(hadm_id, question_kind, run_tag),
+                trace_metadata=command_meta,
+            )
+            # `tools:<n>` cannot be known when the span opens. `tools:0` is the tag the
+            # triage view filters on, so it is added here, once the count exists.
+            observability.stamp_trace_tags(
+                root_span,
+                [*command_meta.get("langfuse_tags", []),
+                 f"tools:{len(command_state.get('tool_calls') or [])}"],
             )
         command_state["langfuse_trace_id"] = observability.trace_id(tracing)
         return command_state
@@ -1063,7 +1092,7 @@ async def ask(
     )
 
     config: dict = {"recursion_limit": RECURSION_LIMIT}
-    trace_meta = _trace_metadata(hadm_id, question_kind, run_tag)
+    trace_meta = _trace_metadata(hadm_id, question_kind, run_tag, turns)
     if trace_meta:
         # Langfuse reads `langfuse_tags` from run metadata; the other keys ride along
         # so the admission and command are visible on the trace itself.
@@ -1085,26 +1114,39 @@ async def ask(
 
     replayed, replayed_calls = await replay_messages(toolbox, turns)
 
-    state = await graph.ainvoke(
-        {
-            "messages": [
-                SystemMessage(content=SYSTEM_PROMPT + _context_block(admission_context)),
-                *replayed,
-                HumanMessage(content=question),
-            ],
-            "tool_calls": [],
-            # The replayed turns' calls travel with the run so the answer can be
-            # guarded against the evidence it was actually given. Without them a
-            # follow-up reusing the stored score is served with the score
-            # stripped as unsupported, which is a correct answer destroyed by a
-            # guardrail that could only see this turn.
-            "replayed_tool_calls": replayed_calls,
-            # Cleared per run, so the demand below is made at most once per question
-            # rather than once per conversation.
-            "retrieval_demanded": False,
-        },
-        config=config,
-    )
+    # The same root span the command path uses, for the same two reasons: the trace
+    # gets its tags and session id from us rather than depending on the SDK reading
+    # them off a model config, and `tools:<n>` can be appended once the turn is over.
+    # `tools:0` is what the "Turn-2 evidence miss" view filters on, and a follow-up
+    # answered from memory is exactly a turn that calls nothing.
+    with observability.observation(
+        f"free_text.turn{trace_meta.get('turn', 1)}", trace_metadata=trace_meta,
+    ) as root_span:
+        state = await graph.ainvoke(
+            {
+                "messages": [
+                    SystemMessage(content=SYSTEM_PROMPT + _context_block(admission_context)),
+                    *replayed,
+                    HumanMessage(content=question),
+                ],
+                "tool_calls": [],
+                # The replayed turns' calls travel with the run so the answer can be
+                # guarded against the evidence it was actually given. Without them a
+                # follow-up reusing the stored score is served with the score
+                # stripped as unsupported, which is a correct answer destroyed by a
+                # guardrail that could only see this turn.
+                "replayed_tool_calls": replayed_calls,
+                # Cleared per run, so the demand below is made at most once per question
+                # rather than once per conversation.
+                "retrieval_demanded": False,
+            },
+            config=config,
+        )
+        observability.stamp_trace_tags(
+            root_span,
+            [*trace_meta.get("langfuse_tags", []),
+             f"tools:{len(state.get('tool_calls') or [])}"],
+        )
 
     # The model's own verdict on what it was given, read before anything else looks
     # at the text: an answer the model wrapped in the contract's envelope is

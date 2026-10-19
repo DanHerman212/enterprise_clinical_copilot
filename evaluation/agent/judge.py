@@ -227,7 +227,14 @@ def _attach_scores(client, trace_id: str, j: dict) -> int:
     if client is None or not trace_id:
         return 0
     dims = j.get("dimensions") or {}
-    flags = " | ".join(j.get("flags") or []) or (j.get("reason") or "")[:300]
+    # The comment used to be the flags alone, which is empty on a clean turn and never
+    # carried the rationale — so the one sentence explaining *why* a turn failed lived
+    # only in the JSONL, and triage meant downloading artefacts (audited 2026-10-19).
+    # Flags first (scannable), then the reasoning (explanatory), then the short reason
+    # as a fallback for a sample that predates `reasoning`.
+    flag_str = " | ".join(j.get("flags") or [])
+    rationale = (j.get("reasoning") or j.get("reason") or "").strip()
+    comment = f"[{flag_str}] {rationale}".strip()[:500] if flag_str else rationale[:500]
     n = 0
     for dim in DIMS:
         value = dims.get(dim)
@@ -239,10 +246,10 @@ def _attach_scores(client, trace_id: str, j: dict) -> int:
         if not isinstance(value, (int, float)) or isinstance(value, bool):
             continue
         client.create_score(trace_id=trace_id, name=dim, value=float(value),
-                            comment=flags)
+                            comment=comment)
         n += 1
     client.create_score(trace_id=trace_id, name="verdict",
-                        value=1 if j.get("verdict") == "PASS" else 0, comment=flags)
+                        value=1 if j.get("verdict") == "PASS" else 0, comment=comment)
     return n + 1
 
 

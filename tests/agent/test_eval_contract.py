@@ -511,3 +511,55 @@ def test_the_agent_is_told_not_to_issue_care_directives():
     )
     assert "care prioritisation" in text
     assert "prescriptive" in text
+
+
+# --- 8. Phase 01: the root-trace telemetry contract ------------------------------
+
+def test_trace_metadata_includes_turn_and_session():
+    """Langfuse could not group or filter an eval run: no turn index, no session id.
+
+    A follow-up could not be told from an opening question, and Turn 1 and Turn 2 of one
+    admission could not be viewed together. `turn` is derived from the replay the caller
+    sent, because the agent holds no conversation state of its own.
+    """
+    from services.agent.graph import _trace_metadata
+
+    meta = _trace_metadata(90000015, "summarize", "test-run",
+                           turns=[{"question": "/ehr", "answer": "a"}])
+
+    assert meta["turn"] == 2
+    assert meta["langfuse_session_id"] == "test-run:hadm_90000015"
+    assert meta["langfuse_tags"] == [
+        "turn:2", "hadm:90000015", "command:summarize", "run:test-run",
+    ]
+
+    first = _trace_metadata(90000015, None, "test-run")
+    assert first["turn"] == 1
+    assert "command:summarize" not in first["langfuse_tags"]
+
+
+def test_live_traffic_gets_no_invented_session():
+    """Without a run tag there is no session id, deliberately.
+
+    The agent is stateless and is not told what a conversation is. Deriving
+    `hadm_<id>` would lump every past turn of that patient into one endless session,
+    which is a worse lie than no grouping (decided 2026-10-19).
+    """
+    from services.agent.graph import _trace_metadata
+
+    meta = _trace_metadata(90000015, "risk", None)
+    assert "langfuse_session_id" not in meta
+    assert "run:" not in " ".join(meta["langfuse_tags"])
+
+
+def test_turn2_collector_preserves_run_tag():
+    """The follow-up body must carry `run_tag`, or half of every conversation vanishes
+    from the run filter — which is exactly what happened: Turn 1 tagged, Turn 2 not."""
+    case = {"hadm_id": 90000015, "prompt": "ehr", "question": "/ehr",
+            "run_tag": "pilot-x", "follow_up": "What was the plan?"}
+    body = collect_http._turn2_body(
+        case, {"question": "/ehr", "answer": "", "tool_calls": []})
+
+    assert body["run_tag"] == "pilot-x"
+    assert body["turns"] == [{"question": "/ehr", "answer": "", "tool_calls": []}]
+    assert body["question"] == "What was the plan?"

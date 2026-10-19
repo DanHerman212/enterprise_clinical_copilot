@@ -404,6 +404,19 @@ def _body(question: str, case: dict) -> dict:
     return body
 
 
+def _turn2_body(case: dict, replayed: dict) -> dict:
+    """The follow-up request body: Turn 1's fields plus the replayed turn.
+
+    Built from `_body` so every case-scoped field survives — `run_tag` above all. A
+    literal dict here is what orphaned every follow-up trace in Langfuse: Turn 1 was
+    tagged `run:<tag>` and Turn 2 was not, so filtering by run showed half a
+    conversation (audited 2026-10-19).
+    """
+    body = _body(case["follow_up"], case)
+    body["turns"] = [replayed]
+    return body
+
+
 def _key(case: dict, turn: int) -> tuple:
     """The key one answer of a case is recorded under, for resume."""
     if "id" in case:
@@ -580,11 +593,9 @@ async def _run_set(client, cases, out_path: Path, args, label: str,
                 if case.get("follow_up") and first.get("status") == 200:
                     if _key(case, 2) not in done:
                         replayed = replay_turn(case["question"], first)
+                        turn2 = _turn2_body(case, replayed)
                         produced.append(await _answer(
-                            client, case, 2, case["follow_up"],
-                            {"question": case["follow_up"],
-                             "hadm_id": case.get("hadm_id"),
-                             "turns": [replayed]},
+                            client, case, 2, case["follow_up"], turn2,
                             prior=replayed))
 
                 if not produced:
@@ -805,11 +816,10 @@ async def _preflight(client, args) -> int:
         return 1
 
     replayed = replay_turn(conv["question"], first)
-    second = await _answer(
-        client, conv, 2, conv["follow_up"],
-        {"question": conv["follow_up"], "hadm_id": conv["hadm_id"],
-         "turns": [replayed]},
-        prior=replayed)
+    # Same builder as `_run_set`: one implementation, so a field cannot survive on one
+    # path and go missing on the other.
+    conv2 = _turn2_body(conv, replayed)
+    second = await _answer(client, conv, 2, conv["follow_up"], conv2, prior=replayed)
     print(f"  turn 1: status={first.get('status')} "
           f"tools={[c.get('name') for c in first.get('tool_calls') or []]} | "
           f"replay carries {len(replayed['tool_calls'])} tool calls | "

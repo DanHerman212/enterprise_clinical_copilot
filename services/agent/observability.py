@@ -93,7 +93,8 @@ def handler():
 
 
 @contextlib.contextmanager
-def observation(name: str, *, as_type: str = "span"):
+def observation(name: str, *, as_type: str = "span",
+                trace_metadata: dict | None = None):
     """A span to hold work that LangChain does not already trace.
 
     `CallbackHandler` reports model and tool runs, which is everything the reasoning
@@ -102,6 +103,12 @@ def observation(name: str, *, as_type: str = "span"):
     with exactly ONE observation and no parent. Langfuse disables its Graph view when
     there is no hierarchy to draw, so the turns most worth reviewing were the ones
     with nothing to review.
+
+    `trace_metadata` stamps the ROOT trace — name, session id, tags, metadata — because
+    on the command path this span *is* the root. The metadata was previously handed only
+    to the formatting model's config, which meant tags reached Langfuse only when the
+    model ran at all: `/risk` makes zero LLM calls (`command.prose` is False), so its
+    traces carried no tags, no session and no admission (audited 2026-10-19).
 
     Yields None when unconfigured, and never raises (rule 1). A span is a convenience
     for a reader; the answer outranks it.
@@ -121,7 +128,46 @@ def observation(name: str, *, as_type: str = "span"):
         yield None
         return
     with manager as span:
+        if trace_metadata and span is not None:
+            _stamp_trace(span, name=name, trace_metadata=trace_metadata)
         yield span
+
+
+def _stamp_trace(span, *, name: str, trace_metadata: dict,
+                 extra_tags: list[str] | None = None) -> None:
+    """Put the root-trace attributes on, best-effort.
+
+    A trace missing its tags is a bad dashboard; an exception here would be a failed
+    answer, so every failure is logged and swallowed (rule 1).
+    """
+    tags = list(trace_metadata.get("langfuse_tags") or [])
+    if extra_tags:
+        tags += [t for t in extra_tags if t not in tags]
+    try:
+        span.update_trace(
+            name=name,
+            session_id=trace_metadata.get("langfuse_session_id"),
+            tags=tags,
+            metadata={k: v for k, v in trace_metadata.items()
+                      if not k.startswith("langfuse_")},
+        )
+    except Exception:  # noqa: BLE001 — rule 1
+        logger.warning("could not stamp langfuse root trace %r", name, exc_info=True)
+
+
+def stamp_trace_tags(span, tags: list[str]) -> None:
+    """Add tags to an already-stamped trace, once the turn's outcome is known.
+
+    `tools:<n>` cannot be known when the span opens, so it is added at the end. Called
+    with whatever `observation()` yielded; a None span (unconfigured, or the SDK failed
+    to open one) is a no-op rather than an error.
+    """
+    if span is None:
+        return
+    try:
+        span.update_trace(tags=tags)
+    except Exception:  # noqa: BLE001 — rule 1
+        logger.warning("could not append langfuse trace tags", exc_info=True)
 
 
 def trace_id(handler=None) -> str:

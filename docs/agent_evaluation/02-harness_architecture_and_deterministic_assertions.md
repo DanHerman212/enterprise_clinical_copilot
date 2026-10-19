@@ -136,5 +136,17 @@ A mount that is empty or mis-prefixed falls back to the baked copies with a prin
 | Real adversarial file through `_merge_for_judging` | 20 in, 20 out — probes are never filtered |
 | Synthetic 30-case suite 2 through the merge | 26 judged, 4 dropped, exactly `S2-16`–`S2-19` |
 | `pipeline.yaml` substitution audit | every `${_VAR}` referenced is defined |
+| `deploy-harness-on-push` on `a07c85b` | SUCCESS — the Phase 02 code builds into the image |
+| `eval-adversarial` / `eval-clinical` redeploy | SUCCESS from `harness:a07c85b…`; volume is `gcsfuse.run.googleapis.com`, `readOnly: true`, bucket `ecc-eval-artifacts`, mounted `/mnt/gcs`, with `EVAL_CASES_DIR=/mnt/gcs/fixtures` |
+| `scripts/sync_fixtures.sh` | 3 objects published under `gs://ecc-eval-artifacts/fixtures/` |
+
+**Not yet verified:** the harness has not been *executed* since Phase 02 — collection → merge → judge → `by_suite` report has only been exercised in-process and against fixture files. Deploy configuration is verified; runtime behaviour is not. The cheapest honest check is a scoped clinical run:
+
+```
+gcloud run jobs execute eval-clinical --region us-east1 --wait \
+    --update-env-vars "RUN_TAG=phase02-smoke,MAX_PATIENTS=1"
+```
+
+`MAX_PATIENTS=1` suppresses the census-denominator check (it is only enforced on a full run) while still collecting the suite 2 matrix, so it exercises the merge, the expected-refusal filter, the stratified report and the manifest in about the time one admission takes. A full census run belongs to Phase 03, where the judge calibration is the point.
 
 * **Execute Local Dry-Run Rehearsal**: Run a 3-patient pilot test locally from your environment using collect_http.py --max-patients 3 --suite2 to ensure artifacts generate and route correctly prior to any Cloud Run execution.

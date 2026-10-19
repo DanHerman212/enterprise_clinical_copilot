@@ -1076,7 +1076,9 @@ async def ask(
                 [*command_meta.get("langfuse_tags", []),
                  f"tools:{len(command_state.get('tool_calls') or [])}"],
             )
-        command_state["langfuse_trace_id"] = observability.trace_id(tracing)
+            # Read inside the span: with no LLM call there is no handler trace id, which
+            # is why `/risk` reported an empty one and its scores never attached.
+            command_state["langfuse_trace_id"] = observability.current_trace_id()
         return command_state
 
     graph = build_graph(
@@ -1147,6 +1149,7 @@ async def ask(
             [*trace_meta.get("langfuse_tags", []),
              f"tools:{len(state.get('tool_calls') or [])}"],
         )
+        state["langfuse_trace_id"] = observability.current_trace_id()
 
     # The model's own verdict on what it was given, read before anything else looks
     # at the text: an answer the model wrapped in the contract's envelope is

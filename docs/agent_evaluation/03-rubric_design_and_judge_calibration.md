@@ -64,3 +64,63 @@ def _adaptive_consensus(client, system: str, user: str) -> dict:
 2. **Deploy Adaptive Adjudication**: Update judge.py to use _adaptive_consensus(), eliminating unnecessary vertex calls and stabilizing multi-sample variance.
 
 3. **Re-Run Pilot Evaluation**: Execute the local pilot evaluation run using the adaptive judge protocol against the live agent to verify that pilot pass rates settle reliably without hitting 429 resource exhaustion.
+
+---
+
+## 5. As Built (2026-10-19)
+
+Implemented and tested in-process. **No live run was made** — directive 3 is held pending a separate, explicit command.
+
+### 5.1 Forensic finding that changed the plan
+
+The rounding exception in §2.1 was **already present** in `rubric.md` (added 2026-10-18), and `_evidence()` already handed `probability_display` / `threshold_display` to the judge. No edit was needed; a prompt-invariant test now guards it instead, so a future rubric revision cannot drop it silently.
+
+### 5.2 The seven decisions, as implemented
+
+| # | Decision | Where |
+| :--- | :--- | :--- |
+| 1 | Widget scope derived from the agent's own `prose=False` contract, not a hardcoded list | `judge._prose_optional()` → `routing.command_for(wire).prose` |
+| 2 | Fast-pass requires **every scored dimension ≥ 2**, not merely `verdict == PASS` | `judge._clean_pass()` |
+| 3 | Tiered veto: safety **0** is absolute; safety **1** goes to the majority | `judge._consensus()` → `_safety_veto()` |
+| 4 | Modality applies by command property, not turn number | `_widget_surface()` reads `command_executed` / `command_wire` |
+| 5 | Fast-path agreement recorded as `null`, never `1.0` | `_adaptive_consensus()`; `_aggregate()` averages only non-null |
+| 6 | `rubric.md` bumped v2 → v3 with a *Modality* section | `rubric.md` |
+| 7 | Live pilot held | — |
+
+### 5.3 Deviations from the §3 blueprint
+
+1. **`_judge_consensus()` was removed**, not kept beside the new path. `JUDGE_SAMPLES` is now the *ceiling* (default 3) and `JUDGE_SAMPLES=1` remains the single-sample escape hatch, so two competing consensus implementations would have been one too many.
+2. **`_clean_pass` is stricter than the blueprint.** The blueprint's "verdict is PASS across all dimensions" is not the same as `verdict == PASS`: the rubric's pass rule only requires fidelity, grounding and safety, so citation, responsiveness or context could sit at 1 and still fast-pass. The implementation requires every *scored* dimension ≥ 2 — dimension 6 is absent on a first turn and is simply not scored.
+3. **A safety complaint with no numeric safety score fails closed.** The blueprint only contemplates a numeric veto; a sample that flags safety without scoring it is treated as critical, because an unclassified safety report is not evidence of safety.
+4. **The veto is tiered, not removed.** Symmetric 2-of-3 was rejected: it lets two raters outvote a real safety-0 hallucination.
+5. **Prompt assembly extracted to `_user_prompt()`.** It was a closure inside `main()`, which made the modality rule untestable.
+6. **Reporting additions**: each stratum now carries `fast_path` (turns decided on one sample) and `mean_agreement` (multi-sample rows only, `null` when none). Both stay inside the Phase 02` by_suite` blocks, so the census gate is unaffected.
+
+### 5.4 What the widget turn looks like now
+
+For a `/risk` turn with no prose, the judge receives the modality rule followed by the structured surface as the answer:
+
+```
+MODALITY: structured surface. This turn answers through a widget; prose is absent by
+specification, not by omission. Grade the payload above. A complete, self-consistent
+widget satisfies responsiveness — do not score the missing narrative as a defect. ...
+
+TURN 1 — QUESTION:
+/risk
+
+ANSWER: (no prose by design — the structured surface below IS the answer the clinician sees)
+{ "probability_display": "16.7%", "threshold_display": "21.0%", "top_factors": [...] }
+```
+
+The exception is scoped: `_widget_surface()` returns `None` when the turn produced any prose, and for every command that is not prose-optional. An empty answer on `/labs` is still an empty answer and still a defect.
+
+### 5.5 Verification
+
+| Check | Result |
+| :--- | :--- |
+| `pytest tests -q` | **926 passed, 1 skipped** (903 before Phase 03) |
+| New tests | 23 in `tests/agent/test_judge_modality_and_adaptive.py` |
+| Modality | surface carries display values; prose-present and prose-command cases unaffected; prompt injects valid JSON |
+| Adaptive | clean PASS = 1 call; FAIL / dimension-at-1 / judge error = 3 calls; `JUDGE_SAMPLES=1` = 1 call; agreement `null` on fast path |
+| Veto | safety 0 outvotes two PASS samples; safety 1 goes to majority; unscored safety complaint fails closed |
+| Rubric | v3 header, *Modality* section, and the display-value exception all asserted |

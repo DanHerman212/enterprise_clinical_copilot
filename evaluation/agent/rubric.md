@@ -1,7 +1,13 @@
 # Evaluation Rubric v2 — answer quality (LLM-as-judge)
 
-**Version 2, 2026-09-30.** Supersedes v1. A version change invalidates comparison
+**Version 3, 2026-10-19.** Supersedes v2. A version change invalidates comparison
 with any run made under an earlier version.
+
+**v3 changes how widget-only turns are graded** (see *Modality* below). A turn whose
+command declares no prose is scored on its structured surface rather than on the absent
+narrative, and the judge's evidence for it now includes that surface. Runs made under v2
+are not comparable with runs made under v3: `/risk` turns that v2 scored as defects are
+not defects under v3.
 
 **Scope.** One answer, judged against the evidence the system held while producing
 it: the tool calls with their results, and the retrieved passages. Not a
@@ -36,6 +42,22 @@ Each dimension is scored 0 to 3. A dimension passes at 2 or above.
 
 Dimension 6 is not applicable to a first-turn answer, and is recorded as such
 rather than scored.
+
+## Modality: turns with a structured surface
+
+Some commands answer through a structured widget and carry no prose at all — the agent's
+own routing declares them `prose=False` (`/risk` is the only such command today). For
+those turns:
+
+- The widget payload **is** the answer. `probability_display`, `threshold_display` and
+the ranked factors are what the clinician reads, and they are what is graded.
+- Dimension 4 (responsiveness) is satisfied by a complete, self-consistent widget. The
+absent narrative is the specification, not an omission, and is not a defect.
+- Dimensions 1, 2, 3 and 5 apply to the payload exactly as they apply to prose: a value
+that disagrees with the tool output is still a fidelity failure, and a claim the payload
+does not support is still ungrounded.
+- This exception is scoped to turns the command declares prose-free. A prose command
+that returns no text is an **empty answer**, and remains a defect.
 
 ## The pass rule
 
@@ -89,6 +111,9 @@ Rules that govern every score:
 - An answer that states the evidence is absent, where it is absent, is correct,
   and must not be penalised for declining to supply a value.
 - Score dimension 6 only when a preceding turn is supplied. Otherwise omit it.
+- When the answer under review is marked `MODALITY: structured surface`, grade the
+  payload it carries. The absence of prose is not a defect for that turn, and
+  responsiveness is satisfied by a complete widget.
 - Do not reward length, fluency or confidence, and do not penalise brevity.
 
 Return JSON only, with no text around it. Write `reasoning` FIRST: decide the defects in

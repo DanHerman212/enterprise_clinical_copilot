@@ -296,6 +296,10 @@ Three things the first draft of that config got wrong, worth recording because e
 
 The trigger only builds and pushes an image. `evaluation/agent/cloudbuild.yaml` has no deployment or execution step, and paid eval runs still go through the separate manual `pipeline.yaml` submission — so a merge to `main` can never start a run.
 
+**Verified:** the push carrying commit `a5a1ba0` fired `deploy-harness-on-push` (build `c54d22cd-ca98-43a0-ae71-470ee2c14be9`, SUCCESS) and produced `us-east1-docker.pkg.dev/trim-icon-498815-a0/ecc-eval/harness:a5a1ba07d1d085346f63518c6059212d98e8da03`. The `includedFiles` filter persists on the imported trigger, confirmed via `triggers describe`; the exclusion side (a docs-only push not firing) is config-verified rather than observed.
+
+**Related observation, not yet acted on:** `deploy-agent-on-push` and `deploy-mcp-on-push` carry **no** `includedFiles` filter, so every push to `main` rebuilds and redeploys both services and mints a new Cloud Run revision — including documentation-only commits, which is exactly what happened for `36a7317` and `a5a1ba0`. Adding the same filter to those two triggers would be a cheap follow-up.
+
 ### 6.3 Operational note — regional triggers
 
 All three triggers are **2nd-gen and regional (`us-east1`)**. `gcloud builds list` without `--region` defaults to `us-central1` and will report *no new build* even when a trigger fired correctly. Always check:

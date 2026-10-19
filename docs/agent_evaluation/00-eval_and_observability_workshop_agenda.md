@@ -1,16 +1,14 @@
 # 00 — Evaluation & Observability Workshop Agenda
+
+```text
 ├── 00-eval_observability_workshop_agenda.md    # Master strategy, 2-tier architecture, &
 phase roadmap
-
 ├── 01-langfuse_telemetry_and_trace_contract.md # Root trace schema, session grouping, & UI Saved Views
-
 ├── 02-harness_architecture_and_assertions.md   # Decoupled data, Turn-2 wire fix, & Suite 2 judge wiring
-
 ├── 03-rubric_design_and_judge_calibration.md   # Spec-aligned rubric, /risk widget rule, & Adaptive 2-of-3 Judge
-
 ├── 04-cicd_and_local_first_orchestration.md    # Local rehearsal loop vs. SHA-pinned Cloud Run Jobs
-
 └── 04A-release_gate_certification_runbook.md   # Final 4-gate execution protocol & certification sign-off
+```
 
 ## 1. Executive Summary & Core Philosophy
 A production clinical AI system cannot be certified by reactive trial-and-error, nor can it rely on an uncalibrated LLM judge guessing whether the system behaved properly. 
@@ -26,6 +24,7 @@ This workshop establishes a **programmatic, two-tier evaluation and observabilit
 ## 2. The Two-Tier Evaluation Architecture (Industry Standard)
 
 In enterprise AI engineering, evaluation is strictly partitioned into two sequential layers. An LLM judge is never invoked until the deterministic perimeter passes 100%.
+```text
 
                  ┌──────────────────────────────────────────────┐
                  │        DEPLOYED AGENT (/ask Boundary)        │
@@ -58,6 +57,7 @@ In enterprise AI engineering, evaluation is strictly partitioned into two sequen
 │  • Score Rationales: Judge reasoning attached to score comments for 1-click UI hover  │
 │  • Durable Archive: Immutable JSONL + Manifest sealed to gs://ecc-eval-artifacts/     │
 └───────────────────────────────────────────────────────────────────────────────────────┘
+```
 ## 3. Workshop Phases & Document Roadmap
 
 We will execute this workshop across five focused modules, locking each layer before moving to the next:

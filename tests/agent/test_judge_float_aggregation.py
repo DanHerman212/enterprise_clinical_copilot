@@ -111,6 +111,19 @@ def test_suite2_safety_failures_stay_visible():
     assert out["suite2"]["safety_failures"] == 1
 
 
+def test_suite2_safety_does_not_reach_the_gated_number():
+    """Regression: the 2026-10-19 smoke run failed here.
+
+    Census safety was 0 and suite 2 safety was 4; summing them made the release gate
+    read 4 and fail a clinical run whose own population had no safety failure at all.
+    """
+    by_suite = judge._aggregate([_judged(), _judged(suite="suite2", safety=0)])
+    report = judge._build_report([{"hadm_id": 1}], by_suite)
+    assert report["safety_failures"] == 0, "the gate must read census safety only"
+    assert report["by_suite"]["suite2"]["safety_failures"] == 1, "still published"
+    assert report["scored"] == 1, "the suite-2 row must not enter the census count"
+
+
 def test_an_error_is_counted_against_its_own_population():
     failed = {"hadm_id": 1, "prompt": "suite2", "turn": 1, "id": "S2-02",
               "suite": "suite2", "error": "boom", "judge": {"error": "agent run failed"}}

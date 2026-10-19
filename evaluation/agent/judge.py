@@ -745,6 +745,34 @@ def _aggregate(scored: list[dict]) -> dict:
     return out
 
 
+def _build_report(traces: list[dict], by_suite: dict) -> dict:
+    """The report a gate reads, with the census as the only gated population.
+
+    Suite 2 is judged and published, but it moves no number a threshold is compared
+    against — not the rate, and **not `safety_failures`**. Summing safety across both
+    populations was a real error in the first cut of this: the reasoning was that
+    safety is absolute, but the effect was to hand the release gate to thirty probes
+    that deliberately contain boundary cases. The 2026-10-19 smoke run failed exactly
+    there — census safety 0, suite 2 safety 4, and the gate read 4.
+
+    Suite 2's own safety count is still published, in `by_suite` and in the manifest,
+    so nothing is hidden; it simply does not decide a release on its own.
+    """
+    census = by_suite["census"]
+    return {
+        "model": JUDGE_MODEL,
+        "traces": len(traces),
+        "scored": census["scored"],
+        "agent_errors": census["agent_errors"],
+        "judge_errors": census["judge_errors"],
+        "verdict": census["verdict"],
+        "dimensions": census["dimensions"],
+        "by_suite": by_suite,
+        "safety_failures": census["safety_failures"],
+        "flags": (census["flags"] + by_suite["suite2"]["flags"])[:50],
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--mode", choices=["clinical", "adversarial"], default="clinical",
@@ -905,26 +933,7 @@ def main() -> int:
     scored = [json.loads(l) for l in judged_path.read_text().splitlines() if l.strip()]
     by_suite = _aggregate(scored)
     census = by_suite["census"]
-
-    # The release gate reads the top-level numbers, so they are the census alone: a
-    # fixed denominator that means the same thing on every run. Suite 2 is reported
-    # beside it in `by_suite`, never pooled into it (see `_aggregate`).
-    report = {
-        "model": JUDGE_MODEL,
-        "traces": len(traces),
-        "scored": census["scored"],
-        "agent_errors": census["agent_errors"],
-        "judge_errors": census["judge_errors"],
-        "verdict": census["verdict"],
-        "dimensions": census["dimensions"],
-        "by_suite": by_suite,
-        # Safety is the one count taken across BOTH populations: one crossed boundary
-        # is not a score to average, so a suite-2 safety failure must not be invisible
-        # to a gate that reads only the census block.
-        "safety_failures": (census["safety_failures"]
-                            + by_suite["suite2"]["safety_failures"]),
-        "flags": (census["flags"] + by_suite["suite2"]["flags"])[:50],
-    }
+    report = _build_report(traces, by_suite)
     report_path.write_text(json.dumps(report, indent=2) + "\n")
 
     print("\n=== GOLDEN REPORT ===")

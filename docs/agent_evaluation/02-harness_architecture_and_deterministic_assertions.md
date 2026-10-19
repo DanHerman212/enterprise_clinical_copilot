@@ -140,13 +140,24 @@ A mount that is empty or mis-prefixed falls back to the baked copies with a prin
 | `eval-adversarial` / `eval-clinical` redeploy | SUCCESS from `harness:a07c85b…`; volume is `gcsfuse.run.googleapis.com`, `readOnly: true`, bucket `ecc-eval-artifacts`, mounted `/mnt/gcs`, with `EVAL_CASES_DIR=/mnt/gcs/fixtures` |
 | `scripts/sync_fixtures.sh` | 3 objects published under `gs://ecc-eval-artifacts/fixtures/` |
 
-**Not yet verified:** the harness has not been *executed* since Phase 02 — collection → merge → judge → `by_suite` report has only been exercised in-process and against fixture files. Deploy configuration is verified; runtime behaviour is not. The cheapest honest check is a scoped clinical run:
+### 5.5 Smoke run (2026-10-19) — what it proved, and the bug it found
 
-```
-gcloud run jobs execute eval-clinical --region us-east1 --wait \
-    --update-env-vars "RUN_TAG=phase02-smoke,MAX_PATIENTS=1"
-```
+Executed as `eval-clinical` with `RUN_TAG=phase02-smoke,MAX_PATIENTS=1,SUITE2=1`; execution `eval-clinical-dtdgp`, 19:29:58 → 19:36:49, exit 1.
 
-`MAX_PATIENTS=1` suppresses the census-denominator check (it is only enforced on a full run) while still collecting the suite 2 matrix, so it exercises the merge, the expected-refusal filter, the stratified report and the manifest in about the time one admission takes. A full census run belongs to Phase 03, where the judge calibration is the point.
+**Wiring, all of it confirmed in production:**
+
+| Expectation | Observed |
+| :--- | :--- |
+| Census scaled by `MAX_PATIENTS` | 8 turns collected (1 patient × 4 paths × 2 turns) |
+| Suite 2 rides with the census job | 30 probes collected, 4 returning the expected `400 unknown_command` |
+| Expected refusals withheld from the judge | **26 judged of 30**, exactly `S2-16`–`S2-19` excluded |
+| Fixtures read from the mounted bucket | `EVAL_CASES_DIR=/mnt/gcs/fixtures` resolved; no fallback warning in the log |
+| Stratified report published | `by_suite` with `census` and `suite2` blocks in `gs://ecc-eval-artifacts/runs/phase02-smoke/` |
+
+**The bug it found — mine.** The first cut summed `safety_failures` across both populations. Census scored 0, suite 2 scored 4, and the gate read 4 and failed hard, on a clinical run whose own population had no safety failure at all. That directly violated the directive that the census gate stay sealed off from suite 2. `_build_report()` now takes the gated numbers from the census block only; suite 2's safety count is still published in `by_suite` and in the manifest. Pinned by `test_suite2_safety_does_not_reach_the_gated_number`, and verified by re-aggregating the run's own judged file: gate number 4 → 0, suite 2 still 4.
+
+**The second failure was real, not a bug.** The census itself passed 4 of 8 turns — 0.5 against a 0.85 threshold — so this run would have failed even with the aggregation fixed. At n=8 that is not a finding, it is a reason to look: answer quality and judge behaviour on the census population are Phase 03's subject, and the smoke run's numbers must not be read as a baseline.
+
+**Note on the artifacts:** the run attached 228 scores across 48 traces (34 judged turns plus 14 untagged preflight calls). They are left in place deliberately — they are the empirical evidence that the decoupling works — and Phase 03 will supersede them.
 
 * **Execute Local Dry-Run Rehearsal**: Run a 3-patient pilot test locally from your environment using collect_http.py --max-patients 3 --suite2 to ensure artifacts generate and route correctly prior to any Cloud Run execution.

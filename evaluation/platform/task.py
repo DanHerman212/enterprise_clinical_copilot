@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 
+from evaluation.platform import a2ui
 from evaluation.platform.schemas import DatasetItemInput, TaskOutput
 
 #: `ask(**kw) -> dict` — the agent round-trip. Injected so the dry run can use a fake.
@@ -122,7 +123,12 @@ def make_task(ask: Ask, *, run_tag: str,
             session_id=session_id,
             turn_1_status=first.get("status"),
             turn_1_command=first.get("command") or first.get("command_executed"),
-            turn_1_components=list(first.get("a2ui_components") or []),
+            # The service does not send an `a2ui_components` field; the names live
+            # inside the messages. Reading the missing field reported [] for every
+            # turn, which made three component assertions fail on a card that was
+            # actually rendered (Step 8, 2026-10-20).
+            turn_1_components=(a2ui.components(first.get("a2ui"))
+                               or list(first.get("a2ui_components") or [])),
             turn_1_card=first.get("a2ui") if isinstance(first.get("a2ui"), dict) else None,
             turn_1_error=first.get("error"),
         )

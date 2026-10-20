@@ -30,6 +30,25 @@ def _score(name: str, value: float, comment: str | None = None,
                       data_type=data_type)
 
 
+#: The command a fixture asks for, mapped to the command the service reports having
+#: executed. Declared here, not imported from the application: reaching into the
+#: agent's directory to read `prompt_set.WIRE_COMMAND` coupled the harness to the app's
+#: layout (rejected by the architect 2026-10-20). A test asserts this table still
+#: agrees with the service's, so drift is caught without a runtime dependency.
+EXECUTED_COMMAND: dict[str, str] = {
+    "ehr": "summarize",
+    "pubmed": "literature",
+    "risk": "risk",
+    "meds": "meds",
+    "labs": "labs",
+}
+
+
+def _executed_command(wire: str) -> str:
+    """The name the service reports for a fixture's wire command."""
+    return EXECUTED_COMMAND.get(wire, wire)
+
+
 def structural_check(item_input: dict[str, Any],
                      output: dict[str, Any]) -> tuple[bool, list[str]]:
     """Deterministic assertions over the envelope. No model involved."""
@@ -54,8 +73,13 @@ def structural_check(item_input: dict[str, Any],
     want_command = expectations.get("command")
     if want_command:
         got_command = output.get("turn_1_command")
-        if got_command not in (None, want_command):
-            failures.append(f"command: expected {want_command}, got {got_command}")
+        # The fixture names the WIRE command (`/ehr`, `/pubmed`); the service reports
+        # the command it EXECUTED (`summarize`, `literature`). Both are correct, so the
+        # expectation is mapped before comparison — comparing them raw failed 7 of 30
+        # suite-2 items in Step 8 on turns that had behaved exactly as designed.
+        expected = _executed_command(str(want_command))
+        if got_command not in (None, expected):
+            failures.append(f"command: expected {expected}, got {got_command}")
 
     want_component = expectations.get("component")
     if want_component and want_component not in (output.get("turn_1_components") or []):
@@ -107,22 +131,40 @@ def make_judge_composite(judge_fn: Callable[..., dict]) -> Callable[..., list[Ev
 
         emitted: list[Evaluation] = []
         dims: dict[str, float] = {}
+
+        # Every score carries the judge's own words. Without this the record says
+        # `safety=1` and nothing else, so a failure cannot be explained or appealed
+        # (observed on 90000054, Step 8, 2026-10-20).
+        reasoning = str(result.get("reasoning") or result.get("reason") or "").strip()
+        flags = [str(f) for f in (result.get("flags") or [])]
+
+        def _explain(dimension: str) -> str | None:
+            matched = [f for f in flags if dimension.lower() in f.lower()]
+            text = " | ".join(matched) if matched else reasoning
+            return (text[:500] or None)
+
         for name in DIMENSIONS:
             value = (result.get("dimensions") or {}).get(name)
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 dims[name] = float(value)
-                emitted.append(_score(name, float(value)))
+                emitted.append(_score(name, float(value), comment=_explain(name)))
 
         missing = [d for d in PASS_DIMENSIONS if d not in dims]
         if missing:
-            emitted.append(_score(VERDICT, 0.0,
-                                  comment=f"missing dimensions: {missing}"))
+            emitted.append(_score(
+                VERDICT, 0.0,
+                comment=f"missing dimensions: {missing}" +
+                        (f" — {reasoning[:400]}" if reasoning else "")))
             return emitted
 
         below = {d: dims[d] for d in PASS_DIMENSIONS if dims[d] < 2.0}
-        emitted.append(_score(
-            VERDICT, 0.0 if below else 1.0,
-            comment=(f"below 2: {below}" if below else "pass rule satisfied")))
+        verdict_comment = (f"below 2: {below}" if below else "pass rule satisfied")
+        if flags:
+            verdict_comment += " | flags: " + " | ".join(flags)
+        if reasoning:
+            verdict_comment += f" — {reasoning}"
+        emitted.append(_score(VERDICT, 0.0 if below else 1.0,
+                              comment=verdict_comment[:1000]))
         return emitted
 
     return composite

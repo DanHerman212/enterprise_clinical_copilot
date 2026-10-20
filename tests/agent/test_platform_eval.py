@@ -292,3 +292,74 @@ def test_composite_calls_the_judge_once_and_applies_the_pass_rule():
     scores = {e.name: e.value for e in out}
     assert calls == [1], "exactly one judge call per item"
     assert scores["verdict"] == 0.0
+
+
+# --- Step 8 findings: wire-command mapping and A2UI component extraction -----
+
+
+def test_wire_commands_are_compared_in_their_executed_form():
+    """`/ehr` executes as `summarize`; comparing them raw failed 7 of 30 items."""
+    for wire, executed in (("ehr", "summarize"), ("pubmed", "literature"),
+                           ("risk", "risk"), ("meds", "meds")):
+        ok, failures = ev.structural_check(
+            {"expectations": {"command": wire}},
+            {"turn_1_command": executed, "turn_1_response": "x"})
+        assert ok, f"{wire}->{executed} should pass structural: {failures}"
+
+
+def test_components_are_read_from_the_a2ui_messages():
+    """The service sends `a2ui.messages`; there is no `a2ui_components` field."""
+    from evaluation.platform import a2ui
+
+    envelope = {"messages": [{"updateComponents": {"components": [
+        {"component": "Column"}, {"component": "LiteratureList"}]}}]}
+    assert a2ui.components(envelope) == ["Column", "LiteratureList"]
+
+
+def test_task_records_components_from_a_real_envelope():
+    class _Agent:
+        def __call__(self, *, question, hadm_id, run_tag, session_id, turns=None):
+            return {"status": 200, "command": "literature", "answer": "Articles.",
+                    "a2ui": {"messages": [{"updateComponents": {"components": [
+                        {"component": "Column"}, {"component": "LiteratureList"}]}}]}}
+
+    task = make_task(_Agent(), run_tag="t", new_session_id=lambda: "s")
+    out = task(item={"input": _item(turns=["/pubmed heart failure"]).copy()})
+    assert "LiteratureList" in out["turn_1_components"]
+
+
+def test_the_command_map_matches_the_service_without_importing_it_at_runtime():
+    """The harness declares the map natively; this test is what stops it drifting.
+
+    The runtime code must not reach into the application's directory (rejected
+    2026-10-20), so the agreement is checked here, in the test suite, where importing
+    the service modules is normal and free.
+    """
+    import prompt_set
+
+    assert ev.EXECUTED_COMMAND == prompt_set.WIRE_COMMAND
+
+
+def test_evaluators_does_not_manipulate_sys_path():
+    import inspect
+
+    source = inspect.getsource(ev)
+    assert "sys.path" not in source, "the harness must not reach into the app layout"
+
+
+def test_every_score_carries_the_judges_explanation():
+    """`safety=1` with no comment is unexplainable; the reasoning must ride along."""
+    def judge_fn(*, input, output):  # noqa: A002
+        dims = {name: 3 for name in ev.DIMENSIONS}
+        dims["safety"] = 1
+        return {"dimensions": dims, "verdict": "FAIL",
+                "flags": ["safety: implied discharge recommendation"],
+                "reasoning": "The answer implies the patient should be discharged."}
+
+    composite = ev.make_judge_composite(judge_fn)
+    out = composite(evaluations=[ev._score("structural", 1.0)], input={}, output={})
+    safety = next(e for e in out if e.name == "safety")
+    verdict = next(e for e in out if e.name == "verdict")
+    assert "implied discharge recommendation" in safety.comment
+    assert "implies the patient should be discharged" in verdict.comment
+    assert all(e.comment for e in out), "no score may be emitted without text"

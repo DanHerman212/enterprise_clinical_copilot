@@ -165,9 +165,19 @@ def run(datasets: tuple[str, ...], *, run_name: str) -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--datasets", nargs="+", default=None,
+                    help=("subset of the allowed datasets; default is both. The full "
+                          "census is rejected by name."))
     ap.add_argument("--dry-payloads", action="store_true",
                     help="validate request bodies against the service contract, send nothing")
     args = ap.parse_args(argv)
+
+    targets = tuple(args.datasets) if args.datasets else DATASETS
+    refused = [name for name in targets if name not in DATASETS]
+    if refused:
+        print(f"FATAL: refusing {refused}; allowed targets are {list(DATASETS)}",
+              flush=True)
+        return 2
 
     try:
         env = verify_environment()
@@ -180,9 +190,9 @@ def main(argv: list[str] | None = None) -> int:
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     run_name = f"pilot-verify-{stamp}"
-    print(f"agent: {env['API_URL']}\nrun:   {run_name}\ndatasets: {list(DATASETS)}")
+    print(f"agent: {env['API_URL']}\nrun:   {run_name}\ndatasets: {list(targets)}")
 
-    summary = run(DATASETS, run_name=run_name)
+    summary = run(targets, run_name=run_name)
 
     print("\n=== STEP 8 SUMMARY ===")
     for name, stats in summary.items():

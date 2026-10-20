@@ -6,6 +6,16 @@ from pathlib import Path
 
 import pytest
 
+# Tests must never write to a real Langfuse project.
+#
+# On 2026-10-20 the evaluation work exported LANGFUSE_* into a persistent shell to seed
+# datasets; every later `pytest tests` run in that shell then emitted real traces from
+# the agent tests (110 of them, no scores) into production observability. Removing the
+# variables at conftest import makes that impossible regardless of the caller's shell,
+# and costs nothing: tracing is designed to be absent-and-silent when unconfigured.
+for _tracing_var in ("LANGFUSE_HOST", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"):
+    os.environ.pop(_tracing_var, None)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 HARNESS_ROOT = Path(__file__).resolve().parents[1]

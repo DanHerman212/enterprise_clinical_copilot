@@ -123,6 +123,56 @@ def test_absent_manifest_adds_no_phantom_evidence():
     assert ev == []
 
 
+# --- 2b. manifest capture at collection time (Option A) ----------------------
+
+
+def test_census_case_carries_the_decoded_manifest():
+    """`build_census` puts the manifest on the case, decoded by the server's decoder."""
+    import build_census
+
+    manifest = {"index_los_days": "6", "admission_type": "Urgent (URGENT)",
+                "prior_inpatient_days": "3"}
+    case = build_census.case_for(90000015, {}, {90000015: manifest})
+    assert case["manifest"] == manifest
+
+
+def test_a_case_without_a_decoded_manifest_still_builds():
+    """An admission the decoder could not read is a missing manifest, not a crash."""
+    import build_census
+
+    assert build_census.case_for(90000015, {})["manifest"] == {}
+
+
+def test_collected_census_record_carries_the_manifest():
+    """The record the judge reads must carry it; the case file alone reaches nobody."""
+    import collect_http
+
+    case = {"hadm_id": 90000015, "prompt": "labs", "question": "q",
+            "manifest": {"index_los_days": "6", "prior_inpatient_days": "3"}}
+    rec = collect_http._record_from_response(case, 200, {"answer": "a"})
+    assert rec["admission_profile"]["index_los_days"] == "6"
+    # and it must actually reach the judge's evidence, first, as the sheet to check on
+    ev = judge._evidence_for(rec)
+    assert ev[0]["tool"] == "admission_manifest"
+    assert ev[0]["patient_manifest"]["prior_inpatient_days"] == "3"
+
+
+def test_a_record_without_a_manifest_gains_no_empty_field():
+    import collect_http
+
+    rec = collect_http._record_from_response(
+        {"hadm_id": 90000015, "prompt": "labs", "question": "q"}, 200, {"answer": "a"})
+    assert "admission_profile" not in rec
+
+
+def test_the_census_is_never_read_from_the_mounted_fixture():
+    """A mounted cohort would shadow the one just built from the served table."""
+    import collect_http
+
+    assert collect_http.CASES == collect_http.RESULTS / "cases_82.json"
+    assert collect_http.SUITE2.name == "suite2_cases.json"
+
+
 # --- 3. the parrot loophole --------------------------------------------------
 
 

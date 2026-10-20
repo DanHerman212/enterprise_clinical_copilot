@@ -88,7 +88,12 @@ def _case_file(name: str, default: Path) -> Path:
 # table by build_census.py. The five outpatient encounters are written
 # alongside it but are not part of this set — they have no inpatient risk score
 # to grade.
-CASES = _case_file("cases_82.json", RESULTS / "cases_82.json")
+#
+# Deliberately NOT resolved through EVAL_CASES_DIR: this file is generated from the
+# served table on every run, and a mounted copy would be a stale cohort shadowing a
+# fresh build — the run would then describe a population that no longer exists. The
+# mount exists for the static fixtures below.
+CASES = RESULTS / "cases_82.json"
 #: The targeted modality matrix. A separate file from the census because these are
 #: single-turn probes chosen to exercise one vector each, not admissions to sweep.
 SUITE2 = _case_file("suite2_cases.json", HERE / "suite2_cases.json")
@@ -331,6 +336,13 @@ def _record_from_response(case: dict, status: int, payload: dict,
                     "band": case.get("band"),
                     "readmission_30d": case.get("readmission_30d"),
                     "suite": "census"})
+        manifest = case.get("manifest")
+        if manifest:
+            # The patient manifest travels with the record so the judge can check a
+            # stated length of stay or admission type against what the service knew.
+            # In production it is pre-flight context and never a tool call, so this is
+            # the only route by which it reaches the judge (2026-10-20).
+            rec["admission_profile"] = manifest
 
     if status != 200:
         # A refusal by the contract. Recorded with the code and message the

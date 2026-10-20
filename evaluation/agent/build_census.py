@@ -113,7 +113,47 @@ def labels_by_hadm_id() -> dict[int, dict]:
     }
 
 
-def case_for(hadm_id: int, labels: dict[int, dict]) -> dict:
+def manifests_by_hadm_id(hadm_ids: list[int]) -> dict[int, dict]:
+    """The readable manifest for each admission, decoded by the server's own decoder.
+
+    The judge has to check a stated length of stay, admission type or prior inpatient
+    days against what the service actually knew. That row is one-hot encoded, so the
+    decoding cannot live in two places: `decode_profile` is the function that produces
+    the wording the agent itself reports, and a second implementation here would grade
+    answers against a different vocabulary than the one they were written in.
+
+    Absent facts stay absent — the decoder reports them as such rather than inferring —
+    because an inferred admission type in the judge's evidence is worse than a missing
+    one.
+    """
+    if not hadm_ids:
+        return {}
+    from google.cloud import bigquery  # noqa: PLC0415 — keeps --help offline
+    from services.mcp.dependencies.features.profile import (  # noqa: PLC0415
+        decode_profile,
+    )
+
+    client = bigquery.Client(project=PROJECT)
+    job = client.query(
+        f"SELECT * FROM {FEATURES} WHERE hadm_id IN UNNEST(@ids)",
+        job_config=bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ArrayQueryParameter("ids", "INT64", list(hadm_ids)),
+        ]),
+    )
+    out: dict[int, dict] = {}
+    for row in job.result():
+        record = dict(row)
+        hadm = record.get("hadm_id")
+        if hadm is None or int(hadm) in out:
+            # The store can carry more than one row per admission — that is why
+            # SERVED_SQL is DISTINCT. The first row is the manifest for all of them.
+            continue
+        out[int(hadm)] = decode_profile(record)
+    return out
+
+
+def case_for(hadm_id: int, labels: dict[int, dict],
+             manifests: dict[int, dict] | None = None) -> dict:
     known = labels.get(hadm_id, {})
     probability = known.get("probability")
     return {
@@ -124,6 +164,11 @@ def case_for(hadm_id: int, labels: dict[int, dict]) -> dict:
         # risk" miss and a "low risk" miss are not the same finding, and the
         # label is the only way to tell which one a failure was.
         "readmission_30d": known.get("readmission_30d"),
+        # The manifest the agent was given as pre-flight context: age, admission type,
+        # length of stay, prior inpatient days and the rest. Carried on the case so it
+        # can travel into the judged record — it is never a tool call, so without this
+        # the judge grades manifest claims blind.
+        "manifest": (manifests or {}).get(hadm_id, {}),
     }
 
 
@@ -153,6 +198,7 @@ def main() -> int:
 
     served = served_hadm_ids()
     labels = labels_by_hadm_id()
+    manifests = manifests_by_hadm_id(served)
 
     outpatient = [h for h in served if h in OUTPATIENT_HADM_IDS]
     inpatient = [h for h in served if h not in OUTPATIENT_HADM_IDS]
@@ -164,8 +210,8 @@ def main() -> int:
     if missing:
         print(f"WARNING: outpatient ids not served: {sorted(missing)}")
 
-    clinical_cases = [case_for(h, labels) for h in inpatient]
-    outpatient_cases = [case_for(h, labels) for h in outpatient]
+    clinical_cases = [case_for(h, labels, manifests) for h in inpatient]
+    outpatient_cases = [case_for(h, labels, manifests) for h in outpatient]
 
     RESULTS.mkdir(parents=True, exist_ok=True)
     clinical_payload = payload_for(

@@ -67,6 +67,67 @@ def structural_check(item_input: dict[str, Any],
     return (not failures), failures
 
 
+def make_assertions_evaluator() -> Callable[..., list[Evaluation]]:
+    """Item evaluator: deterministic assertions only. No model call, ever.
+
+    Kept separate from the judge because the runner spec puts the judge in the
+    composite, and because an assertion that costs a model call is not a cheap check.
+    """
+
+    def evaluator(*, input, output, expected_output=None, metadata=None,
+                  **_kwargs) -> list[Evaluation]:
+        ok, failures = structural_check(input or {}, output or {})
+        return [_score(STRUCTURAL, 1.0 if ok else 0.0,
+                       comment="ok" if ok else "; ".join(failures))]
+
+    return evaluator
+
+
+def make_judge_composite(judge_fn: Callable[..., dict]) -> Callable[..., list[Evaluation]]:
+    """Composite evaluator: short-circuit, one judge call, then the pass rule.
+
+    This is where the judge is invoked (`temperature=0`, one call per item) and it is
+    invoked **only** when the deterministic assertions passed. Returns the dimension
+    evaluations plus the final `verdict`, so the run evaluator has one number to
+    average and the dimensions stay inspectable in the UI.
+    """
+
+    def composite(*, input=None, output=None, expected_output=None, metadata=None,
+                  evaluations=None, **_kwargs) -> list[Evaluation]:
+        scores = {e.name: e.value for e in (evaluations or [])}
+
+        if float(scores.get(STRUCTURAL, 0.0)) < 1.0:
+            return [_score(VERDICT, 0.0,
+                           comment="structural assertion failed; judge not called")]
+
+        result = judge_fn(input=input or {}, output=output or {})
+        if result.get("error"):
+            return [_score(JUDGE_ERROR, 1.0, comment=str(result["error"])),
+                    _score(VERDICT, 0.0, comment="judge error: no verdict to trust")]
+
+        emitted: list[Evaluation] = []
+        dims: dict[str, float] = {}
+        for name in DIMENSIONS:
+            value = (result.get("dimensions") or {}).get(name)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                dims[name] = float(value)
+                emitted.append(_score(name, float(value)))
+
+        missing = [d for d in PASS_DIMENSIONS if d not in dims]
+        if missing:
+            emitted.append(_score(VERDICT, 0.0,
+                                  comment=f"missing dimensions: {missing}"))
+            return emitted
+
+        below = {d: dims[d] for d in PASS_DIMENSIONS if dims[d] < 2.0}
+        emitted.append(_score(
+            VERDICT, 0.0 if below else 1.0,
+            comment=(f"below 2: {below}" if below else "pass rule satisfied")))
+        return emitted
+
+    return composite
+
+
 def make_quality_evaluator(judge_fn: Callable[..., dict]) -> Callable[..., list[Evaluation]]:
     """Item evaluator: assertions, then (only if they pass) the rubric judge."""
 

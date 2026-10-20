@@ -77,6 +77,32 @@ def _evidence(response: dict) -> list[dict[str, Any]]:
     return out
 
 
+def replay_turn(question: str, response: dict) -> dict:
+    """Turn 1 as the service will accept it back in `turns`.
+
+    The service's contract (`contracts.REPLAYED_TURN_FIELDS`) accepts exactly
+    `question`, `answer` and `tool_calls`, and a tool call is exactly
+    `{name, args, payload}` — it refuses anything else with `unsupported_field`
+    rather than ignoring it. The agent's own envelope returns `response`, not
+    `payload`, so passing `tool_calls` through unchanged would make every Turn 2 fail
+    with a 400. Limits are the contract's: 5 calls, 8000 characters of answer.
+    """
+    answer = (response.get("answer") or "")[:8000]
+    calls: list[dict[str, Any]] = []
+    for call in (response.get("tool_calls") or [])[:5]:
+        if not isinstance(call, dict) or not call.get("name"):
+            continue
+        payload = call.get("payload", call.get("response"))
+        entry: dict[str, Any] = {
+            "name": str(call["name"])[:64],
+            "args": call.get("args") if isinstance(call.get("args"), dict) else {},
+        }
+        if isinstance(payload, (dict, str)):
+            entry["payload"] = payload
+        calls.append(entry)
+    return {"question": question, "answer": answer, "tool_calls": calls}
+
+
 def make_task(ask: Ask, *, run_tag: str,
               new_session_id: Callable[[], str]) -> Callable[..., dict]:
     """Build the Langfuse task function."""
@@ -102,11 +128,7 @@ def make_task(ask: Ask, *, run_tag: str,
         )
 
         if len(data.turns) > 1:
-            replayed = {
-                "question": data.turns[0],
-                "answer": first.get("answer") or "",
-                "tool_calls": first.get("tool_calls") or [],
-            }
+            replayed = replay_turn(data.turns[0], first)
             second = ask(question=data.turns[1], hadm_id=hadm_id, run_tag=run_tag,
                          session_id=session_id, turns=[replayed])
             output.turn_2_response = _answer_text(second) or None

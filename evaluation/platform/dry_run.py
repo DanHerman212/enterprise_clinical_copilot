@@ -164,18 +164,18 @@ def main() -> int:
     agent = FakeAgent()
     judge = FakeJudge()
     task = make_task(agent, run_tag="dry-run", new_session_id=lambda: "sess-1")
-    quality = ev.make_quality_evaluator(judge)
-    composite = ev.make_composite_evaluator()
+    assertions = ev.make_assertions_evaluator()
+    composite = ev.make_judge_composite(judge)
     run_gate = ev.make_run_evaluators(min_pass_rate=0.85)[0]
 
     item_results = []
     for item in items:
         output = task(item={"input": item.model_dump()})
-        evaluations = quality(input=item.model_dump(), output=output,
-                              expected_output=None, metadata=None)
-        verdict = composite(input=item.model_dump(), output=output,
-                            expected_output=None, metadata=None, evaluations=evaluations)
-        item_results.append({"evaluations": [*evaluations, verdict]})
+        checks = assertions(input=item.model_dump(), output=output,
+                            expected_output=None, metadata=None)
+        judged = composite(input=item.model_dump(), output=output,
+                           expected_output=None, metadata=None, evaluations=checks)
+        item_results.append({"evaluations": [*checks, *judged]})
 
     detail = {}
     for item, result in zip(items, item_results):

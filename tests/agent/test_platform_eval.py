@@ -203,3 +203,92 @@ def test_suite2_items_are_single_probes_carrying_their_expectations():
     assert len(items) == EXPECTED_COUNTS["suite2-adversarial-v1"]
     assert all(i.workflow_type == "single_probe" for i in items)
     assert any((i.expectations or {}).get("error") for i in items), "boundary probes"
+
+
+# --- Step 8 runner: scope, environment gate, and wire compliance -------------
+
+
+def test_runner_targets_only_the_two_small_datasets():
+    from evaluation.platform import run_evals
+
+    assert set(run_evals.DATASETS) == {"clinical-census-pilot-v2",
+                                       "suite2-adversarial-v1"}
+    assert "clinical-census-full-v1" not in run_evals.DATASETS
+
+
+def test_environment_gate_rejects_a_local_api_url(monkeypatch):
+    from evaluation.platform import run_evals
+
+    for name in run_evals.REQUIRED_ENV:
+        monkeypatch.setenv(name, "x")
+    monkeypatch.setenv("API_URL", "http://127.0.0.1:8000")
+    with pytest.raises(EnvironmentError, match="local host"):
+        run_evals.verify_environment()
+
+
+def test_environment_gate_requires_every_variable(monkeypatch):
+    from evaluation.platform import run_evals
+
+    for name in run_evals.REQUIRED_ENV:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("API_URL", "https://agent.example.run.app")
+    with pytest.raises(EnvironmentError, match="missing required environment"):
+        run_evals.verify_environment()
+
+
+def test_turn1_body_is_accepted_by_the_service_contract():
+    from evaluation.platform.runner import build_body, validate_body
+
+    validate_body(build_body(question="/risk", hadm_id=90000015, run_tag="t"))
+
+
+def test_turn2_replay_is_accepted_by_the_service_contract():
+    """The service refuses unknown replay fields, so `response` must become `payload`."""
+    from evaluation.platform.runner import build_body, validate_body
+    from evaluation.platform.task import replay_turn
+
+    turn = replay_turn("/risk", {
+        "answer": "",
+        "tool_calls": [{"name": "predict_readmission", "args": {"hadm_id": 1},
+                        "response": {"probability": 0.34}}],
+    })
+    validate_body(build_body(question="why?", hadm_id=90000015, run_tag="t",
+                             turns=[turn]))
+
+
+def test_session_id_is_refused_by_the_service():
+    """Documents why the runner never sends one: there is no server-side state."""
+    from services.agent.contracts import AgentRequestError, parse_agent_request
+
+    with pytest.raises(AgentRequestError):
+        parse_agent_request({"question": "hello", "session_id": "abc"},
+                            max_question_chars=100)
+
+
+def test_composite_skips_the_judge_when_assertions_fail():
+    called = []
+
+    def judge_fn(*, input, output):  # noqa: A002
+        called.append(1)
+        return {"dimensions": {}, "verdict": "PASS"}
+
+    composite = ev.make_judge_composite(judge_fn)
+    out = composite(evaluations=[ev._score("structural", 0.0)], input={}, output={})
+    assert called == []
+    assert out[0].name == "verdict" and out[0].value == 0.0
+
+
+def test_composite_calls_the_judge_once_and_applies_the_pass_rule():
+    calls = []
+
+    def judge_fn(*, input, output):  # noqa: A002
+        calls.append(1)
+        dims = {name: 3 for name in ev.DIMENSIONS}
+        dims["responsiveness"] = 1
+        return {"dimensions": dims, "verdict": "PASS"}
+
+    composite = ev.make_judge_composite(judge_fn)
+    out = composite(evaluations=[ev._score("structural", 1.0)], input={}, output={})
+    scores = {e.name: e.value for e in out}
+    assert calls == [1], "exactly one judge call per item"
+    assert scores["verdict"] == 0.0

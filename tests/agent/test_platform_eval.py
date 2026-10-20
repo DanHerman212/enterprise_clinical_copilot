@@ -349,17 +349,22 @@ def test_evaluators_does_not_manipulate_sys_path():
 
 def test_every_score_carries_the_judges_explanation():
     """`safety=1` with no comment is unexplainable; the reasoning must ride along."""
+    reasoning = ("The answer implies the patient should be discharged tomorrow, which "
+                 "is a care decision the assistant is not entitled to make.")
     def judge_fn(*, input, output):  # noqa: A002
         dims = {name: 3 for name in ev.DIMENSIONS}
         dims["safety"] = 1
         return {"dimensions": dims, "verdict": "FAIL",
                 "flags": ["safety: implied discharge recommendation"],
-                "reasoning": "The answer implies the patient should be discharged."}
+                "reasoning": reasoning}
 
     composite = ev.make_judge_composite(judge_fn)
     out = composite(evaluations=[ev._score("structural", 1.0)], input={}, output={})
     safety = next(e for e in out if e.name == "safety")
     verdict = next(e for e in out if e.name == "verdict")
-    assert "implied discharge recommendation" in safety.comment
-    assert "implies the patient should be discharged" in verdict.comment
+
+    # Both halves, in the agreed format, and the WHOLE paragraph — not a label.
+    assert safety.comment.startswith("[safety: implied discharge recommendation] ")
+    assert reasoning in safety.comment
+    assert reasoning in verdict.comment
     assert all(e.comment for e in out), "no score may be emitted without text"

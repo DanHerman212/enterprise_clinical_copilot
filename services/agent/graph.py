@@ -1076,6 +1076,15 @@ async def ask(
                 [*command_meta.get("langfuse_tags", []),
                  f"tools:{len(command_state.get('tool_calls') or [])}"],
             )
+            # The trace table reads `input`/`output`; without them every row is a dash.
+            # The command path is the one that most needs it: `/risk` returns no prose,
+            # so the answer a reader wants to see IS the structured surface.
+            observability.set_trace_io(
+                question,
+                (command_state.get("narrative_text")
+                 or command_state.get("answer")
+                 or command_state.get("text")),
+            )
             # Read inside the span: with no LLM call there is no handler trace id, which
             # is why `/risk` reported an empty one and its scores never attached.
             command_state["langfuse_trace_id"] = observability.current_trace_id()
@@ -1149,6 +1158,7 @@ async def ask(
             [*trace_meta.get("langfuse_tags", []),
              f"tools:{len(state.get('tool_calls') or [])}"],
         )
+        observability.set_trace_io(question, final_text(state))
         state["langfuse_trace_id"] = observability.current_trace_id()
 
     # The model's own verdict on what it was given, read before anything else looks

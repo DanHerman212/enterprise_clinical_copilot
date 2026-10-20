@@ -170,6 +170,30 @@ def stamp_trace_tags(span, tags: list[str]) -> None:
                        exc_info=True)
 
 
+def set_trace_io(user_input: str | None, output: str | None) -> None:
+    """Put the question and the answer on the trace itself.
+
+    Langfuse renders `input` and `output` as columns in the trace table. Without them
+    every row shows a dash, so triage means opening the graph and reading child spans
+    to discover what was even asked — which is the difference between a dashboard and
+    a heap of ids. This module opens the root span, so it is the one place that knows
+    both ends of the turn.
+
+    Best-effort like everything here (rule 1): a missing column is a worse dashboard,
+    a raised exception is a failed answer.
+    """
+    if not configured():
+        return
+    try:
+        import langfuse
+
+        langfuse.get_client().set_current_trace_io(
+            input=(user_input or None), output=(output or None),
+        )
+    except Exception:  # noqa: BLE001 — rule 1
+        logger.warning("could not set the langfuse trace input/output", exc_info=True)
+
+
 def current_trace_id() -> str:
     """The id of the trace active in this context, or "" when there is none.
 

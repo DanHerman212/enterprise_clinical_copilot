@@ -21,6 +21,7 @@ Run: `./.venv/bin/python -m pytest tests/agent/test_judge_modality_and_adaptive.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -113,9 +114,13 @@ def test_prompt_for_an_empty_prose_answer_is_unchanged():
     assert "ANSWER:\n\n" in prompt
 
 
-def test_rubric_is_v3_and_states_the_modality_rule():
+def test_rubric_declares_a_version_and_states_the_modality_rule():
+    """The version string is checked by shape, not by number: bumping the rubric is a
+    normal event (v3 → v4 added responsiveness to the pass rule), and a test that pins
+    the literal number turns every bump into a test failure that says nothing about
+    the behaviour under test."""
     rubric = (judge.HERE / "rubric.md").read_text()
-    assert "Version 3, 2026-10-19" in rubric
+    assert re.search(r"\*\*Version \d+, \d{4}-\d{2}-\d{2}\.\*\* Supersedes v\d+", rubric)
     assert "## Modality: turns with a structured surface" in rubric
     assert "MODALITY: structured surface" in rubric
 

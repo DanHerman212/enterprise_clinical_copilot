@@ -238,27 +238,37 @@ def test_environment_gate_requires_every_variable(monkeypatch):
 
 def test_the_run_records_the_revision_that_actually_served_it(monkeypatch):
     """A run outlives the checkout. Commit alone says nothing about what was deployed."""
-    import io
-    import json
+    import httpx
 
     from evaluation.platform import run_evals
 
-    payload = json.dumps({"status": "ok", "code_revision": "fd9f4ee"}).encode()
     seen: dict[str, str] = {}
 
-    class _Response(io.BytesIO):
+    class _Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"status": "ok", "code_revision": "fd9f4ee"}
+
+    class _Client:
+        def __init__(self, timeout):
+            pass
+
         def __enter__(self):
             return self
 
         def __exit__(self, *_):
             return False
 
-    def _urlopen(request, timeout):
-        seen["url"] = request.full_url
-        seen["auth"] = request.get_header("Authorization") or ""
-        return _Response(payload)
+        def get(self, url, headers=None):
+            seen["url"] = url
+            seen["auth"] = (headers or {}).get("Authorization", "")
+            return _Response()
 
-    monkeypatch.setattr(run_evals.urllib.request, "urlopen", _urlopen)
+    monkeypatch.setattr(httpx, "Client", _Client)
     assert run_evals.served_revision("https://agent.example.run.app/",
                                      token="t0ken") == "fd9f4ee"
     assert seen["url"] == "https://agent.example.run.app/health"
@@ -266,12 +276,24 @@ def test_the_run_records_the_revision_that_actually_served_it(monkeypatch):
 
 
 def test_an_unreadable_health_route_does_not_invent_a_revision(monkeypatch):
+    import httpx
+
     from evaluation.platform import run_evals
 
-    def _boom(request, timeout):
-        raise OSError("connection refused")
+    class _Client:
+        def __init__(self, timeout):
+            pass
 
-    monkeypatch.setattr(run_evals.urllib.request, "urlopen", _boom)
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def get(self, url, headers=None):
+            raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(httpx, "Client", _Client)
     assert run_evals.served_revision("https://agent.example.run.app",
                                      token="t0ken") is None
 

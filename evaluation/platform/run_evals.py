@@ -13,11 +13,8 @@ this file at all — not by argument, not by typo.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
-import urllib.error
-import urllib.request
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -130,16 +127,18 @@ def served_revision(api_url: str, *, timeout: float = 30.0,
     """
     base = api_url.rstrip("/")
     url = f"{base}/health"
+    import httpx  # noqa: PLC0415 — the same stack `http_ask` uses for /ask
+
     try:
         if token is None:
             from evaluation.platform.http_auth import identity_token  # noqa: PLC0415
 
             token = identity_token(base)
-        request = urllib.request.Request(
-            url, headers={"Authorization": f"Bearer {token}"})
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except (urllib.error.URLError, OSError, ValueError, RuntimeError) as exc:
+        with httpx.Client(timeout=timeout) as client:
+            response = client.get(url, headers={"Authorization": f"Bearer {token}"})
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.HTTPError, OSError, ValueError, RuntimeError) as exc:
         print(f"WARNING: {url} unreadable ({exc}); this run's code_revision is unknown",
               flush=True)
         return None

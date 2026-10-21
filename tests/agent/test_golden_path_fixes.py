@@ -85,6 +85,39 @@ def test_trace_io_is_a_no_op_when_tracing_is_off(monkeypatch):
     assert called == []
 
 
+def test_a_command_turn_reports_the_prose_it_actually_produced():
+    """The root span of a command turn used to carry no output at all.
+
+    It looked for `narrative_text`, `answer` and `text` on the command's state. None of
+    those keys exist there — the first is composed later, in the HTTP envelope — so
+    2026-10-21 finished a run with 25 command traces and not one output in the table,
+    while every free-text trace had one.
+    """
+    from langchain_core.messages import AIMessage
+
+    from services.agent.graph import command_trace_output
+
+    prose = {"messages": [AIMessage(content="**Clinical course.** The patient …")],
+             "command": "summarize"}
+    assert command_trace_output(prose).startswith("**Clinical course.**")
+
+    # `/meds`: the model reply is extraction JSON; the sentence a reader sees is the
+    # code-written narrative, and that is what belongs on the trace.
+    meds = {"messages": [AIMessage(content='{"medications": []}')],
+            "command": "meds",
+            "deterministic_answer": "13 discharge medications, as recorded …"}
+    assert command_trace_output(meds).startswith("13 discharge medications")
+
+    # `/risk` has no prose by design: the widget carries the answer, so the payload is
+    # the honest record of what the turn returned.
+    risk = {"messages": [], "command": "risk",
+            "command_payload": {"medications": [], "threshold": 0.11}}
+    assert '"threshold": 0.11' in command_trace_output(risk)
+
+    # A turn that produced nothing says so with an empty string, never a sentinel.
+    assert command_trace_output({"messages": [], "command": "risk"}) == ""
+
+
 # --- 2. open-book evidence ---------------------------------------------------
 
 

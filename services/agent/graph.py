@@ -1092,12 +1092,7 @@ async def ask(
             # The trace table reads `input`/`output`; without them every row is a dash.
             # The command path is the one that most needs it: `/risk` returns no prose,
             # so the answer a reader wants to see IS the structured surface.
-            observability.set_trace_io(
-                question,
-                (command_state.get("narrative_text")
-                 or command_state.get("answer")
-                 or command_state.get("text")),
-            )
+            observability.set_trace_io(question, command_trace_output(command_state))
             # Read inside the span: with no LLM call there is no handler trace id, which
             # is why `/risk` reported an empty one and its scores never attached.
             command_state["langfuse_trace_id"] = observability.current_trace_id()
@@ -1337,3 +1332,30 @@ def final_text(state: dict) -> str:
     # One implementation of "where is the text in a message", shared with the
     # streaming paths. It lived here until they needed it too (`message_text`).
     return text_of(message.content).strip()
+
+
+def command_trace_output(state: dict) -> str:
+    """What the trace table shows as a command turn's output.
+
+    The three keys this used to read — `narrative_text`, `answer`, `text` — are not in a
+    command's state: they are names the HTTP envelope uses, composed after this point. So
+    every command trace was written with an empty output while every free-text trace had
+    one, and the table drew a dash for exactly the turns carrying the most structure
+    (2026-10-21: 25 command traces on a page, none with an output).
+
+    The prose is read where the free-text path reads it, `messages[-1]`. `/meds` keeps its
+    answer in `deterministic_answer`, because its model reply is extraction JSON and the
+    sentence a reader sees is written in code from the verified rows. `/risk` has no prose
+    at all by design — the widget carries the answer — so its output is the payload that
+    widget draws, which is the honest record of what the turn returned.
+    """
+    answer = str(state.get("deterministic_answer") or "").strip()
+    if answer:
+        return answer
+    prose = final_text(state)
+    if prose:
+        return prose
+    payload = state.get("command_payload")
+    if isinstance(payload, dict) and payload:
+        return json.dumps(payload, default=str)[:4000]
+    return ""

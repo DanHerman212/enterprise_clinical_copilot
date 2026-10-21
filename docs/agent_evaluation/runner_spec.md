@@ -7,6 +7,7 @@ Before importing Langfuse or executing any loops, the script must verify its exe
 * Assert `API_URL` is present and does **not** contain `localhost` or `127.0.0.1`.
 * Assert `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, and `LANGFUSE_HOST` are populated.
 * If any of these are missing or local, raise a fatal `EnvironmentError` and exit immediately.
+* Assert that the revision being measured is the revision that is serving: read `code_revision` from `$API_URL/health` (the service resolves it from `CODE_REVISION` then Cloud Run's `K_REVISION`, per `services/agent/chain.py`), print it before the run, and record it in the experiment `metadata`. A run outlives the checkout that produced it, and the runner never executes this tree — it POSTs to the deployed image — so "the fix is committed" is not "the fix is serving". When `--expect-revision <sha>` is supplied, a mismatch is fatal and nothing is sent.
 
 ## 2. The Task Wrapper `execute_agent_thread(item)`
 This is the callable `task` function passed to `run_experiment()`. It must enforce the multi-turn session state.

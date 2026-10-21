@@ -236,6 +236,51 @@ def test_environment_gate_requires_every_variable(monkeypatch):
         run_evals.verify_environment()
 
 
+def test_the_run_records_the_revision_that_actually_served_it(monkeypatch):
+    """A run outlives the checkout. Commit alone says nothing about what was deployed."""
+    import io
+    import json
+
+    from evaluation.platform import run_evals
+
+    payload = json.dumps({"status": "ok", "code_revision": "fd9f4ee"}).encode()
+
+    class _Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    monkeypatch.setattr(run_evals.urllib.request, "urlopen",
+                        lambda url, timeout: _Response(payload))
+    assert run_evals.served_revision("https://agent.example.run.app/") == "fd9f4ee"
+
+
+def test_an_unreadable_health_route_does_not_invent_a_revision(monkeypatch):
+    from evaluation.platform import run_evals
+
+    def _boom(url, timeout):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(run_evals.urllib.request, "urlopen", _boom)
+    assert run_evals.served_revision("https://agent.example.run.app") is None
+
+
+def test_an_expect_revision_mismatch_refuses_the_run(monkeypatch, capsys):
+    """`--expect-revision` is the gate: a stale image must not be attributed to a commit."""
+    from evaluation.platform import run_evals
+
+    for name in run_evals.REQUIRED_ENV:
+        monkeypatch.setenv(name, "x")
+    monkeypatch.setenv("API_URL", "https://agent.example.run.app")
+    monkeypatch.setattr(run_evals, "served_revision", lambda url, **_: "07da80c")
+    monkeypatch.setattr(run_evals, "run", lambda *a, **k: pytest.fail("must not run"))
+
+    assert run_evals.main(["--expect-revision", "fd9f4ee"]) == 2
+    assert "07da80c" in capsys.readouterr().out
+
+
 def test_turn1_body_is_accepted_by_the_service_contract():
     from evaluation.platform.runner import build_body, validate_body
 

@@ -13,8 +13,11 @@ this file at all — not by argument, not by typo.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
+import urllib.error
+import urllib.request
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -108,7 +111,33 @@ def dry_payloads() -> int:
     return 0
 
 
-def run(datasets: tuple[str, ...], *, run_name: str) -> dict[str, Any]:
+def served_revision(api_url: str, *, timeout: float = 30.0) -> str | None:
+    """The `code_revision` the deployed service reports, or None if unreadable.
+
+    The eval never runs this checkout: it POSTs to `api_url`, so the prompts under
+    test are whichever revision is deployed. `services/agent/chain.py` resolves that
+    identity from `CODE_REVISION` and then Cloud Run's `K_REVISION`, and `/health`
+    reports it — which is the only way to tell "the fix is committed" from "the fix
+    is serving".
+
+    The timeout is generous because the service scales to zero and this probe is
+    what wakes it; the first eval POST would pay that cold start anyway.
+    """
+    url = f"{api_url.rstrip('/')}/health"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        print(f"WARNING: {url} unreadable ({exc}); this run's code_revision is unknown",
+              flush=True)
+        return None
+    revision = payload.get("code_revision") if isinstance(payload, dict) else None
+    revision = (revision or "").strip()
+    return revision or None
+
+
+def run(datasets: tuple[str, ...], *, run_name: str,
+        code_revision: str | None = None) -> dict[str, Any]:
     global _run_tag
     _run_tag = run_name
 
@@ -141,7 +170,8 @@ def run(datasets: tuple[str, ...], *, run_name: str) -> dict[str, Any]:
             run_evaluators=run_evaluators,
             max_concurrency=MAX_CONCURRENCY,
             metadata={"rubric_version": "v4", "run_tag": run_name,
-                      "agent_url": os.environ.get("API_URL", "")},
+                      "agent_url": os.environ.get("API_URL", ""),
+                      "code_revision": code_revision or "unknown"},
         )
 
         stats = ev.summarise_item_results(getattr(result, "item_results", []) or [])
@@ -164,6 +194,9 @@ def main(argv: list[str] | None = None) -> int:
                           "census is rejected by name."))
     ap.add_argument("--dry-payloads", action="store_true",
                     help="validate request bodies against the service contract, send nothing")
+    ap.add_argument("--expect-revision", default=None,
+                    help=("refuse to run unless the deployed service reports this "
+                          "code_revision; use the commit you built the image from"))
     args = ap.parse_args(argv)
 
     targets = tuple(args.datasets) if args.datasets else DATASETS
@@ -182,11 +215,21 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_payloads:
         return dry_payloads()
 
+    code_revision = served_revision(env["API_URL"])
+    if args.expect_revision and code_revision != args.expect_revision:
+        print(f"FATAL: service reports code_revision {code_revision or 'unknown'}, "
+              f"not {args.expect_revision}; the image was not built from that commit "
+              "(or the deploy has not landed). Refusing to attribute a run to it.",
+              flush=True)
+        return 2
+
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     run_name = f"pilot-verify-{stamp}"
-    print(f"agent: {env['API_URL']}\nrun:   {run_name}\ndatasets: {list(targets)}")
+    print(f"agent:   {env['API_URL']}\n"
+          f"serving: {code_revision or 'unknown'}\n"
+          f"run:     {run_name}\ndatasets: {list(targets)}")
 
-    summary = run(targets, run_name=run_name)
+    summary = run(targets, run_name=run_name, code_revision=code_revision)
 
     print("\n=== STEP 8 SUMMARY ===")
     for name, stats in summary.items():

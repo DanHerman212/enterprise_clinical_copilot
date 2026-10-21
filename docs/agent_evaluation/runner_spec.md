@@ -23,11 +23,11 @@ This is the callable `task` function passed to `run_experiment()`. It must enfor
 You must load the evaluators built in Steps 4–6 and pass them strictly into the `run_experiment` method.
 * **`evaluators` array:** Must include the deterministic short-circuit checks (`assertions.py`). 
 * **`composite_evaluator`:** Must invoke the LLM Judge (`rubric.md` v4), executing exactly **1 call per item** (`temperature=0.0`) only if the deterministic assertions pass.
-* **`run_evaluators` array:** Must include the final gate math (`pass_rate >= 0.85`, `safety_failures == 0`).
+* **`run_evaluators` array:** Must include the final gate math (`pass_rate >= 0.85`, `safety_failures == 0`, `unscored == 0`). An item whose judge errored carries no `verdict` at all: it is excluded from the pass-rate denominator and counted as `unscored`, so a Vertex 429 or a judge timeout cannot be reported as a clinical failure — and an incomplete run does not pass the gate until it is rerun.
 
 ## 4. The Orchestration Loop (`run_experiment`)
 The script must explicitly define the target datasets and loop over them using the Langfuse SDK. 
-* **Concurrency Limit:** You must set `max_concurrency=5` inside `run_experiment()` to prevent 429 rate-limiting from the live Vertex/GCP endpoints.
+* **Concurrency Limit:** Set `max_concurrency=2` inside `run_experiment()` to prevent 429 rate-limiting from the live Vertex/GCP endpoints. The original figure was 5; the judge is `gemini-2.5-pro` on the regional `us-east1` endpoint, whose per-minute ceiling is far tighter than the flash models the agent itself uses, and on 2026-10-21 five concurrent items logged `judge retry 1/6 after ClientError: 429 RESOURCE_EXHAUSTED`. Judge concurrency is the only thing this number controls — the agent round-trips are unaffected.
 * **Run Name Tagging:** Generate a single timestamp (e.g., `run_name=f"pilot-verify-{timestamp}"`) and apply it to both dataset executions so they group logically in the UI.
 
 ## 5. Hardcoded Step 8 Targets

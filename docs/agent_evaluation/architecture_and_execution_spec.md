@@ -20,7 +20,7 @@ Each dataset runs as its own experiment with its own `run_evaluators` gate.
 A Clinical Census conversation has 2 turns (e.g., `/risk` followed by a free-text follow-up). 
 - **Do NOT flatten 2-turn conversations into 656 independent dataset items.** If flattened and run with concurrency, Turn 2 will execute out of order without Turn 1's session state.
 - **Correct Pattern:** Each Census dataset item represents a **2-turn script** (82 admissions × 4 workflows = 328 dataset items). The `task(item)` function generates one `session_id`, executes Turn 1, awaits the response, executes Turn 2 on the same `session_id`, and returns both turns in the structured output.
-- Set `max_concurrency=5` (not 50) for live runs to prevent vertex/endpoint 429 rate-limit thrashing.
+- Set `max_concurrency=2` (not 50, and no longer 5) for live runs to prevent vertex/endpoint 429 rate-limit thrashing. Measured 2026-10-21: at 5, the rubric judge — `gemini-2.5-pro` on regional `us-east1` — exhausted its per-minute quota and five suite-2 items were lost to `429 RESOURCE_EXHAUSTED`.
 
 ### C. Explicit Schema Contracts (Solving the Manifest & Blank Output Bugs)
 Every dataset item and task output must be validated via Pydantic before touching Langfuse:

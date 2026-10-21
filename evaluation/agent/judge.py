@@ -67,7 +67,19 @@ DIMS = ["fidelity", "grounding", "citation", "responsiveness", "safety", "contex
 # 2026-08-19: the run stalled ~18min at trace 117/300 with no output). The
 # timeout makes a hang raise (-> retried, then flagged) instead of stalling the
 # whole judge. Mirrors collect.py's per-ask timeout.
-_JUDGE_TIMEOUT_SECONDS = int(os.environ.get("JUDGE_TIMEOUT_SECONDS", "45"))
+#
+# Raised 45 -> 90 on 2026-10-21. `gemini-2.5-pro` on the regional endpoint
+# (us-east1) is markedly slower than the flash models the agent itself uses, and a
+# 45s ceiling was cutting off calls that were still working: the suite-2 run that
+# day recorded five items as "no response within 45s", which is a timeout this
+# harness chose, not a judgement about the answer.
+_JUDGE_TIMEOUT_SECONDS = int(os.environ.get("JUDGE_TIMEOUT_SECONDS", "90"))
+
+# Ceiling on the quota backoff. A 429 is a quota WINDOW, and every provider's is at
+# least a minute wide; 60s of waiting meant the retry landed inside the same window
+# and burned an attempt for nothing. Doubling from 15s under this cap covers a
+# two-minute window in three attempts.
+_JUDGE_BACKOFF_CAP_SECONDS = int(os.environ.get("JUDGE_BACKOFF_CAP_SECONDS", "120"))
 
 # P2 fix (2026-08-14, after human judge-validation showed kappa=0): the judge
 # must see the FULL evidence the agent saw. v1 truncated each passage to 400
@@ -617,7 +629,12 @@ def _judge(client, system: str, user: str) -> dict:
         # indistinguishable from a hung job.
         print(f"  judge retry {attempt + 1}/{attempts} after {last[:120]}", flush=True)
         if not timed_out:
-            time.sleep(min(60, (10 * 2 ** attempt) if quota else (2 ** attempt)))
+            # Exponential, and quota-aware: a 429 needs a wait long enough for the
+            # window to roll over (15s, 30s, 60s, 120s), while a malformed reply needs
+            # only a beat (1s, 2s, 4s). Both are capped so a persistent failure cannot
+            # turn one item into a quarter-hour of silence.
+            base = 15 if quota else 1
+            time.sleep(min(_JUDGE_BACKOFF_CAP_SECONDS, base * 2 ** attempt))
     return {"error": last}
 
 

@@ -76,7 +76,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="run only the first N items (use 1 to prove the wiring)")
     ap.add_argument("--run-name", default=None)
     ap.add_argument("--agent-url", default=DEFAULT_AGENT)
-    ap.add_argument("--concurrency", type=int, default=5, help="spec says 5, not 50")
+    ap.add_argument("--concurrency", type=int, default=2,
+                    help="judge-call concurrency; 2 is the ceiling the pro model's "
+                         "regional quota sustains (5 produced 429s on 2026-10-21)")
     ap.add_argument("--rubric-version", default="v4")
     ap.add_argument("--min-pass-rate", type=float, default=0.85)
     args = ap.parse_args(argv)

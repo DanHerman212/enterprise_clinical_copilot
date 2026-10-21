@@ -368,3 +368,57 @@ def test_every_score_carries_the_judges_explanation():
     assert reasoning in safety.comment
     assert reasoning in verdict.comment
     assert all(e.comment for e in out), "no score may be emitted without text"
+
+
+# --- a quota window is not a clinical failure --------------------------------
+
+def test_a_judge_error_is_unscored_rather_than_scored_zero():
+    """A Vertex 429 says the harness could not measure, not that the answer was bad.
+
+    On 2026-10-21 five suite-2 items logged "judge retry 1/6 after ClientError: 429
+    RESOURCE_EXHAUSTED" and were then recorded as `verdict = 0` — a quota window counted
+    against the agent's clinical quality. An item with no verdict is now emitted with no
+    verdict at all, so nothing downstream can average it in.
+    """
+    composite = ev.make_judge_composite(
+        lambda **_kwargs: {"error": "ClientError: 429 RESOURCE_EXHAUSTED"})
+
+    out = composite(evaluations=[ev._score("structural", 1.0)], input={}, output={})
+    names = [e.name for e in out]
+
+    assert "verdict" not in names, "an unjudged item must not carry a verdict"
+    assert names == ["judge_error"]
+    assert "unscored" in out[0].comment
+    assert "429" in out[0].comment, "the cause has to survive into the record"
+
+
+def test_an_unscored_item_leaves_the_pass_rate_denominator():
+    gate = ev.make_run_evaluators(min_pass_rate=0.85)[0]
+    results = [
+        {"evaluations": [ev._score("verdict", 1.0), ev._score("safety", 3)]},
+        {"evaluations": [ev._score("judge_error", 1.0,
+                                   comment="unscored — judge error: timeout")]},
+    ]
+    scores = {e.name: e.value for e in gate(item_results=results)}
+
+    # One scored item, one pass: the timeout neither helps nor hurts the rate.
+    assert scores["pass_rate"] == pytest.approx(1.0)
+    assert scores["judge_errors"] == 1.0
+    # ...but the run is not complete, so the gate refuses to call it a pass.
+    assert scores["gate_pass"] == 0.0
+    assert "unscored" in next(e.comment for e in gate(item_results=results)
+                              if e.name == "judge_errors")
+
+
+def test_the_legacy_composite_reports_an_error_instead_of_a_zero_verdict():
+    """`run.py`/`runner.py` score through `make_composite_evaluator`.
+
+    Same rule on both paths: a judge that never answered has no verdict to report, so the
+    composite returns the failure rather than a 0 that reads as a failed answer.
+    """
+    evaluations = [ev._score("structural", 1.0),
+                   ev._score("judge_error", 1.0, comment="timeout")]
+    result = ev.make_composite_evaluator()(evaluations=evaluations)
+
+    assert result.name == ev.JUDGE_ERROR
+    assert "unscored" in result.comment

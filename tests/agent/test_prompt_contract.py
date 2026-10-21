@@ -99,7 +99,15 @@ def test_the_prompt_names_the_tools_the_reasoning_loop_can_call():
             f"the prompt never names {name}, which the loop can call"
         )
 
-    hidden = {command.tool for command in routing.COMMANDS} - routing.FREETEXT_TOOLS
+    # `predict_readmission` is the one command tool the loop may reach, and only on a
+    # turn whose question asks for the model's own reasoning about a driver
+    # (`routing.asks_why_risk_driver`). Naming it without that condition would be the
+    # invitation the rule below forbids, so the condition is asserted with the name.
+    assert "`predict_readmission`" in SYSTEM_PROMPT
+    assert "exactly one kind of question" in SYSTEM_PROMPT
+
+    hidden = ({command.tool for command in routing.COMMANDS}
+              - routing.FREETEXT_TOOLS - {"predict_readmission"})
     for name in sorted(hidden):
         assert f"`{name}`" not in SYSTEM_PROMPT, (
             f"the prompt names {name}, which the loop cannot call: either admit it "
@@ -272,3 +280,37 @@ def test_the_medication_authority_separates_reading_from_listing():
     # The sentence this replaced forbade reading at all ("mining names out of another
     # section"); it must not return under the same words.
     assert "mining names" not in SYSTEM_PROMPT
+
+
+def test_an_empty_sectioned_search_is_not_an_empty_record():
+    """90000051 answered "no information in this record" after searching four headings.
+
+    `rag_search_sections` reads named discharge-summary sections; a note with another
+    layout returns none of them. The prompt has to say that the record-wide search is
+    what decides, or the model reports an absence it never checked.
+    """
+    assert "ZERO PASSAGES FROM IT IS NOT AN EMPTY RECORD" in SYSTEM_PROMPT
+    assert "call `rag_search` for this admission" in SYSTEM_PROMPT
+
+
+def test_a_risk_driver_question_is_answered_with_the_models_attribution():
+    """a6e4ca01: "what explains creatinine as a readmission risk driver?" got the labs only.
+
+    The chart says what the value did; only the model says why it counts. Both halves are
+    required, and the score itself still belongs to /risk.
+    """
+    assert "predict_readmission` is in front of you on exactly one kind of question" \
+        in SYSTEM_PROMPT
+    assert "which drivers led and in which direction" in SYSTEM_PROMPT
+    # The boundary is restated rather than dropped: /risk owns the number.
+    assert "/risk owns the number" in SYSTEM_PROMPT
+
+
+def test_a_number_is_not_distributed_across_the_items_beside_it():
+    """a4b7930e: "100% accuracy" reported for three goals when the passage said two.
+
+    A percentage stated for a list is not a percentage for every member of it, and the
+    judge scores the difference as an altered value.
+    """
+    assert "A number belongs to the item it is stated for." in SYSTEM_PROMPT
+    assert "Do not group or distribute" in SYSTEM_PROMPT

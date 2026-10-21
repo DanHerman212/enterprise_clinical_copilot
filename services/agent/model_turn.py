@@ -197,8 +197,19 @@ SILENT_TURN_SENTENCE = (
     "literature — ask about one of those and I'll answer from the record."
 )
 
+# The same sentence for a record that was not a stay. The inpatient wording offers an
+# admission summary, a readmission risk and a discharge medication list; on an outpatient
+# note all three are inventions, and offering them asserts that the record holds what it
+# cannot (90000051, "Summarize the note", 2026-10-21: fidelity 0, grounding 1, safety 0 —
+# the judge read the offer as a claim about the encounter).
+OUTPATIENT_SILENT_TURN_SENTENCE = (
+    "I don't have an answer for that. I can summarise this encounter note, review its "
+    "laboratory values, or search the clinical literature — ask about one of those and "
+    "I'll answer from the record."
+)
 
-def silent_refusal(message: Any) -> str | None:
+
+def silent_refusal(message: Any, *, outpatient: bool = False) -> str | None:
     """The sentence to serve when the model finished cleanly without speaking.
 
     Only an explicit `STOP` qualifies. A missing finish reason is unknown, and an
@@ -206,12 +217,16 @@ def silent_refusal(message: Any) -> str | None:
     model decided to say nothing" and "the response did not arrive" is the whole
     reason this distinction exists, and guessing at it would hide a real fault behind
     a polite sentence.
+
+    `outpatient` picks the wording that is true of the record. It is a property of the
+    admission, not of the model's answer, which is why it is passed in rather than
+    inferred from anything in this module.
     """
     if finish_reason(message) != "STOP":
         return None
     if blocked_reason(message) is not None:
         return None
-    return SILENT_TURN_SENTENCE
+    return OUTPATIENT_SILENT_TURN_SENTENCE if outpatient else SILENT_TURN_SENTENCE
 
 
 def classify(message: Any) -> tuple[str, str, str | None]:

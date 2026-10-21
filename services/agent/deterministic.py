@@ -340,18 +340,24 @@ def medication_narrative(verified: list[dict[str, str]], returned_passages: int)
     score it ungrounded (90000023, 2026-10-21).
     """
     names = _distinct_medications(verified)
+    # The sentence reports on the passage the tool returned, so it carries that passage's
+    # marker like any other claim: the citation layer resolves ^[1] against this turn's
+    # retrieved passages, and the judge reads a provenance-poor answer as one that cited
+    # nothing (5fa503f6 and e5558ec7 passed with `citation_missing`, 2026-10-21). Only
+    # when a passage exists — a marker pointing at nothing is worse than none.
+    source = " ^[1]" if returned_passages else ""
     if names:
         count = len(names)
         noun = "medication" if count == 1 else "medications"
         return (
             f"{count} discharge {noun}, as recorded in the discharge note: "
-            f"{', '.join(names)}."
+            f"{', '.join(names)}{source}."
         )
     if returned_passages == 0:
         return "No specific discharge medication information is available for this admission."
     return (
         "The discharge medications section was retrieved, but no medication could be "
-        "read from it."
+        f"read from it{source}."
     )
 
 

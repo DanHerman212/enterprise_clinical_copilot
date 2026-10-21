@@ -100,8 +100,16 @@ def test_the_loop_is_bound_with_the_allow_list():
     # allow-list has to be what is built, and every binding has to be given it. Pinning
     # the whitespace of a single call made a refactor that preserved both facts fail,
     # which is a test reporting on its own brittleness rather than on the boundary.
-    assert "freetext_tools = _tools(toolbox, allowed=routing.FREETEXT_TOOLS)" in source
+    #
+    # The allow-list is now a function of the turn, because one question shape — "why is
+    # this a risk driver?" — cannot be answered without the model's own attribution
+    # (`_freetext_allowed`). The boundary is unchanged for every other turn.
+    assert "freetext_tools = _tools(toolbox, allowed=_freetext_allowed(" in source
     assert source.count("bind_tools(freetext_tools") == 2
+
+    assert graph._freetext_allowed(False) == routing.FREETEXT_TOOLS
+    assert graph._freetext_allowed(True) == frozenset(
+        {*routing.FREETEXT_TOOLS, "predict_readmission"})
 
 
 # --- what an empty search becomes --------------------------------------------

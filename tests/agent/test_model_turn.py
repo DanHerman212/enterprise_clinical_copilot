@@ -115,6 +115,30 @@ def test_a_clean_finish_with_no_text_is_an_abstention_not_a_failure():
     assert "don't have an answer" in model_turn.SILENT_TURN_SENTENCE.lower()
 
 
+def test_the_abstention_sentence_names_only_what_the_record_can_offer():
+    """The offers are claims about the encounter, and an outpatient note has none of them.
+
+    `90000051` on 2026-10-21: an outpatient speech-therapy note, no sections found, and
+    the client was offered "summarise this admission" and "explain its readmission risk".
+    The judge scored it fidelity 0, grounding 1, safety 0 — not for the refusal, which was
+    right, but for the offer, which asserted an admission and a risk that the manifest
+    says do not exist.
+    """
+    outpatient = model_turn.silent_refusal(_turn(finish_reason="STOP"), outpatient=True)
+    assert outpatient == model_turn.OUTPATIENT_SILENT_TURN_SENTENCE
+
+    for term in ("admission", "readmission", "discharge medication"):
+        assert term not in outpatient.lower(), f"outpatient sentence offers {term!r}"
+
+    # It still has to be a useful answer: what this assistant CAN do with this record.
+    assert "encounter" in outpatient.lower()
+    assert "laborator" in outpatient.lower() or "literature" in outpatient.lower()
+
+    # The inpatient wording is unchanged for a record that really was a stay.
+    inpatient = model_turn.silent_refusal(_turn(finish_reason="STOP"), outpatient=False)
+    assert "readmission risk" in inpatient.lower()
+
+
 def test_an_empty_turn_with_no_reported_reason_is_not_called_an_abstention():
     """Absent from a candidate is not the same as chosen, and guessing hides faults.
 

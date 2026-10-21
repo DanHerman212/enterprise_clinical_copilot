@@ -620,6 +620,26 @@ def _tools(toolbox: MCPToolbox,
     ]
 
 
+def _freetext_allowed(risk_driver_question: bool) -> frozenset[str]:
+    """The tools the reasoning loop may call on this turn.
+
+    `routing.FREETEXT_TOOLS` is the standing boundary: a command's tool is absent rather
+    than refused. `predict_readmission` crosses that boundary on exactly one kind of
+    turn — a question asking WHY a factor is a readmission risk driver — because that
+    question cannot be answered from the chart: the attribution and its direction live in
+    the model, and an answer without them describes the values and stops (a6e4ca01,
+    2026-10-21).
+
+    What is NOT relaxed: the rule that no risk SCORE is produced in free text. The
+    projection in `tool_node` shows the model display strings and driver names with
+    directions, never a bare float, and the /risk command remains the thing that draws
+    the score.
+    """
+    if not risk_driver_question:
+        return routing.FREETEXT_TOOLS
+    return frozenset({*routing.FREETEXT_TOOLS, "predict_readmission"})
+
+
 #: How many opening chunks are held before a model turn is declared an answer.
 #
 # The hold exists because `agent_node` writes two different things through one call:
@@ -779,6 +799,7 @@ def build_graph(
     guard: Callable[[str, dict], dict | None] | None = None,
     prose_stream: bool = False,
     manifest_answers_question: bool = False,
+    risk_driver_question: bool = False,
 ):
     """Compile the graph. `on_event` receives progress stages; None disables them.
 
@@ -812,7 +833,7 @@ def build_graph(
     # transcript of a follow-up question already contains the model's earlier turns, so
     # "has the model spoken" is true before this run has done anything and would never
     # force anything on the questions that need it most.
-    freetext_tools = _tools(toolbox, allowed=routing.FREETEXT_TOOLS)
+    freetext_tools = _tools(toolbox, allowed=_freetext_allowed(risk_driver_question))
     chat_model = _build_llm(model)
     llm = chat_model.bind_tools(freetext_tools)
     llm_retrieving = chat_model.bind_tools(freetext_tools, tool_choice="any")
@@ -864,8 +885,15 @@ def build_graph(
     async def tool_node(state: AgentState) -> dict:
         last = state["messages"][-1]
         calls = last.tool_calls if isinstance(last, AIMessage) else []
+        # `_presented_prediction` only touches a prediction result, and there is one on
+        # this turn only when the question asked for the model's reasoning (see
+        # `_freetext_allowed`). Projected rather than raw: the model reads the score as
+        # the interface writes it and never holds a float it could paste.
+        from services.agent.deterministic import _presented_prediction  # noqa: PLC0415
+
         messages, recorded = await _execute_tool_calls(
             toolbox, calls, on_event, guard=guard,
+            project=_presented_prediction,
             # Everything this turn has already spent, so the budget is a budget for the
             # turn rather than for one iteration of the loop around it.
             already_called=list(state.get("tool_calls") or []),
@@ -1108,6 +1136,10 @@ async def ask(
         # pre-flight manifest answers, in a turn that carries the manifest.
         manifest_answers_question=bool(admission_context)
         and routing.asks_for_administrative_detail(question),
+        # Also a property of this turn: whether the question asks for the model's own
+        # reasoning about a driver, which is the only way `predict_readmission` enters
+        # the free-text tool set (see `_freetext_allowed`).
+        risk_driver_question=routing.asks_why_risk_driver(question),
     )
 
     config: dict = {"recursion_limit": RECURSION_LIMIT}

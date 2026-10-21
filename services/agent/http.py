@@ -296,7 +296,8 @@ def _response_fields(state: dict) -> dict:
 
 
 async def _compose_success(
-    question: str, state: dict, trace: str, *, want_follow_ups: bool = False
+    question: str, state: dict, trace: str, *, want_follow_ups: bool = False,
+    outpatient: bool = False,
 ) -> dict:
     """Guard the answer, compose the presentation, validate the payload.
 
@@ -327,7 +328,7 @@ async def _compose_success(
         # refusal by the content filters is not — at temperature 0 the same
         # question reaches the same decision (ECC-12).
         message = final_message(state)
-        silent = model_turn.silent_refusal(message)
+        silent = model_turn.silent_refusal(message, outpatient=outpatient)
         if silent is not None:
             # A clean finish with nothing in it is the model choosing not to speak,
             # not the service failing. Serving it as an abstention keeps a safety
@@ -662,6 +663,7 @@ async def ask_route(request: Request) -> JSONResponse:
         payload = await _compose_success(
             parsed["question"], state, trace,
             want_follow_ups=parsed.get("follow_ups") is True,
+            outpatient=parsed.get("hadm_id") in routing.OUTPATIENT_HADM_IDS,
         )
     except AgentAnswerUnavailable as exc:
         # The record says which of the three it was, in the code and in the
@@ -914,6 +916,7 @@ async def _stream_chain(
             payload = await _compose_success(
                 parsed["question"], state, trace,
                 want_follow_ups=parsed.get("follow_ups") is True,
+                outpatient=parsed.get("hadm_id") in routing.OUTPATIENT_HADM_IDS,
             )
         except AgentAnswerUnavailable as exc:
             log.record(

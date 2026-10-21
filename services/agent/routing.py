@@ -696,8 +696,30 @@ def asks_for_administrative_detail(question: str) -> bool:
     return False
 
 
-#: Words that mean the caller wants published evidence, not a record extraction.
+#: A question that asks WHY a named factor matters to the risk model, rather than what
+#: the risk is. On 2026-10-21 "What in this patient's chart explains creatinine as a
+#: readmission risk driver?" was answered with the creatinine series alone: the agent
+#: could reach the values but not the model's attribution, so it described the numbers
+#: and stopped (a6e4ca01, responsiveness 1, everything else 3).
 #:
+#: A false positive binds one extra tool to one turn, which costs a call; a false
+#: negative returns the answer that failed. Both words are required — "risk" alone is a
+#: score question, which /risk owns and this must not answer.
+_RISK_DRIVER_WORDS = frozenset({"driver", "drivers", "drives", "drive", "driving"})
+_WHY_WORDS = frozenset({"why", "explain", "explains", "explained", "explaining",
+                        "reason", "because", "contributes", "contribute"})
+
+
+def asks_why_risk_driver(question: str) -> bool:
+    """Whether this question asks for the model's reasoning about a risk driver."""
+    tokens = (question or "").lower().translate(_PUNCTUATION).split()
+    if "risk" not in tokens and "readmission" not in tokens:
+        return False
+    return (any(token in _RISK_DRIVER_WORDS for token in tokens)
+            and any(token in _WHY_WORDS for token in tokens))
+
+
+#: Words that mean the caller wants published evidence, not a record extraction.#:
 #: The free-text router matches a small vocabulary of extraction words, and on
 #: 2026-10-17 that vocabulary cost an answer: a clicked follow-up asked "What does
 #: current clinical literature suggest regarding the efficacy of this specific

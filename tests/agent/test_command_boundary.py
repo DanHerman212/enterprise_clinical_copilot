@@ -664,7 +664,31 @@ def test_a_taper_counts_as_one_medication_and_the_names_are_stated():
 def test_the_narrative_lists_every_distinct_drug_in_first_seen_order():
     rows = [{"medication": n, "dosage": "", "frequency": ""}
             for n in ("Celebrex", "Colace", "Ativan")]
-    assert medication_narrative(rows, 3).endswith("Celebrex, Colace, Ativan.")
+    assert medication_narrative(rows, 3).startswith(
+        "3 discharge medications, as recorded in the discharge note: "
+        "Celebrex, Colace, Ativan")
+
+
+def test_the_narrative_cites_the_passage_it_reports_on():
+    """The prose is code-written, so its citation is too — and only when there is one.
+
+    Two items passed the 2026-10-21 run carrying `citation_missing`: the /meds answer
+    was correct and cited nothing, because nothing in this module ever wrote a marker.
+    `citation` is not a gating dimension, so the omission could not fail a run — which
+    is exactly why it needs asserting here.
+    """
+    rows = [{"medication": "Celebrex", "dosage": "200 mg", "frequency": "daily"}]
+
+    cited = medication_narrative(rows, 1)
+    assert cited.endswith("^[1]."), cited
+
+    # No passage retrieved means no marker: a citation pointing at nothing is removed
+    # downstream anyway, and writing one would claim evidence this turn never had.
+    unverified = medication_narrative([], 1)
+    assert "^[1]" in unverified
+
+    # A genuinely empty result says so, and cites nothing.
+    assert "^[" not in medication_narrative([], 0)
 
 
 def test_the_medication_command_hands_the_payload_the_verified_rows_only():

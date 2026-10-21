@@ -186,3 +186,25 @@ def test_an_unclassified_question_is_left_alone():
 
     assert routed["kind"] is None
     assert "routed_to" not in routed
+
+
+# --- which turns may reach the risk model ------------------------------------
+
+@pytest.mark.parametrize("question,expected", [
+    # The question that failed on 2026-10-21: it asks why the model weighs a value,
+    # which the chart cannot answer.
+    ("What in this patient's chart explains creatinine as a readmission risk driver?",
+     True),
+    ("Why does her RDW drive readmission risk?", True),
+    ("Explain how prior inpatient days contribute as a risk driver", True),
+    # A score question is /risk's, and must not hand the free-text loop the predictor.
+    ("What is her readmission risk?", False),
+    ("Show me the risk score for this admission", False),
+    # Why-questions that are not about risk stay on the chart tools.
+    ("Why was she started on metoprolol?", False),
+    ("What explains the drop in hemoglobin?", False),
+])
+def test_only_a_risk_driver_question_reaches_the_predictor(question, expected):
+    """Binding the predictor everywhere would let free text produce a score; binding it
+    nowhere leaves a driver question unanswerable. The predicate is the boundary."""
+    assert routing.asks_why_risk_driver(question) is expected

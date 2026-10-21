@@ -244,6 +244,7 @@ def test_the_run_records_the_revision_that_actually_served_it(monkeypatch):
     from evaluation.platform import run_evals
 
     payload = json.dumps({"status": "ok", "code_revision": "fd9f4ee"}).encode()
+    seen: dict[str, str] = {}
 
     class _Response(io.BytesIO):
         def __enter__(self):
@@ -252,19 +253,27 @@ def test_the_run_records_the_revision_that_actually_served_it(monkeypatch):
         def __exit__(self, *_):
             return False
 
-    monkeypatch.setattr(run_evals.urllib.request, "urlopen",
-                        lambda url, timeout: _Response(payload))
-    assert run_evals.served_revision("https://agent.example.run.app/") == "fd9f4ee"
+    def _urlopen(request, timeout):
+        seen["url"] = request.full_url
+        seen["auth"] = request.get_header("Authorization") or ""
+        return _Response(payload)
+
+    monkeypatch.setattr(run_evals.urllib.request, "urlopen", _urlopen)
+    assert run_evals.served_revision("https://agent.example.run.app/",
+                                     token="t0ken") == "fd9f4ee"
+    assert seen["url"] == "https://agent.example.run.app/health"
+    assert seen["auth"] == "Bearer t0ken", "the probe must be authenticated like /ask"
 
 
 def test_an_unreadable_health_route_does_not_invent_a_revision(monkeypatch):
     from evaluation.platform import run_evals
 
-    def _boom(url, timeout):
+    def _boom(request, timeout):
         raise OSError("connection refused")
 
     monkeypatch.setattr(run_evals.urllib.request, "urlopen", _boom)
-    assert run_evals.served_revision("https://agent.example.run.app") is None
+    assert run_evals.served_revision("https://agent.example.run.app",
+                                     token="t0ken") is None
 
 
 def test_an_expect_revision_mismatch_refuses_the_run(monkeypatch, capsys):

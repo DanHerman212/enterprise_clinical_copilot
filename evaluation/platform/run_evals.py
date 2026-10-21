@@ -111,7 +111,8 @@ def dry_payloads() -> int:
     return 0
 
 
-def served_revision(api_url: str, *, timeout: float = 30.0) -> str | None:
+def served_revision(api_url: str, *, timeout: float = 30.0,
+                    token: str | None = None) -> str | None:
     """The `code_revision` the deployed service reports, or None if unreadable.
 
     The eval never runs this checkout: it POSTs to `api_url`, so the prompts under
@@ -120,14 +121,25 @@ def served_revision(api_url: str, *, timeout: float = 30.0) -> str | None:
     reports it — which is the only way to tell "the fix is committed" from "the fix
     is serving".
 
+    `/health` sits behind the same Cloud Run IAM as `/ask` (verified: an anonymous
+    GET is a 403 from the frontend, not the app), so the probe carries an identity
+    token audienced to the service, exactly as `http_ask` does.
+
     The timeout is generous because the service scales to zero and this probe is
     what wakes it; the first eval POST would pay that cold start anyway.
     """
-    url = f"{api_url.rstrip('/')}/health"
+    base = api_url.rstrip("/")
+    url = f"{base}/health"
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:
+        if token is None:
+            from evaluation.platform.http_auth import identity_token  # noqa: PLC0415
+
+            token = identity_token(base)
+        request = urllib.request.Request(
+            url, headers={"Authorization": f"Bearer {token}"})
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             payload = json.loads(response.read().decode("utf-8"))
-    except (urllib.error.URLError, OSError, ValueError) as exc:
+    except (urllib.error.URLError, OSError, ValueError, RuntimeError) as exc:
         print(f"WARNING: {url} unreadable ({exc}); this run's code_revision is unknown",
               flush=True)
         return None

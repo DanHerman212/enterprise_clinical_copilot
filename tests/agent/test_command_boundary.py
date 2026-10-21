@@ -32,6 +32,7 @@ from services.agent import graph  # noqa: E402
 from services.agent import routing  # noqa: E402
 from services.agent import payload as payload_module  # noqa: E402
 from services.agent.deterministic import (  # noqa: E402
+    _NO_READMISSION,
     _presented_prediction,
     medication_narrative,
     parse_medications,
@@ -362,21 +363,45 @@ def test_the_summary_prompt_names_the_strings_the_payload_carries():
     assert "unrounded" in formatting
 
 
-def test_the_summary_prompt_asks_for_the_fourth_risk_section():
-    """The fourth section is the bridge between the narrative and the widget.
+def test_the_summary_prompt_makes_sections_conditional_on_the_evidence():
+    """A heading the passages do not support is a heading the model must omit.
 
-    Asserted as the section names rather than as the whole instruction, so the wording can
-    be improved without failing a test that was only ever checking that the requirement is
-    still stated at all.
+    The sections are still named, because the interface renders them, but three of them
+    are now conditional. Ordering all four unconditionally is what produced a fabricated
+    discharge plan for 90000028 and an "admission" for 90000073 on 2026-10-20: to satisfy
+    the format the model wrote sections the note did not contain.
+
+    Asserted as the section names plus the omission rule, so the wording can be improved
+    without failing a test that only ever checked the requirement is still stated.
     """
     formatting = routing.command_for("summarize").formatting
 
-    for section in ("Hospital course", "Discharge diagnosis",
-                    "Discharge instructions", "Readmission risk & trajectory"):
-        assert section in formatting, f"the summary no longer asks for {section!r}"
+    # The inpatient heading, and the outpatient counterpart that replaces it.
+    assert "Hospital course" in formatting
+    assert "Clinical course" in formatting
+    # Both inventable sections are named as conditional, and omission is sanctioned.
+    assert "Discharge diagnosis" in formatting
+    assert "Discharge instructions" in formatting
+    assert "omit" in formatting.lower()
+    # The risk section still has to be asked for.
+    assert "Readmission risk & trajectory" in formatting
 
     # And it must not invite the model to re-derive the score the widget prints.
     assert "round" in formatting
+
+
+def test_the_outpatient_caveat_forbids_calling_the_record_an_admission():
+    """90000073 answered "this admission" about a speech-therapy visit.
+
+    The caveat is the only place the formatting turn learns the record is an outpatient
+    one, so the lexical rule has to live there: the answer may not call a visit a stay.
+    """
+    caveat = _NO_READMISSION
+
+    assert "outpatient" in caveat.lower()
+    assert "this admission" in caveat
+    assert "this encounter" in caveat or "this visit" in caveat
+    assert "Hospital course" in caveat  # redirected to 'Clinical course'
 
 
 def test_a_prose_less_command_never_builds_a_model():

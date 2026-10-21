@@ -231,10 +231,19 @@ LABS_FORMATTING = """Describe the laboratory trajectories you were given, for a 
 asked what these measurements did during this admission.
 
 Write two to four sentences, in prose. Say what moved and in which direction, where each
-analyte started, how far it went, and whether it left its reference range. Give the values you
-need to make that concrete, at the precision you were given them: the payload states each
-analyte's values to its own reporting precision, and a value re-rounded in your sentence would
-disagree with the number in the card beside it for no reason.
+analyte started, and how far it went. Give the values you need to make that concrete, at the
+precision you were given them: the payload states each analyte's values to its own reporting
+precision, and a value re-rounded in your sentence would disagree with the number in the card
+beside it for no reason.
+
+Every timepoint in the payload carries a `flag`: "normal", "low", "high", "critical_low" or
+"critical_high". That flag is the reading's verdict against the reference interval, computed
+before you saw it, and it alone decides whether a value is abnormal. Rely on the flag and do
+not perform your own numerical comparison: do not compare a value against `reference_low` or
+`reference_high`, and do not decide normality from the numbers. Where the flag says "low",
+state that the value was low; where it says "high", state high; where it says "normal", say it
+was within its reference range. A value the flag calls low is never described as normal, in
+range or unremarkable, however close to the interval it looks.
 
 The trajectories were generated from this admission's own recorded features. They were NOT read
 from a laboratory record. Say so once, plainly, in the course of the answer — the card carries
@@ -252,21 +261,36 @@ answer about a course, not a report. Write nothing about medications, and append
 about missing information."""
 
 EHR_FORMATTING = """Summarise the note sections you were given, for a clinician.
-Write flowing prose under four headings, in this order and with these names: Hospital course,
-Discharge diagnosis, Discharge instructions, Readmission risk & trajectory.
+Write flowing prose under these headings, in this order:
 
-Write each heading as a markdown level-2 heading, exactly `## Hospital course` and so on, with a
-blank line before and after it. The interface needs the heading to be a block of its own so it
+- "Hospital course" for an inpatient admission. Where the record is an outpatient encounter —
+  the caveat in the tool result says when it is — there was no admission, so write "Clinical
+  course" instead. Never write a hospital course for a record that was not a stay.
+- "Discharge diagnosis", only if the passages you were given contain a discharge diagnosis.
+- "Discharge instructions", only if the passages you were given contain discharge instructions.
+- "Readmission risk & trajectory", only where a readmission-risk estimate was given to you.
+
+A heading the passages do not support is a heading you omit. Omitting a section is the correct
+answer; inventing one to satisfy the format is a clinical error, and a fabricated discharge plan
+is the worst version of it. Never write a heading and then fill it with a claim the passages do
+not contain, and never write a placeholder such as "not documented" under a heading of your own
+choosing.
+
+Write each heading as a markdown level-2 heading — exactly `## Hospital course`, or
+`## Clinical course` for an outpatient record, and so on — with a blank line before and after it.
+The interface needs the heading to be a block of its own so it
 can be set above the prose it names. A heading folded into the paragraph beneath it — or worse,
 into one bold run together with it — cannot be told apart from the prose, and the whole section
 is then rendered at the heading's weight.
 
 Use bold for nothing else in this answer, and never wrap a whole section in a single bold run.
 
-The first three sections summarise the note passages you were given.
+The note sections summarise the passages you were given, and a section is written only where the
+passages contain what it names.
 
-The fourth explains the readmission-risk estimate you were also given, for THIS patient: what
-the named drivers mean clinically, how they connect to the hospital course and the discharge
+The final section applies only where a readmission-risk estimate was also given, and it explains
+that estimate for THIS patient: what
+the named drivers mean clinically, how they connect to the course and the discharge
 plan, and what they imply for follow-up. Name each driver exactly as the risk result names it,
 so the sentence and the bar beside it describe one factor one way.
 

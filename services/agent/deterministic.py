@@ -81,8 +81,12 @@ Use only what the tool result contains. Do not add clinical knowledge, do not in
 value that is absent, and do not attach a disclaimer of your own.
 
 Never write a record number into the narrative: no admission id, no `hadm_id`, no note,
-passage or document id. Say "this admission" or name the section you were given. Figures
-the tool result states — a probability, a dose, a count — are reported as usual."""
+passage or document id. Say "this admission" or name the section you were given — except for
+an outpatient record, where you say "this encounter" or "this visit" instead. A caveat in the
+tool result states when the record is an outpatient one; where it does, the record is not an
+admission and must never be called one, because an outpatient note documents a visit and not a
+hospital stay. Figures the tool result states — a probability, a dose, a count — are reported
+as usual."""
 
 
 # A medication line's dose, as it appears in note text: a number followed by a
@@ -305,7 +309,11 @@ _NO_READMISSION = (
     "admission, so no readmission risk was computed and none is applicable. Do not "
     "write a 'Readmission risk & trajectory' section, do not state a risk percentage, "
     "and do not describe risk drivers. Say in one sentence instead that readmission "
-    "risk does not apply to an outpatient record."
+    "risk does not apply to an outpatient record. Do not call this record an admission "
+    'and do not write the phrase "this admission": an outpatient note documents a visit, '
+    'not a hospital stay, so write "this encounter" or "this visit" instead. Do not write '
+    "a 'Hospital course' heading — use 'Clinical course' — and omit any discharge-diagnosis "
+    "or discharge-instructions section the passages you were given do not contain."
 )
 
 

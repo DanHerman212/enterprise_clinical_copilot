@@ -73,7 +73,19 @@ DIMS = ["fidelity", "grounding", "citation", "responsiveness", "safety", "contex
 # 45s ceiling was cutting off calls that were still working: the suite-2 run that
 # day recorded five items as "no response within 45s", which is a timeout this
 # harness chose, not a judgement about the answer.
-_JUDGE_TIMEOUT_SECONDS = int(os.environ.get("JUDGE_TIMEOUT_SECONDS", "90"))
+#
+# Raised 90 -> 150 the same day, after one item (`8053ca5c`, a 2-turn-free note
+# summary) exhausted two 90s attempts and left the run unscored — and a single
+# unscored item blocks the gate. Reading it per call, not once at import, is what lets
+# the end-of-run retry pass in `run_evals` give a slow item a longer ceiling without
+# restarting the process.
+_DEFAULT_JUDGE_TIMEOUT_SECONDS = 150
+
+
+def judge_timeout_seconds() -> int:
+    """The per-attempt ceiling, read at call time so a retry pass can raise it."""
+    return int(os.environ.get("JUDGE_TIMEOUT_SECONDS",
+                              str(_DEFAULT_JUDGE_TIMEOUT_SECONDS)))
 
 # Ceiling on the quota backoff. A 429 is a quota WINDOW, and every provider's is at
 # least a minute wide; 60s of waiting meant the retry landed inside the same window
@@ -606,10 +618,11 @@ def _judge(client, system: str, user: str) -> dict:
                 q.put({"error": f"{type(exc).__name__}: {exc}"})
 
         threading.Thread(target=_call, daemon=True).start()
+        timeout = judge_timeout_seconds()
         try:
-            out = q.get(timeout=_JUDGE_TIMEOUT_SECONDS)
+            out = q.get(timeout=timeout)
         except queue.Empty:
-            out = {"error": f"no response within {_JUDGE_TIMEOUT_SECONDS}s"}
+            out = {"error": f"no response within {timeout}s"}
         if "error" not in out:
             return out
         last = out["error"]

@@ -35,6 +35,14 @@ DATASETS = ("clinical-census-pilot-v2", "suite2-adversarial-v1")
 #: that matters here — the agent round-trips are unaffected by lowering it.
 MAX_CONCURRENCY = int(os.environ.get("EVAL_MAX_CONCURRENCY", "2"))
 MIN_PASS_RATE = 0.85
+
+#: The judge ceiling for the end-of-run retry pass, longer than the in-run default.
+#:
+#: A retry runs alone, so it can afford to wait: the item it is rescuing was already
+#: given two 150s attempts inside a concurrent batch, where the call competes for quota
+#: and for the model's own queue. If it does not answer in four minutes on its own, the
+#: item is genuinely unjudgeable and the run says so.
+RETRY_JUDGE_TIMEOUT_SECONDS = int(os.environ.get("EVAL_RETRY_JUDGE_TIMEOUT", "240"))
 REQUIRED_ENV = ("API_URL", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY",
                 "LANGFUSE_HOST", "PROJECT_ID")
 LOCAL_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0")
@@ -155,7 +163,11 @@ def run(datasets: tuple[str, ...], *, run_name: str,
     from langfuse import Langfuse
 
     from evaluation.platform import evaluators as ev
-    from evaluation.platform.experiment import run_linked
+    from evaluation.platform.experiment import (
+        record_run_scores,
+        retry_unscored,
+        run_linked,
+    )
     from evaluation.platform.judge_call import make_judge_fn
 
     client = Langfuse()
@@ -183,7 +195,6 @@ def run(datasets: tuple[str, ...], *, run_name: str,
             task=execute_agent_thread,
             evaluators=[assertions],
             composite=composite,
-            run_evaluators=run_evaluators,
             max_concurrency=MAX_CONCURRENCY,
             description="Step 8 live pilot, rubric v4",
             metadata={"rubric_version": "v4", "run_tag": run_name,
@@ -192,6 +203,30 @@ def run(datasets: tuple[str, ...], *, run_name: str,
         )
 
         stats = experiment.stats
+        if stats["unscored"]:
+            # One quiet second attempt, at concurrency 1 and with a longer ceiling. A
+            # judge call that did not answer is the harness failing to measure, and a
+            # single item left unscored blocks the gate — so it is worth half a minute
+            # to recover it rather than rerunning a multi-hour census.
+            print(f"  retry pass: {stats['unscored']} unscored item(s)", flush=True)
+            previous = os.environ.get("JUDGE_TIMEOUT_SECONDS")
+            os.environ["JUDGE_TIMEOUT_SECONDS"] = str(RETRY_JUDGE_TIMEOUT_SECONDS)
+            try:
+                stats = retry_unscored(
+                    client, items=items, outcomes=experiment.item_results,
+                    evaluators=[assertions], composite=composite,
+                )
+            finally:
+                if previous is None:
+                    os.environ.pop("JUDGE_TIMEOUT_SECONDS", None)
+                else:
+                    os.environ["JUDGE_TIMEOUT_SECONDS"] = previous
+
+        record_run_scores(
+            client, dataset_run_id=experiment.dataset_run_id,
+            outcomes=experiment.item_results, run_evaluators=run_evaluators,
+        )
+
         summary[dataset_name] = {
             "items": len(items), **stats,
             "gate_pass": (stats["pass_rate"] >= MIN_PASS_RATE

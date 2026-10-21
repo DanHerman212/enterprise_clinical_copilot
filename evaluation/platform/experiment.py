@@ -94,7 +94,6 @@ def run_linked(
     task: Callable[..., dict[str, Any]],
     evaluators: list[Callable[..., list[Evaluation]]],
     composite: Callable[..., Evaluation] | None = None,
-    run_evaluators: list[Callable[..., list[Evaluation]]] | None = None,
     metadata: dict[str, Any] | None = None,
     description: str | None = None,
     max_concurrency: int = 2,
@@ -171,17 +170,80 @@ def run_linked(
         1 for outcome in outcomes if outcome.trace_id is None and outcome.error is None)
     dataset_run_id = next((o.dataset_run_id for o in outcomes if o.dataset_run_id), None)
 
-    # The run-level gate is a score on the RUN, not on any one trace: the SDK hangs
-    # these off `dataset_run_id`, and that is where the Datasets view reads them.
-    if dataset_run_id and run_evaluators:
-        for evaluator in run_evaluators:
-            for evaluation in evaluator(item_results=outcomes):
-                client.create_score(
-                    dataset_run_id=dataset_run_id,
-                    name=evaluation.name,
-                    value=evaluation.value,
-                    comment=evaluation.comment,
-                    data_type=evaluation.data_type,
-                )
-
     return DatasetRun(stats=stats, item_results=outcomes, dataset_run_id=dataset_run_id)
+
+
+def retry_unscored(
+    client: Any,
+    *,
+    items: list[Any],
+    outcomes: list[ItemOutcome],
+    evaluators: list[Callable[..., list[Evaluation]]],
+    composite: Callable[..., Evaluation] | None = None,
+) -> dict[str, Any]:
+    """Re-judge items that settled unscored, once, at concurrency 1.
+
+    Only the evaluators run again. The task is not re-sent: the answer exists, and
+    re-running it would spend a second call, a second trace and a second attribution for
+    a defect in the JUDGE. That is also why this is safe to do at the end of a run — a
+    2.9-hour census that loses one item to a slow judge must not be thrown away, and one
+    quiet retry is the cheapest way to keep it.
+
+    Only scores the first pass did not write are written now, so the trace keeps the
+    `judge_error` as the record of the attempt that failed and gains the verdict the
+    second attempt earned. Returns the updated stats.
+    """
+    by_id = {str(_field(item, "id") or ""): item for item in items}
+    recovered = 0
+    for outcome in outcomes:
+        names = {evaluation.name for evaluation in outcome.evaluations}
+        if ev.VERDICT in names or ev.JUDGE_ERROR not in names:
+            continue
+        item = by_id.get(outcome.item_id)
+        if item is None or outcome.trace_id is None:
+            continue
+        fresh = _evaluate(evaluators, composite,
+                          item_input=_field(item, "input"), output=outcome.output,
+                          expected_output=_field(item, "expected_output"),
+                          item_metadata=_field(item, "metadata"))
+        verdict = next((e for e in fresh if e.name == ev.VERDICT), None)
+        if verdict is None:
+            print(f"  retry {outcome.item_id[:8]}: still unscored", flush=True)
+            continue
+        for evaluation in fresh:
+            if evaluation.name in names:
+                continue
+            client.create_score(trace_id=outcome.trace_id, name=evaluation.name,
+                                value=evaluation.value, comment=evaluation.comment,
+                                data_type=evaluation.data_type)
+        outcome.evaluations = fresh
+        recovered += 1
+        print(f"  retry {outcome.item_id[:8]}: verdict={verdict.value:g}", flush=True)
+
+    print(f"  retry pass recovered {recovered} item(s)", flush=True)
+    stats = ev.summarise_item_results(outcomes)
+    stats["unattributed"] = sum(
+        1 for outcome in outcomes if outcome.trace_id is None and outcome.error is None)
+    return stats
+
+
+def record_run_scores(
+    client: Any,
+    *,
+    dataset_run_id: str | None,
+    outcomes: list[ItemOutcome],
+    run_evaluators: list[Callable[..., list[Evaluation]]],
+) -> None:
+    """The run-level gate, written against the run once every item is final.
+
+    Separate from `run_linked` because a retry pass can change an item after the loop
+    ends, and a gate score written before that would say a run failed when it did not —
+    the Datasets view reads this number, not the console.
+    """
+    if dataset_run_id is None:
+        return
+    for evaluator in run_evaluators:
+        for evaluation in evaluator(item_results=outcomes):
+            client.create_score(dataset_run_id=dataset_run_id, name=evaluation.name,
+                                value=evaluation.value, comment=evaluation.comment,
+                                data_type=evaluation.data_type)

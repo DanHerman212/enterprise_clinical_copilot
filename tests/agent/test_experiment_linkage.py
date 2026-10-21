@@ -24,7 +24,11 @@ if str(_REPO) not in sys.path:
 from langfuse import Evaluation  # noqa: E402
 
 from evaluation.platform import evaluators as ev  # noqa: E402
-from evaluation.platform.experiment import run_linked  # noqa: E402
+from evaluation.platform.experiment import (  # noqa: E402
+    record_run_scores,
+    retry_unscored,
+    run_linked,
+)
 
 MANIFEST = {"age": "70", "admission_type": "Urgent (URGENT)",
             "prior_inpatient_days": "2", "index_los_days": "4"}
@@ -125,10 +129,12 @@ def test_the_run_gate_is_recorded_against_the_dataset_run():
         return [Evaluation(name="gate_pass", value=1.0, comment="ok",
                            data_type="NUMERIC")]
 
-    run_linked(client, dataset_name="suite2-adversarial-v1", run_name="r1",
-               items=[_item("item-a")], task=_task_for({"item-a": "trace-a"}),
-               evaluators=[_assertions], composite=_composite,
-               run_evaluators=[gate], max_concurrency=1)
+    run = run_linked(client, dataset_name="suite2-adversarial-v1", run_name="r1",
+                     items=[_item("item-a")], task=_task_for({"item-a": "trace-a"}),
+                     evaluators=[_assertions], composite=_composite,
+                     max_concurrency=1)
+    record_run_scores(client, dataset_run_id=run.dataset_run_id,
+                      outcomes=run.item_results, run_evaluators=[gate])
 
     run_scores = [row for row in client.scores if row.get("dataset_run_id")]
     assert [row["name"] for row in run_scores] == ["gate_pass"]
@@ -168,3 +174,58 @@ def test_the_task_carries_the_services_trace_id_into_the_output():
         "turns": ["/risk"], "patient_manifest": MANIFEST}))
 
     assert output["langfuse_trace_id"] == "trace-from-service"
+
+
+def test_the_retry_pass_recovers_an_item_the_judge_missed():
+    """`8053ca5c`: one slow judge call must not cost a multi-hour census."""
+    client = _Client()
+    calls = {"n": 0}
+
+    def flaky_composite(*, input=None, output=None, expected_output=None, metadata=None,
+                        evaluations=None, **_):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return Evaluation(name=ev.JUDGE_ERROR, value=1.0, data_type="NUMERIC",
+                              comment="unscored — no response within 150s")
+        return Evaluation(name=ev.VERDICT, value=1.0, comment="pass",
+                          data_type="NUMERIC")
+
+    items = [_item("item-a")]
+    run = run_linked(client, dataset_name="suite2-adversarial-v1", run_name="r1",
+                     items=items, task=_task_for({"item-a": "trace-a"}),
+                     evaluators=[_assertions], composite=flaky_composite,
+                     max_concurrency=1)
+    assert run.stats["unscored"] == 1
+    written_before = len(client.scores)
+
+    stats = retry_unscored(client, items=items, outcomes=run.item_results,
+                           evaluators=[_assertions], composite=flaky_composite)
+
+    assert stats["unscored"] == 0 and stats["scored"] == 1
+    # Only the verdict is new. The assertion score is not rewritten, and the judge_error
+    # stays on the trace as the record of the attempt that failed.
+    new = client.scores[written_before:]
+    assert [row["name"] for row in new] == [ev.VERDICT]
+    assert new[0]["trace_id"] == "trace-a"
+
+
+def test_a_retry_that_fails_again_leaves_the_item_unscored():
+    client = _Client()
+
+    def always_errors(*, input=None, output=None, expected_output=None, metadata=None,
+                      evaluations=None, **_):
+        return Evaluation(name=ev.JUDGE_ERROR, value=1.0, data_type="NUMERIC",
+                          comment="unscored — no response within 240s")
+
+    items = [_item("item-a")]
+    run = run_linked(client, dataset_name="suite2-adversarial-v1", run_name="r1",
+                     items=items, task=_task_for({"item-a": "trace-a"}),
+                     evaluators=[_assertions], composite=always_errors,
+                     max_concurrency=1)
+    before = len(client.scores)
+
+    stats = retry_unscored(client, items=items, outcomes=run.item_results,
+                           evaluators=[_assertions], composite=always_errors)
+
+    assert stats["unscored"] == 1
+    assert len(client.scores) == before, "a second failure writes nothing new"

@@ -101,7 +101,7 @@ def run(names: list[str], *, run_tag: str, max_concurrency: int = 5) -> dict[str
     from langfuse import Langfuse  # noqa: PLC0415
 
     from evaluation.platform import evaluators as ev  # noqa: PLC0415
-    from evaluation.platform.experiment import run_linked  # noqa: PLC0415
+    from evaluation.platform.experiment import record_run_scores, run_linked  # noqa: PLC0415
     from evaluation.platform.judge_call import make_judge_fn, RUBRIC  # noqa: PLC0415
     from evaluation.platform.task import make_task  # noqa: PLC0415
 
@@ -128,10 +128,13 @@ def run(names: list[str], *, run_tag: str, max_concurrency: int = 5) -> dict[str
             task=task,
             evaluators=[quality],
             composite=composite,
-            run_evaluators=run_evaluators,
             max_concurrency=max_concurrency,
             description=f"live pilot, rubric {RUBRIC[:0] or 'v4'}",
             metadata={"rubric_version": "v4", "run_tag": run_tag, "agent_url": AGENT_URL},
+        )
+        record_run_scores(
+            client, dataset_run_id=experiment.dataset_run_id,
+            outcomes=experiment.item_results, run_evaluators=run_evaluators,
         )
         item_results = experiment.item_results
         verdicts, safety, errors = [], 0, 0

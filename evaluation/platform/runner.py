@@ -101,6 +101,7 @@ def run(names: list[str], *, run_tag: str, max_concurrency: int = 5) -> dict[str
     from langfuse import Langfuse  # noqa: PLC0415
 
     from evaluation.platform import evaluators as ev  # noqa: PLC0415
+    from evaluation.platform.experiment import run_linked  # noqa: PLC0415
     from evaluation.platform.judge_call import make_judge_fn, RUBRIC  # noqa: PLC0415
     from evaluation.platform.task import make_task  # noqa: PLC0415
 
@@ -119,19 +120,20 @@ def run(names: list[str], *, run_tag: str, max_concurrency: int = 5) -> dict[str
             raise RuntimeError(f"{name}: no items — seed it before running")
         print(f"\n=== {name}: {len(items)} item(s), tag {run_tag} ===", flush=True)
 
-        result = client.run_experiment(
-            name=f"{name}",
+        experiment = run_linked(
+            client,
+            dataset_name=name,
             run_name=run_tag,
-            description=f"live pilot, rubric {RUBRIC[:0] or 'v4'}",
-            data=items,
+            items=items,
             task=task,
             evaluators=[quality],
-            composite_evaluator=composite,
+            composite=composite,
             run_evaluators=run_evaluators,
             max_concurrency=max_concurrency,
+            description=f"live pilot, rubric {RUBRIC[:0] or 'v4'}",
             metadata={"rubric_version": "v4", "run_tag": run_tag, "agent_url": AGENT_URL},
         )
-        item_results = getattr(result, "item_results", []) or []
+        item_results = experiment.item_results
         verdicts, safety, errors = [], 0, 0
         for item in item_results:
             for evaluation in (getattr(item, "evaluations", None) or []):

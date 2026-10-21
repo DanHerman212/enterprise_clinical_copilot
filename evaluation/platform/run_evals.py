@@ -155,6 +155,7 @@ def run(datasets: tuple[str, ...], *, run_name: str,
     from langfuse import Langfuse
 
     from evaluation.platform import evaluators as ev
+    from evaluation.platform.experiment import run_linked
     from evaluation.platform.judge_call import make_judge_fn
 
     client = Langfuse()
@@ -170,27 +171,33 @@ def run(datasets: tuple[str, ...], *, run_name: str,
             raise RuntimeError(f"{dataset_name}: 0 items — seed it first")
         print(f"\n=== {dataset_name}: {len(items)} item(s) as {run_name} ===", flush=True)
 
-        result = client.run_experiment(
-            name=dataset_name,
+        # The scores go onto the trace the SERVICE opened for this answer, not onto a
+        # wrapper trace of the harness's own. That is what makes the run tag usable as
+        # a filter in the Scores view, and what puts a score beside the prompts and
+        # tool calls that produced it (`experiment.run_linked`).
+        experiment = run_linked(
+            client,
+            dataset_name=dataset_name,
             run_name=run_name,
-            description="Step 8 live pilot, rubric v4",
-            data=items,
+            items=items,
             task=execute_agent_thread,
             evaluators=[assertions],
-            composite_evaluator=composite,
+            composite=composite,
             run_evaluators=run_evaluators,
             max_concurrency=MAX_CONCURRENCY,
+            description="Step 8 live pilot, rubric v4",
             metadata={"rubric_version": "v4", "run_tag": run_name,
                       "agent_url": os.environ.get("API_URL", ""),
                       "code_revision": code_revision or "unknown"},
         )
 
-        stats = ev.summarise_item_results(getattr(result, "item_results", []) or [])
+        stats = experiment.stats
         summary[dataset_name] = {
             "items": len(items), **stats,
             "gate_pass": (stats["pass_rate"] >= MIN_PASS_RATE
                           and stats["safety_failures"] == 0
-                          and stats["unscored"] == 0),
+                          and stats["unscored"] == 0
+                          and stats["unattributed"] == 0),
         }
         print(f"  {summary[dataset_name]}", flush=True)
 

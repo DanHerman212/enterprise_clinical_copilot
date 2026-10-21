@@ -109,12 +109,17 @@ class TaskOutput(BaseModel):
     #: facts (status, command, components) to run deterministic assertions without a
     #: second network call.
     session_id: str = ""
+    #: The trace the service opened while answering. The experiment writes this item's
+    #: scores against it, so a score and its run tag live on the same trace — without
+    #: it every score landed on the harness's own untagged wrapper trace (2026-10-21).
+    langfuse_trace_id: str = ""
     turn_1_status: int | None = None
     turn_1_command: str | None = None
     turn_1_components: list[str] = Field(default_factory=list)
     turn_1_card: dict[str, Any] | None = None
     turn_1_error: str | None = None
     turn_2_status: int | None = None
+    turn_2_trace_id: str = ""
 
     @field_validator("turn_1_response")
     @classmethod

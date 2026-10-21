@@ -115,6 +115,9 @@ def test_an_answer_without_a_trace_id_keeps_its_verdict_but_is_not_written():
                      evaluators=[_assertions], composite=_composite, max_concurrency=1)
 
     assert client.scores == [], "nothing may be written without a trace to write it to"
+    # Nothing was sent to the dataset-run API either: `trace_id=None` is a 400 from
+    # Langfuse, and four of those errors buried the real message on 2026-10-21.
+    assert client.run_items == [], "no run item without a trace id"
     # The measurement happened, so it still counts in the rate...
     assert run.stats["scored"] == 1 and run.stats["pass_rate"] == 1.0
     # ...and the run records that its evidence could not be opened.
@@ -229,3 +232,29 @@ def test_a_retry_that_fails_again_leaves_the_item_unscored():
 
     assert stats["unscored"] == 1
     assert len(client.scores) == before, "a second failure writes nothing new"
+
+
+def test_a_composite_that_returns_a_list_is_flattened():
+    """`make_judge_composite` returns the dimensions AND the verdict, not one Evaluation.
+
+    The 22:30 run on 2026-10-21 died on its first item inside this loop: the composite's
+    list was appended as a single object and then read for `.name`. Every test here used a
+    single-Evaluation composite, so none of them could see it. Both shapes are real — the
+    SDK's own `composite_evaluator` accepts either — so both are asserted.
+    """
+    client = _Client()
+
+    def list_composite(*, input=None, output=None, expected_output=None, metadata=None,
+                       evaluations=None, **_):
+        return [Evaluation(name="fidelity", value=3.0, data_type="NUMERIC"),
+                Evaluation(name=ev.VERDICT, value=1.0, comment="pass",
+                           data_type="NUMERIC")]
+
+    run = run_linked(client, dataset_name="suite2-adversarial-v1", run_name="r1",
+                     items=[_item("item-a")], task=_task_for({"item-a": "trace-a"}),
+                     evaluators=[_assertions], composite=list_composite,
+                     max_concurrency=1)
+
+    names = [row["name"] for row in client.scores]
+    assert names == [ev.STRUCTURAL, "fidelity", ev.VERDICT]
+    assert run.stats["scored"] == 1 and run.stats["pass_rate"] == 1.0

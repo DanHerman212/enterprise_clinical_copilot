@@ -208,3 +208,73 @@ def test_only_a_risk_driver_question_reaches_the_predictor(question, expected):
     """Binding the predictor everywhere would let free text produce a score; binding it
     nowhere leaves a driver question unanswerable. The predicate is the boundary."""
     assert routing.asks_why_risk_driver(question) is expected
+
+
+# --- a refusal is a turn, and a turn is traceable -----------------------------
+
+def _fake_span(monkeypatch, trace_id="aaaa1111"):
+    """Make `observability.observation` yield a span with a known trace id."""
+    import contextlib
+    import types
+
+    from services.agent import observability
+
+    seen: dict = {}
+
+    @contextlib.contextmanager
+    def fake_observation(name, *, as_type="span", trace_metadata=None):
+        seen["name"] = name
+        seen["metadata"] = trace_metadata or {}
+        yield types.SimpleNamespace(trace_id=trace_id)
+
+    monkeypatch.setattr(observability, "observation", fake_observation)
+    return seen
+
+
+def test_an_unknown_command_refusal_carries_a_trace_id(monkeypatch):
+    """`/`, `/labb`, `/medss`, `/ehrr` on 2026-10-21 were right and untraceable.
+
+    The four probes were answered correctly (400, no tool calls) and reported no trace
+    id, so the eval had nowhere to put their scores and called them unattributed. A
+    refusal is a decision, and a decision is worth a trace.
+    """
+    import json
+
+    seen = _fake_span(monkeypatch)
+
+    response = http._unknown_command({"question": "/labb", "kind": None,
+                                      "run_tag": "pilot-run", "hadm_id": 90000023})
+
+    assert response.status_code == 400
+    body = json.loads(response.body)
+    assert body["error"] == "unknown_command"
+    assert body["langfuse_trace_id"] == "aaaa1111"
+
+    # Tagged like an answered turn, so the run filter finds it.
+    assert seen["name"] == "command.unknown"
+    assert "run:pilot-run" in seen["metadata"]["langfuse_tags"]
+    assert seen["metadata"]["langfuse_session_id"] == "pilot-run:hadm_90000023"
+
+
+def test_a_known_command_is_still_not_refused(monkeypatch):
+    _fake_span(monkeypatch)
+    assert http._unknown_command({"question": "/labs", "kind": None}) is None
+    assert http._unknown_command({"question": "a question", "kind": None}) is None
+
+
+def test_an_unserved_admission_refusal_carries_a_trace_id(monkeypatch):
+    """The sibling exit: composed like an answer, but opened outside any span."""
+    import asyncio
+
+    _fake_span(monkeypatch)
+
+    async def fake_compose(*_args, **_kwargs):
+        return {"error": "admission_not_found"}
+
+    monkeypatch.setattr(http, "_compose_success", fake_compose)
+
+    payload = asyncio.run(http._unserved_admission(
+        {"question": "q", "hadm_id": 90009999, "run_tag": "pilot-run"}, "trace-1"))
+
+    assert payload is not None
+    assert payload["langfuse_trace_id"] == "aaaa1111"

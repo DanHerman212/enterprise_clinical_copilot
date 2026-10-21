@@ -73,7 +73,13 @@ def _evaluate(evaluators: list[Callable[..., list[Evaluation]]],
               composite: Callable[..., Evaluation] | None,
               *, item_input: Any, output: dict[str, Any],
               expected_output: Any, item_metadata: Any) -> list[Evaluation]:
-    """Assertions first, then the composite — the order the rubric requires."""
+    """Assertions first, then the composite — the order the rubric requires.
+
+    A composite may return one evaluation or a list of them: `make_judge_composite`
+    returns the dimensions AND the verdict, while `make_composite_evaluator` returns the
+    verdict alone. Both are "the composite" in the SDK's sense, so both are accepted here
+    and flattened. Assuming one shape crashed the first item of the 22:30 run.
+    """
     kwargs = dict(input=item_input or {}, output=output or {},
                   expected_output=expected_output, metadata=item_metadata)
     evaluations: list[Evaluation] = []
@@ -81,7 +87,8 @@ def _evaluate(evaluators: list[Callable[..., list[Evaluation]]],
         evaluations.extend(evaluator(**kwargs))
 
     if composite is not None:
-        evaluations.append(composite(evaluations=evaluations, **kwargs))
+        produced = composite(evaluations=evaluations, **kwargs)
+        evaluations.extend(produced if isinstance(produced, list) else [produced])
     return evaluations
 
 
@@ -131,17 +138,21 @@ def run_linked(
                   "scores not written", flush=True)
 
         run_id: str | None = None
-        try:
-            row = client.api.dataset_run_items.create(
-                run_name=run_name,
-                dataset_item_id=item_id,
-                run_description=description,
-                metadata=metadata,
-                trace_id=trace_id,
-            )
-            run_id = getattr(row, "dataset_run_id", None)
-        except Exception as exc:  # noqa: BLE001
-            print(f"  {item_id[:8]} run item failed: {exc}", flush=True)
+        if trace_id is not None:
+            try:
+                row = client.api.dataset_run_items.create(
+                    run_name=run_name,
+                    dataset_item_id=item_id,
+                    run_description=description,
+                    metadata=metadata,
+                    trace_id=trace_id,
+                )
+                run_id = getattr(row, "dataset_run_id", None)
+            except Exception as exc:  # noqa: BLE001
+                print(f"  {item_id[:8]} run item failed: {exc}", flush=True)
+        # With no trace id the run item is not attempted at all: Langfuse rejects
+        # `trace_id=None` with a 400 ("observationId or traceId must be provided"), and a
+        # rejected call per unattributed item buried the real message in headers.
 
         if trace_id is not None:
             for evaluation in evaluations:

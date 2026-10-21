@@ -157,18 +157,47 @@ async def _unserved_admission(parsed: dict, trace: str) -> dict | None:
     _StageLog().record(trace, parsed.get("question") or "", "refused",
                        error="admission_not_found")
     # Composed through the shared pipeline rather than hand-built, so this refusal
-    # carries exactly the fields every other answer carries.
-    payload = await _compose_success(
-        parsed.get("question") or "",
-        {"deterministic_answer": ADMISSION_NOT_FOUND, "tool_calls": [],
-         "command": None},
-        trace,
-    )
+    # carries exactly the fields every other answer carries — including its trace id,
+    # which the pipeline cannot supply here because no span is open around this exit.
+    with observability.observation(
+        "turn.refused", trace_metadata=_refusal_trace_metadata(parsed),
+    ) as span:
+        payload = await _compose_success(
+            parsed.get("question") or "",
+            {"deterministic_answer": ADMISSION_NOT_FOUND, "tool_calls": [],
+             "command": None},
+            trace,
+        )
+        payload["langfuse_trace_id"] = (
+            observability.span_trace_id(span) or observability.current_trace_id()
+        )
     payload["guardrail_flags"] = list(payload.get("guardrail_flags") or []) + [
         "admission_not_found"
     ]
     payload["routed_to"] = "abstain"
     return payload
+
+
+def _refusal_trace_metadata(parsed: dict) -> dict:
+    """Trace attributes for a turn that was refused before any work ran.
+
+    A refusal is a decision the service made, and four of them in the 2026-10-21 run
+    (`/`, `/labb`, `/medss`, `/ehrr`) were correct answers that left nothing behind: no
+    span, no trace, no id in the response, so the eval had nowhere to put their scores
+    and reported them unattributed. `run_tag` arrives on the request, so the trace is
+    filterable exactly like an answered turn's.
+    """
+    run_tag = (parsed.get("run_tag") or "").strip()
+    hadm = parsed.get("hadm_id")
+    tags = [f"run:{run_tag}", "turn:1"] if run_tag else ["turn:1"]
+    if hadm is not None:
+        tags.insert(1, f"hadm:{hadm}")
+    return {
+        "langfuse_session_id": (f"{run_tag}:hadm_{hadm}" if run_tag and hadm else None),
+        "langfuse_tags": tags,
+        "hadm_id": hadm,
+        "outcome": "refused",
+    }
 
 
 def _unknown_command(parsed: dict) -> JSONResponse | None:
@@ -183,6 +212,10 @@ def _unknown_command(parsed: dict) -> JSONResponse | None:
     is no surface to draw and no citation to resolve, and the caller's request really
     was malformed. The message is user-facing text, which is what lets the site relay
     it verbatim instead of replacing it with a generic failure.
+
+    It opens a span all the same. The answer is a decision worth counting, and the
+    trace id it returns is what lets a caller (the eval, a dashboard) attach a score to
+    the turn that produced it.
     """
     if parsed.get("kind"):
         # A chip or palette selection is an explicit command; it was already resolved.
@@ -200,9 +233,15 @@ def _unknown_command(parsed: dict) -> JSONResponse | None:
     if routing.command_for_slash(token) is not None:
         return None
     available = ", ".join(sorted(c.slash for c in routing.COMMANDS))
+    with observability.observation(
+        "command.unknown", trace_metadata=_refusal_trace_metadata(parsed),
+    ) as span:
+        trace_id = (observability.span_trace_id(span)
+                    or observability.current_trace_id())
     return JSONResponse(
         {"error": "unknown_command",
-         "message": f"There is no {token} command. Available commands: {available}."},
+         "message": f"There is no {token} command. Available commands: {available}.",
+         "langfuse_trace_id": trace_id},
         status_code=400,
     )
 

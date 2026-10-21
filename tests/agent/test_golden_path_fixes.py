@@ -85,6 +85,36 @@ def test_trace_io_is_a_no_op_when_tracing_is_off(monkeypatch):
     assert called == []
 
 
+def test_the_trace_id_is_read_from_the_span_not_from_the_context():
+    """Four command turns on 2026-10-21 answered with no trace id at all.
+
+    `current_trace_id()` asks the ambient context, and the context is the part that can
+    go missing — copied into a worker thread, or not yet populated. The span we opened
+    already knows its trace (`LangfuseSpan.trace_id`, which is what the SDK itself
+    reads), so that is the source the response uses.
+    """
+    span = types.SimpleNamespace(trace_id="2f9c1e4a5b6d")
+    assert observability.span_trace_id(span) == "2f9c1e4a5b6d"
+
+    # A span without an id is not an error: the caller falls back to the context,
+    # and an empty string is how "no id" is spelled everywhere in this module.
+    assert observability.span_trace_id(types.SimpleNamespace()) == ""
+    assert observability.span_trace_id(None) == ""
+    assert observability.span_trace_id(object()) == ""
+
+
+def test_both_routes_take_the_id_from_the_span():
+    """The wiring, asserted where it lives: both root spans hand their id over."""
+    from pathlib import Path
+
+    from services.agent import graph
+
+    source = Path(graph.__file__).read_text(encoding="utf-8")
+    assert source.count("observability.span_trace_id(root_span)") == 2, (
+        "the command path and the free-text path must both read the span's own id"
+    )
+
+
 def test_a_command_turn_reports_the_prose_it_actually_produced():
     """The root span of a command turn used to carry no output at all.
 

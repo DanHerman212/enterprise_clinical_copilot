@@ -201,6 +201,11 @@ def current_trace_id() -> str:
     handler's `last_trace_id`, and with no model run there is no handler id — so the
     turn reported an empty trace id and the judge had nothing to attach a score to.
     Read INSIDE the span, while the context is still open.
+
+    Prefer `span_trace_id` when the span is in hand. This reads the CONTEXT, and the
+    context is the part that can go missing: four command turns in the 22:38 run
+    (2026-10-21) answered correctly and reported no trace id at all, so their scores
+    had nowhere to land and the run's evidence could not be opened.
     """
     if not configured():
         return ""
@@ -208,6 +213,22 @@ def current_trace_id() -> str:
         import langfuse
 
         return str(langfuse.get_client().get_current_trace_id() or "")
+    except Exception:  # noqa: BLE001 — rule 1
+        return ""
+
+
+def span_trace_id(span) -> str:
+    """The trace id of a span we opened ourselves, or "" if it has none.
+
+    This asks the OBJECT rather than the ambient context. The SDK assigns the id when it
+    creates the span (`LangfuseSpan.trace_id`), so an id read here cannot be missing for
+    the reason `current_trace_id()` can: a context that was copied into a worker thread,
+    or one that the SDK had not populated yet.
+
+    It is the id the RESPONSE carries, so it is also the id the eval attaches scores to.
+    """
+    try:
+        return str(getattr(span, "trace_id", "") or "")
     except Exception:  # noqa: BLE001 — rule 1
         return ""
 

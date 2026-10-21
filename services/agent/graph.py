@@ -1121,9 +1121,13 @@ async def ask(
             # The command path is the one that most needs it: `/risk` returns no prose,
             # so the answer a reader wants to see IS the structured surface.
             observability.set_trace_io(question, command_trace_output(command_state))
-            # Read inside the span: with no LLM call there is no handler trace id, which
-            # is why `/risk` reported an empty one and its scores never attached.
-            command_state["langfuse_trace_id"] = observability.current_trace_id()
+            # Read from the span itself, not from the ambient context: the context can
+            # go missing (four command turns in the 22:38 run reported no trace id at
+            # all), while the span always knows the trace it belongs to.
+            command_state["langfuse_trace_id"] = (
+                observability.span_trace_id(root_span)
+                or observability.current_trace_id()
+            )
         return command_state
 
     graph = build_graph(
@@ -1200,7 +1204,9 @@ async def ask(
              f"tools:{len(state.get('tool_calls') or [])}"],
         )
         observability.set_trace_io(question, final_text(state))
-        state["langfuse_trace_id"] = observability.current_trace_id()
+        state["langfuse_trace_id"] = (
+            observability.span_trace_id(root_span) or observability.current_trace_id()
+        )
 
     # The model's own verdict on what it was given, read before anything else looks
     # at the text: an answer the model wrapped in the contract's envelope is

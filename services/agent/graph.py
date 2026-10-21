@@ -932,15 +932,28 @@ def build_graph(
     return graph.compile()
 
 
-def _context_block(admission_context: str) -> str:
+def _context_block(admission_context: str, hadm_id: int | None = None) -> str:
     """The pre-flight manifest, appended to the system prompt.
 
     Appended rather than sent as a second system message: a turn then has exactly
     one instruction message, which is what every provider accepts, and the block
     reads as a continuation of the rules it is qualifying rather than as a peer
     of them.
+
+    An OUTPATIENT record also gets `routing.OUTPATIENT_ENCOUNTER_NOTICE` here, and
+    this is the only place the free-text path can learn it. `SYSTEM_PROMPT` is
+    admission-independent by construction, so without this the loop wrote "this
+    admission" and a hospital course about a speech-therapy visit — the identical
+    defect the command path had, on the path that has no `Outpatient` caveat in its
+    tool result because it has no formatter (90000073, "Summarize the note",
+    2026-10-21).
     """
-    text = (admission_context or "").strip()
+    parts = [(admission_context or "").strip()]
+    if hadm_id in routing.OUTPATIENT_HADM_IDS:
+        parts.append("<encounter_notice>\n"
+                     f"{routing.OUTPATIENT_ENCOUNTER_NOTICE}\n"
+                     "</encounter_notice>")
+    text = "\n\n".join(part for part in parts if part)
     return f"\n\n{text}" if text else ""
 
 
@@ -1136,7 +1149,8 @@ async def ask(
         state = await graph.ainvoke(
             {
                 "messages": [
-                    SystemMessage(content=SYSTEM_PROMPT + _context_block(admission_context)),
+                    SystemMessage(
+                        content=SYSTEM_PROMPT + _context_block(admission_context, hadm_id)),
                     *replayed,
                     HumanMessage(content=question),
                 ],

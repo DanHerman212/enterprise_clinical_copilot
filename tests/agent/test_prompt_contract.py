@@ -126,6 +126,20 @@ RULE_MARKERS = (
     # Our record numbers are not clinical facts and are not something a clinician
     # can look up. Live on 2026-10-12 the model wrote one into a prose answer.
     ("the record-number ban", "no admission id"),
+    # The free-text path had no equivalent of the command path's outpatient caveat,
+    # so 90000073 "Summarize the note" described a speech-therapy visit as an
+    # admission with a hospital course (2026-10-21). The prompt now names the block
+    # `graph._context_block` injects, and the test below asserts the two agree.
+    ("the outpatient-wording rule", "<encounter_notice>"),
+    # 90000023 answered a creatinine question with "the discharge note does not
+    # document it" on a turn whose only call was `get_lab_trends`: an absence claim
+    # about a document nobody opened (2026-10-21).
+    ("the absence-needs-a-retrieval rule",
+     "An absence you state must be an absence you LOOKED FOR"),
+    # The series carries a deterministic flag per timepoint; the prompt binds the
+    # prose to it instead of asking the model to compare floats, and forbids the
+    # summary sentence that hides a low reading (2026-10-21).
+    ("the lab-flag rule", "remained within reference range"),
 )
 
 
@@ -191,3 +205,45 @@ def test_the_record_number_rule_has_both_halves():
     assert "no admission id" in SYSTEM_PROMPT
     assert "90000023" not in graph._asked_about(
         "Was she febrile? For admission 90000023.")
+
+
+def test_the_free_text_prompt_is_told_when_the_record_is_an_outpatient_visit():
+    """The prompt is admission-independent; the notice is not.
+
+    `SYSTEM_PROMPT` is one constant for every request, so the only place the free-text
+    loop can learn that a record is a visit rather than a stay is the block the graph
+    appends to it. Live on 2026-10-21, "Summarize the note" on 90000073 — a
+    speech-therapy progress note — produced "this admission" and a hospital course.
+    """
+    from services.agent.routing import (
+        OUTPATIENT_ENCOUNTER_NOTICE,
+        OUTPATIENT_HADM_IDS,
+    )
+
+    outpatient = min(OUTPATIENT_HADM_IDS)
+    block = graph._context_block("", outpatient)
+    assert OUTPATIENT_ENCOUNTER_NOTICE in block
+    assert "<encounter_notice>" in block and "</encounter_notice>" in block
+
+    # An inpatient admission is not told anything about outpatient records: a rule
+    # stated on every turn is a rule the model learns to skim.
+    assert graph._context_block("", 90000023) == ""
+
+    # And it composes with the manifest rather than replacing it: the notice qualifies
+    # the record, the manifest states the features, and a turn needs both.
+    composed = graph._context_block("<admission_metadata>x</admission_metadata>", outpatient)
+    assert composed.index("<admission_metadata>") < composed.index("<encounter_notice>")
+    assert composed.startswith("\n\n")
+
+
+def test_the_summary_headings_are_conditional_on_an_inpatient_stay():
+    """`**Hospital course.**` is only right for an admission.
+
+    The heading example is what the model copies, so an unconditional
+    "**Hospital course.** The patient was admitted …" is an instruction to invent a stay
+    for a record that had none (90000028 through the command path, 90000073 through this
+    one). The outpatient form has to be shown, not merely permitted.
+    """
+    assert "**Hospital course.** The patient was admitted" not in SYSTEM_PROMPT
+    assert "**Clinical course.**" in SYSTEM_PROMPT
+    assert "**Discharge diagnosis.**" in SYSTEM_PROMPT

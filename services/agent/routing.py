@@ -49,6 +49,7 @@ from dataclasses import dataclass, field
 # module and not the chunker, so importing this constant from `chunking` failed the
 # container at startup and the deploy silently served the previous revision.
 from services.agent.admission_context import PREFLIGHT_TOOLS
+from services.agent.admission_phenotypes import bucket_for, phenotype_of_query
 from services.mcp.retrieval.sections import SUMMARY_SECTIONS
 
 
@@ -230,20 +231,35 @@ Return only the JSON object, with no prose before or after it."""
 LABS_FORMATTING = """Describe the laboratory trajectories you were given, for a clinician who
 asked what these measurements did during this admission.
 
+Read the question at the top of this input. Where it names specific analytes — "her
+hemoglobin and sodium", "the creatinine" — those analytes are the answer, and the prose is
+about them alone. Describe the named analytes and say nothing about the rest of the panel:
+a list of ten trajectories where two were asked for buries the answer, and the card already
+shows every series. Where the question names no analyte, describe the panel you were given.
+
 Write two to four sentences, in prose. Say what moved and in which direction, where each
 analyte started, and how far it went. Give the values you need to make that concrete, at the
 precision you were given them: the payload states each analyte's values to its own reporting
 precision, and a value re-rounded in your sentence would disagree with the number in the card
 beside it for no reason.
 
+Name every abnormal reading. For each analyte you describe, state each timepoint the flag
+calls abnormal, with its value and the flag's own term. Name the nadir (the lowest value) or
+the peak (the highest) explicitly when the series has one that is abnormal, rather than
+leaving the reader to find it in the series: "it fell to 7.1 g/dL on hospital day 3" is the
+sentence that matters, and "it varied" is the sentence that loses it.
+
 Every timepoint in the payload carries a `flag`: "normal", "low", "high", "critical_low" or
 "critical_high". That flag is the reading's verdict against the reference interval, computed
 before you saw it, and it alone decides whether a value is abnormal. Rely on the flag and do
 not perform your own numerical comparison: do not compare a value against `reference_low` or
 `reference_high`, and do not decide normality from the numbers. Where the flag says "low",
-state that the value was low; where it says "high", state high; where it says "normal", say it
-was within its reference range. A value the flag calls low is never described as normal, in
-range or unremarkable, however close to the interval it looks.
+state that the value was low; where it says "high", state high; where it says "critical_low",
+say critically low; where it says "critical_high", say critically high; where it says
+"normal", say it was within its reference range. A value the flag calls low is never
+described as normal, in range or unremarkable, however close to the interval it looks — and
+where ANY timepoint in an analyte's series carries a non-"normal" flag, that analyte never
+"remained within reference range", whatever its later values did.
 
 The trajectories were generated from this admission's own recorded features. They were NOT read
 from a laboratory record. Say so once, plainly, in the course of the answer — the card carries
@@ -772,9 +788,65 @@ def _templated_arguments(args: dict, hadm_id: int | None,
 #: the eval harness can both read it rather than each carrying a copy.
 OUTPATIENT_HADM_IDS = frozenset({90000028, 90000040, 90000051, 90000054, 90000073})
 
+#: The instruction that tells a prompt the record is an outpatient encounter.
+#:
+#: One text, both paths. `deterministic._NO_READMISSION` appends it to a command's
+#: formatting input and `graph._context_block` appends it to the free-text system prompt,
+#: because the defect it prevents is a property of the RECORD and not of the route: 90000073
+#: wrote "this admission" about a speech-therapy visit from the `/ehr` path, and 90000073
+#: "Summarize the note" wrote it from the free-text path, where nothing had ever told the
+#: loop the record was not a stay (2026-10-21).
+#:
+#: It is a constant here rather than in either caller because the vocabulary that decides
+#: which admissions are outpatient lives here, and a second copy of this instruction would
+#: drift from `OUTPATIENT_HADM_IDS` the first time one of them was edited.
+OUTPATIENT_ENCOUNTER_NOTICE = (
+    "OUTPATIENT ENCOUNTER: this record is an outpatient note — a visit, not an inpatient "
+    "stay. There was no admission, no hospital course, no discharge and no readmission risk "
+    "to estimate, so none of those words applies to it. Do not write the words "
+    '"admission", "hospital course", "discharge diagnosis" or "discharge instructions", do '
+    "not write a 'Readmission risk & trajectory' section, do not state a risk percentage "
+    "and do not describe risk drivers. Write \"this encounter\" or \"this visit\" instead of "
+    '"this admission", and write "Clinical course" instead of "Hospital course". A heading '
+    "the passages do not support is omitted, never filled with a claim.")
+
+
+def comparison_applies(command: Command, hadm_id: int | None,
+                       topic: str | None) -> bool:
+    """Whether the turn has anything to compare this patient against.
+
+    The condition-lock has two halves and this is the half the tools answer. `a2ui`'s
+    `_draws_matrix` already refuses to DRAW the cohort table when a `/pubmed` query is
+    about a condition this patient does not have, but the estimate was still requested
+    and still reached the formatter — so the model wrote the comparison paragraph the
+    surface had just declined to illustrate. Observed on 90000015 (an orthopedic
+    admission): `/pubmed congestive heart failure` produced an unprompted readmission-risk
+    paragraph beside a heart-failure literature list.
+
+    The rule is the surface's rule, applied before the call rather than after it: on a
+    literature command the estimate is requested only when the query's subject resolves to
+    the patient's own phenotype bucket. A query that names no condition, or an admission
+    the reviewed map does not carry, resolves to a mismatch and the estimate is not
+    requested — with no second figure there is nothing honest to compare, and
+    `LITERATURE_FORMATTING` already says to write no comparison then.
+
+    A non-literature command is untouched: `/ehr`'s estimate is the briefing itself.
+    """
+    if command.wire != "literature" or hadm_id is None:
+        return True
+    query = (topic or "").strip()
+    if not query:
+        # No topic never reaches a literature command's tools (`tool_arguments` refuses
+        # it), so this is only the unit-test shape. Keep the declared call there: a rule
+        # that silently drops calls whenever it cannot evaluate them is not a rule.
+        return True
+    bucket = bucket_for(hadm_id)
+    return bool(bucket) and phenotype_of_query(query) == bucket.key
+
 
 def supplementary_arguments(
-        command: Command, hadm_id: int | None) -> list[tuple[str, dict]]:
+        command: Command, hadm_id: int | None,
+        topic: str | None = None) -> list[tuple[str, dict]]:
     """`(tool, arguments)` for each of this command's supplementary calls.
 
     A call flagged `skipped_without_admission` is left out when there is no admission to
@@ -785,12 +857,18 @@ def supplementary_arguments(
     The readmission estimate is also left out for an OUTPATIENT record: scoring an
     outpatient note answers a question nobody asked, and the number then has to be drawn
     somewhere. See `OUTPATIENT_HADM_IDS`.
+
+    `topic` is the caller's own words for a command that takes them, and it is what
+    `comparison_applies` needs to decide whether a literature turn has a comparison at
+    all. It is None for every command that does not take free text.
     """
+    comparisons = comparison_applies(command, hadm_id, topic)
     return [
         (spec.tool, _templated_arguments(spec.args, hadm_id, command))
         for spec in command.supplementary
         if not (spec.skipped_without_admission and hadm_id is None)
         and not (spec.tool == "predict_readmission" and hadm_id in OUTPATIENT_HADM_IDS)
+        and not (spec.tool == "predict_readmission" and not comparisons)
     ]
 
 

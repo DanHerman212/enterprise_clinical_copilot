@@ -96,7 +96,13 @@ EXPECTED_COMPONENTS = {
 }
 
 # The caller's own words, for the one command that needs them.
-TOPIC = "a clinical topic"
+#
+# Deliberately a condition the default fixture admission has: 90000023 is
+# heart_failure_cardiorenal, and a `/pubmed` estimate is condition-locked to the query's
+# subject. A fixture topic that matched no phenotype would quietly exercise the refusing
+# path in every test that uses this constant, so the "runs exactly its own tools" and
+# "reports each tool" invariants would stop being asserted at all.
+TOPIC = "heart failure readmission"
 
 
 def _topic_for(command):
@@ -104,7 +110,7 @@ def _topic_for(command):
 
 
 def _run_command(command, hadm_id=90000023, *, payload=None, reply=None,
-                 model=None):
+                 model=None, question="a command"):
     """Run one command against stubs, and return (state, toolbox, model)."""
     box = _RecordingToolbox(payload)
     if model is None:
@@ -112,7 +118,7 @@ def _run_command(command, hadm_id=90000023, *, payload=None, reply=None,
     with patch.object(graph, "_build_llm", lambda name: model):
         state = asyncio.run(run_command(
             box, command, hadm_id, topic=_topic_for(command),
-            question="a command", model="test-model",
+            question=question, model="test-model",
         ))
     return state, box, model
 
@@ -812,3 +818,79 @@ def test_an_unknown_slash_token_is_left_as_a_question():
 
     assert parsed["kind"] is None
     assert "/usr/bin/env is not a command" in parsed["question"]
+
+
+# --- the question reaches the formatter ---------------------------------------
+
+def test_the_formatter_is_told_the_question_that_was_asked():
+    """A routed free-text question arrives here already consumed by the router.
+
+    `classify_free_text` turns "What were her hemoglobin and sodium trends?" into
+    `Command(wire="labs")`, and the formatting turn is then built from the tool result
+    alone — so on 2026-10-21 it summarised all ten analytes, because ten was all it had
+    been shown. The question goes into the formatter's input, first, so the requested
+    analytes are the subject of the prose.
+    """
+    from services.agent.deterministic import _formatter_input
+
+    labs = routing.command_for("labs")
+    asked = "What were her hemoglobin and sodium trends?"
+    _, _, model = _run_command(labs, 90000015, question=asked)
+
+    human = model.seen[0][1]
+    assert human.content.startswith(f"Question asked: {asked}\n\n")
+    # The tool result still follows, and the question is not a substitute for it.
+    assert "<tool_result" in human.content.split(asked, 1)[1]
+
+    # A turn with no question formats exactly as it did before this existed.
+    assert _formatter_input([], False) == ""
+    assert _formatter_input([], False, "   ") == ""
+
+
+def test_the_requested_analytes_are_what_the_labs_prompt_is_about():
+    """Passing the question in is only half the fix: the prompt has to use it."""
+    from services.agent.routing import LABS_FORMATTING
+
+    assert "Read the question at the top of this input" in LABS_FORMATTING
+    assert "those analytes are the answer" in LABS_FORMATTING
+    assert "nadir" in LABS_FORMATTING
+    # The sentence that hid an abnormal reading has to be forbidden by name.
+    assert "remained within reference range" in LABS_FORMATTING
+    assert "that analyte never" in LABS_FORMATTING
+    # Every flag is named, and the critical ones are given their own wording.
+    assert "critical_low" in LABS_FORMATTING and "critical_high" in LABS_FORMATTING
+
+
+# --- the condition-lock has to hold before the call, not after it -------------
+
+def test_a_literature_turn_about_another_condition_requests_no_estimate():
+    """The matrix refuses a mismatched comparison; the estimate did not.
+
+    `a2ui._draws_matrix` already suppressed the cohort table for `/pubmed congestive
+    heart failure` on an orthopedic admission, but `predict_readmission` still ran and its
+    result still reached the formatter — so the model wrote the risk comparison the
+    surface had just declined to draw (90000015, 2026-10-21). The call is not made when
+    there is no comparison to make.
+    """
+    command = routing.command_for("literature")
+
+    # 90000015 is orthopedic_arthroplasty in the reviewed map.
+    assert routing.supplementary_arguments(
+        command, 90000015, "congestive heart failure") == []
+    # A question that names no condition has no cohort to sit beside either.
+    assert routing.supplementary_arguments(
+        command, 90000015, "what does the literature say about readmission") == []
+    # The patient's own condition keeps the comparison, which is the whole feature.
+    assert routing.supplementary_arguments(
+        command, 90000015, "total knee arthroplasty readmission") == [
+            ("predict_readmission", {"hadm_id": 90000015})]
+
+
+def test_the_condition_lock_leaves_every_other_command_alone():
+    """`/ehr` is the briefing the estimate belongs to; it is not a comparison."""
+    summarize = routing.command_for("summarize")
+    assert routing.supplementary_arguments(summarize, 90000015, None) == [
+        ("predict_readmission", {"hadm_id": 90000015})]
+    assert routing.supplementary_arguments(
+        summarize, 90000015, "congestive heart failure") == [
+            ("predict_readmission", {"hadm_id": 90000015})]

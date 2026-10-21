@@ -56,6 +56,7 @@ from services.agent.feature_labels import humanize
 from services.agent.message_text import text_of
 from services.agent.prompts import SYSTEM_PROMPT
 from services.agent.routing import (
+    OUTPATIENT_ENCOUNTER_NOTICE,
     OUTPATIENT_HADM_IDS,
     Command,
     supplementary_arguments,
@@ -304,23 +305,33 @@ def medication_narrative(verified: list[dict[str, str]], returned_passages: int)
     )
 
 
-_NO_READMISSION = (
-    "NO READMISSION ESTIMATE: this record is an outpatient note, not an inpatient "
-    "admission, so no readmission risk was computed and none is applicable. Do not "
-    "write a 'Readmission risk & trajectory' section, do not state a risk percentage, "
-    "and do not describe risk drivers. Say in one sentence instead that readmission "
-    "risk does not apply to an outpatient record. Do not call this record an admission "
-    'and do not write the phrase "this admission": an outpatient note documents a visit, '
-    'not a hospital stay, so write "this encounter" or "this visit" instead. Do not write '
-    "a 'Hospital course' heading — use 'Clinical course' — and omit any discharge-diagnosis "
-    "or discharge-instructions section the passages you were given do not contain."
-)
+# The wording lives in `routing`, beside the set that decides which admissions are
+# outpatient, because the free-text path appends the same instruction (`graph._context_block`).
+# The name is kept here because this is the path that has always carried it and the tests
+# read it from here.
+_NO_READMISSION = OUTPATIENT_ENCOUNTER_NOTICE
 
 
-def _formatter_input(tool_messages: list[Any], outpatient: bool) -> str:
-    """What the formatting turn reads: the tool results, plus the outpatient caveat."""
+def _formatter_input(tool_messages: list[Any], outpatient: bool,
+                     question: str | None = None) -> str:
+    """What the formatting turn reads: the question, the tool results, the caveat.
+
+    The QUESTION goes first, and it is not decoration. A free-text question that
+    `classify_free_text` routes to a command reaches this turn as `labs` or `meds` with the
+    caller's words already consumed by the router — so a formatting turn built from the tool
+    result alone answered a question it had never been shown. Observed 2026-10-21:
+    "What were her hemoglobin and sodium trends?" (90000015) and "Show me her hemoglobin and
+    sodium labs" (90000023) were routed to `/labs`, and the model summarised all ten analytes
+    because ten was all it had.
+
+    `question` defaults to None so the shape this function had before the question was
+    threaded through is still expressible, and a turn without one formats exactly as it did.
+    """
     text = "\n\n".join(str(m.content) for m in tool_messages)
-    return f"{text}\n\n{_NO_READMISSION}" if outpatient else text
+    if outpatient:
+        text = f"{text}\n\n{_NO_READMISSION}"
+    asked = (question or "").strip()
+    return f"Question asked: {asked}\n\n{text}" if asked else text
 
 
 async def _formatting_turn(
@@ -406,7 +417,7 @@ async def run_command(
     # a second, and it takes one so a single turn can put the readmission score beside
     # the narrative it qualifies.
     calls = [{"name": command.tool, "args": arguments, "id": f"{command.wire}-1"}]
-    supplementary = supplementary_arguments(command, hadm_id)
+    supplementary = supplementary_arguments(command, hadm_id, topic)
     calls += [
         {"name": name, "args": extra, "id": f"{command.wire}-{index}"}
         for index, (name, extra) in enumerate(supplementary, start=2)
@@ -487,7 +498,7 @@ async def run_command(
         llm,
         [
             SystemMessage(content=f"{FORMATTER_PREAMBLE}\n\n{command.formatting}"),
-            HumanMessage(content=_formatter_input(tool_messages, outpatient)),
+            HumanMessage(content=_formatter_input(tool_messages, outpatient, question)),
         ],
         config=config,
         announce=_announce if streams and command.prose_is_model_output else None,

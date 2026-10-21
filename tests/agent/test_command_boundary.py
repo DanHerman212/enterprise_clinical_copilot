@@ -123,6 +123,22 @@ def _run_command(command, hadm_id=90000023, *, payload=None, reply=None,
     return state, box, model
 
 
+def _expected_calls(command):
+    """The calls one turn makes when the sectioned search comes back empty.
+
+    `_RecordingToolbox` answers with no passages unless a test hands it some, so the
+    default fixture runs `/ehr` down its empty path: the declared calls, then the one
+    record-wide `rag_search` that decides whether the RECORD is empty or only the four
+    named sections are absent (90000051, 2026-10-21). The tests that pin the non-empty
+    path are `test_a_sectioned_result_with_passages_does_not_search_again` and
+    `test_the_record_wide_search_answers_an_absence_only_after_it_returns_nothing`.
+    """
+    names = list(command.tools)
+    if command.wire == "summarize":
+        names.append("rag_search")
+    return names
+
+
 # --- the table ---------------------------------------------------------------
 
 def test_every_command_names_tools_the_server_registers():
@@ -225,10 +241,11 @@ def test_an_unknown_wire_value_is_not_a_command():
 def test_a_command_runs_exactly_its_own_tools_once(command):
     state, box, _ = _run_command(command)
 
-    # Every declared call, in declaration order, once each — and nothing else.
-    # `/ehr` declares two, so this is the assertion that fails if a supplementary
-    # call is dropped, duplicated, or run ahead of the tool it accompanies.
-    assert [name for name, _ in box.calls] == list(command.tools), box.calls
+    # Every declared call, in declaration order, once each — and nothing beyond what
+    # the table declares plus the one fallback the table also owns. `/ehr` declares
+    # two, so this is the assertion that fails if a supplementary call is dropped,
+    # duplicated, or run ahead of the tool it accompanies.
+    assert [name for name, _ in box.calls] == _expected_calls(command), box.calls
 
     name, args = box.calls[0]
     assert name not in command.forbidden
@@ -242,7 +259,7 @@ def test_a_command_runs_exactly_its_own_tools_once(command):
 
     # The record the answer is stored with names the same calls, so a replayed
     # turn shows what actually ran.
-    assert [call["name"] for call in state["tool_calls"]] == list(command.tools)
+    assert [call["name"] for call in state["tool_calls"]] == _expected_calls(command)
 
 
 @pytest.mark.parametrize(
@@ -273,9 +290,9 @@ def test_the_supplementary_result_reaches_the_formatting_turn():
     command = routing.command_for("summarize")
     state, box, model = _run_command(command)
 
-    # The turn really did make both calls...
-    assert [name for name, _ in box.calls] == ["rag_search_sections",
-                                              "predict_readmission"]
+    # The turn really did make both calls, and only those two plus the one fallback
+    # an empty sectioned result earns...
+    assert [name for name, _ in box.calls] == _expected_calls(command)
     # ...and the composer still sees the estimate, because it is what draws the chip.
     assert "predict_readmission" in [call["name"] for call in state["tool_calls"]]
 
@@ -283,6 +300,45 @@ def test_the_supplementary_result_reaches_the_formatting_turn():
     human = model.seen[0][1]
     assert '<tool_result name="predict_readmission">' in human.content
     assert '<tool_result name="rag_search_sections">' in human.content
+
+
+def test_a_sectioned_result_with_passages_does_not_search_again():
+    """The record-wide search is a fallback for an empty result, not a second query.
+
+    This is the assertion the fallback could quietly weaken: given passages, `/ehr` must
+    make exactly its declared calls and no more, so a turn that searched twice whenever
+    it felt like it would fail here.
+    """
+    command = routing.command_for("summarize")
+    payload = {"returned": 1,
+               "passages": [{"text": "History of present illness: presented with dyspnea."}]}
+    state, box, model = _run_command(command, payload=payload)
+
+    assert [name for name, _ in box.calls] == list(command.tools)
+    assert [call["name"] for call in state["tool_calls"]] == list(command.tools)
+    assert '<tool_result name="rag_search">' not in model.seen[0][1].content
+
+
+def test_the_record_wide_search_answers_an_absence_only_after_it_returns_nothing():
+    """An absence statement is earned by searching the record, not by one section miss.
+
+    90000051 was an outpatient note. `/ehr` asked for four discharge-summary headings, was
+    told there were none, and answered "no information was found in the provided record" —
+    a claim about the record made from a search that never looked at it.
+    """
+    command = routing.command_for("summarize")
+    state, box, model = _run_command(command)
+
+    # The extra call is a record-wide search of this admission, and it is the last one.
+    assert box.calls[-1] == (
+        "rag_search",
+        {"hadm_id": 90000023, "query": routing.EHR_RECORD_QUERY},
+    )
+
+    # Its result reaches the formatting turn, which is what lets the prose distinguish
+    # "this section is absent" from "this record is empty".
+    assert '<tool_result name="rag_search">' in model.seen[0][1].content
+    assert "rag_search" in [call["name"] for call in state["tool_calls"]]
 
 
 # A prediction payload at the precision the service serves it at: six decimals on the
@@ -423,12 +479,13 @@ def test_a_prose_less_command_never_builds_a_model():
 
 @pytest.mark.parametrize("command", routing.COMMANDS, ids=lambda c: c.wire)
 def test_a_command_reports_each_tool_before_the_review_stage(command):
-    """The run reads as: plan, run the declared tools, review.
+    """The run reads as: plan, run the tools, review.
 
-    One `tool`/`result` pair per declared call, in the order the table declares
-    them. A supplementary call is work that happened, so it announces like any
-    other: a command that listed stages in another order would be narrating work it
-    did not do, and silencing the second call would hide half of what `/ehr` ran.
+    One `tool`/`result` pair per call, in the order the table declares them. A
+    supplementary call is work that happened, so it announces like any other: a
+    command that listed stages in another order would be narrating work it did not
+    do, and silencing the second call would hide half of what `/ehr` ran. The
+    record-wide fallback announces on the same terms, for the same reason.
     """
     seen = []
     box = _RecordingToolbox()
@@ -441,10 +498,11 @@ def test_a_command_reports_each_tool_before_the_review_stage(command):
         ))
 
     assert [event["stage"] for event in seen] == (
-        ["planning"] + ["tool", "result"] * len(command.tools) + ["reviewing"]
+        ["planning"] + ["tool", "result"] * len(_expected_calls(command))
+        + ["reviewing"]
     )
     assert [event["tool"] for event in seen if event["stage"] == "tool"] == (
-        list(command.tools)
+        _expected_calls(command)
     )
 
 
@@ -569,12 +627,44 @@ def test_the_fallback_sentence_needs_a_genuinely_empty_result():
     assert unverified != (
         "No specific discharge medication information is available for this admission."
     )
-    assert "formatting failure" in unverified
+    assert "no medication could be read from it" in unverified
+    # The prose states the observation, not our internals: "formatting failure" is a
+    # fact about this module and a judge scores it as an ungrounded clinical claim.
+    assert "formatting failure" not in unverified.lower()
+    assert "pipeline" not in unverified.lower()
 
 
 def test_the_narrative_counts_the_verified_rows_rather_than_all_of_them():
     verified = [{"medication": "Lasix", "dosage": "80 mg", "frequency": "daily"}]
     assert "1 discharge medication" in medication_narrative(verified, 1)
+
+
+def test_a_taper_counts_as_one_medication_and_the_names_are_stated():
+    """A dose step-down is one drug in two rows. Counting rows said 14 medications
+    for a note that prescribed 13 (90000015, 2026-10-21), and a question asking
+    WHICH medications was answered with a number."""
+    taper = [
+        {"medication": "oxycodone SR", "dosage": "20 mg", "frequency": "q.12h."},
+        {"medication": "oxycodone SR", "dosage": "10 mg", "frequency": "q.12h."},
+        {"medication": "Celebrex", "dosage": "200 mg", "frequency": "daily"},
+    ]
+    narrative = medication_narrative(taper, 2)
+    assert "2 discharge medications" in narrative
+    assert "oxycodone SR" in narrative and "Celebrex" in narrative
+    assert narrative.count("oxycodone SR") == 1, "one drug, named once"
+
+    # Identity is the normalised name: casing and spacing cannot split one drug.
+    split = [
+        {"medication": "Toprol XL", "dosage": "50 mg", "frequency": "daily"},
+        {"medication": "toprol  xl", "dosage": "25 mg", "frequency": "daily"},
+    ]
+    assert "1 discharge medication" in medication_narrative(split, 2)
+
+
+def test_the_narrative_lists_every_distinct_drug_in_first_seen_order():
+    rows = [{"medication": n, "dosage": "", "frequency": ""}
+            for n in ("Celebrex", "Colace", "Ativan")]
+    assert medication_narrative(rows, 3).endswith("Celebrex, Colace, Ativan.")
 
 
 def test_the_medication_command_hands_the_payload_the_verified_rows_only():

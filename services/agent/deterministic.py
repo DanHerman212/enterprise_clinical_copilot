@@ -56,6 +56,7 @@ from services.agent.feature_labels import humanize
 from services.agent.message_text import text_of
 from services.agent.prompts import SYSTEM_PROMPT
 from services.agent.routing import (
+    EHR_RECORD_QUERY,
     OUTPATIENT_ENCOUNTER_NOTICE,
     OUTPATIENT_HADM_IDS,
     Command,
@@ -284,24 +285,73 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _distinct_medications(verified: list[dict[str, str]]) -> list[str]:
+    """The medication names in `verified`, once each, in first-seen order.
+
+    A taper is one drug in two rows — "oxycodone SR 20 mg" then "oxycodone SR
+    10 mg", because the note steps the dose down — and counting rows told a reader
+    there were fourteen discharge medications when the note prescribed thirteen
+    (90000015, 2026-10-21). Identity is the normalised name, so casing and spacing
+    cannot split one drug into two.
+
+    The spelling of the first row that named the drug is kept: this is what the
+    note said, not a value this module chose.
+    """
+    names: list[str] = []
+    seen: set[str] = set()
+    for row in verified:
+        name = str(row.get("medication") or "").strip()
+        key = _normalise(name)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        names.append(name)
+    return names
+
+
+def _passage_count(recorded: list[RecordedToolCall]) -> int:
+    """How many passages this turn's tool calls actually returned."""
+    return sum(
+        len((call.get("response") or {}).get("passages") or [])
+        for call in recorded
+        if isinstance(call.get("response"), dict)
+    )
+
+
 def medication_narrative(verified: list[dict[str, str]], returned_passages: int) -> str:
     """What the narrative says for a medications command.
 
-    The grid carries the list, so the prose says only what the list is. The
-    fallback sentence the document reserves for a genuinely empty result is used
-    only when the tool returned no passages at all — a tool that returned text
-    this module could not verify is a different failure and must not be reported
-    as an absence of information.
+    The prose names the medications as well as counting them. It used to say only
+    "N discharge medications, as recorded in the discharge note", on the reasoning
+    that the grid carries the list — but the prose is what the judge and the
+    citation layer read as the answer, and a question asking WHICH medications
+    was answered with a number (90000015, 2026-10-21). The grid still renders the
+    rows with doses and frequencies; the sentence is the answer a reader who is
+    not looking at the card can still use.
+
+    The count is of distinct drugs, not of rows; see `_distinct_medications`.
+
+    The fallback sentence the document reserves for a genuinely empty result is
+    used only when the tool returned no passages at all. A tool that returned
+    text this module could not verify is a different failure, and the prose states
+    that failure clinically: what was retrieved, and that no medication could be
+    read from it. It does not name our internals — "formatting failure" is a fact
+    about this module, not about the patient's record, and a judge is right to
+    score it ungrounded (90000023, 2026-10-21).
     """
-    if verified:
-        count = len(verified)
+    names = _distinct_medications(verified)
+    if names:
+        count = len(names)
         noun = "medication" if count == 1 else "medications"
-        return f"{count} discharge {noun}, as recorded in the discharge note."
+        return (
+            f"{count} discharge {noun}, as recorded in the discharge note: "
+            f"{', '.join(names)}."
+        )
     if returned_passages == 0:
         return "No specific discharge medication information is available for this admission."
     return (
         "The discharge medications section was retrieved, but no medication could be "
-        "read from it. This is a formatting failure, not an absence of information."
+        "read from it."
     )
 
 
@@ -438,6 +488,24 @@ async def run_command(
         traced=True,
     )
 
+    # `/ehr` asks for four named discharge-summary sections. An outpatient note has
+    # none of them, so the sectioned call succeeds and returns nothing — and the
+    # formatter, told only that, reported the RECORD as empty ("No information was
+    # found in the provided record to summarize", 90000051, 2026-10-21). One
+    # record-wide search settles which of the two it is: passages means there was
+    # something to summarize, and nothing means the absence is real and sayable.
+    if command.wire == "summarize" and hadm_id is not None and not _passage_count(recorded):
+        fallback = [{
+            "name": "rag_search",
+            "args": {"hadm_id": hadm_id, "query": EHR_RECORD_QUERY},
+            "id": f"{command.wire}-record",
+        }]
+        extra_messages, extra_recorded = await _execute_tool_calls(
+            toolbox, fallback, on_event, project=_presented_prediction, traced=True,
+        )
+        tool_messages += extra_messages
+        recorded += extra_recorded
+
     # Every result this turn produced goes to the formatting turn, supplementary calls
     # included.
     #
@@ -523,11 +591,7 @@ async def run_command(
     if command.wire == "meds":
         source = _source_text(recorded)
         verified, dropped = parse_medications(text, source)
-        returned = sum(
-            len(c.get("response", {}).get("passages") or [])
-            for c in recorded
-            if isinstance(c.get("response"), dict)
-        )
+        returned = _passage_count(recorded)
         state["command_payload"] = {
             "medications": verified,
             "dropped": dropped,

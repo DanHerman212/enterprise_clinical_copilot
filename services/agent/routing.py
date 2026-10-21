@@ -52,6 +52,16 @@ from services.agent.admission_context import PREFLIGHT_TOOLS
 from services.agent.admission_phenotypes import bucket_for, phenotype_of_query
 from services.mcp.retrieval.sections import SUMMARY_SECTIONS
 
+#: What `/ehr` searches for when the sectioned retrieval returns nothing.
+#:
+#: `rag_search_sections` looks for four named discharge-summary headings. An
+#: outpatient note has none of them, so the call legitimately returned zero
+#: passages — and the answer then reported the RECORD as empty rather than those
+#: sections as absent (90000051, "Summarize the note", 2026-10-21). One
+#: record-wide search is what makes an absence statement a statement about the
+#: record: if this returns nothing either, there really is nothing to summarize.
+EHR_RECORD_QUERY = "patient history, clinical course, diagnosis, treatment and plan"
+
 
 class UnknownCommand(ValueError):
     """An intent arrived that this table does not define."""

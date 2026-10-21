@@ -247,3 +247,28 @@ def test_the_summary_headings_are_conditional_on_an_inpatient_stay():
     assert "**Hospital course.** The patient was admitted" not in SYSTEM_PROMPT
     assert "**Clinical course.**" in SYSTEM_PROMPT
     assert "**Discharge diagnosis.**" in SYSTEM_PROMPT
+
+
+def test_the_medication_authority_separates_reading_from_listing():
+    """/meds owns the reconciliation; it does not own reading a regimen the note records.
+
+    The rule this replaces forbade both, and the cost was live on 2026-10-21 (`d7e4a1cb`):
+    "is the literature behind this specific combination effective?" came back refused as a
+    medications question, on the false premise that the agent was not permitted to read a
+    regimen its retrieved passage named. Both halves are load-bearing — a rule that permits
+    reading but forgets the reconciliation invites an invented list, and a rule that forbids
+    reading refuses a question the record can answer.
+    """
+    assert "READING IS NOT LISTING" in SYSTEM_PROMPT
+
+    # The reconciliation is still the command's, and the prohibition names the shape it
+    # takes: an enumerated list with doses and frequencies.
+    assert "enumerated list" in SYSTEM_PROMPT
+    assert "/meds' answer to give" in SYSTEM_PROMPT
+
+    # The false premise is refused in the prompt itself, not merely left unstated.
+    assert "not permitted" in SYSTEM_PROMPT
+
+    # The sentence this replaced forbade reading at all ("mining names out of another
+    # section"); it must not return under the same words.
+    assert "mining names" not in SYSTEM_PROMPT

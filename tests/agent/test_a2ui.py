@@ -354,12 +354,24 @@ class TestToolCallExtraction:
         assert predict_payload([]) is None
         assert predict_payload([{"name": "other", "response": {}}]) is None
 
-    def test_rag_payload_prefers_free_text_search(self):
+    def test_rag_payload_merges_every_retrieval_call_in_order(self):
+        """Numbering is global across calls, so the array is the concatenation.
+
+        This used to return only the `rag_search` payload when both kinds were present,
+        which is what the citation markers do NOT index: the prompt tells the model the
+        second call's passages continue after the first's, so a marker past the first
+        call resolved to the wrong passage (`/ehr`'s sectioned call plus its record-wide
+        fallback).
+        """
         calls = [
-            {"name": "rag_search_sections", "response": {"query": "sections"}},
-            {"name": "rag_search", "response": {"query": "free"}},
+            {"name": "rag_search_sections",
+             "response": {"query": "sections", "passages": [{"text": "a"}]}},
+            {"name": "rag_search",
+             "response": {"query": "free", "passages": [{"text": "b"}]}},
         ]
-        assert rag_payload(calls)["query"] == "free"
+        merged = rag_payload(calls)
+        assert merged["query"] == "sections", "held to call order, like the numbering"
+        assert [p["text"] for p in merged["passages"]] == ["a", "b"]
 
     def test_rag_payload_falls_back_to_sections(self):
         calls = [{"name": "rag_search_sections", "response": {"query": "sections"}}]

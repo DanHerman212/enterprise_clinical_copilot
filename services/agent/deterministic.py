@@ -372,13 +372,14 @@ def _formatter_input(tool_messages: list[Any], outpatient: bool,
                      question: str | None = None) -> str:
     """What the formatting turn reads: the question, the tool results, the caveat.
 
-    The QUESTION goes first, and it is not decoration. A free-text question that
-    `classify_free_text` routes to a command reaches this turn as `labs` or `meds` with the
-    caller's words already consumed by the router — so a formatting turn built from the tool
-    result alone answered a question it had never been shown. Observed 2026-10-21:
-    "What were her hemoglobin and sodium trends?" (90000015) and "Show me her hemoglobin and
-    sodium labs" (90000023) were routed to `/labs`, and the model summarised all ten analytes
-    because ten was all it had.
+    The QUESTION goes first, and it is not decoration. Until Phase 01 this turn could be
+    reached by a free-text question that a keyword router had rewritten into `/labs` or
+    `/meds`, with the caller's words consumed by the router — so a formatter built from
+    the tool result alone answered a question it had never been shown. Observed
+    2026-10-21: "What were her hemoglobin and sodium trends?" (90000015) and "Show me
+    her hemoglobin and sodium labs" (90000023) were routed to `/labs`, and the model
+    summarised all ten analytes because ten was all it had. The router is gone; a command
+    now arrives only because the caller named it, and the question is that name.
 
     `question` defaults to None so the shape this function had before the question was
     threaded through is still expressible, and a turn without one formats exactly as it did.

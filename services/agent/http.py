@@ -119,7 +119,18 @@ async def _question_or_error(
     refused = _unknown_command(parsed)
     if refused is not None:
         return None, refused
-    return _route_free_text(parsed), None
+    # No routing here. A command arrives as a command — a chip selection, or a leading
+    # `/slash` token that `parse_agent_request` has already resolved into `kind` — and
+    # everything else is a question for the reasoning loop.
+    #
+    # What used to stand here was a keyword router: any free-text question containing
+    # "medications" or "sodium" was rewritten into `kind="meds"`/`"labs"` and sent to
+    # the stateless command path, which ignores `turns` by design. On a follow-up, that
+    # meant the question was answered with Turn 1's static caption — the reader asked
+    # whether the discharge list held an anticoagulant and was given the medication
+    # count again (2026-10-22, every turn-2 census failure). A word list cannot tell an
+    # extraction request from an analytical question, so it no longer tries.
+    return parsed, None
 
 
 #: The shape of a typed command, anchored at the start of the question.
@@ -244,35 +255,6 @@ def _unknown_command(parsed: dict) -> JSONResponse | None:
          "langfuse_trace_id": trace_id},
         status_code=400,
     )
-
-
-def _route_free_text(parsed: dict) -> dict:
-    """Send a free-text question to the command that owns it, when one clearly does.
-
-    Applied here, at the seam between the request and the chain, so the graph never
-    learns that routing exists. `parsed["kind"]` is the field the chain already
-    reads as the command, so setting it is the whole mechanism: the bound tool runs,
-    the formatting prompt applies, and the surface is composed by the same code that
-    answers a clicked chip.
-
-    A caller that chose a chip is left exactly as it is. The router is for questions
-    nobody classified, and overriding an explicit choice would be the router
-    disagreeing with the person using it.
-
-    `routed_to` rides along so the console can say which command answered. It is
-    kept out of `kind` rather than redundant with it because the two mean different
-    things: `kind` is the command the chain runs, `routed_to` is the fact that the
-    command was chosen for the reader rather than by them.
-    """
-    if parsed.get("kind"):
-        return parsed
-    wire = routing.classify_free_text(parsed.get("question") or "")
-    if wire is None:
-        return parsed
-    routed = dict(parsed)
-    routed["kind"] = wire
-    routed["routed_to"] = wire
-    return routed
 
 
 class AgentAnswerUnavailable(Exception):

@@ -199,10 +199,15 @@ def test_ask_publishes_the_command_that_ran():
     assert body["routed_to"] is None      # typed, not chosen for the reader
 
 
-def test_ask_publishes_routed_to_when_free_text_is_routed():
-    """`routed_to` is the other half: a free-text question the router recognised. The
-    field is always present, null when the reader typed a command — an always-present
-    field is one an assertion can distinguish from a missing one."""
+def test_ask_reports_no_routed_command_for_free_text():
+    """A question is not a command, however many clinical nouns it contains.
+
+    Before Phase 01 this response carried `routed_to: "labs"`: the question was
+    rewritten into `/labs` and answered by the stateless command path, which ignores
+    `turns` — so the same question asked as a follow-up was answered with Turn 1's
+    caption. The field stays in the envelope (present, null) because a caller's parser
+    distinguishes "no routed command" from "field absent".
+    """
     with patch.object(srv, "toolbox", _fake_toolbox), \
          patch.object(srv, "ask", _fake_ask_factory(_state(command=None))):
         resp = _client().post(
@@ -214,7 +219,8 @@ def test_ask_publishes_routed_to_when_free_text_is_routed():
     assert resp.status_code == 200
     body = resp.json()
     assert "routed_to" in body
-    assert body["routed_to"] == "labs"     # un-slashed on the wire; the harness normalises
+    assert body["routed_to"] is None
+    assert body["command"] is None
 
 
 def test_the_collector_normalises_what_the_wire_sends():

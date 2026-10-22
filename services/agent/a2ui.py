@@ -931,14 +931,34 @@ def predict_payload(tool_calls: list[dict]) -> dict | None:
 
 
 def rag_payload(tool_calls: list[dict]) -> dict | None:
-    """The retrieval response — the free-text `rag_search` or the
-    deterministic `rag_search_sections` used for summaries — so the canvas
-    source card is drawn for both paths."""
-    for name in ("rag_search", "rag_search_sections"):
-        for call in tool_calls or []:
-            if call.get("name") == name:
-                return call.get("response") or None
-    return None
+    """The retrieval evidence for this run, as ONE passage array.
+
+    The prompt numbers citations GLOBALLY across calls — "the first call's passages are
+    ^[1], ^[2] …; the second call's passages continue after them" — so the array a
+    marker indexes has to be that same concatenation. This returned only the FIRST
+    retrieval call's payload, which meant a marker pointing into the second call
+    resolved against an unrelated passage or clamped to the end of the first
+    (Phase 01 audit, 2026-10-22; `/ehr` is the case, with its sectioned call plus the
+    record-wide fallback).
+
+    A single call is returned untouched, which is every command turn and most free-text
+    ones — the merge only exists for the multi-call turn it was always wrong for.
+    """
+    rag_calls = [call for call in tool_calls or []
+                 if call.get("name") in ("rag_search", "rag_search_sections")
+                 and isinstance(call.get("response"), dict)]
+    if not rag_calls:
+        return None
+    if len(rag_calls) == 1:
+        return rag_calls[0]["response"]
+
+    merged = dict(rag_calls[0]["response"])
+    passages: list = []
+    for call in rag_calls:
+        passages.extend(call["response"].get("passages") or [])
+    merged["passages"] = passages
+    merged["returned"] = len(passages)
+    return merged
 
 
 def lab_trend_payload(tool_calls: list[dict]) -> dict | None:

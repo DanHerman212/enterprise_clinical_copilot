@@ -515,6 +515,12 @@ FREETEXT_TOOLS: frozenset[str] = frozenset({
     "rag_search",
     "rag_search_sections",
     "search_literature",
+    # Phase 01 (2026-10-22). A free-text question about medications used to be refused
+    # and redirected to /meds, which answers with the extraction list and ignores the
+    # conversation — so "are any of these anticoagulants?" was answered with the count
+    # again. The loop can read the same structured extraction the command reads, and
+    # `guardrail` verifies doses and frequencies against the note text either way.
+    "discharge_medications",
     # Phase 3 (2026-10-16). A clicked risk driver arrives here as a question about a lab
     # value, and a question about a lab value is answered from a trajectory rather than
     # from a note passage. Admitting it is what lets the drill-down work at all: without
@@ -557,59 +563,29 @@ def is_command(wire: str | None) -> bool:
     return wire is not None and wire in BY_WIRE
 
 
-#: Vocabulary that makes a free-text question a request for a command's answer.
-#:
-#: Ordered, and the first match wins. `meds` before `labs` is the conservative
-#: reading: a question that mentions both is usually asking for the list, and a
-#: medication list is the narrower, more checkable answer of the two.
-#:
-#: Words, not a model — and that is the point of the whole change. The redirect
-#: this replaces was a sentence in a prompt competing with the rest of the prompt,
-#: and on 2026-10-17 it lost: a free-text risk question started calling
-#: `rag_search` instead of naming /risk, purely because a new paragraph shifted the
-#: balance. A word list fails the other way, by abstaining, and an abstention
-#: leaves the question with the reasoning loop — exactly where it went before.
-#:
-#: `risk` is deliberately absent. Its redirect still holds through the prompt and
-#: is asserted by the live tests, so routing it here would be a behaviour change
-#: with no defect behind it.
-#: Punctuation becomes a space before tokenising, so `hemoglobin,` and `(RDW)` are the
-#: words they look like. Everything the matcher sees is then `[a-z0-9]+` runs.
-_PUNCTUATION = str.maketrans({ch: " " for ch in ".,;:!?()[]{}\"'/\\-–—"})
-
-_FREE_TEXT_ROUTES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("meds", (
-        "medication", "medications", "meds", "prescription", "prescriptions",
-        "dosing", "dose", "doses", "drug", "drugs", "regimen", "pharmacy",
-    )),
-    ("labs", (
-        "lab", "labs", "laboratory", "hemoglobin", "haemoglobin", "sodium",
-        "potassium", "creatinine", "platelet", "platelets", "monocyte",
-        "monocytes", "hematocrit", "haematocrit", "rdw",
-        "red cell distribution", "bilirubin", "albumin", "lactate", "glucose",
-    )),
-)
-
-#: Question templates a canvas control composes for itself, which the router must
-#: never answer on the reader's behalf.
+#: Question templates a canvas control composes for itself.
 #:
 #: A clicked risk driver is not a typed question. It arrives through the same door as
 #: one — `askFollowUp` fills the composer and submits the form, so the wire carries
-#: free text and nothing else — but the reader chose a control that already means
-#: "explain this driver in this chart". On 2026-10-17 the router could not tell the two
-#: apart and answered the RDW driver control with the whole lab panel, because the
-#: template contains the word `rdw`; the reader asked why a number matters and was
-#: shown every trajectory in the admission.
+#: free text — but the reader chose a control that already means "explain this driver in
+#: this chart".
 #:
-#: The durable fix is an `intent` field on the request, so an affordance says what it
-#: is instead of being recognised by its wording. Until the composer carries one, the
-#: templates the surface emits are listed here, and a match abstains — which leaves the
-#: question with the reasoning loop, exactly as an unrecognised question would.
+#: The free-text ROUTER this once fed has been removed (Phase 01, 2026-10-22): every
+#: question that is not a command now reaches the reasoning loop, which is where an
+#: affordance was always heading. What remains is the second caller, and it is still
+#: needed: `asks_for_administrative_detail` must not read "as a readmission risk
+#: driver" as a request for a feature field, because the answer lives in the model's
+#: attribution and in the notes.
 _AFFORDANCE_TEMPLATES: tuple[tuple[str, ...], ...] = (
     # `driverQuestion(label)` in the renderer's RiskInfluencers widget.
     ("as", "a", "readmission", "risk", "driver"),
 )
 
+
+
+#: Punctuation becomes a space before tokenising, so `hemoglobin,` and `(RDW)` are the
+#: words they look like. Everything the matchers below see is `[a-z0-9]+` runs.
+_PUNCTUATION = str.maketrans({ch: " " for ch in ".,;:!?()[]{}\"'/\\-–—"})
 
 
 def _contains_affordance_template(tokens: list[str]) -> bool:
@@ -707,7 +683,9 @@ def asks_for_administrative_detail(question: str) -> bool:
 #: score question, which /risk owns and this must not answer.
 _RISK_DRIVER_WORDS = frozenset({"driver", "drivers", "drives", "drive", "driving"})
 _WHY_WORDS = frozenset({"why", "explain", "explains", "explained", "explaining",
-                        "reason", "because", "contributes", "contribute"})
+                        "reason", "because", "contributes", "contribute",
+                        "contributed", "contributing", "contribution",
+                        "contributions"})
 
 
 def asks_why_risk_driver(question: str) -> bool:
@@ -717,83 +695,6 @@ def asks_why_risk_driver(question: str) -> bool:
         return False
     return (any(token in _RISK_DRIVER_WORDS for token in tokens)
             and any(token in _WHY_WORDS for token in tokens))
-
-
-#: Words that mean the caller wants published evidence, not a record extraction.#:
-#: The free-text router matches a small vocabulary of extraction words, and on
-#: 2026-10-17 that vocabulary cost an answer: a clicked follow-up asked "What does
-#: current clinical literature suggest regarding the efficacy of this specific
-#: combination of medications…" and the word "medications" sent it to /meds, which
-#: answers with the extraction list. The reader asked for evidence and got the chart.
-#:
-#: A literature cue ABSTAINS rather than routing to /pubmed. The cue only says the
-#: question is not an extraction request; whether the answer comes from the literature
-#: or from the notes is still the reasoning loop's decision, and routing on a cue would
-#: be a second guess dressed up as a rule.
-_LITERATURE_CUES: tuple[tuple[str, ...], ...] = (
-    ("literature",), ("evidence",),
-    ("study",), ("studies",),
-    ("trial",), ("trials",),
-    ("meta", "analysis"), ("metaanalysis",),
-    ("systematic", "review"),
-    ("pubmed",), ("guideline",), ("guidelines",),
-    ("efficacy",), ("effectiveness",), ("benchmark",), ("benchmarks",),
-)
-
-
-def _contains_literature_cue(tokens: list[str]) -> bool:
-    """Whether the question asks for published evidence rather than a record value."""
-    for cue in _LITERATURE_CUES:
-        span = len(cue)
-        if span == 1:
-            if cue[0] in tokens:
-                return True
-        elif any(tokens[i:i + span] == list(cue)
-                 for i in range(len(tokens) - span + 1)):
-            return True
-    return False
-
-
-def classify_free_text(question: str) -> str | None:
-    """The command wire a free-text question is asking for, or None.
-
-    Returns the WIRE name (`"meds"`, `"labs"`) rather than a slash command, because
-    the wire name is what `parse_agent_request` calls `kind` and what
-    `state["command"]` holds. Handing that back means the caller assigns one field
-    and the entire deterministic path follows — the bound tool, the formatting
-    prompt, the composed surface — exactly as if the chip had been clicked.
-
-    None means "not obviously one of these", and the caller leaves the question
-    where it was: with the reasoning loop, which can still answer it from the notes.
-    """
-    tokens = (question or "").lower().translate(_PUNCTUATION).split()
-    if not tokens:
-        return None
-    # A control's own question is answered by the loop that the control names, not
-    # by whichever keyword happens to be in its label.
-    if _contains_affordance_template(tokens):
-        return None
-    # An evidence question is not an extraction request, whatever nouns it uses.
-    # "…efficacy of this combination of medications" is the case that lost an answer.
-    if _contains_literature_cue(tokens):
-        return None
-    # Exact tokens, never substrings. `"lab" in text` also fires on "elaborate",
-    # "collaborate" and "syllable", and a router that hijacks those is worse than
-    # no router: the wrong command answers confidently and the reader is told their
-    # question was understood. A phrase is matched as a run of tokens, so
-    # "red cell distribution" still works without a regex character class that
-    # would have to be escaped correctly for every entry in the table.
-    for wire, phrases in _FREE_TEXT_ROUTES:
-        for phrase in phrases:
-            words = phrase.split()
-            span = len(words)
-            if span == 1:
-                if words[0] in tokens:
-                    return wire
-            elif any(tokens[i:i + span] == words
-                     for i in range(len(tokens) - span + 1)):
-                return wire
-    return None
 
 
 def _templated_arguments(args: dict, hadm_id: int | None,

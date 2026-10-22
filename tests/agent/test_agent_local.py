@@ -84,23 +84,29 @@ def unknown_patient() -> dict:
 
 # --- the free-text boundary: a command's work is redirected, never performed ---
 
-def test_a_free_text_risk_question_is_redirected(free_text_risk):
-    """The answer is the command's name, and there is no tool call to argue with.
+def test_a_free_text_risk_question_enters_the_reasoning_loop(free_text_risk):
+    """Phase 01: a typed risk question is a question, not a command.
 
-    Asserted on the trace, because prose cannot prove this: a model that estimated
-    a risk out of its own knowledge would also produce a sentence about risk. The
-    absence of a call is the guarantee, and it is why the tool is not bound rather
-    than merely forbidden — a tool the model cannot call cannot answer.
+    Before the refactor it was rewritten into `/risk` and answered with the command's
+    static caption — which ignores `turns`, so the same question asked as a follow-up
+    got Turn 1's answer back. Now the loop receives it and decides for itself; what it
+    must not do is answer from memory, which is why a tool call is asserted.
     """
-    assert free_text_risk["tool_calls"] == []
-    assert "/risk" in final_text(free_text_risk)
+    assert "command" not in free_text_risk, "free text must not become a command"
+    assert free_text_risk["tool_calls"], "the loop answered without looking anything up"
+    assert final_text(free_text_risk).strip()
 
 
-def test_a_free_text_medication_question_is_redirected(free_text_meds):
-    """Same boundary, other command. An assembled medication list is exactly what
-    a model reading a note passage produces, and exactly what /meds replaces."""
-    assert free_text_meds["tool_calls"] == []
-    assert "/meds" in final_text(free_text_meds)
+def test_a_free_text_medication_question_enters_the_reasoning_loop(free_text_meds):
+    """Same boundary, other command — and now the medication tool is the loop's.
+
+    It used to be withheld, so the only way to answer was to redirect to /meds. A
+    follow-up that asked for a classification got the count again. The loop may call
+    `discharge_medications` itself, and the guardrail still verifies the doses.
+    """
+    assert "command" not in free_text_meds, "free text must not become a command"
+    assert any(call["name"] == "discharge_medications"
+               for call in free_text_meds["tool_calls"]), free_text_meds["tool_calls"]
 
 
 # --- the path that does own the tool ------------------------------------------

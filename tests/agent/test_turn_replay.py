@@ -116,3 +116,60 @@ def test_the_prompt_stays_a_template_and_the_history_is_data(monkeypatch):
     # change what the model is asked about now.
     assert messages[-1].content == parsed["question"]
     assert captured["state"]["messages"][-1].content == parsed["question"]
+
+# --- Phase 01: the replayed payload is the evidence a follow-up reads ---------
+
+class _NoToolbox:
+    """A toolbox that fails if it is asked for anything.
+
+    `replay_messages` re-resolves a call only when the turn did not store its payload.
+    This turn did, so a call to the toolbox would mean the payload was ignored — which
+    is the defect this asserts against: a Turn 2 that re-asks the estimator gets a
+    fresh number and a second, unrelated trace.
+    """
+
+    async def call(self, *_args, **_kwargs):  # pragma: no cover - must not run
+        raise AssertionError("the stored payload was not used")
+
+
+RISK_TURN = [{
+    "question": "/risk",
+    "answer": "The score is above the operating threshold.",
+    "tool_calls": [{
+        "name": "predict_readmission",
+        "args": {"hadm_id": 90000015},
+        "payload": {
+            "hadm_id": 90000015,
+            "probability": 0.332758,
+            "threshold": 0.11,
+            "top_factors": [
+                {"feature": "rdw_max", "contribution": 0.316788,
+                 "direction": "increases"},
+                {"feature": "rbc_min", "contribution": 0.201144,
+                 "direction": "decreases"},
+            ],
+        },
+    }],
+}]
+
+
+def test_a_replayed_risk_turn_carries_its_drivers_into_the_transcript():
+    """Turn 2 must read the exact drivers and directions from the transcript.
+
+    The Phase 01 requirement is that a follow-up after `/risk` can explain the model's
+    attribution without a redundant call. That only holds if the replayed tool result
+    carries the whole `top_factors` list — projection here would leave the follow-up
+    describing values it can see and guessing at the reasoning it cannot.
+    """
+    from langchain_core.messages import ToolMessage
+
+    messages, calls = asyncio.run(graph.replay_messages(_NoToolbox(), RISK_TURN))
+
+    assert calls[0]["name"] == "predict_readmission"
+    assert [f["feature"] for f in calls[0]["response"]["top_factors"]] == \
+        ["rdw_max", "rbc_min"]
+    assert calls[0]["response"]["top_factors"][1]["direction"] == "decreases"
+
+    rendered = "\n".join(m.content for m in messages if isinstance(m, ToolMessage))
+    assert 'name="predict_readmission"' in rendered
+    assert '"rdw_max"' in rendered and '"direction": "decreases"' in rendered, rendered

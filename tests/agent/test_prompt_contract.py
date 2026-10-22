@@ -301,9 +301,12 @@ def test_a_risk_driver_question_is_answered_with_the_models_attribution():
     """
     assert "predict_readmission` is in front of you on exactly one kind of question" \
         in SYSTEM_PROMPT
-    assert "which drivers led and in which direction" in SYSTEM_PROMPT
+    # Wrapped across two lines in the prompt, so the two halves are asserted rather
+    # than the whitespace between them.
+    assert "drivers contributed most" in SYSTEM_PROMPT
+    assert "in which direction" in SYSTEM_PROMPT
     # The boundary is restated rather than dropped: /risk owns the number.
-    assert "/risk owns the number" in SYSTEM_PROMPT
+    assert "/risk owns" in SYSTEM_PROMPT
 
 
 def test_a_number_is_not_distributed_across_the_items_beside_it():
@@ -314,3 +317,41 @@ def test_a_number_is_not_distributed_across_the_items_beside_it():
     """
     assert "A number belongs to the item it is stated for." in SYSTEM_PROMPT
     assert "Do not group or distribute" in SYSTEM_PROMPT
+
+# --- Phase 01: the prompt has to permit the multi-turn behaviours ------------
+
+def test_an_analytical_medication_question_is_answered_not_redirected():
+    """The old rule refused every medication question. That is what failed Turn 2.
+
+    "Are any high-risk or anticoagulant medications listed on discharge?" was answered
+    with the count from Turn 1, because the prompt told the model a medications
+    question was not its to answer. The boundary is now between the LIST (a command's
+    answer) and a question ABOUT the list (the loop's).
+    """
+    assert "Repeating a count" in SYSTEM_PROMPT
+    assert "is an anticoagulant" in SYSTEM_PROMPT
+
+
+def test_a_comparative_lab_question_is_answered_in_the_first_sentence():
+    assert "was most abnormal" in SYSTEM_PROMPT
+    assert "not an answer to" in SYSTEM_PROMPT
+
+
+def test_feature_values_are_stated_exactly_as_recorded():
+    assert "18.5833" in SYSTEM_PROMPT
+    assert "not 18.58" in SYSTEM_PROMPT
+
+
+def test_the_manifest_outranks_a_historical_facility():
+    assert "outranks the notes" in SYSTEM_PROMPT
+    assert "discharge_location" in SYSTEM_PROMPT
+
+
+def test_an_answer_from_the_transcript_needs_no_new_marker():
+    """A follow-up answered from a replayed turn is complete, not uncited.
+
+    The citation layer resolves markers against THIS turn's passages, so a marker on
+    replayed evidence would resolve to nothing and be stripped — leaving the model to
+    choose between refusing and re-retrieving. The prompt says neither is required.
+    """
+    assert "without a citation marker" in SYSTEM_PROMPT

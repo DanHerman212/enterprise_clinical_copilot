@@ -1,104 +1,101 @@
-"""The deterministic free-text router (Phase 4C §1.4, directive 3).
+"""The routing boundary: a command is a command, and a question is a question.
 
-A free-text question that is plainly asking for a command's answer is sent to that
-command before the model is consulted. The redirect that used to do this job lived
-in the system prompt, and on 2026-10-17 it lost an argument with another paragraph
-in the same prompt: a free-text risk question began calling `rag_search` instead of
-naming /risk, purely because a new scope rule shifted the balance. A rule that has
-to win against the rest of the prompt is not a boundary.
+Phase 01. Before this, `http._route_free_text` rewrote any free-text question that
+contained "medications", "sodium" or "creatinine" into a command, and the command path
+ignores `turns` by design — so a follow-up was answered with Turn 1's static caption.
+Every turn-2 census failure on 2026-10-22 had that shape: the reader asked whether the
+discharge list held an anticoagulant and was handed the medication count again.
 
-These are unit tests, deliberately. The classifier is a pure function and the seam
-is a dict rewrite, so neither needs a model, a tool, or a served endpoint — which
-means the routing contract can be asserted on every run rather than only where a
-live service happens to be up.
+The boundary is structural now, not lexical:
+
+* an explicit command — a chip selection, or a leading `/slash` token that
+  `parse_agent_request` resolves — runs the deterministic path;
+* every other question, on any turn, reaches the reasoning loop with its transcript.
+
+There is no word list left, so there is nothing to tune and nothing to hardcode.
 """
+
+import asyncio
+import json
+import types
 
 import pytest
 
-from services.agent import http, routing
+from services.agent import contracts, http, routing
+
+WIRE = {"/meds": "meds", "/labs": "labs", "/risk": "risk", "/ehr": "summarize",
+        "/pubmed": "literature"}
 
 
-@pytest.mark.parametrize("question,expected", [
-    ("What did her hemoglobin and sodium do during this admission?", "labs"),
-    ("Show me the discharge medications and dosing for this admission", "meds"),
-    ("what labs were drawn", "labs"),
-    ("Was her RDW ever abnormal?", "labs"),
-    # Abstention, in both directions. A summary is not one of these commands, and a
-    # risk question is left where it was: its redirect still holds through the
-    # prompt (asserted by the live tests), so routing it here would be a behaviour
-    # change with no defect behind it.
-    ("Summarize the hospital course", None),
-    ("What is the readmission risk for this admission?", None),
-    ("", None),
-    ("   ", None),
-    # Substring traps. Each of these contains a lab word as a substring and must
-    # abstain, which is why the matcher compares whole tokens.
-    ("Please elaborate on the admission", None),
-    ("Did the teams collaborate on discharge?", None),
-    ("Count every syllable in the note", None),
-    # A clicked risk-driver control composes this template and submits it as free
-    # text, so the router sees the driver's label and nothing else. Answering it
-    # with /labs because the label says RDW is the router overriding a control the
-    # reader already chose.
-    ("What in this patient's chart explains red cell distribution width (RDW) "
-     "as a readmission risk driver?", None),
-    ("What in this patient's chart explains admission type as a readmission "
-     "risk driver?", None),
-])
-def test_classify_free_text(question, expected):
-    assert routing.classify_free_text(question) == expected
+@pytest.mark.parametrize("slash,wire", sorted(WIRE.items()))
+def test_only_a_slash_command_becomes_a_command(slash, wire):
+    """The deterministic path is entered by naming it, never by resembling it.
 
-
-def test_punctuation_does_not_hide_a_word():
-    """`hemoglobin,` and `(sodium)` are the words they look like."""
-    assert routing.classify_free_text("Her hemoglobin, and (sodium) values?") == "labs"
-    assert routing.classify_free_text("Medications: which ones?") == "meds"
-
-
-def test_a_multi_word_phrase_is_matched_as_a_phrase():
-    assert routing.classify_free_text("What was her red cell distribution?)") == "labs"
-
-
-def test_a_risk_driver_control_is_not_hijacked_by_its_own_label():
-    """The label is the reason the reader clicked, not the question they asked."""
-    for label in ("red cell distribution width (RDW)", "admission type",
-                  "lowest monocyte count", "prior inpatient days"):
-        question = (f"What in this patient's chart explains {label} "
-                    "as a readmission risk driver?")
-        assert routing.classify_free_text(question) is None
-
-
-def test_the_affordance_rule_does_not_swallow_a_real_lab_question():
-    """The abstention is about the template, not about the word inside it."""
-    assert routing.classify_free_text("Was her RDW ever abnormal?") == "labs"
-    assert routing.classify_free_text(
-        "What did her hemoglobin and sodium do during this admission?") == "labs"
+    The command goes on the wire alone: text beside a command is a second intention,
+    and the contract refuses that as `ambiguous_intent` (asserted in
+    `test_eval_contract`). Only `/pubmed` takes a topic, and it is tested there.
+    """
+    body = {"question": f"{slash} heart failure readmission"
+            if slash == "/pubmed" else slash, "hadm_id": 90000023}
+    parsed = contracts.parse_agent_request(body, max_question_chars=4000)
+    assert parsed["kind"] == wire
 
 
 @pytest.mark.parametrize("question", [
-    # The A5 follow-up that lost its answer on 2026-10-17: a request for published
-    # evidence, routed to /meds because it contained the word "medications".
-    "What does current clinical literature suggest regarding the efficacy of this "
-    "specific combination of medications for the patient's primary diagnosis?",
-    "Is there evidence that these lab values predict readmission?",
-    "What do the guidelines say about metoprolol dosing?",
-    "Are there studies comparing these two drugs?",
-    "Find a meta-analysis on lab monitoring after discharge.",
+    # Each of these was rewritten into /meds or /labs before Phase 01.
+    "Show me the discharge medications and dosing for this admission",
+    "Are any high-risk or anticoagulant medications listed on discharge?",
+    "Which lab was most abnormal at discharge?",
+    "What was her creatinine?",
+    "What did her hemoglobin and sodium do during this admission?",
+    "What is the oncology history for this patient?",
 ])
-def test_a_question_asking_for_evidence_is_not_routed_to_an_extraction(question):
-    assert routing.classify_free_text(question) is None
+def test_a_question_is_never_rewritten_into_a_command(question):
+    parsed = contracts.parse_agent_request({"question": question, "hadm_id": 90000023},
+                                           max_question_chars=4000)
+    assert parsed["kind"] is None
 
 
-def test_a_plain_medication_or_lab_request_still_routes():
-    """The abstention must not cost the questions the router exists for."""
-    assert routing.classify_free_text("Show me the discharge medications") == "meds"
-    assert routing.classify_free_text("What was her creatinine?") == "labs"
+def test_the_request_seam_leaves_the_parsed_request_alone():
+    """The seam is where the rewrite happened, so the seam is what is asserted."""
+    async def body():
+        return {"question": "Show me the discharge medications", "hadm_id": 90000023}
+
+    parsed, error = asyncio.run(
+        http._question_or_error(types.SimpleNamespace(json=body)))
+
+    assert error is None
+    assert parsed["kind"] is None
+    assert "routed_to" not in parsed
+
+
+def test_a_follow_up_keeps_its_transcript_at_the_seam():
+    async def body():
+        return {"question": "Are any high-risk or anticoagulant medications listed?",
+                "hadm_id": 90000023,
+                "turns": [{"question": "/meds",
+                           "answer": "13 discharge medications, as recorded in the "
+                                     "discharge note: oxycodone SR, Celebrex.",
+                           "tool_calls": []}]}
+
+    parsed, error = asyncio.run(
+        http._question_or_error(types.SimpleNamespace(json=body)))
+
+    assert error is None
+    assert parsed["kind"] is None, "a follow-up is a question, not the command it follows"
+    assert parsed["turns"], "the transcript has to reach the loop intact"
+
+
+def test_no_router_remains():
+    """A word list that no longer exists cannot be tuned, hardcoded or drift."""
+    assert not hasattr(http, "_route_free_text")
+    assert not hasattr(routing, "classify_free_text")
+    assert not hasattr(routing, "_FREE_TEXT_ROUTES")
+    assert not hasattr(routing, "_LITERATURE_CUES")
 
 
 def test_a_mistyped_command_is_refused_before_the_chain_runs():
     """`/ehrr` used to run an 18-step turn and raise a `Reconciled` badge."""
-    import json
-
     response = http._unknown_command({"question": "/ehrr", "kind": None})
 
     assert response is not None
@@ -108,7 +105,6 @@ def test_a_mistyped_command_is_refused_before_the_chain_runs():
     # The message has to name the way out, or the caller is told only that they failed.
     for slash in ("/ehr", "/labs", "/meds", "/risk", "/pubmed"):
         assert slash in body["message"]
-    assert "Reconciled" not in body["message"]
 
 
 @pytest.mark.parametrize("parsed", [
@@ -152,40 +148,6 @@ def test_an_outpatient_record_gets_no_readmission_estimate():
 ])
 def test_asks_for_administrative_detail(question, expected):
     assert routing.asks_for_administrative_detail(question) is expected
-
-
-def test_a_routed_question_takes_the_command_field():
-    """`kind` is the whole mechanism: the chain already reads it as the command."""
-    parsed = {"question": "Show me the discharge medications", "kind": None}
-
-    routed = http._route_free_text(parsed)
-
-    assert routed["kind"] == "meds"
-    assert routed["routed_to"] == "meds"
-    # The request dict is not edited in place. A router that mutates its argument
-    # has an effect that is invisible in a diff of the caller.
-    assert parsed["kind"] is None
-    assert "routed_to" not in parsed
-
-
-def test_an_explicit_chip_is_never_overridden():
-    """The router is for questions nobody classified, not for second-guessing."""
-    parsed = {"question": "Show me the discharge medications", "kind": "summarize"}
-
-    routed = http._route_free_text(parsed)
-
-    assert routed["kind"] == "summarize"
-    assert "routed_to" not in routed
-
-
-def test_an_unclassified_question_is_left_alone():
-    """Abstaining leaves the question with the reasoning loop, which can still answer."""
-    parsed = {"question": "Summarize the hospital course", "kind": None}
-
-    routed = http._route_free_text(parsed)
-
-    assert routed["kind"] is None
-    assert "routed_to" not in routed
 
 
 # --- which turns may reach the risk model ------------------------------------

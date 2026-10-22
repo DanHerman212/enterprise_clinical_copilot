@@ -261,11 +261,19 @@ def intent_sections(question: str | None) -> tuple[str, ...]:
 
     Summarize/risk questions map to () — their citation-by-number behavior is
     left untouched.
+
+    A COMPOSITE question maps to () as well (Phase 01, 2026-10-22). Section intent
+    exists because the model mis-numbers an extraction: asked for the medications, it
+    cites ^[1] while the list sits in the third passage. But that override is only
+    safe when the question asks for ONE section. "What was the disposition and
+    follow-up plan?" mentions two things, and a single intent then remaps the model's
+    correct citation onto a chunk that answers only half of it.
     """
     if not question:
         return ()
     q = question.lower()
-    for sections, needles in _INTENT_SECTIONS:
-        if any(n in q for n in needles):
-            return sections
-    return ()
+    matched = [sections for sections, needles in _INTENT_SECTIONS
+               if any(n in q for n in needles)]
+    if len(matched) != 1:
+        return ()
+    return matched[0]

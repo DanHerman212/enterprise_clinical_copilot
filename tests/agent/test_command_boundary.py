@@ -937,13 +937,13 @@ def test_an_unknown_slash_token_is_left_as_a_question():
 # --- the question reaches the formatter ---------------------------------------
 
 def test_the_formatter_is_told_the_question_that_was_asked():
-    """A routed free-text question arrives here already consumed by the router.
+    """The command's own name is the question the formatter is told.
 
-    `classify_free_text` turns "What were her hemoglobin and sodium trends?" into
-    `Command(wire="labs")`, and the formatting turn is then built from the tool result
-    alone — so on 2026-10-21 it summarised all ten analytes, because ten was all it had
-    been shown. The question goes into the formatter's input, first, so the requested
-    analytes are the subject of the prose.
+    Before Phase 01 a keyword router could rewrite "What were her hemoglobin and sodium
+    trends?" into `Command(wire="labs")`, and the formatting turn was then built from the
+    tool result alone — so on 2026-10-21 it summarised all ten analytes, because ten was
+    all it had been shown. The router is gone; what reaches here is `/labs`, which the
+    caller typed, and it still goes into the formatter's input first.
     """
     from services.agent.deterministic import _formatter_input
 

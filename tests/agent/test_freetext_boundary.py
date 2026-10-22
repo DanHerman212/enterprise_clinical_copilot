@@ -63,8 +63,14 @@ def test_the_reasoning_loop_is_given_only_the_retrieval_tools():
              graph._tools(_box(), allowed=routing.FREETEXT_TOOLS)}
 
     assert given == set(routing.FREETEXT_TOOLS)
+    # The score stays a command's answer. A question ABOUT the drivers is answered by
+    # the loop, but only on the turn that asks for the model's reasoning — see
+    # `_freetext_allowed`, asserted below.
     assert "predict_readmission" not in given
-    assert "discharge_medications" not in given
+    # Phase 01: the medication extraction is the loop's too. A question about the
+    # medications is answered, not redirected, and the guardrail verifies doses against
+    # the note text either way.
+    assert "discharge_medications" in given
 
 
 def test_every_registered_tool_is_reachable_from_some_path():
@@ -85,11 +91,15 @@ def test_every_registered_tool_is_reachable_from_some_path():
 
 
 def test_a_command_tool_is_the_reason_text_tool_is_hidden():
-    """The two lists are complements by intent, not by accident: a tool is hidden
-    from free text precisely because a command answers it deterministically."""
+    """The score is the one tool a typed question cannot reach.
+
+    Phase 01 admitted `discharge_medications` to the loop, so the complement is now a
+    single entry: a risk score is produced by /risk and drawn by its widget, and a
+    model asked for one has every reason to write a plausible number.
+    """
     hidden = {command.tool for command in routing.COMMANDS} - routing.FREETEXT_TOOLS
 
-    assert hidden == {"predict_readmission", "discharge_medications"}
+    assert hidden == {"predict_readmission"}
 
 
 def test_the_loop_is_bound_with_the_allow_list():

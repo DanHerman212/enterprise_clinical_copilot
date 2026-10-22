@@ -28,6 +28,7 @@ from typing import Any, Callable
 from langfuse import Evaluation
 
 from evaluation.platform import evaluators as ev
+from evaluation.platform.trace_export import trace_ids_for_turns
 
 #: The field the service returns for the trace it opened while answering.
 TRACE_FIELD = "langfuse_trace_id"
@@ -127,6 +128,9 @@ def run_linked(
             return outcome
 
         trace_id = str(output.get(TRACE_FIELD) or "") or None
+        turn_traces = trace_ids_for_turns(output)
+        missing_turns = [index + 1 for index, found in enumerate(turn_traces)
+                         if not found]
         evaluations = _evaluate(evaluators, composite, item_input=item_input,
                                 output=output, expected_output=expected_output,
                                 item_metadata=item_metadata)
@@ -136,6 +140,14 @@ def run_linked(
             # is not written anywhere a reader could open it, and the run says so.
             print(f"  {item_id[:8]} no {TRACE_FIELD} in the response; "
                   "scores not written", flush=True)
+        elif missing_turns:
+            # Turn 1 answered and turn 2 did not leave a trace. The item's scores still
+            # land on turn 1, but half the thread is unopenable and the run must not
+            # look clean: this is the 8-character-prefix problem, reported instead of
+            # hidden.
+            print(f"  {item_id[:8]} no trace id for turn(s) "
+                  f"{missing_turns}; that half of the thread cannot be opened",
+                  flush=True)
 
         run_id: str | None = None
         if trace_id is not None:
@@ -169,11 +181,13 @@ def run_linked(
         state = "unscored" if verdict is None else f"verdict={verdict:g}"
         # The census is multi-turn, and an item's scores belong to the FIRST turn's
         # trace — the one the dataset run item points at. The second turn is a separate
-        # request and a separate trace, so its id is printed here: an operator auditing
-        # the first few items can open both halves without querying Langfuse, and a
-        # missing turn-2 id is visible as a missing field rather than as silence.
-        second = str(output.get("turn_2_trace_id") or "")
-        turn_two = f" t2={second[:8]}" if second else ""
+        # request and a separate trace, so its FULL id is printed here: an operator
+        # auditing the first few items can open both halves without querying Langfuse,
+        # and can do it from the log rather than from a prefix that resolves to nothing.
+        # A prefix is what the 2026-10-21 dump had, which is why no turn-2 span in it
+        # could be fetched by any script.
+        second = turn_traces[1] if len(turn_traces) > 1 else ""
+        turn_two = f" t2={second}" if second else ""
         print(f"  [{done}/{total}] {item_id[:8]} {state}{turn_two}", flush=True)
         return ItemOutcome(item_id=item_id, trace_id=trace_id, evaluations=evaluations,
                            dataset_run_id=run_id, output=output)
@@ -182,10 +196,15 @@ def run_linked(
         outcomes = list(pool.map(one, items))
 
     stats = ev.summarise_item_results(outcomes)
-    # An answer we obtained but cannot point at. A task that failed is already counted
-    # `unscored`; counting it here as well would report one gap twice.
+    # An answer we obtained but cannot fully point at. A task that failed is already
+    # counted `unscored`; counting it here as well would report one gap twice.
+    # Any turn counts, not only the first: a two-turn item whose second trace is missing
+    # is half-unopenable even though its scores have somewhere to land.
     stats["unattributed"] = sum(
-        1 for outcome in outcomes if outcome.trace_id is None and outcome.error is None)
+        1 for outcome in outcomes
+        if outcome.error is None
+        and any(not found for found in trace_ids_for_turns(outcome.output))
+    )
     dataset_run_id = next((o.dataset_run_id for o in outcomes if o.dataset_run_id), None)
 
     return DatasetRun(stats=stats, item_results=outcomes, dataset_run_id=dataset_run_id)

@@ -179,6 +179,13 @@ async def _unserved_admission(parsed: dict, trace: str) -> dict | None:
              "command": None},
             trace,
         )
+        # A refusal is a turn: it has a question and it has an answer, and the span
+        # said neither. Without this the only trace of the decision is the `outcome`
+        # tag, and a reviewer exporting the tree sees an empty root for the very turns
+        # whose correctness was in question.
+        observability.set_trace_io(
+            parsed.get("question") or "", ADMISSION_NOT_FOUND, span=span,
+        )
         payload["langfuse_trace_id"] = (
             observability.span_trace_id(span) or observability.current_trace_id()
         )

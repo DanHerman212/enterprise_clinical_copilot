@@ -117,6 +117,13 @@ def make_task(ask: Ask, *, run_tag: str,
         first = ask(question=data.turns[0], hadm_id=hadm_id, run_tag=run_tag,
                     session_id=session_id)
 
+        # Read once, here: the ids are the item's only handle on its own evidence, and
+        # every turn has to contribute one. Collected as a list rather than as two
+        # named fields because a turn that ran and left no id is the case the run has
+        # to report, and a list can hold that absence where a name cannot.
+        first_trace = str(first.get("langfuse_trace_id") or "")
+        turn_traces = [first_trace]
+
         output = TaskOutput(
             turn_1_response=_answer_text(first),
             tool_evidence=_evidence(first),
@@ -124,7 +131,9 @@ def make_task(ask: Ask, *, run_tag: str,
             # The service's own trace id, carried so the experiment can hang this item's
             # scores off the trace that holds the run tag — and the prompts, tool calls
             # and model output that produced the answer (2026-10-21).
-            langfuse_trace_id=str(first.get("langfuse_trace_id") or ""),
+            langfuse_trace_id=first_trace,
+            turn_trace_ids=turn_traces,
+            turn1_trace=first_trace,
             turn_1_status=first.get("status"),
             turn_1_command=first.get("command") or first.get("command_executed"),
             # The service does not send an `a2ui_components` field; the names live
@@ -141,9 +150,16 @@ def make_task(ask: Ask, *, run_tag: str,
             replayed = replay_turn(data.turns[0], first)
             second = ask(question=data.turns[1], hadm_id=hadm_id, run_tag=run_tag,
                          session_id=session_id, turns=[replayed])
+            second_trace = str(second.get("langfuse_trace_id") or "")
+            turn_traces.append(second_trace)
+            # Assigned rather than relied on by reference: a pydantic model validates
+            # its list field on construction, so the list this function holds and the
+            # one the model holds are not guaranteed to be the same object.
+            output.turn_trace_ids = turn_traces
             output.turn_2_response = _answer_text(second) or None
             output.turn_2_status = second.get("status")
-            output.turn_2_trace_id = str(second.get("langfuse_trace_id") or "")
+            output.turn_2_trace_id = second_trace
+            output.turn2_trace = second_trace
             output.tool_evidence.extend(_evidence(second))
 
         return output.model_dump()

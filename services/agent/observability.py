@@ -40,6 +40,8 @@ import contextvars
 import logging
 import os
 
+from typing import Any
+
 logger = logging.getLogger(__name__)
 
 # All three are required. A host without keys, or keys without a host, would
@@ -94,7 +96,7 @@ def handler():
 
 @contextlib.contextmanager
 def observation(name: str, *, as_type: str = "span",
-                trace_metadata: dict | None = None):
+                trace_metadata: dict | None = None, input: Any = None):
     """A span to hold work that LangChain does not already trace.
 
     `CallbackHandler` reports model and tool runs, which is everything the reasoning
@@ -114,6 +116,11 @@ def observation(name: str, *, as_type: str = "span",
 
     Yields None when unconfigured, and never raises (rule 1). A span is a convenience
     for a reader; the answer outranks it.
+
+    `input` is set when the span opens rather than by an `.update()` afterwards,
+    because a span's argument is known at the moment it is opened — a tool span that
+    names a tool and records no arguments is a row that says a search ran and not what
+    for, which is the question a reader opens the trace to answer.
     """
     manager = None
     propagate = None
@@ -122,7 +129,9 @@ def observation(name: str, *, as_type: str = "span",
             import langfuse
 
             client = langfuse.get_client()
-            manager = client.start_as_current_observation(as_type=as_type, name=name)
+            manager = client.start_as_current_observation(
+                as_type=as_type, name=name, input=input,
+            )
             if trace_metadata:
                 attrs = {
                     "trace_name": name,
@@ -170,8 +179,8 @@ def stamp_trace_tags(span, tags: list[str]) -> None:
                        exc_info=True)
 
 
-def set_trace_io(user_input: str | None, output: str | None) -> None:
-    """Put the question and the answer on the trace itself.
+def set_trace_io(user_input: str | None, output: str | None, span=None) -> None:
+    """Put the question and the answer on the trace, and on the root span too.
 
     Langfuse renders `input` and `output` as columns in the trace table. Without them
     every row shows a dash, so triage means opening the graph and reading child spans
@@ -179,8 +188,15 @@ def set_trace_io(user_input: str | None, output: str | None) -> None:
     a heap of ids. This module opens the root span, so it is the one place that knows
     both ends of the turn.
 
+    `span` is not redundant with the trace-level call. They write to two different
+    records: `set_current_trace_io` fills the table row, and the root observation kept
+    `input: null, output: null` — so an exported span tree, which is what root-cause
+    analysis reads, had nothing at its root. Both are written here because a caller
+    that has the span must not have to remember there are two places to put it.
+
     Best-effort like everything here (rule 1): a missing column is a worse dashboard,
-    a raised exception is a failed answer.
+    a raised exception is a failed answer. The two writes fail independently, so a
+    trace-level refusal does not cost the span its attribution.
     """
     if not configured():
         return
@@ -192,6 +208,38 @@ def set_trace_io(user_input: str | None, output: str | None) -> None:
         )
     except Exception:  # noqa: BLE001 — rule 1
         logger.warning("could not set the langfuse trace input/output", exc_info=True)
+    if span is None:
+        return
+    try:
+        span.update(input=(user_input or None), output=(output or None))
+    except Exception:  # noqa: BLE001 — rule 1
+        logger.warning("could not set the langfuse span input/output", exc_info=True)
+
+
+def record_span_output(span, output, *, is_error: bool = False) -> None:
+    """Record what a span produced, and whether it produced a failure.
+
+    A tool span with no output is a row that says the tool ran and nothing about the
+    result, which is the end of the turn a reviewer actually needs: whether the search
+    returned passages, whether the predictor returned a score, or whether the tool
+    answered with its structured `{"error": ...}`.
+
+    An error payload is levelled ERROR rather than left DEFAULT, because the payload is
+    the only place the failure appears: `MCPToolbox.call` returns errors as values, so
+    no exception reaches Langfuse and a span tree that reads only its statuses shows a
+    clean turn.
+
+    Best-effort (rule 1).
+    """
+    if span is None:
+        return
+    try:
+        fields: dict[str, Any] = {"output": output}
+        if is_error:
+            fields["level"] = "ERROR"
+        span.update(**fields)
+    except Exception:  # noqa: BLE001 — rule 1
+        logger.warning("could not record the langfuse span output", exc_info=True)
 
 
 def current_trace_id() -> str:

@@ -113,6 +113,15 @@ class TaskOutput(BaseModel):
     #: scores against it, so a score and its run tag live on the same trace — without
     #: it every score landed on the harness's own untagged wrapper trace (2026-10-21).
     langfuse_trace_id: str = ""
+    #: EVERY turn's trace id, in turn order, at full length. A multi-turn item is
+    #: several traces and only the first belongs to the run item; the rest were
+    #: recorded as an 8-character stdout prefix, so nothing could open them afterwards.
+    #: An empty entry is a turn that produced no trace, and the run counts that item as
+    #: unattributed rather than reporting a clean run over a half-invisible thread.
+    turn_trace_ids: list[str] = Field(default_factory=list)
+    #: Named views of the same values, for callers that already read them by turn.
+    turn1_trace: str = ""
+    turn2_trace: str = ""
     turn_1_status: int | None = None
     turn_1_command: str | None = None
     turn_1_components: list[str] = Field(default_factory=list)

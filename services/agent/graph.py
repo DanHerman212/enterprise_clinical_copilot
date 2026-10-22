@@ -515,8 +515,19 @@ async def _execute_tool_calls(
                 # own root and the list filled with `tool.rag_search` traces sharing
                 # one timestamp. Observed live 2026-10-17.
                 if traced:
-                    with observability.observation(f"tool.{call['name']}"):
+                    # The span carries the arguments as its input and the payload as
+                    # its output. A tool span with neither is a row saying a tool ran,
+                    # which is the one thing the reader already knew from the name.
+                    with observability.observation(
+                        f"tool.{call['name']}", input=arguments,
+                    ) as tool_span:
                         payload = await toolbox.call(call["name"], arguments)
+                        observability.record_span_output(
+                            tool_span, payload,
+                            is_error=bool(
+                                isinstance(payload, dict) and payload.get("error")
+                            ),
+                        )
                 else:
                     payload = await toolbox.call(call["name"], arguments)
                 # What came back, in the call's own terms. Emitted here because this
@@ -1146,7 +1157,9 @@ async def ask(
             # The trace table reads `input`/`output`; without them every row is a dash.
             # The command path is the one that most needs it: `/risk` returns no prose,
             # so the answer a reader wants to see IS the structured surface.
-            observability.set_trace_io(question, command_trace_output(command_state))
+            observability.set_trace_io(
+                question, command_trace_output(command_state), span=root_span,
+            )
             # Read from the span itself, not from the ambient context: the context can
             # go missing (four command turns in the 22:38 run reported no trace id at
             # all), while the span always knows the trace it belongs to.
@@ -1234,7 +1247,7 @@ async def ask(
             [*trace_meta.get("langfuse_tags", []),
              f"tools:{len(state.get('tool_calls') or [])}"],
         )
-        observability.set_trace_io(question, final_text(state))
+        observability.set_trace_io(question, final_text(state), span=root_span)
         state["langfuse_trace_id"] = (
             observability.span_trace_id(root_span) or observability.current_trace_id()
         )

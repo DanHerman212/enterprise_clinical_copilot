@@ -417,11 +417,19 @@ def _narrative(answer: str, sources: list[dict], literature: dict | None) -> dic
     articles and nothing else: those records ARE the evidence, and resolving the markers
     against note passages would leave every marker in a summary unbacked — which the
     component draws as a disabled control, on a summary that was properly grounded.
+
+    The turn is only a literature turn when it produced RECORDS. An empty search result
+    is a `dict`, so a bare `is not None` test made every chart answer that happened to
+    carry a fruitless PubMed call cite zero articles: the note passages had already been
+    resolved, and this function threw them away in favour of an empty list. The reader
+    then had a `^[1]` that resolved to nothing beside a card saying no literature was
+    found (2026-10-22). Records or note sources — never an empty list over a full one.
     """
     if not answer.strip():
         return None
-    if literature is not None:
-        return narrative_surface(answer, literature_citations(_usable_articles(literature)))
+    articles = _usable_articles(literature or {})
+    if articles and literature is not None:
+        return narrative_surface(answer, literature_citations(articles))
     return narrative_surface(answer, note_citations(sources))
 
 
@@ -1062,7 +1070,8 @@ def turn_phenotype(tool_calls: list[dict]) -> str:
 def compose_presentation(question: str, answer: str,
                          tool_calls: list[dict],
                          command_payload: dict | None = None,
-                         command: str | None = None) -> dict:
+                         command: str | None = None,
+                         context_grounded: bool = False) -> dict:
     """The full presentation contract for an answered question.
 
     One call produces every field the browser consumes, so the answer's
@@ -1085,6 +1094,13 @@ def compose_presentation(question: str, answer: str,
     extracts rows the canvas draws as a grid. It is passed through rather than
     recomposed, because the rows were verified against the note text in the command
     and re-deriving them here would be a second implementation of that check.
+
+    `context_grounded` is the caller saying this turn also rests on the patient record
+    through a channel this layer cannot see: the pre-flight manifest that answered an
+    administrative question, or the replayed turns' chart calls that a follow-up is
+    quoting. It feeds `verified` and nothing else — evidence the composer never saw
+    cannot change what it draws, but it does change whether the answer was checked
+    against the record.
 
     Pure — no I/O, no clock, no randomness — so it is fully testable without
     a browser or a live endpoint.
@@ -1153,6 +1169,56 @@ def compose_presentation(question: str, answer: str,
     if scope_suppressed:
         scope = None
 
+    # Whether this turn is DRAWN as a literature turn.
+    #
+    # Two ways it is: the search returned records, or it returned nothing and there is
+    # no patient-record evidence to show instead. The second case is a real one —
+    # `/pubmed` about a condition this patient does not have still owes the reader the
+    # records and the sentence saying none matched.
+    #
+    # What it must never be is "a dict arrived". An empty result beside a chart answer
+    # swapped the canvas to an empty `LiteratureList` and dropped the note citations, so
+    # a correct chart answer arrived under a card saying no literature was found about a
+    # question nobody asked of the literature (2026-10-22).
+    articles = _usable_articles(literature or {})
+    draws_literature = bool(articles) or (
+        literature is not None and not sources and not lab_evidenced
+        and not payload_evidenced
+    )
+    drawn_literature = literature if draws_literature else None
+
+    # Whether the answer was verified against the patient record.
+    #
+    # The rule is grounding, not citation. A `/labs` answer rests on a trajectory, a
+    # `/risk` answer on the model's own estimate, `/meds` on an extraction checked
+    # against the note — none of them carries a `^[n]`, and requiring one would withhold
+    # the badge from the turns that are most tightly bound to the chart. A pure PubMed
+    # turn is the case it must NOT cover: those records are somebody else's patients.
+    #
+    # The guardrail's own verdict is ANDed by the caller (`http`), because only that
+    # layer knows whether the answer survived it or was replaced by an abstention.
+    # The estimate is a fifth channel, and it is the one `/risk` has: a widget-only turn
+    # carries no prose and no passage, and its evidence is the model's own scoring of
+    # this admission. A driver question reaches the same place from free text.
+    estimate_evidenced = _usable_estimate(predict_payload(tool_calls)) is not None
+    grounded_in_record = (
+        bool(sources) or lab_evidenced or payload_evidenced or estimate_evidenced
+        or bool(context_grounded)
+    )
+    # A literature turn is about other people's patients, whatever rides beside it — the
+    # comparator turn draws this patient's estimate as a baseline row and is still an
+    # answer about published cohorts. Note sources are the exception: a turn that cites
+    # the record is grounded in it, whichever surface it drew.
+    literature_only = draws_literature and not sources
+    # A widget IS an answer. `/risk` returns no prose by design, so "substantive" cannot
+    # mean "has prose" — it means there is something the reader was given that can be
+    # vouched for, and a drawn estimate is that.
+    substantive = (not no_prose) or payload_evidenced or estimate_evidenced
+    verified = bool(
+        grounded_in_record and substantive and not scope_suppressed
+        and not literature_only
+    )
+
     return {
         "answer": renumbered,
         "citation_map": remap,
@@ -1162,7 +1228,11 @@ def compose_presentation(question: str, answer: str,
         # separate from `sources` on purpose: that list is the discharge-note
         # citation channel — numbered, renumbered, and resolved against retrieved
         # passages — and an article has no passage to resolve against.
-        "literature": literature,
+        "literature": drawn_literature,
+        # Whether this answer was checked against, and grounded in, the patient's own
+        # record. Stated once, here, because the turns that qualify are decided by
+        # clinical rules and a browser re-deriving them would be a second opinion.
+        "verified": verified,
         # What the turn rested on, and the rows the console's references drawer lists.
         # Derived here rather than in the browser because this is the layer that saw the
         # tool calls and resolved the citations; a second derivation downstream would be
@@ -1180,7 +1250,7 @@ def compose_presentation(question: str, answer: str,
             cite=first_citation(renumbered),
             sections=intent,
             source=sources[0] if sources else None,
-            literature=literature,
+            literature=drawn_literature,
             labs=labs,
             medications=command_payload,
             # The narrative chooses its citations from this turn's evidence: the

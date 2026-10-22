@@ -25,6 +25,7 @@ and every test reads from one of the runs below.
 
 import asyncio
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -89,12 +90,25 @@ def test_a_free_text_risk_question_enters_the_reasoning_loop(free_text_risk):
 
     Before the refactor it was rewritten into `/risk` and answered with the command's
     static caption — which ignores `turns`, so the same question asked as a follow-up
-    got Turn 1's answer back. Now the loop receives it and decides for itself; what it
-    must not do is answer from memory, which is why a tool call is asserted.
+    got Turn 1's answer back. Now the loop receives it and decides for itself.
+
+    What it must not do is answer from memory, and since 2026-10-22 there are two ways
+    it can honour that, because the model changed which one it picks when the literature
+    tool stopped being bound on every turn: it retrieves, or it names the command that
+    owns the score and stops. Both are correct — `predict_readmission` is deliberately
+    outside the loop, so a redirect is the honest answer to "what is her risk" — and the
+    failure this guards is unchanged: a risk FIGURE with nothing behind it. So a
+    redirect is accepted only when it carries no number.
     """
     assert "command" not in free_text_risk, "free text must not become a command"
-    assert free_text_risk["tool_calls"], "the loop answered without looking anything up"
-    assert final_text(free_text_risk).strip()
+    if free_text_risk["tool_calls"]:
+        assert final_text(free_text_risk).strip()
+        return
+    text = final_text(free_text_risk)
+    assert "/risk" in text, "the loop neither looked anything up nor named /risk"
+    assert not re.search(r"\d", text), (
+        "a redirect must not carry a figure: the score belongs to /risk"
+    )
 
 
 def test_a_free_text_medication_question_enters_the_reasoning_loop(free_text_meds):

@@ -631,24 +631,32 @@ def _tools(toolbox: MCPToolbox,
     ]
 
 
-def _freetext_allowed(risk_driver_question: bool) -> frozenset[str]:
+def _freetext_allowed(risk_driver_question: bool,
+                      wants_literature: bool) -> frozenset[str]:
     """The tools the reasoning loop may call on this turn.
 
     `routing.FREETEXT_TOOLS` is the standing boundary: a command's tool is absent rather
-    than refused. `predict_readmission` crosses that boundary on exactly one kind of
-    turn — a question asking WHY a factor is a readmission risk driver — because that
-    question cannot be answered from the chart: the attribution and its direction live in
-    the model, and an answer without them describes the values and stops (a6e4ca01,
-    2026-10-21).
+    than refused. Two tools cross it on their own conditions, and each condition is about
+    the QUESTION rather than about the model's judgement:
+
+    * `predict_readmission`, on a question asking WHY a factor is a readmission risk
+      driver — the attribution and its direction live in the model, and an answer without
+      them describes the values and stops (a6e4ca01, 2026-10-21).
+    * `search_literature`, on a question that asks for published evidence
+      (`routing.asks_for_literature`). Bound unconditionally before 2026-10-22, which put
+      an empty `LiteratureList` over chart follow-ups and discarded their note citations.
 
     What is NOT relaxed: the rule that no risk SCORE is produced in free text. The
     projection in `tool_node` shows the model display strings and driver names with
     directions, never a bare float, and the /risk command remains the thing that draws
     the score.
     """
-    if not risk_driver_question:
-        return routing.FREETEXT_TOOLS
-    return frozenset({*routing.FREETEXT_TOOLS, "predict_readmission"})
+    allowed = set(routing.FREETEXT_TOOLS)
+    if wants_literature:
+        allowed |= routing.LITERATURE_TOOLS
+    if risk_driver_question:
+        allowed.add("predict_readmission")
+    return frozenset(allowed)
 
 
 #: How many opening chunks are held before a model turn is declared an answer.
@@ -827,6 +835,7 @@ def build_graph(
     manifest_answers_question: bool = False,
     risk_driver_question: bool = False,
     risk_driver_declared: bool = False,
+    wants_literature: bool = False,
 ):
     """Compile the graph. `on_event` receives progress stages; None disables them.
 
@@ -860,7 +869,9 @@ def build_graph(
     # transcript of a follow-up question already contains the model's earlier turns, so
     # "has the model spoken" is true before this run has done anything and would never
     # force anything on the questions that need it most.
-    freetext_tools = _tools(toolbox, allowed=_freetext_allowed(risk_driver_question))
+    freetext_tools = _tools(
+        toolbox, allowed=_freetext_allowed(risk_driver_question, wants_literature),
+    )
     chat_model = _build_llm(model)
     llm = chat_model.bind_tools(freetext_tools)
     llm_retrieving = chat_model.bind_tools(freetext_tools, tool_choice="any")
@@ -1169,6 +1180,10 @@ async def ask(
             )
         return command_state
 
+    manifest_answers_question = bool(admission_context) and (
+        routing.asks_for_administrative_detail(question)
+    )
+
     graph = build_graph(
         toolbox, model=model, on_event=on_event, question_kind=question_kind,
         # The one identifier this turn holds, checked against what is about to
@@ -1177,8 +1192,7 @@ async def ask(
         prose_stream=prose_stream,
         # Computed once, here, because it is a property of this turn: a question the
         # pre-flight manifest answers, in a turn that carries the manifest.
-        manifest_answers_question=bool(admission_context)
-        and routing.asks_for_administrative_detail(question),
+        manifest_answers_question=manifest_answers_question,
         # Also a property of this turn: whether the question asks for the model's own
         # reasoning about a driver, which is the only way `predict_readmission` enters
         # the free-text tool set (see `_freetext_allowed`). A clicked driver bar declares
@@ -1188,6 +1202,10 @@ async def ask(
         # `route` uses it to end a replay turn that already holds the attribution, and
         # a question that merely reads like a driver question was never scored.
         risk_driver_declared=intent == "risk_driver",
+        # The other half of `_freetext_allowed`: published evidence is searched only on
+        # a turn that asked for it, so a chart question cannot come back with a
+        # `LiteratureList` and no note citations.
+        wants_literature=routing.asks_for_literature(question),
     )
 
     config: dict = {"recursion_limit": RECURSION_LIMIT}
@@ -1251,6 +1269,11 @@ async def ask(
         state["langfuse_trace_id"] = (
             observability.span_trace_id(root_span) or observability.current_trace_id()
         )
+        # The settlement layer decides whether the answer was verified against the
+        # patient record, and the manifest is one of the channels that make it so. It
+        # is not a tool call and leaves no other trace on the state, so it is recorded
+        # here rather than inferred downstream from an answer that reads like a lookup.
+        state["manifest_answered"] = manifest_answers_question
 
     # The model's own verdict on what it was given, read before anything else looks
     # at the text: an answer the model wrapped in the contract's envelope is

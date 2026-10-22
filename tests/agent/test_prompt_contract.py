@@ -106,8 +106,16 @@ def test_the_prompt_names_the_tools_the_reasoning_loop_can_call():
     assert "`predict_readmission`" in SYSTEM_PROMPT
     assert "exactly one kind of question" in SYSTEM_PROMPT
 
+    # `search_literature` is the second conditional one: a command's tool that is bound
+    # only when the question asks for published evidence (`routing.asks_for_literature`).
+    # Naming it is right — the model must know it may search the literature — and the
+    # condition has to be named with it, or the prompt reads as a standing invitation.
+    assert "`search_literature`" in SYSTEM_PROMPT
+    assert "Reach for `search_literature` ONLY when the question asks for" in SYSTEM_PROMPT
+
     hidden = ({command.tool for command in routing.COMMANDS}
-              - routing.FREETEXT_TOOLS - {"predict_readmission"})
+              - routing.FREETEXT_TOOLS
+              - {"predict_readmission"} - routing.LITERATURE_TOOLS)
     for name in sorted(hidden):
         assert f"`{name}`" not in SYSTEM_PROMPT, (
             f"the prompt names {name}, which the loop cannot call: either admit it "

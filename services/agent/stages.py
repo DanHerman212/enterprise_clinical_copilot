@@ -143,6 +143,11 @@ TOOL_LABELS = {
     "rag_search_sections": "Reading the Note Sections",
     "discharge_medications": "Reading the Discharge Medications",
     "search_literature": "Searching the Literature",
+    # A lab drill-down is a chart read like any other, and it was unlabelled until
+    # 2026-10-22: every `/labs` step and every clicked driver announced itself as
+    # "Consulting a Tool", which is the fallback speaking for a tool this table had not
+    # been taught. The specific name is the whole point of the row.
+    "get_lab_trends": "Reading the Lab Trajectories",
     # The pre-flight manifest is normally hydrated before the model runs, so its
     # label is only ever drawn when the model asks for it itself.
     "get_admission_profile": "Reading the Admission Profile",
@@ -163,6 +168,7 @@ LABEL_RESULT_PASSAGES = "Read the Note Passages"
 LABEL_RESULT_SECTIONS = "Read the Note Sections"
 LABEL_RESULT_MEDICATIONS = "Read the Discharge Medications"
 LABEL_RESULT_LITERATURE = "Read the Articles"
+LABEL_RESULT_LABS = "Read the Lab Trajectories"
 
 RESULT_LABELS = {
     "predict_readmission": LABEL_RESULT_RISK,
@@ -170,6 +176,7 @@ RESULT_LABELS = {
     "rag_search_sections": LABEL_RESULT_SECTIONS,
     "discharge_medications": LABEL_RESULT_MEDICATIONS,
     "search_literature": LABEL_RESULT_LITERATURE,
+    "get_lab_trends": LABEL_RESULT_LABS,
 }
 
 # What a returned count counts. The noun travels with the tool because one number
@@ -182,6 +189,9 @@ RESULT_NOUNS = {
     "rag_search": "Note Passage",
     "rag_search_sections": "Note Section",
     "search_literature": "Literature Record",
+    # A trajectory is one analyte's course, not a passage and not a record: the count
+    # under a lab drill-down says how many series were drawn.
+    "get_lab_trends": "Lab Trajectory",
 }
 
 # For a tool this table has not been taught. Vague and true, like LABEL_UNKNOWN_TOOL.

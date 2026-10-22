@@ -43,6 +43,8 @@ and the two are told apart here rather than by whichever layer saw it last.
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass, field
 
 # The section vocabulary, not the chunker. The agent's image ships the vocabulary
@@ -287,27 +289,29 @@ answer about a course, not a report. Write nothing about medications, and append
 about missing information."""
 
 EHR_FORMATTING = """Summarise the note sections you were given, for a clinician.
-Write flowing prose under these headings, in this order:
+Write flowing prose with these section labels, in this order:
 
-- "Hospital course" for an inpatient admission. Where the record is an outpatient encounter —
-  the caveat in the tool result says when it is — there was no admission, so write "Clinical
-  course" instead. Never write a hospital course for a record that was not a stay.
-- "Discharge diagnosis", only if the passages you were given contain a discharge diagnosis.
-- "Discharge instructions", only if the passages you were given contain discharge instructions.
-- "Readmission risk & trajectory", only where a readmission-risk estimate was given to you.
+- **Hospital course.** for an inpatient admission. Where the record is an outpatient
+  encounter — the caveat in the tool result says when it is — there was no admission, so
+  write **Clinical course.** instead. Never write a hospital course for a record that was
+  not a stay.
+- **Discharge diagnosis.** only if the passages you were given contain a discharge diagnosis.
+- **Discharge instructions.** only if the passages you were given contain discharge instructions.
+- **Readmission risk & trajectory.** only where a readmission-risk estimate was given to you.
 
-A heading the passages do not support is a heading you omit. Omitting a section is the correct
+A label the passages do not support is a label you omit. Omitting a section is the correct
 answer; inventing one to satisfy the format is a clinical error, and a fabricated discharge plan
-is the worst version of it. Never write a heading and then fill it with a claim the passages do
-not contain, and never write a placeholder such as "not documented" under a heading of your own
+is the worst version of it. Never write a label and then fill it with a claim the passages do
+not contain, and never write a placeholder such as "not documented" under a label of your own
 choosing.
 
-Write each heading as a markdown level-2 heading — exactly `## Hospital course`, or
-`## Clinical course` for an outpatient record, and so on — with a blank line before and after it.
-The interface needs the heading to be a block of its own so it
-can be set above the prose it names. A heading folded into the paragraph beneath it — or worse,
-into one bold run together with it — cannot be told apart from the prose, and the whole section
-is then rendered at the heading's weight.
+Open each section with its label in bold, followed by a period, at the START of its own
+paragraph — exactly `**Hospital course.**`, or `**Clinical course.**` for an outpatient record,
+and so on — then the prose of that section on the same line. The interface sets the bold run as
+the section's heading, which is why it must be the first thing in the paragraph and must end
+with the period: a label buried mid-sentence cannot be found, and markdown heading syntax
+(`##`) is not used anywhere in this answer — it reaches the reader as literal characters while
+the answer is being written.
 
 Use bold for nothing else in this answer, and never wrap a whole section in a single bold run.
 
@@ -514,7 +518,13 @@ BY_WIRE: dict[str, Command] = {c.wire: c for c in COMMANDS}
 FREETEXT_TOOLS: frozenset[str] = frozenset({
     "rag_search",
     "rag_search_sections",
-    "search_literature",
+    # NOT `search_literature`. It was admitted here unconditionally on 2026-10-16 and that
+    # cost the chart turns: every free-text follow-up could reach PubMed, so a question
+    # about the discharge note came back with an empty `LiteratureList` — "no matching
+    # literature was found" — over an answer drawn from the notes, and the note citations
+    # were discarded in the bargain. Published evidence is a different question from a
+    # chart question and has its own cue test: `asks_for_literature`.
+    #
     # Phase 01 (2026-10-22). A free-text question about medications used to be refused
     # and redirected to /meds, which answers with the extraction list and ignores the
     # conversation — so "are any of these anticoagulants?" was answered with the count
@@ -527,6 +537,43 @@ FREETEXT_TOOLS: frozenset[str] = frozenset({
     # it the click would be answered in prose and the card would never be composed.
     "get_lab_trends",
 })
+
+#: Tools that read published evidence rather than the patient's record.
+LITERATURE_TOOLS: frozenset[str] = frozenset({"search_literature"})
+
+# The cue set for "is this a question about published evidence?".
+#
+# Restored from `d23684a^` (Phase 02.5, 2026-10-22) after `search_literature` was found
+# bound on every free-text turn. Multi-word cues are matched as adjacent words, so
+# "systematic review" and "meta-analysis" (normalised to two words) are one cue each
+# rather than two unrelated ones.
+_LITERATURE_CUES: tuple[tuple[str, ...], ...] = (
+    ("literature",), ("evidence",),
+    ("study",), ("studies",),
+    ("trial",), ("trials",),
+    ("meta", "analysis"), ("metaanalysis",),
+    ("systematic", "review"),
+    ("pubmed",), ("guideline",), ("guidelines",),
+    ("efficacy",), ("effectiveness",), ("benchmark",), ("benchmarks",),
+)
+
+
+def asks_for_literature(question: str) -> bool:
+    """Whether the question asks for published evidence rather than a record value.
+
+    The gate on `search_literature` for a free-text turn. Deliberately a cue test rather
+    than a model decision: whether PubMed is consulted is a fact about the request, and
+    a turn that has to spend a model call to discover it has already spent the call.
+
+    Empty when nothing matches, and empty then means the loop does not search the
+    literature at all — a chart question answered from the chart never carries a
+    published-records surface it did not ask for.
+    """
+    text = " " + re.sub(r"[^a-z0-9]+", " ", str(question or "").lower()) + " "
+    for cue in _LITERATURE_CUES:
+        if " " + " ".join(cue) + " " in text:
+            return True
+    return False
 
 
 def command_for(wire: str) -> Command:

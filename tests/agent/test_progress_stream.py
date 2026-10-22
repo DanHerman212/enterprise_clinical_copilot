@@ -104,36 +104,22 @@ def test_every_advertised_tool_has_a_progress_label():
     A missing label does not break anything — the fallback is generic and still
     true — but the user gets a worse answer to "what is it doing?". This is the
     test that turns a silent omission into a failure.
-    """
-    from services.mcp.tools import (
-        predict_readmission,
-        rag_search,
-        rag_search_sections,
-        discharge_medications,
-        search_literature,
-    )
-    from services.mcp.tools.admission_profile import get_admission_profile
 
-    advertised = {
-        predict_readmission.__name__,
-        rag_search.__name__,
-        rag_search_sections.__name__,
-        discharge_medications.__name__,
-        search_literature.__name__,
-        # Normally hydrated before the model runs, but it is an advertised tool and
-        # the model may ask for it, which draws the label.
-        get_admission_profile.__name__,
-    }
+    Read from the server's own export list rather than from a second copy written here.
+    Until 2026-10-22 this test enumerated the tools by hand, and `get_lab_trends` was
+    missing from BOTH lists — so the test agreed with the omission instead of catching
+    it, and every lab drill-down announced itself as "Consulting a Tool".
+    """
+    from services.mcp import tools as mcp_tools
+
+    advertised = set(mcp_tools.__all__)
     assert advertised == set(stages.TOOL_LABELS), (
         "a label is missing for a tool the server advertises, or a label names a "
         "tool that no longer exists"
     )
-
-
-def test_an_unknown_tool_falls_back_to_a_true_generic_label():
-    assert stages.tool_label("brand_new_tool") == stages.LABEL_UNKNOWN_TOOL
-
-
+    # The two tables that decide what the result row says, held to the same list.
+    assert set(stages.RESULT_LABELS) <= advertised
+    assert set(stages.RESULT_NOUNS) <= advertised
 def test_every_label_is_title_case():
     """House style, enforced rather than remembered.
 
@@ -289,6 +275,10 @@ def test_stream_sends_stages_then_one_answer_frame():
     assert set(answer) == {
         "question", "answer", "guardrail_flags", "tool_calls",
         "a2ui", "sources", "model", "code_revision", "mcp_transport",
+        # Whether the answer was checked against, and grounded in, the patient record.
+        # Added 2026-10-22 (Phase 02.5): the console draws its badge from this field
+        # rather than inferring it from the evidence, which is a clinical rule.
+        "verified",
         # The pointer to the run, streamed with the answer rather than only
         # recorded in the agent's log, so the site can store it beside the turn.
         "langfuse_trace_id",

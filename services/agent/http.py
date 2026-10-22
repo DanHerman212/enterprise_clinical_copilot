@@ -422,6 +422,13 @@ async def _compose_success(
         # comparative cohort table to the commands whose question it answers, so the
         # composer has to know which one it is composing for.
         state.get("command"),
+        # Grounding the composer cannot see: the pre-flight manifest answered an
+        # administrative question, or the replayed turns' chart calls are what a
+        # follow-up is quoting. It changes `verified` and never what is drawn.
+        context_grounded=bool(state.get("manifest_answered")) or any(
+            call.get("name") not in routing.LITERATURE_TOOLS
+            for call in (state.get("replayed_tool_calls") or [])
+        ),
     )
 
     # Proposed from the answer that will actually be served, not from what the model
@@ -456,6 +463,13 @@ async def _compose_success(
     payload = {
         "question": question,
         "answer": presentation["answer"],
+        # Whether this answer was checked against, and grounded in, the patient's own
+        # record. Composed in `a2ui` from the evidence and ANDed here with the one fact
+        # only this layer holds: whether the answer survived the guardrails or was
+        # replaced by an abstention — an abstention is the system saying it could not
+        # stand behind the answer, so it cannot be badged as verified.
+        "verified": bool(presentation["verified"])
+        and "abstained_after_guard" not in flags,
         "guardrail_flags": flags,
         "tool_calls": trimmed_calls,
         "a2ui": presentation["a2ui"],

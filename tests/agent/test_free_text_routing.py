@@ -87,11 +87,20 @@ def test_a_follow_up_keeps_its_transcript_at_the_seam():
 
 
 def test_no_router_remains():
-    """A word list that no longer exists cannot be tuned, hardcoded or drift."""
+    """A word list that no longer exists cannot be tuned, hardcoded or drift.
+
+    What Phase 01 removed is the COMMAND router: no free-text question is turned into a
+    command by a keyword table. The literature cue set came back on 2026-10-22 by
+    architect directive, and it is not the same thing — it does not choose a command, it
+    decides whether one optional TOOL is bound for the turn (`asks_for_literature`), and
+    the deterministic path is never reachable through it.
+    """
     assert not hasattr(http, "_route_free_text")
     assert not hasattr(routing, "classify_free_text")
     assert not hasattr(routing, "_FREE_TEXT_ROUTES")
-    assert not hasattr(routing, "_LITERATURE_CUES")
+    # Restored deliberately, and only as a tool gate.
+    assert hasattr(routing, "asks_for_literature")
+    assert "search_literature" not in routing.FREETEXT_TOOLS
 
 
 def test_a_mistyped_command_is_refused_before_the_chain_runs():

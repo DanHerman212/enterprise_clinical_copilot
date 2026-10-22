@@ -318,6 +318,47 @@ def _passage_count(recorded: list[RecordedToolCall]) -> int:
     )
 
 
+def _consolidate_medication_passages(recorded: list[RecordedToolCall]) -> None:
+    """Put the whole medications text in one passage, at index 0.
+
+    `discharge_medications` returns every chunk of the medications section and then
+    every chunk of the discharge instructions — deliberately, because the names are in
+    the first and the doses are in the second, and the extraction needs both. But
+    `/meds` cites its narrative with a single `^[1]`, and `^[1]` addresses
+    `passages[0]`: the FIRST chunk of the medications section. A reader who clicked it
+    saw a fragment of the list the grid had just shown them in full, and the guardrail
+    compared the whole answer against one chunk of its evidence.
+
+    Joined here, once, before anything reads the passages — the citation layer, the
+    guardrail's source text and the payload all see the same complete text. The labels
+    inside the joined body still say which section each part came from, so nothing is
+    lost by merging the containers. The model was already given the per-section
+    rendering above; this changes what the answer CITES, not what the model read.
+    """
+    for call in recorded:
+        response = call.get("response")
+        if not isinstance(response, dict):
+            continue
+        passages = response.get("passages")
+        if not isinstance(passages, list) or len(passages) < 2:
+            continue
+        text = "\n\n".join(
+            str(passage.get("text") or "") for passage in passages
+            if isinstance(passage, dict)
+        ).strip()
+        if not text:
+            continue
+        # The first passage's own keys are kept; only the text is replaced. The
+        # `section` key is deliberately NOT relabelled: citation resolution matches on
+        # the machine name (`discharge_medications`), and a human label here would make
+        # `resolve_source` miss it and serve the "no information" sentence instead of the
+        # passage. What the reader sees as a heading comes from the key, upstream.
+        merged = dict(passages[0])
+        merged["text"] = text
+        response["passages"] = [merged]
+        response["returned"] = 1
+
+
 def medication_narrative(verified: list[dict[str, str]], returned_passages: int) -> str:
     """What the narrative says for a medications command.
 
@@ -512,6 +553,12 @@ async def run_command(
         )
         tool_messages += extra_messages
         recorded += extra_recorded
+
+    # `/meds` cites with one marker, so the passages it cites have to be one passage.
+    # Done before the formatting turn's state is built, because everything downstream —
+    # the answer's citation, the guardrail's source text and the grid — reads `recorded`.
+    if command.wire == "meds":
+        _consolidate_medication_passages(recorded)
 
     # Every result this turn produced goes to the formatting turn, supplementary calls
     # included.

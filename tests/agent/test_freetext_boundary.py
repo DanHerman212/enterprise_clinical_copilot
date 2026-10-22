@@ -96,10 +96,18 @@ def test_a_command_tool_is_the_reason_text_tool_is_hidden():
     Phase 01 admitted `discharge_medications` to the loop, so the complement is now a
     single entry: a risk score is produced by /risk and drawn by its widget, and a
     model asked for one has every reason to write a plausible number.
-    """
-    hidden = {command.tool for command in routing.COMMANDS} - routing.FREETEXT_TOOLS
 
-    assert hidden == {"predict_readmission"}
+    `search_literature` is not in the complement even though it is a command's tool,
+    because a question can ask for published evidence and the loop must be able to
+    answer it — but it is not in the standing allow-list either. It is bound per turn
+    by `asks_for_literature`, which `test_the_loop_is_bound_with_the_allow_list` holds.
+    """
+    tool_of_command = {command.tool for command in routing.COMMANDS}
+    # Never available to the loop, on any turn.
+    assert tool_of_command - routing.FREETEXT_TOOLS - routing.LITERATURE_TOOLS == {
+        "predict_readmission"}
+    # A command's tool that is off by default and bound per turn by the question.
+    assert routing.LITERATURE_TOOLS <= tool_of_command - routing.FREETEXT_TOOLS
 
 
 def test_the_loop_is_bound_with_the_allow_list():
@@ -114,12 +122,18 @@ def test_the_loop_is_bound_with_the_allow_list():
     # The allow-list is now a function of the turn, because one question shape — "why is
     # this a risk driver?" — cannot be answered without the model's own attribution
     # (`_freetext_allowed`). The boundary is unchanged for every other turn.
-    assert "freetext_tools = _tools(toolbox, allowed=_freetext_allowed(" in source
+    assert "freetext_tools = _tools(" in source
+    assert "allowed=_freetext_allowed(" in source
     assert source.count("bind_tools(freetext_tools") == 2
 
-    assert graph._freetext_allowed(False) == routing.FREETEXT_TOOLS
-    assert graph._freetext_allowed(True) == frozenset(
+    assert graph._freetext_allowed(False, False) == routing.FREETEXT_TOOLS
+    assert graph._freetext_allowed(True, False) == frozenset(
         {*routing.FREETEXT_TOOLS, "predict_readmission"})
+    # Published evidence is bound only when the question asked for it (Phase 02.5).
+    assert graph._freetext_allowed(False, True) == frozenset(
+        {*routing.FREETEXT_TOOLS, "search_literature"})
+    assert graph._freetext_allowed(True, True) == frozenset(
+        {*routing.FREETEXT_TOOLS, "predict_readmission", "search_literature"})
 
 
 # --- what an empty search becomes --------------------------------------------

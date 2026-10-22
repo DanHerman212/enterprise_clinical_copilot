@@ -945,7 +945,8 @@ def rag_payload(tool_calls: list[dict]) -> dict | None:
     ones — the merge only exists for the multi-call turn it was always wrong for.
     """
     rag_calls = [call for call in tool_calls or []
-                 if call.get("name") in ("rag_search", "rag_search_sections")
+                 if call.get("name") in ("rag_search", "rag_search_sections",
+                                         "discharge_medications")
                  and isinstance(call.get("response"), dict)]
     if not rag_calls:
         return None

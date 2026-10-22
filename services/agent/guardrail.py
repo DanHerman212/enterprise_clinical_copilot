@@ -148,13 +148,25 @@ _CITE = re.compile(r"\^\[\s*(?:PMID\s*[:#]?\s*)?(\d+)\s*\]", re.IGNORECASE)
 
 
 def _passage_sections(tool_calls: list[dict]) -> tuple[list[dict], str]:
-    """All (section, text) retrieved, plus concatenated discharge-meds text."""
+    """All (section, text) retrieved, plus concatenated discharge-meds text.
+
+    `discharge_medications` is included because the free-text loop can call it now
+    (Phase 01): a typed question about medications is answered from the same
+    extraction `/meds` uses, and every per-dose check below has to see those passages
+    or the answer's doses go unverified. Its passages are labelled with the section
+    when the tool says so; the tool is the section, so an unlabelled one is labelled
+    here rather than dropped from verification.
+    """
     passages = []
     for tc in tool_calls or []:
-        if tc.get("name") not in ("rag_search", "rag_search_sections"):
+        name = tc.get("name")
+        if name not in ("rag_search", "rag_search_sections", "discharge_medications"):
             continue
         for p in (tc.get("response") or {}).get("passages") or []:
-            passages.append({"section": p.get("section"), "text": p.get("text") or ""})
+            section = p.get("section")
+            if not section and name == "discharge_medications":
+                section = "discharge_medications"
+            passages.append({"section": section, "text": p.get("text") or ""})
     med_texts = []
     for p in passages:
         sec = (p.get("section") or "").lower()

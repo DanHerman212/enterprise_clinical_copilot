@@ -163,8 +163,21 @@ class AgentResponseError(ValueError):
 # infer it from an answer that quietly lost its context.
 ACCEPTED_REQUEST_FIELDS = frozenset(
     {"question", "hadm_id", "chip", "turns", "stream_prose", "follow_ups",
-     "run_tag"}
+     "run_tag", "intent"}
 )
+
+#: The affordances a surface can declare about its own request.
+#:
+#: A clicked risk-driver bar is not a typed question: the reader chose a control that
+#: already means "explain this driver in this chart". Until Phase 01 the service could
+#: only infer that from the wording, and the wording is a feature label — "what is the
+#: oncology history for this patient?" says nothing structural. Declaring it removes the
+#: guess, and removes the temptation to match a specific label.
+#:
+#: A closed vocabulary, deliberately: an intent the service does not know is refused
+#: rather than ignored, because a surface that thinks it declared something and did not
+#: would be silently back to the wording game.
+REQUEST_INTENTS = frozenset({"risk_driver"})
 
 # Names a caller reaches for when it expects the agent to remember the
 # conversation by itself. The agent holds nothing between requests, so a turn is
@@ -449,6 +462,15 @@ def parse_agent_request(body: Any, *, max_question_chars: int) -> AgentRequest:
     if question is not None and not isinstance(question, str):
         raise AgentRequestError("invalid_request", "'question' must be a string", 400)
 
+    intent = body.get("intent")
+    if intent is not None:
+        if not isinstance(intent, str) or intent not in REQUEST_INTENTS:
+            raise AgentRequestError(
+                "invalid_request",
+                f"'intent' must be one of {sorted(REQUEST_INTENTS)}",
+                400,
+            )
+
     # A slash command typed into the question is the same intent as a chip, and it is
     # resolved HERE, before anything downstream can route it probabilistically. The
     # command vocabulary is closed and lives in one table, so this is a lookup rather
@@ -563,6 +585,11 @@ def parse_agent_request(body: Any, *, max_question_chars: int) -> AgentRequest:
         "stream_prose": stream_prose,
         "follow_ups": follow_ups,
     }
+    # Only when one was declared, for the same reason as `run_tag`: a field that is
+    # always present but usually None makes "did a control send this?" a question about
+    # a value rather than about a key. Absent means the request is ordinary.
+    if intent is not None:
+        parsed["intent"] = intent
     # Only when one was sent. A person's turn carries no run label, and a field that is
     # always present but usually None makes "is this an evaluation turn?" a question
     # about a value instead of about a key.

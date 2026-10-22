@@ -1054,6 +1054,7 @@ async def ask(
     prose_stream: bool = False,
     admission_context: str = "",
     run_tag: str | None = None,
+    intent: str | None = None,
 ) -> dict:
     """Run one question to completion. Returns the final state.
 
@@ -1142,8 +1143,9 @@ async def ask(
         and routing.asks_for_administrative_detail(question),
         # Also a property of this turn: whether the question asks for the model's own
         # reasoning about a driver, which is the only way `predict_readmission` enters
-        # the free-text tool set (see `_freetext_allowed`).
-        risk_driver_question=routing.asks_why_risk_driver(question),
+        # the free-text tool set (see `_freetext_allowed`). A clicked driver bar declares
+        # that it is one, so the control decides instead of its label.
+        risk_driver_question=routing.wants_risk_driver(question, intent),
     )
 
     config: dict = {"recursion_limit": RECURSION_LIMIT}

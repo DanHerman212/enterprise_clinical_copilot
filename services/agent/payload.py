@@ -75,7 +75,14 @@ COMMAND_COMPONENTS: dict[str, str] = {
 # outside the four commands without a second contract for it.
 TOOL_COMPONENTS: dict[str, str] = {
     "predict_readmission": "risk_visualizer",
-    "discharge_medications": "medication_table",
+    # Phase 01. On the free-text path this tool answers a QUESTION about the
+    # medications, and the answer is prose — the model is not producing the extraction
+    # JSON that `/meds` produces, so `command_payload` is None and the medication grid
+    # has nothing verified to draw. Mapping it to `medication_table` therefore emitted
+    # a card reading "the medication extraction did not run for this answer", under a
+    # correct answer. The structured grid belongs to `/meds` (COMMAND_COMPONENTS); here
+    # the evidence is passages, and passages are source cards.
+    "discharge_medications": "source_cards",
     "rag_search": "source_cards",
     "rag_search_sections": "source_cards",
     "search_literature": "literature_cards",

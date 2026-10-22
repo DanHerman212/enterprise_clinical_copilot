@@ -697,6 +697,21 @@ def asks_why_risk_driver(question: str) -> bool:
             and any(token in _WHY_WORDS for token in tokens))
 
 
+def wants_risk_driver(question: str, intent: str | None = None) -> bool:
+    """Whether this turn should bind `predict_readmission` in the reasoning loop.
+
+    Two ways in, and the second is the one that scales. Wording catches a question
+    asked in prose; a declared affordance catches a clicked control, whose text is a
+    feature LABEL and therefore says nothing structural about why it was clicked —
+    "what is the oncology history for this patient?" is a driver drill-down when a bar
+    sent it and an ordinary history question when a person typed it.
+
+    A false positive costs one bound tool on one turn; a false negative returns an
+    answer about the chart when the question was about the model's reasoning.
+    """
+    return intent == "risk_driver" or asks_why_risk_driver(question)
+
+
 def _templated_arguments(args: dict, hadm_id: int | None,
                          command: Command) -> dict:
     """`args` over `hadm_id`, refusing when an admission is needed and absent.

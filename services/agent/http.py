@@ -600,6 +600,10 @@ async def _run_chain(
                 "turns": parsed["turns"],
                 "prose_stream": parsed["stream_prose"],
             }
+            if parsed.get("intent"):
+                # A declared affordance, not an inference. Only present when a control
+                # said what it was, so an ordinary turn stays the call it always was.
+                options["intent"] = parsed["intent"]
             if context:
                 # Only when there is one. A turn without a profile stays exactly
                 # the call it always was, which is what keeps hydration an

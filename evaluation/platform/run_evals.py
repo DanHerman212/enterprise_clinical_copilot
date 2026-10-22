@@ -28,6 +28,13 @@ for _path in (REPO, REPO / "evaluation" / "agent"):
 
 #: Hardcoded targets (spec §5). Deliberately not a parameter.
 DATASETS = ("clinical-census-pilot-v2", "suite2-adversarial-v1")
+
+#: The Step 9 census: 82 patients x 4 prompts = 328 items, ~2.9 h at concurrency 2.
+#:
+#: Kept OUT of `DATASETS` on purpose. The pilot set is what a routine check runs, and
+#: the census is a deliberate, announced step with its own gate — naming it must be an
+#: act, not a typo away from `--datasets`. `--allow-full-census` is that act.
+FULL_CENSUS_DATASET = "clinical-census-full-v1"
 #: Two, not five. `gemini-2.5-pro` on us-east1 has a markedly tighter per-minute quota
 #: than the flash models, and five concurrent items meant five concurrent judge calls in
 #: the same window: the 2026-10-21 suite-2 run logged "judge retry 1/6 after ClientError:
@@ -244,7 +251,10 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--datasets", nargs="+", default=None,
                     help=("subset of the allowed datasets; default is both. The full "
-                          "census is rejected by name."))
+                          "census needs --allow-full-census as well."))
+    ap.add_argument("--allow-full-census", action="store_true",
+                    help=(f"permit {FULL_CENSUS_DATASET} (Step 9, ~2.9h). Without "
+                          "this flag the census is refused by name."))
     ap.add_argument("--dry-payloads", action="store_true",
                     help="validate request bodies against the service contract, send nothing")
     ap.add_argument("--expect-revision", default=None,
@@ -253,9 +263,10 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     targets = tuple(args.datasets) if args.datasets else DATASETS
-    refused = [name for name in targets if name not in DATASETS]
+    allowed = (*DATASETS, FULL_CENSUS_DATASET) if args.allow_full_census else DATASETS
+    refused = [name for name in targets if name not in allowed]
     if refused:
-        print(f"FATAL: refusing {refused}; allowed targets are {list(DATASETS)}",
+        print(f"FATAL: refusing {refused}; allowed targets are {list(allowed)}",
               flush=True)
         return 2
 

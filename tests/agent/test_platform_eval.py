@@ -209,11 +209,33 @@ def test_suite2_items_are_single_probes_carrying_their_expectations():
 
 
 def test_runner_targets_only_the_two_small_datasets():
+    """The 328-item census is a deliberate step, not another entry in a tuple.
+
+    Naming it now takes `--allow-full-census` on the command line, so a routine check
+    cannot become a three-hour run because of a typo in `--datasets`.
+    """
     from evaluation.platform import run_evals
 
     assert set(run_evals.DATASETS) == {"clinical-census-pilot-v2",
                                        "suite2-adversarial-v1"}
     assert "clinical-census-full-v1" not in run_evals.DATASETS
+    assert run_evals.FULL_CENSUS_DATASET == "clinical-census-full-v1"
+
+
+def test_the_full_census_needs_the_explicit_flag(monkeypatch, capsys):
+    """Naming it is an act. Without the flag the run stops before anything is sent."""
+    from evaluation.platform import run_evals
+
+    assert run_evals.main(["--datasets", "clinical-census-full-v1"]) == 2
+    assert "refusing" in capsys.readouterr().out
+
+    # With the flag it gets past the scope check, and the next gate is the environment:
+    # that is how we know the scope decision was the only thing standing in the way.
+    for name in run_evals.REQUIRED_ENV:
+        monkeypatch.delenv(name, raising=False)
+    assert run_evals.main(["--datasets", "clinical-census-full-v1",
+                           "--allow-full-census"]) == 2
+    assert "missing required environment" in capsys.readouterr().out
 
 
 def test_environment_gate_rejects_a_local_api_url(monkeypatch):

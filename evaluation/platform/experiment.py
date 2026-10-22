@@ -167,7 +167,14 @@ def run_linked(
         done += 1
         verdict = next((e.value for e in evaluations if e.name == ev.VERDICT), None)
         state = "unscored" if verdict is None else f"verdict={verdict:g}"
-        print(f"  [{done}/{total}] {item_id[:8]} {state}", flush=True)
+        # The census is multi-turn, and an item's scores belong to the FIRST turn's
+        # trace — the one the dataset run item points at. The second turn is a separate
+        # request and a separate trace, so its id is printed here: an operator auditing
+        # the first few items can open both halves without querying Langfuse, and a
+        # missing turn-2 id is visible as a missing field rather than as silence.
+        second = str(output.get("turn_2_trace_id") or "")
+        turn_two = f" t2={second[:8]}" if second else ""
+        print(f"  [{done}/{total}] {item_id[:8]} {state}{turn_two}", flush=True)
         return ItemOutcome(item_id=item_id, trace_id=trace_id, evaluations=evaluations,
                            dataset_run_id=run_id, output=output)
 

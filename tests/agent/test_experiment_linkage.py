@@ -258,3 +258,24 @@ def test_a_composite_that_returns_a_list_is_flattened():
     names = [row["name"] for row in client.scores]
     assert names == [ev.STRUCTURAL, "fidelity", ev.VERDICT]
     assert run.stats["scored"] == 1 and run.stats["pass_rate"] == 1.0
+
+
+def test_a_two_turn_item_reports_both_trace_ids(capsys):
+    """The census is multi-turn; an audit of the first items must see both halves.
+
+    Scores belong to turn 1's trace (the one the dataset run item points at), and turn 2
+    is a separate request with its own trace. Printing its id is what makes the audit
+    possible without a Langfuse query, and a missing id then shows as a missing field.
+    """
+    client = _Client()
+
+    def task(*, item, **_):
+        return {"turn_1_response": "a", "langfuse_trace_id": "trace-a",
+                "turn_2_response": "b", "turn_2_trace_id": "trace-bb"}
+
+    run_linked(client, dataset_name="suite2-adversarial-v1", run_name="r1",
+               items=[_item("item-a")], task=task, evaluators=[_assertions],
+               composite=_composite, max_concurrency=1)
+
+    out = capsys.readouterr().out
+    assert "t2=trace-bb" in out, out

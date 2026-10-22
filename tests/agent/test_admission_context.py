@@ -189,7 +189,7 @@ class _FakeTool:
     input_schema = {"type": "object", "properties": {}}
 
 
-def _ask(model, question, manifest):
+def _ask(model, question, manifest, **kwargs):
     from services.agent.mcp_client import MCPToolbox
 
     box = MCPToolbox(session=None)
@@ -202,7 +202,7 @@ def _ask(model, question, manifest):
     with patch.object(graph, "_build_llm", lambda name: model):
         return asyncio.run(graph.ask(
             box, question, hadm_id=90000058, model="test",
-            admission_context=manifest,
+            admission_context=manifest, **kwargs,
         ))
 
 
@@ -243,5 +243,67 @@ def test_without_a_manifest_nothing_is_skipped():
     model = _AnsweringModel()
 
     _ask(model, "what is the patient length of stay?", "")
+
+    assert model.calls == 2
+
+
+# --- the same rule for a driver drill-down -----------------------------------
+
+DRIVER_QUESTION = (
+    "What in this patient's chart explains prior inpatient visits as a "
+    "readmission risk driver?"
+)
+
+DRIVER_TURNS = [{
+    "question": "What is this patient's readmission risk?",
+    "tool_calls": [{
+        "name": "predict_readmission",
+        "args": {"hadm_id": 90000058},
+        "payload": {
+            "probability": 0.62,
+            "threshold": 0.5,
+            "decision": 1,
+            "factors": [
+                {"label": "prior inpatient visits", "contribution": 0.11},
+            ],
+        },
+    }],
+    "answer": "The probability is 0.62, above the 0.5 threshold.",
+}]
+
+
+def test_a_declared_driver_drilldown_answers_from_the_replayed_score():
+    """The score and its factors are the evidence; a forced search replaces them.
+
+    A clicked driver bar declares `intent: risk_driver`, and the turn it opens is a
+    follow-up whose replay already holds the scoring call. Demanding a retrieval
+    cannot improve that answer and costs it: the forced round's reply becomes the
+    settled answer, so `demand_retrieval` must not fire here.
+    """
+    model = _AnsweringModel("Prior admissions contributed most of the estimate.")
+
+    state = _ask(
+        model, DRIVER_QUESTION, MANIFEST,
+        turns=DRIVER_TURNS, intent="risk_driver",
+    )
+
+    assert model.calls == 1, "the drill-down was forced into a retrieval it did not need"
+    assert state["tool_calls"] == []
+
+
+def test_the_same_question_undeclared_still_has_its_retrieval_demanded():
+    """The declaration is the signal, not the wording: only the control knows."""
+    model = _AnsweringModel("Prior admissions contributed most of the estimate.")
+
+    _ask(model, DRIVER_QUESTION, MANIFEST, turns=DRIVER_TURNS)
+
+    assert model.calls == 2
+
+
+def test_a_declaration_without_a_replayed_score_still_retrieves():
+    """A first-turn declaration has nothing behind it yet, so it reads the chart."""
+    model = _AnsweringModel("Prior admissions contributed most of the estimate.")
+
+    _ask(model, DRIVER_QUESTION, MANIFEST, intent="risk_driver")
 
     assert model.calls == 2

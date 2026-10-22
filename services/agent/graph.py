@@ -791,6 +791,21 @@ def _budget_exhausted_turn(response: AIMessage) -> AIMessage:
     )
 
 
+def _transcript_carries_attribution(state: AgentState) -> bool:
+    """Whether the replayed turns already hold the model's risk attribution.
+
+    Read from `replayed_tool_calls`, not from `tool_calls`: the latter records only
+    this turn, so it is empty exactly when the answer came from memory, which is the
+    case this asks about. A follow-up that reuses the stored score has the scoring
+    call in its replay and the score in the transcript; nothing a note search returns
+    can add to that.
+    """
+    return any(
+        call.get("name") == "predict_readmission"
+        for call in state.get("replayed_tool_calls") or []
+    )
+
+
 def build_graph(
     toolbox: MCPToolbox,
     model: str = MODEL_ID,
@@ -800,6 +815,7 @@ def build_graph(
     prose_stream: bool = False,
     manifest_answers_question: bool = False,
     risk_driver_question: bool = False,
+    risk_driver_declared: bool = False,
 ):
     """Compile the graph. `on_event` receives progress stages; None disables them.
 
@@ -921,10 +937,11 @@ def build_graph(
                 return END
             return "tools"
         # No tool call, so the turn is finished — unless it is an answer about the chart
-        # written without reading the chart. The four ways that is not the case: something
+        # written without reading the chart. The six ways that is not the case: something
         # was already retrieved, the demand has already been made once, the reply is the
-        # redirect the prompt asks for (a complete answer that calls no tool by design), or
-        # there is no reply at all.
+        # redirect the prompt asks for (a complete answer that calls no tool by design),
+        # there is no reply at all, the manifest is the evidence (see below), or a
+        # declared driver drill-down already holds its attribution in the replay.
         if state["tool_calls"] or state["retrieval_demanded"]:
             return END
         answer = text_of(getattr(last, "content", ""))
@@ -942,6 +959,14 @@ def build_graph(
             # is not harmless: the forced round's reply becomes the settled answer,
             # so the correct one is replaced by an abstention. See
             # `routing.asks_for_administrative_detail`.
+            return END
+        if risk_driver_declared and _transcript_carries_attribution(state):
+            # A clicked driver bar asked what stands behind a factor it was already
+            # scored on, and the replayed turns carry that scoring call. The same
+            # argument as the manifest: the evidence for this question is already in
+            # the transcript, so a forced search buys nothing and costs the answer.
+            # Declared, not inferred from the wording — the drill-down knows what it
+            # is, and only that declaration distinguishes it from a first turn.
             return END
         return "demand_retrieval"
 
@@ -1146,6 +1171,10 @@ async def ask(
         # the free-text tool set (see `_freetext_allowed`). A clicked driver bar declares
         # that it is one, so the control decides instead of its label.
         risk_driver_question=routing.wants_risk_driver(question, intent),
+        # The declaration on its own, kept separate from the question it also implies:
+        # `route` uses it to end a replay turn that already holds the attribution, and
+        # a question that merely reads like a driver question was never scored.
+        risk_driver_declared=intent == "risk_driver",
     )
 
     config: dict = {"recursion_limit": RECURSION_LIMIT}

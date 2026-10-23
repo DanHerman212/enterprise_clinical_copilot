@@ -62,9 +62,46 @@ def build_user_prompt(input_doc: dict[str, Any], output: dict[str, Any]) -> str:
         # a preceding turn is supplied — and a three- or four-turn thread used to reach
         # the judge as turns 1 and 2 with the rest silently dropped.
         parts.append(f"TURN {index + 1} — QUESTION:\n{question}\n\nANSWER:\n{answer}\n")
-    parts.append("EVIDENCE (tool outputs + retrieved passages the agent had):\n"
-                 + evidence)
+        cited = _cited_sources(output, index)
+        if cited:
+            # The numbering the reader clicks. `sources` is ordered by first appearance
+            # in the answer and renumbered to match, so `^[k]` resolves through THIS
+            # list — while the raw tool payloads below keep the order the tools returned
+            # them in. Grading a marker against the raw array scored a correct answer
+            # `citation: 1` on three consecutive canaries (2026-10-23).
+            parts.append(
+                f"TURN {index + 1} — THE NUMBERING THIS ANSWER USES: every `^[k]` in the "
+                "answer above resolves to entry [k] of this list, and to nothing else.\n"
+                + cited + "\n")
+    parts.append(
+        "RAW TOOL EVIDENCE (what the tools returned, in the order they returned it).\n"
+        "Its passage order is NOT the numbering the answer cites — grade markers against\n"
+        "the per-turn list above, and use this block only to check what the evidence\n"
+        "says:\n" + evidence)
     return "\n".join(parts)
+
+
+def _cited_sources(output: dict[str, Any], turn_index: int) -> str:
+    """The turn's published sources, rendered as `[k] section: text`.
+
+    Empty when the harness did not record them (a trace from before the field existed),
+    which leaves the judge with the raw evidence as it always had.
+    """
+    turns = output.get("turn_sources")
+    if not isinstance(turns, list) or turn_index >= len(turns):
+        return ""
+    entries = turns[turn_index]
+    if not isinstance(entries, list) or not entries:
+        return ""
+    lines: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        cite = entry.get("cite")
+        section = str(entry.get("section") or "note passage")
+        text = " ".join(str(entry.get("text") or "").split())[:400]
+        lines.append(f"  [{cite}] {section}: {text}")
+    return "\n".join(lines)
 
 
 def _turn_answers(output: dict[str, Any]) -> list[str]:

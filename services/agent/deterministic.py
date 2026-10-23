@@ -588,6 +588,13 @@ async def run_command(
     # A summary's passages are ordered canonically as they arrive, so the formatter's
     # numbering and the citation layer's numbering are the same order (TF-7).
     order = _ordered_summary_payload if command.wire == "summarize" else None
+    # Numbering continues from what the replayed turns already showed the model, because
+    # a marker is resolved against the whole conversation's passages (TF-10).
+    cite_offset = sum(
+        len((call.get("response") or {}).get("passages") or [])
+        for call in (replayed_calls or [])
+        if isinstance(call.get("response"), dict)
+    )
     tool_messages, recorded = await _execute_tool_calls(
         toolbox, calls, on_event, project=_presented_prediction,
         # This path opens `command.<wire>` around the whole turn, so its tool spans
@@ -595,6 +602,7 @@ async def run_command(
         # produced a separate root trace per tool.
         traced=True,
         order=order,
+        cite_offset=cite_offset,
     )
 
     # `/ehr` asks for four named discharge-summary sections. An outpatient note has
@@ -612,6 +620,7 @@ async def run_command(
         extra_messages, extra_recorded = await _execute_tool_calls(
             toolbox, fallback, on_event, project=_presented_prediction, traced=True,
             order=order,
+            cite_offset=cite_offset + _passage_count(recorded),
         )
         tool_messages += extra_messages
         recorded += extra_recorded

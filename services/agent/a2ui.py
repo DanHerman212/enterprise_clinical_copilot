@@ -1071,7 +1071,8 @@ def compose_presentation(question: str, answer: str,
                          tool_calls: list[dict],
                          command_payload: dict | None = None,
                          command: str | None = None,
-                         context_grounded: bool = False) -> dict:
+                         context_grounded: bool = False,
+                         evidence: list[dict] | None = None) -> dict:
     """The full presentation contract for an answered question.
 
     One call produces every field the browser consumes, so the answer's
@@ -1108,13 +1109,19 @@ def compose_presentation(question: str, answer: str,
     renumbered = renumber_citations(answer)
     remap = citation_remap(answer)
     intent = intent_sections(question)
-    rag = rag_payload(tool_calls)
-    literature = literature_payload(tool_calls)
-    labs = lab_trend_payload(tool_calls)
+    # `evidence` is every call the conversation has shown the model — the replayed turns
+    # first, then this one — because that is the array the answer's markers are numbered
+    # against (`graph._render_tool_result` counts continuously across both). Resolving
+    # against this turn's calls alone left a follow-up that quoted the chart with a
+    # marker that pointed at nothing (TF-10, 2026-10-23).
+    evidence_calls = list(evidence) if evidence is not None else tool_calls
+    rag = rag_payload(evidence_calls)
+    literature = literature_payload(evidence_calls)
+    labs = lab_trend_payload(evidence_calls)
     sources = resolve_sources(renumbered, remap, rag, intent)
     narrative = _narrative(renumbered, sources, literature)
 
-    scope = turn_scope(tool_calls)
+    scope = turn_scope(evidence_calls)
 
     # A turn that retrieved records answers from them, so it is general medical evidence
     # even when a supplementary call also fetched this patient's own estimate (Phase 2,

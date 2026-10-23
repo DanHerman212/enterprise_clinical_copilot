@@ -443,6 +443,11 @@ async def _compose_success(
             call.get("name") not in routing.LITERATURE_TOOLS
             for call in (state.get("replayed_tool_calls") or [])
         ),
+        # The whole conversation's evidence, in the order the model was shown it. A
+        # follow-up's markers are numbered continuously across the replayed turns and
+        # this one, so the source table has to be the same concatenation (TF-10).
+        evidence=[*(state.get("replayed_tool_calls") or []),
+                  *(state.get("tool_calls") or [])],
     )
 
     # Chosen from the record this turn already holds, not proposed by a model: a chip

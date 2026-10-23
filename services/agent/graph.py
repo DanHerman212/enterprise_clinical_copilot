@@ -169,7 +169,7 @@ def _render_passage(passage: dict[str, Any]) -> dict[str, Any]:
     )}
 
 
-def _render_tool_result(payload: Any) -> str:
+def _render_tool_result(payload: Any, *, offset: int = 0) -> str:
     """Render a tool result as the body the wrapper hands the model.
 
     The projection is built here rather than applied to the payload itself: the
@@ -177,6 +177,13 @@ def _render_tool_result(payload: Any) -> str:
     citation lookup use, and those should carry what the tool actually returned.
     A refused passage keeps its slot, with the refusal in place of its text, so
     the positions every citation refers to do not shift.
+
+    `offset` is how many passages the model has already been shown in this
+    conversation. Citation numbers are global across tool results and across the
+    replayed turns, because that is the array the citation layer resolves against
+    (`a2ui.rag_payload` concatenates the same calls in the same order). Restarting
+    at 1 per result meant `^[1]` named the first passage of whichever result the
+    reader happened to look at (TF-10, 2026-10-23).
     """
     if isinstance(payload, str):
         return _escape_delimiter(payload)
@@ -192,7 +199,7 @@ def _render_tool_result(payload: Any) -> str:
         # are the same numbers.
         rendered = dict(payload, passages=[
             ({**(_render_passage(passage) if isinstance(passage, dict) else {}),
-              "cite": index})
+              "cite": offset + index})
             if isinstance(passage, dict) else passage
             for index, passage in enumerate(passages, start=1)
         ])
@@ -456,6 +463,7 @@ async def _execute_tool_calls(
     already_called: list[dict] | None = None,
     traced: bool = False,
     order: Callable[[str, dict], dict] | None = None,
+    cite_offset: int = 0,
 ) -> tuple[list[BaseMessage], list[RecordedToolCall]]:
     """Run one turn's tool calls, refusing those beyond the per-turn budget.
 
@@ -481,6 +489,7 @@ async def _execute_tool_calls(
     messages: list[BaseMessage] = []
     recorded: list[RecordedToolCall] = []
     prior = list(already_called or [])
+    numbered = cite_offset
     done = {_call_key(str(call.get("name")), dict(call.get("args") or {}))
             for call in prior}
     for index, call in enumerate(calls):
@@ -555,7 +564,8 @@ async def _execute_tool_calls(
             "name": call["name"], "args": arguments, "response": payload,
         }))
         shown = project(call["name"], payload) if project is not None else payload
-        body = _render_tool_result(shown)
+        body = _render_tool_result(shown, offset=numbered)
+        numbered += _passage_total(shown)
         messages.append(
             ToolMessage(
                 content=(
@@ -951,6 +961,15 @@ def build_graph(
             # Everything this turn has already spent, so the budget is a budget for the
             # turn rather than for one iteration of the loop around it.
             already_called=list(state.get("tool_calls") or []),
+            # Numbering continues from the passages the replayed turns already showed
+            # and from the calls this turn has made so far.
+            cite_offset=(_passage_total({"passages": [
+                passage
+                for call in (state.get("replayed_tool_calls") or [])
+                for passage in ((call.get("response") or {}).get("passages") or [])
+            ]})
+                + sum(_passage_total(call.get("response"))
+                      for call in state.get("tool_calls") or [])),
         )
         return {"messages": messages, "tool_calls": recorded}
 
@@ -1353,8 +1372,14 @@ def replayed_turns(turns: list[dict[str, str]] | None) -> list[BaseMessage]:
     return messages
 
 
+def _passage_total(payload: Any) -> int:
+    """How many passages a payload puts in front of the model."""
+    passages = payload.get("passages") if isinstance(payload, dict) else None
+    return len(passages) if isinstance(passages, list) else 0
+
+
 def _replayed_tool_messages(
-    call: dict[str, Any], call_id: str, payload: Any
+    call: dict[str, Any], call_id: str, payload: Any, *, offset: int = 0
 ) -> list[BaseMessage]:
     """One replayed tool call and its result, rendered exactly as a live pair is.
 
@@ -1369,7 +1394,7 @@ def _replayed_tool_messages(
         content="",
         tool_calls=[{"name": call["name"], "args": call.get("args") or {}, "id": call_id}],
     )
-    body = _render_tool_result(payload)
+    body = _render_tool_result(payload, offset=offset)
     result = ToolMessage(
         content=f'<tool_result name="{call["name"]}">\n{body}\n</tool_result>',
         tool_call_id=call_id,
@@ -1404,6 +1429,7 @@ async def replay_messages(
     """
     messages: list[BaseMessage] = []
     calls: list[RecordedToolCall] = []
+    offset = 0
     for turn_index, turn in enumerate(turns or []):
         messages.append(HumanMessage(content=turn["question"]))
         for call_index, call in enumerate(turn.get("tool_calls") or []):
@@ -1416,8 +1442,12 @@ async def replay_messages(
                 )
                 payload = await toolbox.call(call["name"], dict(call.get("args") or {}))
             messages.extend(
-                _replayed_tool_messages(call, f"replay-{turn_index}-{call_index}", payload)
+                _replayed_tool_messages(call, f"replay-{turn_index}-{call_index}", payload,
+                                        offset=offset)
             )
+            # The numbering continues across turns, because the citation layer resolves
+            # a marker against every passage the conversation has shown.
+            offset += _passage_total(payload)
             calls.append({
                 "name": call["name"],
                 "args": dict(call.get("args") or {}),

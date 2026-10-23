@@ -135,6 +135,10 @@ class TaskOutput(BaseModel):
     turn_prompts: list[str] = Field(default_factory=list)
     #: Follow-ups proposed per turn (only turns that requested them carry any).
     turn_follow_ups: list[list[str]] = Field(default_factory=list)
+    #: Each turn's published `sources`: the numbering the answer's `^[k]` markers
+    #: resolve to. Kept per turn because the judge has to grade a marker against the
+    #: list the reader clicked, not against the order the tools returned passages in.
+    turn_sources: list[list[dict[str, Any]]] = Field(default_factory=list)
     tool_evidence: list[dict[str, Any]] = Field(default_factory=list)
 
     #: Tracing / diagnosis. Additive to the spec: the evaluators need the envelope

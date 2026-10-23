@@ -107,6 +107,22 @@ def _verified(response: dict) -> bool | None:
     return flag if isinstance(flag, bool) else None
 
 
+def _sources(response: dict) -> list[dict[str, Any]]:
+    """The sources the reader can click for this turn, in the numbering they use.
+
+    Kept as `{cite, section, text}` only: the judge needs to know which passage a marker
+    resolves to, and the passage's text is what it checks the sentence against.
+    """
+    out: list[dict[str, Any]] = []
+    for entry in response.get("sources") or []:
+        if not isinstance(entry, dict):
+            continue
+        out.append({"cite": entry.get("cite"),
+                    "section": entry.get("section"),
+                    "text": entry.get("text")})
+    return out
+
+
 def replay_turn(question: str, response: dict) -> dict:
     """Turn 1 as the service will accept it back in `turns`.
 
@@ -228,6 +244,7 @@ def make_task(ask: Ask, *, run_tag: str,
         follow_ups = [_follow_ups(response) for response in responses]
         components = [_components(response) for response in responses]
         verified = [_verified(response) for response in responses]
+        sources = [_sources(response) for response in responses]
 
         output = TaskOutput(
             turn_1_response=answers[0],
@@ -238,6 +255,7 @@ def make_task(ask: Ask, *, run_tag: str,
             turn_follow_ups=follow_ups,
             turn_components=components,
             turn_verified=verified,
+            turn_sources=sources,
             turn_1_verified=verified[0],
             tool_evidence=[
                 item for response in responses for item in _evidence(response)

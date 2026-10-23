@@ -355,11 +355,15 @@ def test_the_manifest_outranks_a_historical_facility():
     assert "discharge_location" in SYSTEM_PROMPT
 
 
-def test_an_answer_from_the_transcript_needs_no_new_marker():
-    """A follow-up answered from a replayed turn is complete, not uncited.
+def test_an_answer_from_the_transcript_cites_like_any_other():
+    """Superseded 2026-10-23 (TF-10).
 
-    The citation layer resolves markers against THIS turn's passages, so a marker on
-    replayed evidence would resolve to nothing and be stripped — leaving the model to
-    choose between refusing and re-retrieving. The prompt says neither is required.
+    This test used to pin the opposite rule — that transcript evidence needs no marker —
+    because the citation layer resolved markers against this turn's passages only, so a
+    marker on replayed evidence would have been stripped. Numbering now runs through the
+    whole conversation and the source table is the same concatenation, so the exemption
+    is gone and an uncited follow-up is a defect rather than a contract.
     """
-    assert "without a citation marker" in SYSTEM_PROMPT
+    assert "without a citation marker" not in SYSTEM_PROMPT
+    assert "must cite it like any other evidence" in SYSTEM_PROMPT
+    assert "the replayed turns' passages come first" in SYSTEM_PROMPT

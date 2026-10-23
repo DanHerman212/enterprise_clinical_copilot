@@ -64,6 +64,7 @@ from services.agent.routing import (
     supplementary_arguments,
     tool_arguments,
 )
+from services.mcp.retrieval.sections import SUMMARY_SECTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -317,6 +318,40 @@ def _passage_count(recorded: list[RecordedToolCall]) -> int:
         for call in recorded
         if isinstance(call.get("response"), dict)
     )
+
+
+def _order_summary_passages(recorded: list[RecordedToolCall]) -> None:
+    """Put a summary's passages in `SUMMARY_SECTIONS` order, in place.
+
+    `/ehr` cross-wired `^[3]` and `^[4]` (TF-7, 2026-10-23). The retrieval tool returns
+    the four sections in whatever order it scores them — the discharge instructions
+    before the discharge diagnosis, on 90000015 — while the formatter is told to write
+    the sections in the canonical order, diagnosis third and instructions fourth. The
+    model numbered its markers by the section's position in its own answer, the source
+    list kept the retrieval order, and a reader clicking `^[3]` inside the Discharge
+    diagnosis paragraph landed on the medication list.
+
+    Ordering the passages here makes position and provenance the same fact: passage n
+    IS section n, whichever way the model counts. Sections the canonical tuple does not
+    name keep their relative order at the end, so a record with an extra heading still
+    reads in the order it arrived rather than being dropped.
+    """
+    order = {name: index for index, name in enumerate(SUMMARY_SECTIONS)}
+    for call in recorded:
+        response = call.get("response")
+        if not isinstance(response, dict):
+            continue
+        passages = response.get("passages")
+        if not isinstance(passages, list) or len(passages) < 2:
+            continue
+        if not isinstance(passages[0], dict) or "section" not in passages[0]:
+            continue
+        # A stable sort, so sections the tuple does not name keep the order they came
+        # in and are placed after the ones it does.
+        response["passages"] = sorted(
+            passages,
+            key=lambda passage: order.get(str(passage.get("section") or ""), len(order)),
+        )
 
 
 def _consolidate_medication_passages(recorded: list[RecordedToolCall]) -> None:
@@ -599,6 +634,14 @@ async def run_command(
             "command": command.wire,
             "deterministic_answer": routing.OUTPATIENT_EHR_NOTICE,
         }
+
+    # A summary's passages are put in canonical section order before anything reads
+    # them: the citation numbering, the source list the reader clicks and the section
+    # order the formatter is told to write. Retrieval order is a scoring artifact and
+    # used to disagree with the narrative's order, which cross-wired `^[3]` and `^[4]`
+    # (TF-7, 2026-10-23).
+    if command.wire == "summarize":
+        _order_summary_passages(recorded)
 
     # `/meds` cites with one marker, so the passages it cites have to be one passage.
     # Done before the formatting turn's state is built, because everything downstream —

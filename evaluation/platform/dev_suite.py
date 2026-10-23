@@ -119,7 +119,7 @@ def item_payload(row: dict[str, Any], manifest: dict[str, Any]) -> dict[str, Any
     if "verified" in expected:
         expectations["verified"] = expected["verified"]
     for key in ("components", "forbidden_components", "must_contain",
-                "must_not_disclose", "literature_nonempty"):
+                "must_not_disclose", "citation_marker"):
         if key in expected:
             expectations[key] = expected[key]
 

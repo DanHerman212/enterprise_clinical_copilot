@@ -161,6 +161,14 @@ class TaskOutput(BaseModel):
     turn_1_error: str | None = None
     turn_2_status: int | None = None
     turn_2_trace_id: str = ""
+    #: The service's `verified` flag per turn: whether the answer was checked against
+    #: the patient's own record. Trajectory 7 asserts it is False on an outpatient
+    #: refusal, which is the flag a reader sees on the card, so it is asserted rather
+    #: than inferred from the prose.
+    turn_verified: list[bool | None] = Field(default_factory=list)
+    #: Component names rendered per turn, in turn order.
+    turn_components: list[list[str]] = Field(default_factory=list)
+    turn_1_verified: bool | None = None
 
     @field_validator("turn_1_response")
     @classmethod

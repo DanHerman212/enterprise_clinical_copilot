@@ -91,6 +91,22 @@ def _follow_ups(response: dict) -> list[str]:
     return [text for item in offered if (text := str(item).strip())]
 
 
+def _components(response: dict) -> list[str]:
+    """The component names a turn rendered, in surface order."""
+    return (a2ui.components(response.get("a2ui"))
+            or list(response.get("a2ui_components") or []))
+
+
+def _verified(response: dict) -> bool | None:
+    """The service's `verified` flag, or None when it did not send one.
+
+    None is not False: a model-graded turn with no flag says nothing about grounding,
+    and a check that reads absent as False would fail every envelope predating it.
+    """
+    flag = response.get("verified")
+    return flag if isinstance(flag, bool) else None
+
+
 def replay_turn(question: str, response: dict) -> dict:
     """Turn 1 as the service will accept it back in `turns`.
 
@@ -210,6 +226,8 @@ def make_task(ask: Ask, *, run_tag: str,
         first = responses[0]
         answers = [_answer_text(response) for response in responses]
         follow_ups = [_follow_ups(response) for response in responses]
+        components = [_components(response) for response in responses]
+        verified = [_verified(response) for response in responses]
 
         output = TaskOutput(
             turn_1_response=answers[0],
@@ -218,6 +236,9 @@ def make_task(ask: Ask, *, run_tag: str,
             turn_responses=answers,
             turn_prompts=prompts,
             turn_follow_ups=follow_ups,
+            turn_components=components,
+            turn_verified=verified,
+            turn_1_verified=verified[0],
             tool_evidence=[
                 item for response in responses for item in _evidence(response)
             ],
@@ -231,8 +252,7 @@ def make_task(ask: Ask, *, run_tag: str,
             # inside the messages. Reading the missing field reported [] for every
             # turn, which made three component assertions fail on a card that was
             # actually rendered (Step 8, 2026-10-20).
-            turn_1_components=(a2ui.components(first.get("a2ui"))
-                               or list(first.get("a2ui_components") or [])),
+            turn_1_components=components[0],
             turn_1_card=first.get("a2ui") if isinstance(first.get("a2ui"), dict) else None,
             turn_1_error=first.get("error"),
         )

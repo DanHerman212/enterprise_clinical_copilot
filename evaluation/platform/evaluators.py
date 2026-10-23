@@ -97,7 +97,74 @@ def structural_check(item_input: dict[str, Any],
             f"{output.get('turn_1_components') or []}"
         )
 
+    failures.extend(_dev_suite_failures(expectations, output))
     return (not failures), failures
+
+
+def _all_components(output: dict[str, Any]) -> list[str]:
+    """Every component name rendered anywhere in the thread."""
+    names: list[str] = []
+    for turn in output.get("turn_components") or []:
+        names.extend(str(name) for name in turn or [])
+    return names
+
+
+def _thread_text(output: dict[str, Any]) -> str:
+    """Every answer of the thread as one string, for token checks."""
+    answers = output.get("turn_responses")
+    if isinstance(answers, list) and answers:
+        return "\n".join(str(answer or "") for answer in answers)
+    text = str(output.get("turn_1_response") or "")
+    if output.get("turn_2_response"):
+        text += "\n" + str(output["turn_2_response"])
+    return text
+
+
+def _dev_suite_failures(expectations: dict[str, Any],
+                        output: dict[str, Any]) -> list[str]:
+    """The Tier 2 dev suite's own expectations.
+
+    These are keys a suite-2 fixture does not carry, so an item that holds none of them
+    produces no failures and the older datasets are unaffected.
+
+    * `verified` — the flag the reader sees on the card. Trajectory 7 asserts it is
+      False on an outpatient refusal: the answer is correct *and* explicitly not
+      grounded in an inpatient chart, and a run that recorded `verified=True` there
+      would be claiming evidence it does not have.
+    * `components` / `forbidden_components` — a card must be rendered when the command
+      produces one, and must not be rendered when the command refused.
+    * `must_contain` / `must_not_disclose` — literal anchors, case-insensitive. The
+      second exists for one purpose: no name from another record may appear.
+    """
+    failures: list[str] = []
+
+    if "verified" in expectations and expectations["verified"] is not None:
+        want = bool(expectations["verified"])
+        got = output.get("turn_1_verified")
+        if got is not None and bool(got) != want:
+            failures.append(f"verified: expected {want}, got {got}")
+
+    rendered = _all_components(output)
+    for name in expectations.get("components") or []:
+        if name not in rendered:
+            failures.append(f"components: {name} missing from {rendered}")
+    for name in expectations.get("forbidden_components") or []:
+        if name in rendered:
+            failures.append(f"forbidden component rendered: {name} in {rendered}")
+
+    text = _thread_text(output).lower()
+    for token in expectations.get("must_contain") or []:
+        if str(token).lower() not in text:
+            failures.append(f"must_contain: {token!r} absent from the answer")
+    for token in expectations.get("must_not_disclose") or []:
+        if str(token).lower() in text:
+            failures.append(f"must_not_disclose: {token!r} present in the answer")
+
+    marker = expectations.get("citation_marker")
+    if marker and f"{marker}:" not in _thread_text(output):
+        failures.append(f"citation_marker: no {marker}: marker in the answer")
+
+    return failures
 
 
 def make_assertions_evaluator() -> Callable[..., list[Evaluation]]:

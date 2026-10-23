@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -28,6 +29,14 @@ for _path in (REPO, REPO / "evaluation" / "agent"):
 
 #: Hardcoded targets (spec §5). Deliberately not a parameter.
 DATASETS = ("clinical-census-pilot-v2", "suite2-adversarial-v1")
+
+#: The Tier 2 dev suite (Phase 04). A gated target rather than a routine one: its
+#: canary is named, and the full 26 run needs the Architect's sign-off, so it is
+#: reached by `--datasets ecc-tier2-dev-suite` and not by the default.
+DEV_SUITE_DATASET = "ecc-tier2-dev-suite"
+
+#: Gate 1's three canary scenarios, and nothing else (Phase 04 §4.2).
+CANARY_SCENARIOS = ("dev_t1_01", "dev_t2_03", "dev_t7_01")
 
 #: The Step 9 census: 82 patients x 4 prompts = 328 items, ~2.9 h at concurrency 2.
 #:
@@ -76,6 +85,29 @@ def verify_environment() -> dict[str, str]:
 
 _run_tag: str = ""
 _task: Any = None
+
+
+def _item_scenario_id(item: Any) -> str:
+    """The scenario id on an item, from its input or its dataset id."""
+    data = item.get("input") if isinstance(item, dict) else getattr(item, "input", None)
+    if isinstance(data, dict) and data.get("scenario_id"):
+        return str(data["scenario_id"])
+    return str(item.get("id") if isinstance(item, dict) else getattr(item, "id", ""))
+
+
+def _select_scenarios(items: list[Any], wanted: tuple[str, ...]) -> list[Any]:
+    """The named scenarios, in the order the caller named them.
+
+    Refuses an unknown id rather than quietly running fewer items: a canary that runs
+    two of its three scenarios and reports green is the failure this gate exists to
+    prevent.
+    """
+    by_id = {_item_scenario_id(item): item for item in items}
+    missing = [name for name in wanted if name not in by_id]
+    if missing:
+        raise RuntimeError(
+            f"scenario(s) not in the dataset: {missing}; have {sorted(by_id)}")
+    return [by_id[name] for name in wanted]
 
 
 def execute_agent_thread(item: Any) -> dict[str, Any]:
@@ -162,8 +194,21 @@ def served_revision(api_url: str, *, timeout: float = 30.0,
     return revision or None
 
 
+def rubric_version() -> str:
+    """The rubric the run is graded under, read from the rubric itself.
+
+    It was hardcoded to `v4` while the rubric file was at v5, so three runs claimed a
+    version that had already been superseded and could not be compared with anything.
+    """
+    text = (REPO / "evaluation" / "agent" / "rubric.md").read_text()
+    first = text.splitlines()[0] if text else ""
+    match = re.search(r"Rubric (v\d+)", first)
+    return match.group(1) if match else "unknown"
+
+
 def run(datasets: tuple[str, ...], *, run_name: str,
-        code_revision: str | None = None) -> dict[str, Any]:
+        code_revision: str | None = None,
+        scenarios: tuple[str, ...] = ()) -> dict[str, Any]:
     global _run_tag
     _run_tag = run_name
 
@@ -183,12 +228,16 @@ def run(datasets: tuple[str, ...], *, run_name: str,
     run_evaluators = ev.make_run_evaluators(min_pass_rate=MIN_PASS_RATE)
 
     summary: dict[str, Any] = {}
+    rubric = rubric_version()
     for dataset_name in datasets:
         dataset = client.get_dataset(dataset_name)
         items = list(getattr(dataset, "items", []) or [])
         if not items:
             raise RuntimeError(f"{dataset_name}: 0 items — seed it first")
-        print(f"\n=== {dataset_name}: {len(items)} item(s) as {run_name} ===", flush=True)
+        if scenarios:
+            items = _select_scenarios(items, scenarios)
+        print(f"\n=== {dataset_name}: {len(items)} item(s) as {run_name} ===",
+              flush=True)
 
         # The scores go onto the trace the SERVICE opened for this answer, not onto a
         # wrapper trace of the harness's own. That is what makes the run tag usable as
@@ -203,8 +252,8 @@ def run(datasets: tuple[str, ...], *, run_name: str,
             evaluators=[assertions],
             composite=composite,
             max_concurrency=MAX_CONCURRENCY,
-            description="Step 8 live pilot, rubric v4",
-            metadata={"rubric_version": "v4", "run_tag": run_name,
+            description=f"Phase 04 Tier 2 dev suite, rubric {rubric}",
+            metadata={"rubric_version": rubric, "run_tag": run_name,
                       "agent_url": os.environ.get("API_URL", ""),
                       "code_revision": code_revision or "unknown"},
         )
@@ -234,8 +283,13 @@ def run(datasets: tuple[str, ...], *, run_name: str,
             outcomes=experiment.item_results, run_evaluators=run_evaluators,
         )
 
+        _print_item_report(experiment.item_results, dataset_name=dataset_name,
+                           run_name=run_name,
+                           dataset_run_id=experiment.dataset_run_id)
+
         summary[dataset_name] = {
             "items": len(items), **stats,
+            "dataset_run_id": experiment.dataset_run_id,
             "gate_pass": (stats["pass_rate"] >= MIN_PASS_RATE
                           and stats["safety_failures"] == 0
                           and stats["unscored"] == 0
@@ -245,6 +299,54 @@ def run(datasets: tuple[str, ...], *, run_name: str,
 
     client.flush()
     return summary
+
+
+def _print_item_report(outcomes: list[Any], *, dataset_name: str, run_name: str,
+                       dataset_run_id: str | None) -> None:
+    """One block per item: what was asked, what came back, how it scored.
+
+    The run's aggregate cannot answer the questions a gate asks — which chip was
+    resolved, whether an outpatient refusal really carried `verified=False`, which
+    dimension lost the item — so each item is reported here rather than re-queried
+    from Langfuse afterwards.
+    """
+    from evaluation.platform import evaluators as ev
+
+    dimensions = ev.DIMENSIONS
+    print(f"\n--- per-item report: {dataset_name} / {run_name} "
+          f"(run {dataset_run_id or 'unattributed'}) ---", flush=True)
+    for outcome in outcomes:
+        output = outcome.output or {}
+        scores = {e.name: e for e in outcome.evaluations}
+        structural = scores.get(ev.STRUCTURAL)
+        verdict = scores.get(ev.VERDICT)
+
+        print(f"\n  {outcome.item_id}  "
+              f"verdict={'none' if verdict is None else f'{verdict.value:g}'}",
+              flush=True)
+        prompts = output.get("turn_prompts") or []
+        for index, prompt in enumerate(prompts, start=1):
+            print(f"    turn {index} asked: {prompt}", flush=True)
+        offered = next((turn for turn in output.get("turn_follow_ups") or [] if turn),
+                       [])
+        if offered:
+            print(f"    turn 1 proposed: {offered}", flush=True)
+        print("    verified per turn: "
+              f"{output.get('turn_verified') or []}", flush=True)
+        print("    components per turn: "
+              f"{output.get('turn_components') or []}", flush=True)
+        if structural is not None:
+            print(f"    structural: {structural.value:g} — "
+                  f"{structural.comment or 'ok'}", flush=True)
+        dims = {name: scores[name].value for name in dimensions if name in scores}
+        if dims:
+            print(f"    dimensions: {dims}", flush=True)
+        if verdict is not None and verdict.comment:
+            print(f"    verdict note: {verdict.comment}", flush=True)
+        if outcome.error:
+            print(f"    ERROR: {outcome.error}", flush=True)
+        print(f"    traces: {output.get('turn_trace_ids') or [outcome.trace_id]}",
+              flush=True)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -260,15 +362,33 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--expect-revision", default=None,
                     help=("refuse to run unless the deployed service reports this "
                           "code_revision; use the commit you built the image from"))
+    ap.add_argument("--canary", action="store_true",
+                    help=(f"run only {list(CANARY_SCENARIOS)} (Gate 1, Phase 04 §4.2)"))
+    ap.add_argument("--scenarios", default="",
+                    help="comma-separated scenario ids to run from the dev suite; "
+                         "an unknown id is refused")
     args = ap.parse_args(argv)
 
     targets = tuple(args.datasets) if args.datasets else DATASETS
-    allowed = (*DATASETS, FULL_CENSUS_DATASET) if args.allow_full_census else DATASETS
+    allowed = (*DATASETS, DEV_SUITE_DATASET)
+    if args.allow_full_census:
+        allowed = (*allowed, FULL_CENSUS_DATASET)
     refused = [name for name in targets if name not in allowed]
     if refused:
         print(f"FATAL: refusing {refused}; allowed targets are {list(allowed)}",
               flush=True)
         return 2
+
+    scenarios: tuple[str, ...] = ()
+    if args.canary:
+        if DEV_SUITE_DATASET not in targets:
+            print(f"FATAL: --canary runs the dev suite; add "
+                  f"--datasets {DEV_SUITE_DATASET}", flush=True)
+            return 2
+        scenarios = CANARY_SCENARIOS
+    elif args.scenarios.strip():
+        scenarios = tuple(name.strip() for name in args.scenarios.split(",")
+                          if name.strip())
 
     try:
         env = verify_environment()
@@ -288,12 +408,16 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    run_name = f"pilot-verify-{stamp}"
+    run_name = (f"phase04-gate1-canary-{stamp}" if scenarios
+                and tuple(scenarios) == CANARY_SCENARIOS else f"pilot-verify-{stamp}")
     print(f"agent:   {env['API_URL']}\n"
           f"serving: {code_revision or 'unknown'}\n"
           f"run:     {run_name}\ndatasets: {list(targets)}")
+    if scenarios:
+        print(f"scenarios: {list(scenarios)}")
 
-    summary = run(targets, run_name=run_name, code_revision=code_revision)
+    summary = run(targets, run_name=run_name, code_revision=code_revision,
+                  scenarios=scenarios)
 
     print("\n=== STEP 8 SUMMARY ===")
     for name, stats in summary.items():

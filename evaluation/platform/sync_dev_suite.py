@@ -31,6 +31,7 @@ if str(REPO) not in sys.path:
 from evaluation.platform.dev_suite import (  # noqa: E402
     DEV_SUITE_PATH,
     TRAJECTORIES,
+    item_payload,
     read_rows,
     validate_rows,
 )
@@ -59,6 +60,7 @@ def build_items(*, manifests: dict[int, dict]) -> list[dict]:
     payloads: list[dict] = []
     for row in rows:
         manifest = manifests.get(int(row["hadm_id"])) or {}
+        expectations = item_payload(row, manifest)["expectations"]
         metadata = dict(row.get("metadata") or {})
         metadata.update({
             "scenario_id": row["id"],
@@ -69,6 +71,11 @@ def build_items(*, manifests: dict[int, dict]) -> list[dict]:
             "id": row["id"],
             "input": {
                 "scenario_id": row["id"],
+                # `patient_id` is the field the task reads the record from, and the
+                # manifest is keyed by it. `hadm_id` travels beside it because the
+                # phase document names it; omitting `patient_id` failed all three
+                # canary items before a single request was sent (2026-10-23).
+                "patient_id": str(row["hadm_id"]),
                 "hadm_id": str(row["hadm_id"]),
                 "trajectory": row["trajectory"],
                 "trajectory_index": TRAJECTORIES[row["trajectory"]],
@@ -76,6 +83,9 @@ def build_items(*, manifests: dict[int, dict]) -> list[dict]:
                 "command": row.get("command"),
                 "turns": list(row["turns"]),
                 "patient_manifest": manifest,
+                # The assertions evaluator reads these from the item input; without
+                # them the deterministic half of the score is a no-op that reports ok.
+                "expectations": expectations,
             },
             "expected_output": row["expected_output"],
             "metadata": metadata,

@@ -43,10 +43,15 @@ def _identity_token() -> str:
 def make_ask(agent_url: str, token: str, *, timeout: float = 240.0):
     """One `/ask` round-trip. Returns the envelope plus its HTTP status."""
 
-    def ask(*, question, hadm_id, run_tag, session_id=None, turns=None) -> dict:
+    def ask(*, question, hadm_id, run_tag, session_id=None, turns=None,
+            follow_ups=False) -> dict:
         body: dict = {"question": question, "hadm_id": hadm_id, "run_tag": run_tag}
         if turns:
             body["turns"] = turns
+        if follow_ups:
+            # Only a loop-back item asks: `follow_ups` makes the service propose the
+            # next questions, and every other turn has its own wording.
+            body["follow_ups"] = True
         last: dict = {}
         for attempt in range(3):
             try:

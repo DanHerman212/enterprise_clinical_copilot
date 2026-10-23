@@ -50,19 +50,37 @@ def build_user_prompt(input_doc: dict[str, Any], output: dict[str, Any]) -> str:
                           sort_keys=True)
     evidence = json.dumps(output.get("tool_evidence") or [], indent=2)[:120000]
     turns = input_doc.get("turns") or []
-    first_q = turns[0] if turns else ""
+    answers = _turn_answers(output)
 
-    parts = [
-        MANIFEST_RULES + "\n" + manifest + "\n",
-        f"TURN 1 — QUESTION:\n{first_q}\n\nANSWER:\n"
-        f"{output.get('turn_1_response') or ''}\n",
-    ]
-    if len(turns) > 1:
-        parts.append(f"TURN 2 — QUESTION:\n{turns[1]}\n\nANSWER:\n"
-                     f"{output.get('turn_2_response') or ''}\n")
+    parts = [MANIFEST_RULES + "\n" + manifest + "\n"]
+    if not turns:
+        return "\n".join(parts + ["NO QUESTION RECORDED\n", "EVIDENCE:\n" + evidence])
+    for index, question in enumerate(turns):
+        answer = answers[index] if index < len(answers) else ""
+        # Turn 1 is the conversation's opening; every later turn is a follow-up and is
+        # labelled as such, because dimension 6 (context retention) is scored only when
+        # a preceding turn is supplied — and a three- or four-turn thread used to reach
+        # the judge as turns 1 and 2 with the rest silently dropped.
+        parts.append(f"TURN {index + 1} — QUESTION:\n{question}\n\nANSWER:\n{answer}\n")
     parts.append("EVIDENCE (tool outputs + retrieved passages the agent had):\n"
                  + evidence)
     return "\n".join(parts)
+
+
+def _turn_answers(output: dict[str, Any]) -> list[str]:
+    """Every turn's answer, oldest first.
+
+    `turn_responses` is the whole thread. The named fields are the fallback for a
+    stored trace written before it existed.
+    """
+    answers = output.get("turn_responses")
+    if isinstance(answers, list) and answers:
+        return [str(answer if answer is not None else "") for answer in answers]
+    legacy = [str(output.get("turn_1_response") or "")]
+    second = output.get("turn_2_response")
+    if second:
+        legacy.append(str(second))
+    return legacy
 
 
 def make_judge_fn(client_factory: Callable[[], Any] | None = None) -> Callable[..., dict]:

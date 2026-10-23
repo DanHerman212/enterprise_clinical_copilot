@@ -59,6 +59,15 @@ def structural_check(item_input: dict[str, Any],
     if not str(output.get("turn_1_response") or "").strip():
         failures.append("turn_1_response is blank")
 
+    # A thread is only as good as its weakest turn, so every turn is checked rather than
+    # the first. Blank here is an answer that reached the item and said nothing, which
+    # is the failure mode a pass rate computed over turn 1 alone cannot see.
+    answers = output.get("turn_responses")
+    if isinstance(answers, list):
+        for index, answer in enumerate(answers[1:], start=2):
+            if not str(answer or "").strip():
+                failures.append(f"turn_{index}_response is blank")
+
     if "status" in expectations and expectations["status"] is not None:
         got = output.get("turn_1_status")
         if got != expectations["status"]:

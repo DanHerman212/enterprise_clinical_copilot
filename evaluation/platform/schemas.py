@@ -15,7 +15,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-WorkflowType = Literal["command_plus_followup", "single_probe"]
+WorkflowType = Literal["command_plus_followup", "single_probe", "multi_turn"]
+
+#: The most turns one item may script. Trajectory 4 of the Tier 2 dev suite runs a
+#: three- or four-turn thread, and stating the ceiling here keeps a mis-authored row
+#: from arriving at the service as an unbounded replay.
+MAX_TURNS = 4
 
 #: A response that is present but says nothing. Treated as blank, because a card
 #: rendered as an em dash is what made the dashboard unreadable.
@@ -61,6 +66,14 @@ class DatasetItemInput(BaseModel):
     #: Deterministic expectations from the fixture (status / component / error …).
     expectations: dict[str, Any] = Field(default_factory=dict)
 
+    #: The Tier 2 dev suite's own bookkeeping. Declared rather than left to be
+    #: dropped: without these fields the item validates and then arrives at the judge
+    #: stripped of the ground truth it is graded against.
+    scenario_id: str | None = None
+    trajectory: str | None = None
+    expected_output: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
     @field_validator("patient_id")
     @classmethod
     def _patient_id_present(cls, value: str) -> str:
@@ -83,6 +96,14 @@ class DatasetItemInput(BaseModel):
     def _turn_count_matches_workflow(self) -> DatasetItemInput:
         if not self.turns:
             raise ValueError("turns must contain at least one prompt")
+        if any(not str(turn).strip() for turn in self.turns):
+            raise ValueError("a turn is blank: every scripted prompt must be non-empty")
+        if self.workflow_type == "multi_turn":
+            if not 2 <= len(self.turns) <= MAX_TURNS:
+                raise ValueError(
+                    f"multi_turn needs 2..{MAX_TURNS} turns, got {len(self.turns)}"
+                )
+            return self
         expected = 2 if self.workflow_type == "command_plus_followup" else 1
         if len(self.turns) != expected:
             raise ValueError(
@@ -103,6 +124,17 @@ class TaskOutput(BaseModel):
 
     turn_1_response: str
     turn_2_response: str | None = None
+    #: EVERY turn's answer text, in turn order. Trajectories 4 and 5 script three and
+    #: four turns, and the judge grades a thread rather than turn 2 alone — without
+    #: this list turns 3+ reached the item and stopped short of the judge.
+    turn_responses: list[str] = Field(default_factory=list)
+    #: The prompts actually sent, in turn order, with any `{{turn_N.follow_ups[0]}}`
+    #: placeholder resolved to the value the service proposed. Kept because a resolved
+    #: loop-back turn is not the text in the dataset, and a replayed run must be able
+    #: to show what was asked.
+    turn_prompts: list[str] = Field(default_factory=list)
+    #: Follow-ups proposed per turn (only turns that requested them carry any).
+    turn_follow_ups: list[list[str]] = Field(default_factory=list)
     tool_evidence: list[dict[str, Any]] = Field(default_factory=list)
 
     #: Tracing / diagnosis. Additive to the spec: the evaluators need the envelope

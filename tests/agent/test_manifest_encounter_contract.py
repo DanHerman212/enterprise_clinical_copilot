@@ -100,8 +100,12 @@ def test_the_rubric_counts_a_grounded_refusal_as_a_pass():
 
 def test_the_rubric_is_versioned_above_the_run_it_supersedes():
     rubric = (_REPO / "evaluation" / "agent" / "rubric.md").read_text()
-    assert rubric.startswith("# Evaluation Rubric v5"), (
-        "a change to the pass rule invalidates comparison with earlier runs and must "
-        "carry a new version"
+    assert rubric.startswith("# Evaluation Rubric v6"), (
+        "a change to how a class of answer is graded invalidates comparison with "
+        "earlier runs and must carry a new version"
     )
+    assert "**Version 6, 2026-10-21.**" in rubric
+    # v5's outpatient clause is still the rule; v6 added the adversarial classes
+    # alongside it and did not replace it.
     assert "**Version 5, 2026-10-20.**" in rubric
+    assert "Refusing a tool that does not apply" in rubric

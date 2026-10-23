@@ -9,6 +9,7 @@ interleave: they are sequential by construction, one item per worker slot.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Callable
 
 from evaluation.platform import a2ui
@@ -78,6 +79,18 @@ def _evidence(response: dict) -> list[dict[str, Any]]:
     return out
 
 
+def _follow_ups(response: dict) -> list[str]:
+    """The next questions the service proposed, when the turn asked for them.
+
+    Kept per turn rather than merged: a loop-back turn consumes the Nth entry of one
+    named turn, so the round it came from has to stay identifiable.
+    """
+    offered = response.get("follow_ups")
+    if not isinstance(offered, list):
+        return []
+    return [text for item in offered if (text := str(item).strip())]
+
+
 def replay_turn(question: str, response: dict) -> dict:
     """Turn 1 as the service will accept it back in `turns`.
 
@@ -104,6 +117,50 @@ def replay_turn(question: str, response: dict) -> dict:
     return {"question": question, "answer": answer, "tool_calls": calls}
 
 
+#: A turn whose wording is decided at runtime: the Nth entry of the follow-ups the
+#: service proposed on an earlier turn. Trajectory 2 of the Tier 2 dev suite tests the
+#: affordance the UI actually renders, so the prompt cannot be typed into the dataset.
+FOLLOW_UP_PLACEHOLDER = re.compile(r"\{\{\s*turn_(\d+)\.follow_ups\[\s*(\d+)\s*\]\s*\}\}")
+
+
+def placeholder_turns(turns: list[str]) -> dict[int, int]:
+    """`{turn_index: turn_index}` — which later turn consumes which earlier turn's
+    follow-up. Zero-based, as `turns` is."""
+    needed: dict[int, int] = {}
+    for index, prompt in enumerate(turns):
+        for match in FOLLOW_UP_PLACEHOLDER.finditer(prompt):
+            source = int(match.group(1)) - 1
+            if source >= index:
+                raise ValueError(
+                    f"turn {index + 1} references turn {source + 1}'s follow-ups, which "
+                    "has not run yet"
+                )
+            needed[source] = source
+    return needed
+
+
+def resolve_prompt(prompt: str, responses: list[dict]) -> str:
+    """Replace every loop-back placeholder with the follow-up the service proposed."""
+
+    def _sub(match: re.Match[str]) -> str:
+        source = int(match.group(1)) - 1
+        position = int(match.group(2))
+        if source >= len(responses):
+            raise ValueError(f"turn {source + 1} has not run")
+        offered = responses[source].get("follow_ups") or []
+        if not isinstance(offered, list) or position >= len(offered):
+            raise ValueError(
+                f"turn {source + 1} proposed no follow_ups[{position}]: "
+                f"{len(offered) if isinstance(offered, list) else 0} proposed"
+            )
+        text = str(offered[position]).strip()
+        if not text:
+            raise ValueError(f"turn {source + 1} proposed a blank follow_ups[{position}]")
+        return text
+
+    return FOLLOW_UP_PLACEHOLDER.sub(_sub, prompt)
+
+
 def make_task(ask: Ask, *, run_tag: str,
               new_session_id: Callable[[], str]) -> Callable[..., dict]:
     """Build the Langfuse task function."""
@@ -113,27 +170,61 @@ def make_task(ask: Ask, *, run_tag: str,
         data = DatasetItemInput.model_validate(raw)
         session_id = new_session_id()
         hadm_id = int(data.patient_id)
+        loop_backs = placeholder_turns(data.turns)
 
-        first = ask(question=data.turns[0], hadm_id=hadm_id, run_tag=run_tag,
-                    session_id=session_id)
+        # Every turn runs in order on one session, each sent with the whole transcript
+        # replayed: a follow-up without its conversation is a different question. This
+        # is a loop rather than two named calls because Trajectory 4 scripts three and
+        # four turns, and turns 3+ used to be dropped without a word.
+        #
+        # `turn_traces` collects one id per turn rather than two named fields because a
+        # turn that ran and left no id is the case the run has to report, and a list
+        # can hold that absence where a name cannot.
+        responses: list[dict] = []
+        turn_traces: list[str] = []
+        prompts: list[str] = []
+        transcript: list[dict] = []
 
-        # Read once, here: the ids are the item's only handle on its own evidence, and
-        # every turn has to contribute one. Collected as a list rather than as two
-        # named fields because a turn that ran and left no id is the case the run has
-        # to report, and a list can hold that absence where a name cannot.
-        first_trace = str(first.get("langfuse_trace_id") or "")
-        turn_traces = [first_trace]
-
-        output = TaskOutput(
-            turn_1_response=_answer_text(first),
-            tool_evidence=_evidence(first),
-            session_id=session_id,
+        for index, scripted in enumerate(data.turns):
+            prompt = resolve_prompt(scripted, responses)
+            prompts.append(prompt)
+            call: dict[str, Any] = {
+                "question": prompt,
+                "hadm_id": hadm_id,
+                "run_tag": run_tag,
+                "session_id": session_id,
+                "turns": list(transcript) or None,
+            }
+            # Sent only when the turn has to propose them: `ask` is injected, and a
+            # transport that does not know the field still satisfies this task.
+            if index in loop_backs:
+                call["follow_ups"] = True
+            response = ask(**call)
+            responses.append(response)
             # The service's own trace id, carried so the experiment can hang this item's
             # scores off the trace that holds the run tag — and the prompts, tool calls
             # and model output that produced the answer (2026-10-21).
-            langfuse_trace_id=first_trace,
-            turn_trace_ids=turn_traces,
-            turn1_trace=first_trace,
+            turn_traces.append(str(response.get("langfuse_trace_id") or ""))
+            transcript.append(replay_turn(prompt, response))
+
+        first = responses[0]
+        answers = [_answer_text(response) for response in responses]
+        follow_ups = [_follow_ups(response) for response in responses]
+
+        output = TaskOutput(
+            turn_1_response=answers[0],
+            # The whole thread, so a three- or four-turn item reaches the judge as a
+            # thread instead of as its first two turns.
+            turn_responses=answers,
+            turn_prompts=prompts,
+            turn_follow_ups=follow_ups,
+            tool_evidence=[
+                item for response in responses for item in _evidence(response)
+            ],
+            session_id=session_id,
+            langfuse_trace_id=turn_traces[0],
+            turn_trace_ids=list(turn_traces),
+            turn1_trace=turn_traces[0],
             turn_1_status=first.get("status"),
             turn_1_command=first.get("command") or first.get("command_executed"),
             # The service does not send an `a2ui_components` field; the names live
@@ -146,21 +237,12 @@ def make_task(ask: Ask, *, run_tag: str,
             turn_1_error=first.get("error"),
         )
 
-        if len(data.turns) > 1:
-            replayed = replay_turn(data.turns[0], first)
-            second = ask(question=data.turns[1], hadm_id=hadm_id, run_tag=run_tag,
-                         session_id=session_id, turns=[replayed])
-            second_trace = str(second.get("langfuse_trace_id") or "")
-            turn_traces.append(second_trace)
-            # Assigned rather than relied on by reference: a pydantic model validates
-            # its list field on construction, so the list this function holds and the
-            # one the model holds are not guaranteed to be the same object.
-            output.turn_trace_ids = turn_traces
-            output.turn_2_response = _answer_text(second) or None
+        if len(responses) > 1:
+            second = responses[1]
+            output.turn_2_response = answers[1] or None
             output.turn_2_status = second.get("status")
-            output.turn_2_trace_id = second_trace
-            output.turn2_trace = second_trace
-            output.tool_evidence.extend(_evidence(second))
+            output.turn_2_trace_id = turn_traces[1]
+            output.turn2_trace = turn_traces[1]
 
         return output.model_dump()
 

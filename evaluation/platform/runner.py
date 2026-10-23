@@ -53,17 +53,24 @@ def check_scope(names: list[str]) -> list[str]:
 
 
 def build_body(*, question: str, hadm_id: int, run_tag: str,
-               turns: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+               turns: list[dict[str, Any]] | None = None,
+               follow_ups: bool = False) -> dict[str, Any]:
     """The request body, exactly as the service accepts it.
 
     `session_id` is deliberately absent: the service refuses it as a conversation
     field, because it holds no conversation state — the caller owns the transcript and
     replays it in `turns`.
+
+    `follow_ups` is sent only when a later turn of the item consumes what it proposes.
+    A loop-back turn has no wording of its own until the first turn has run, so this is
+    the harness asking the service what to ask next (Tier 2 dev suite, Trajectory 2).
     """
     body: dict[str, Any] = {"question": question, "hadm_id": int(hadm_id),
                             "run_tag": run_tag}
     if turns:
         body["turns"] = turns
+    if follow_ups:
+        body["follow_ups"] = True
     return body
 
 
@@ -76,13 +83,15 @@ def validate_body(body: dict[str, Any]) -> None:
 
 def http_ask(*, question: str, hadm_id: int, run_tag: str,
              turns: list[dict[str, Any]] | None = None,
-             session_id: str | None = None) -> dict[str, Any]:
+             session_id: str | None = None,
+             follow_ups: bool = False) -> dict[str, Any]:
     """One `/ask` call. `session_id` is accepted for logging only and not sent."""
     import httpx
 
     from evaluation.platform.http_auth import identity_token  # noqa: PLC0415
 
-    body = build_body(question=question, hadm_id=hadm_id, run_tag=run_tag, turns=turns)
+    body = build_body(question=question, hadm_id=hadm_id, run_tag=run_tag, turns=turns,
+                      follow_ups=follow_ups)
     validate_body(body)
     headers = {"Authorization": f"Bearer {identity_token(AGENT_URL)}"}
     with httpx.Client(timeout=180.0) as client:

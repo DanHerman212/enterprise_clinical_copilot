@@ -819,6 +819,22 @@ OUTPATIENT_RISK_REFUSAL = (
     "this visit instead, or run the command on an inpatient admission."
 )
 
+#: Served by `/ehr` on an outpatient record whose note yields nothing to summarise.
+#:
+#: Added 2026-10-23 (TF-6). The formatter was handed an empty record and abstained —
+#: "I don't have an answer for that" — which named neither the encounter nor its
+#: consequence, and left the turn's trace row with no output because the state it came
+#: from carried no answer text. The notice says what the record is, what it therefore
+#: does not hold, and what remains available; it invents no stay, no length of stay and
+#: no discharge list.
+OUTPATIENT_EHR_NOTICE = (
+    "This record is an outpatient encounter, not a hospital admission, so there is no "
+    "discharge summary to review: no hospital course, discharge diagnosis or discharge "
+    "medication list exists for this visit, and nothing here should be read as an "
+    "inpatient stay. Ask about this visit instead, or run the command on an inpatient "
+    "admission."
+)
+
 
 def refuses_readmission_score(command: Command, hadm_id: int | None) -> bool:
     """Whether this command must decline to score this record.

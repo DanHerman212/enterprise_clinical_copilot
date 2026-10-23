@@ -575,6 +575,31 @@ async def run_command(
         tool_messages += extra_messages
         recorded += extra_recorded
 
+    # Whether this record is a stay at all. Broader than `outpatient` above, which only
+    # asks whether the risk estimate was withheld: every command on an outpatient record
+    # owes the reader the same statement about what the record is, not only the one that
+    # would have drawn a risk card.
+    outpatient_record = hadm_id is not None and hadm_id in OUTPATIENT_HADM_IDS
+
+    # `/ehr` on an outpatient record with nothing in it. The record-wide search has now
+    # answered the only question that matters — nothing means the absence is real — so
+    # the answer is the encounter notice itself, in code, with no formatting turn
+    # (TF-6, 2026-10-23). Left to the formatter, this turn produced an abstention that
+    # named neither the encounter nor its consequence, and left the trace row empty
+    # because `graph.command_trace_output` reads the answer off this state.
+    if command.wire == "summarize" and outpatient_record and not _passage_count(recorded):
+        return {
+            "messages": [
+                SystemMessage(content=SYSTEM_PROMPT),
+                HumanMessage(content=question),
+                *tool_messages,
+            ],
+            "tool_calls": recorded,
+            "replayed_tool_calls": replayed_calls or [],
+            "command": command.wire,
+            "deterministic_answer": routing.OUTPATIENT_EHR_NOTICE,
+        }
+
     # `/meds` cites with one marker, so the passages it cites have to be one passage.
     # Done before the formatting turn's state is built, because everything downstream —
     # the answer's citation, the guardrail's source text and the grid — reads `recorded`.
@@ -662,6 +687,20 @@ async def run_command(
         # command's state from a free-text one downstream.
         "command": command.wire,
     }
+
+    if command.prose and not str(text).strip():
+        # A formatting turn that finished with nothing in it. The sentence is put on the
+        # state here rather than left to the envelope's empty-answer branch, because the
+        # trace's output is read off this state (`graph.command_trace_output`) and an
+        # empty answer wrote the turn's trace row as a dash — the one record an audit
+        # opens first (TF-6, 2026-10-23). The wording is the same one the envelope
+        # would have served, so the answer itself is unchanged.
+        from services.agent import model_turn  # noqa: PLC0415 — used on this exit only
+
+        state["deterministic_answer"] = (
+            model_turn.OUTPATIENT_SILENT_TURN_SENTENCE if outpatient_record
+            else model_turn.SILENT_TURN_SENTENCE
+        )
 
     if command.wire == "meds":
         source = _source_text(recorded)

@@ -132,7 +132,42 @@ def test_every_ground_truth_anchor_appears_in_the_fact_sheet(row):
 
 
 @pytest.mark.parametrize("row", ROWS, ids=[row["id"] for row in ROWS])
-def test_every_disclosure_ban_is_a_value_the_record_does_not_hold(row):
+def test_no_anchor_requires_a_manifest_only_field(row):
+    """Every `must_contain` token must come from a source the turn actually surfaces.
+
+    `Home with home health` was a manifest field; the discharge note never states the
+    disposition, and no tool returns it — so the `/ehr` answer could not contain it and
+    `dev_t1_01` failed on a correct summary (Gate 1, 2026-10-23).
+
+    The manifest/risk table is the one block that only the pre-flight context knows. The
+    driver table below it IS tool output (`predict_readmission` returns the ranked
+    features), as are the medication passages, the lab panels and the quoted note
+    sections, so those are all legitimate sources for an anchor.
+    """
+    section = _fact_section(str(row["hadm_id"]))
+    # Everything from the risk score onward is tool output: the ranked driver table,
+    # the medication passages, the lab panels and the quoted note sections. Only the
+    # manifest table above it is pre-flight context alone.
+    surfaceable = section.partition("**Readmission probability")[2].lower()
+
+    facts = row["expected_output"].get("facts") or {}
+    probability = facts.get("readmission_probability")
+    renderings = {f"{probability:.1%}"} if isinstance(probability, (int, float)) else set()
+
+    for token in row["expected_output"].get("must_contain") or []:
+        assert token.lower() in surfaceable or token in renderings, (
+            f"{row['id']}: {token!r} is not in text any tool returns for "
+            f"{row['hadm_id']} — it is a manifest-only value")
+
+
+def test_the_first_scenario_no_longer_anchors_the_discharge_disposition():
+    row = next(row for row in ROWS if row["id"] == "dev_t1_01")
+    tokens = row["expected_output"]["must_contain"]
+    assert "home health" not in [token.lower() for token in tokens]
+    assert "knee replacement" in tokens
+
+
+
     """A `must_not_disclose` token must not be documented for this record — otherwise
     the ban would fail a transcription of the chart. Where the row names the record a
     disclosure would come from, every banned token must be documented *there*."""

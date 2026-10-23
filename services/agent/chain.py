@@ -27,7 +27,7 @@ that is what is reported here (`resolve_code_revision`).
 import json
 import logging
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 
 from services.mcp.config import GEMINI_MODEL
 
@@ -87,6 +87,10 @@ RECORD_FIELDS = (
     "tool_errors",
     "guardrail_flags",
     "langfuse_trace_id",
+    # The chips the turn offered. Added with the deterministic selector (Phase 05 §2):
+    # the list is chosen after the turn's span has closed, so this line is the only
+    # record that carries it.
+    "follow_ups",
 )
 
 
@@ -105,6 +109,7 @@ def record_execution(
     tool_errors=(),
     guardrail_flags: Iterable[str] = (),
     langfuse_trace_id: str = "",
+    follow_ups: Sequence[str] = (),
     error: str | None = None,
     model: str = MODEL_ID,
     code_revision: str = CODE_REVISION,
@@ -175,6 +180,11 @@ def record_execution(
         # one. This is the join the eval loop uses — a score attaches to a trace
         # id, and the record is where that id is durable.
         "langfuse_trace_id": langfuse_trace_id,
+        # The chips this turn offered. Chosen from the record after the turn's span
+        # closed, so they cannot ride on the trace; this line is where they are
+        # recorded against the run (Phase 05 §2, 2026-10-23). Always present, empty when
+        # the caller did not ask for them or when no template fired.
+        "follow_ups": list(follow_ups),
     }
     if error:
         record["error"] = error

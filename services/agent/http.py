@@ -431,25 +431,33 @@ async def _compose_success(
         ),
     )
 
-    # Proposed from the answer that will actually be served, not from what the model
-    # first wrote: a follow-up built on a sentence a guardrail removed would ask about
-    # something the reader never saw. Runs last, and cannot fail the turn —
-    # `followups.suggest` returns an empty list rather than raising.
+    # Chosen from the record this turn already holds, not proposed by a model: a chip
+    # is a control, and a control that asks something the chart cannot answer is worse
+    # than no chip row at all (Phase 05 §2, 2026-10-23). Synchronous, in-memory, and it
+    # cannot fail the turn — `followups.suggest` returns a list or an empty list.
     #
-    # Only when the caller asked for it. One model call per turn is a real cost, and the
-    # caller that draws a follow-up row is the only one that should pay it. The two
-    # derived fields below the payload are free and always present, so the shape of a
-    # payload does not depend on this flag — only whether the list has anything in it.
+    # Only when the caller asked for it. The two derived fields below the payload are
+    # free and always present, so the shape of a payload does not depend on this flag —
+    # only whether the list has anything in it.
     follow_ups = (
-        await followups.suggest(
+        followups.suggest(
             question,
             presentation["answer"],
             model=chain.MODEL_ID,
             scope=presentation.get("scope"),
+            state=state,
+            outpatient=outpatient,
         )
         if want_follow_ups
         else []
     )
+    if want_follow_ups:
+        # Recorded on the turn's own record. The trace cannot hold them: this runs after
+        # the turn's span has closed, and this SDK/server combination drops observation
+        # writes made outside an active span (measured 2026-10-23), so the chip list
+        # rides on the execution line, which already carries the trace id that joins it
+        # to the run.
+        state["follow_ups"] = list(follow_ups)
 
     # The guardrails' own flags, plus the one only this layer can see: a chart turn
     # whose scope was withheld because no note citation resolved. Telemetry first —
@@ -735,6 +743,10 @@ async def ask_route(request: Request) -> JSONResponse:
         # the id that joins them: without it, "the answer looked wrong" is a
         # question about a log line or about a trace, and never about both.
         langfuse_trace_id=state.get("langfuse_trace_id") or "",
+        # The chips this turn offered, when the caller asked for them. They are chosen
+        # after the turn's span closed, so this line is where they are recorded against
+        # the run rather than the trace (see `followups`, Phase 05 §2).
+        follow_ups=state.get("follow_ups") or [],
     )
     # The command a free-text question was routed to, when it was routed at all.
     # Carried on the payload because the console draws it as a pill beside the turn:
@@ -995,6 +1007,8 @@ async def _stream_chain(
             tool_calls=[call["name"] for call in payload["tool_calls"]],
             guardrail_flags=payload["guardrail_flags"],
             langfuse_trace_id=state.get("langfuse_trace_id") or "",
+            # The same field the blocking route records, for the same reason.
+            follow_ups=state.get("follow_ups") or [],
         )
         yield _sse(stages.STAGE_ANSWER, payload)
     finally:

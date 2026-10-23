@@ -50,6 +50,7 @@ from typing import Any, Callable
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
+from services.agent import routing
 from services.agent import stages
 from services.agent.contracts import RecordedToolCall
 from services.agent.feature_labels import humanize
@@ -506,6 +507,26 @@ async def run_command(
     # Imported here rather than at module scope: `graph` imports this module for
     # the command branch, so a module-level import would be circular.
     from services.agent.graph import _build_llm, _emit, _execute_tool_calls
+
+    # `/risk` on an outpatient record does not run at all. Checked before the tools are
+    # resolved, because the failure it prevents is the tool call itself: scoring a
+    # record with no admission produces a probability, and a probability draws a risk
+    # card. The answer is the refusal, in code, with no model turn — `/risk` makes none
+    # on any turn.
+    if routing.refuses_readmission_score(command, hadm_id):
+        _emit(on_event, stages.planning_event(command.wire))
+        refused = routing.OUTPATIENT_RISK_REFUSAL
+        return {
+            "messages": [
+                SystemMessage(content=SYSTEM_PROMPT),
+                HumanMessage(content=question),
+                AIMessage(content=refused),
+            ],
+            "tool_calls": [],
+            "replayed_tool_calls": replayed_calls or [],
+            "command": command.wire,
+            "deterministic_answer": refused,
+        }
 
     arguments = tool_arguments(command, hadm_id, topic)
     _emit(on_event, stages.planning_event(command.wire))

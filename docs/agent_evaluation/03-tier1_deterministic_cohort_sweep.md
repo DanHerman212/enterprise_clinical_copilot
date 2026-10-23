@@ -124,19 +124,55 @@ For each candidate record, capture:
 3. **STOP and wait for Architect sign-off to close Phase 03.**
 
 ---
+## Section 5: Phase 03 Close-Out — TF-1 Surgical Remediation & Locked Cohort Matrix
+
+### 5.1 Architect Authorization (Scoped Unfreeze for TF-1 Only)
+Following review of the Section 3 & Section 4 findings, the Architect authorizes a **strictly scoped code change** to resolve **TF-1 (`/risk` not gated on outpatient status)** before closing Phase 03 and re-locking the codebase for Phase 04.
+
+- **Permitted Write Scope for TF-1:**
+  - `services/agent/routing.py` and/or `services/agent/deterministic.py` (solely to gate `/risk` / `predict_readmission` on `OUTPATIENT_HADM_IDS`).
+  - `tests/evaluation/test_tier1_cohort_sweep.py` (and corresponding unit tests in `tests/`) to assert the updated outpatient boundary rule.
+- **All Other Paths Remain Frozen:**
+  - Do **not** modify `services/mcp/`, `danielmherman`, or unrelated agent modules (`TF-2` through `TF-5` remain deferred/Tier 2 concerns).
+
+### 5.2 TF-1 Remediation Specification
+1. **Outpatient Gate on `/risk` & `predict_readmission`:**
+   - Ensure that when `hadm_id in OUTPATIENT_HADM_IDS` (`90000028, 90000040, 90000051, 90000054, 90000073`), executing `/risk` does **not** invoke `predict_readmission` as a primary tool or render an inpatient readmission `RiskInfluencers` card for a non-admission visit.
+   - Instead, `/risk` on an outpatient encounter must deterministically trigger the outpatient scope refusal / notice (`outpatient=True`, `verified=False`, no `RiskInfluencers` widget, no hallucinated inpatient readmission score), consistent with `/ehr` outpatient handling.
+2. **Update Tier 1 Sweep Assertions (`tests/evaluation/test_tier1_cohort_sweep.py`):**
+   - Update the Section 2 / Section 3 outpatient assertions to verify that across all 5 `OUTPATIENT_HADM_IDS`, both `/ehr` and `/risk` enforce the outpatient boundary and suppress `predict_readmission`.
+
+
+### 5.3 Execution & Deliverable for Phase 03 Final Sign-Off
+1. Implement the `TF-1` fix and run:
+   - `pytest tests/evaluation/test_tier1_cohort_sweep.py`
+   - Full repository `pytest tests` suite to verify zero regressions across the existing 1,100+ unit tests.
+2. Output a concise **Section 5 Close-Out Report** confirming:
+   - `TF-1` is resolved and verified across all 5 outpatient records.
+   - Full test suite pass counts.
+   - `git diff --stat` showing only the authorized `TF-1` files and test updates were touched, and the codebase is now re-frozen for Phase 04.
+
+---
 
 ## Tracked Findings (remediation deferred — logged for Architect review after Phase 03)
 
 Nothing below was fixed during Phase 03: `services/agent/` and `services/mcp/` are frozen,
 so each finding is recorded with its evidence and left for a later phase.
 
-### TF-1 — `/risk` is not gated on outpatient status
-`routing.OUTPATIENT_HADM_IDS` drops `predict_readmission` only where it is a
+### TF-1 — `/risk` was not gated on outpatient status — **RESOLVED (Section 5, 2026-10-23)**
+`routing.OUTPATIENT_HADM_IDS` dropped `predict_readmission` only where it was a
 *Supplementary* call (`routing.supplementary_arguments`). On `/risk` the estimate is the
-**primary** tool, and `deterministic`'s `outpatient` flag is derived from supplementary
-calls, so a `/risk` turn on an outpatient record is treated as an ordinary risk turn and
-scores a record that has no admission. Section 2 asserts the rules that exist, not the
-one the directive describes.
+**primary** tool, and `deterministic`'s `outpatient` flag was derived from supplementary
+calls, so a `/risk` turn on an outpatient record was treated as an ordinary risk turn and
+scored a record with no admission. Measured: `90000051` returned 0.2916, above threshold,
+for a speech-therapy note.
+
+Fixed in `routing.refuses_readmission_score` + `routing.OUTPATIENT_RISK_REFUSAL`, checked
+at the top of `deterministic.run_command` before any tool is resolved. `/risk` on an
+outpatient now makes no tool call, returns a deterministic refusal, draws no
+`RiskInfluencers` card, and reports `verified=False`. Verified across all five outpatient
+records by `tests/evaluation/test_tier1_cohort_sweep.py` and
+`tests/agent/test_outpatient_risk_gate.py` (20 tests).
 
 ### TF-2 — three inpatient notes carry no discharge-summary headings
 `90000026` (1,153 chars), `90000033` (2,346), `90000087` (4,153). The note exists and

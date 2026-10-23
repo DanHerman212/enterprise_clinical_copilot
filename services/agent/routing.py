@@ -806,6 +806,38 @@ OUTPATIENT_ENCOUNTER_NOTICE = (
     "the passages do not support is omitted, never filled with a claim.")
 
 
+#: What `/risk` says when the record is not an admission.
+#:
+#: A refusal rather than an estimate, because there is no readmission to estimate: the
+#: record is an outpatient visit, so a probability computed for it would be a number
+#: about a stay that never happened. It is deterministic prose, not a model turn — the
+#: `/risk` command makes no model call at all, and asking one here would let the score
+#: come back in words.
+OUTPATIENT_RISK_REFUSAL = (
+    "This record is an outpatient encounter, not a hospital admission, so there is no "
+    "readmission risk to estimate. There was no stay to be readmitted from — ask about "
+    "this visit instead, or run the command on an inpatient admission."
+)
+
+
+def refuses_readmission_score(command: Command, hadm_id: int | None) -> bool:
+    """Whether this command must decline to score this record.
+
+    `/risk` asks the model for the readmission estimate, and on an outpatient record
+    there is none. Until 2026-10-23 the outpatient rule only dropped
+    `predict_readmission` where it was a SUPPLEMENTARY call (routing.py,
+    `supplementary_arguments`), so `/ehr` and `/pubmed` honoured it while `/risk` —
+    where the estimate is the PRIMARY tool — scored the visit anyway and drew an
+    inpatient risk card over it (TF-1). Measured on 90000051: a 0.2916 estimate, above
+    threshold, for a speech-therapy note.
+
+    A predicate rather than a branch inside the caller because it is a statement about
+    the vocabulary: the same five ids that cannot be compared against a cohort also
+    cannot be given a score.
+    """
+    return command.wire == "risk" and hadm_id in OUTPATIENT_HADM_IDS
+
+
 def comparison_applies(command: Command, hadm_id: int | None,
                        topic: str | None) -> bool:
     """Whether the turn has anything to compare this patient against.

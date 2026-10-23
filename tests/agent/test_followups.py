@@ -444,3 +444,146 @@ def test_replayed_calls_count_as_chart_state():
                      "Follow up with Dr. A.", rows=["Coumadin"], returned=1)))
 def test_a_real_turn_s_chips_are_short_enough_for_a_row(chip):
     assert len(chip) <= followups._MAX_QUESTION_CHARS
+
+
+# ------------------------------------------------------- Sprint 1: asked questions
+
+
+TAPER_NOTE = ("Oxycodone SR 20 mg q.12h for five days, then decrease to "
+              "oxycodone SR 10 mg q.12h for five days. Continue Coumadin 7 mg daily. "
+              "No driving for two days. Follow up with Dr. A.")
+TAPER_CHIP = ("What is the dosing and taper schedule for oxycodone SR at discharge?")
+COUMADIN_CHIP = "What is the discharge dosing plan for Coumadin?"
+
+
+def test_clicking_a_chip_never_offers_that_chip_back():
+    """The production defect: clicking the taper chip re-rendered the taper chip."""
+    state = _med_state(TAPER_NOTE, rows=["Oxycodone SR", "Coumadin"], returned=1)
+    first = followups.suggest("/meds", ANSWER, scope="patient_chart", state=state)
+    assert first[0] == TAPER_CHIP
+
+    second = followups.suggest("/meds", ANSWER, scope="patient_chart", state=state,
+                               asked=["/meds", TAPER_CHIP])
+    assert TAPER_CHIP not in second, second
+    assert second[0] == COUMADIN_CHIP
+
+
+def test_an_asked_question_matches_through_punctuation_and_case():
+    """A click and its replayed text differ in whitespace and punctuation only."""
+    state = _med_state(TAPER_NOTE, rows=["Oxycodone SR", "Coumadin"], returned=1)
+    chips = followups.suggest(
+        "/meds", ANSWER, scope="patient_chart", state=state,
+        asked=["what is the DOSING and taper schedule for oxycodone sr at discharge"])
+    assert TAPER_CHIP not in chips
+
+
+def test_the_current_turn_advances_down_the_taxonomy_across_three_turns():
+    """Turn 1 → Turn 2 → Turn 3 consumes what was asked and keeps advancing."""
+    state = _med_state(TAPER_NOTE, rows=["Oxycodone SR", "Coumadin"], returned=1)
+
+    turn_1 = followups.suggest("/meds", ANSWER, scope="patient_chart", state=state)
+    turn_2 = followups.suggest("/meds", ANSWER, scope="patient_chart", state=state,
+                               asked=["/meds", *turn_1])
+    turn_3 = followups.suggest("/meds", ANSWER, scope="patient_chart", state=state,
+                               asked=["/meds", *turn_1, *turn_2])
+
+    for earlier, later in ((turn_1, turn_2), (turn_1 + turn_2, turn_3)):
+        assert not set(map(str.lower, later)) & set(map(str.lower, earlier)), (
+            f"repeat across turns: {later} vs {earlier}")
+    # Each turn advances: the second offers what the first did not, and once the
+    # taxonomy for this record is spent the row shrinks rather than repeating.
+    assert turn_2, "turn 2 offered nothing after three questions were asked"
+    assert len(set(turn_1) & set(turn_2)) == 0
+    assert len(turn_3) < len(turn_2)
+
+
+def test_a_thread_that_has_asked_everything_offers_nothing():
+    state = _med_state(TAPER_NOTE, rows=["Oxycodone SR", "Coumadin"], returned=1)
+    everything = followups._candidates(state=state, scope="patient_chart",
+                                       question="/meds", outpatient=False)
+    chips = followups.suggest("/meds", ANSWER, scope="patient_chart", state=state,
+                              asked=["/meds", *everything])
+    assert chips == []
+
+
+# ------------------------------------------------- Sprint 1: current turn first
+
+
+def test_the_current_turn_s_evidence_is_offered_before_replayed_evidence():
+    """A lab turn's own chip outranks the medication chips of the turn before it."""
+    state = {
+        "tool_calls": [{"name": "get_lab_trends", "response": {
+            "returned": 1, "trends": [_trend("RDW", 23.7, 11.5, 14.5,
+                                             unit="%", decimals=1)]}}],
+        "replayed_tool_calls": [{"name": "discharge_medications", "response": {
+            "returned": 1, "passages": [{"section": "discharge_medications",
+                                         "text": "Continue Coumadin 7 mg daily."}]}}],
+        "command": None,
+    }
+    chips = followups.suggest("what was abnormal?", ANSWER, scope="patient_chart",
+                              state=state)
+
+    assert chips[0].startswith("How does the abnormal discharge RDW")
+    # And the replayed chart fills the remaining slots rather than being ignored.
+    assert any("Coumadin" in chip for chip in chips[1:])
+    assert len(chips) >= 2
+
+
+def test_the_replayed_fallback_is_not_used_when_the_current_turn_fills_the_row():
+    state = _med_state(TAPER_NOTE, rows=["Oxycodone SR", "Coumadin"], returned=1)
+    state["replayed_tool_calls"] = [{"name": "get_lab_trends", "response": {
+        "returned": 1, "trends": [_trend("RDW", 23.7, 11.5, 14.5)]}}]
+
+    chips = followups.suggest("/meds", ANSWER, scope="patient_chart", state=state)
+    assert not any(chip.startswith("How does the abnormal") for chip in chips)
+
+
+# -------------------------------------------------- Sprint 1: literature isolation
+
+
+def _literature_state(articles: int, *, replayed: bool = True) -> dict:
+    state = {
+        "tool_calls": [{"name": "search_literature",
+                        "response": {"query": "pain control", "returned": articles,
+                                     "articles": [{"title": f"Trial {n}"}
+                                                  for n in range(articles)]}}],
+        "replayed_tool_calls": [],
+        "command": None,
+    }
+    if replayed:
+        state["replayed_tool_calls"] = [{
+            "name": "discharge_medications",
+            "response": {"returned": 1, "passages": [
+                {"section": "discharge_medications",
+                 "text": TAPER_NOTE}]},
+        }]
+    return state
+
+
+def test_a_literature_turn_with_no_articles_offers_nothing():
+    """Zero PubMed records is a turn with no follow-up — never the chart chips."""
+    chips = followups.suggest("how long do patients need pain meds after surgery?",
+                              ANSWER, scope="literature",
+                              state=_literature_state(0))
+    assert chips == []
+
+
+def test_a_literature_turn_never_falls_back_to_replayed_chart_calls():
+    chips = followups.suggest("how long do patients need pain meds after surgery?",
+                              ANSWER, scope="literature",
+                              state=_literature_state(2))
+
+    assert len(chips) == 1
+    assert "published literature" in chips[0]
+    assert not any("oxycodone" in chip or "Coumadin" in chip for chip in chips)
+
+
+def test_a_literature_turn_ignores_the_chart_even_when_it_is_in_the_same_turn():
+    state = _literature_state(1)
+    state["tool_calls"].append({"name": "discharge_medications", "response": {
+        "returned": 1, "passages": [{"section": "discharge_medications",
+                                     "text": TAPER_NOTE}]}})
+    chips = followups.suggest("/pubmed pain control", ANSWER, scope="literature",
+                              state=state)
+
+    assert all("published literature" in chip for chip in chips)

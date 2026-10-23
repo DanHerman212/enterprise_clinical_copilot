@@ -17,6 +17,7 @@ import os
 import re
 import time
 import uuid
+from collections.abc import Sequence
 from typing import Callable
 
 from starlette.applications import Starlette
@@ -196,6 +197,19 @@ async def _unserved_admission(parsed: dict, trace: str) -> dict | None:
     return payload
 
 
+def _asked_questions(parsed: dict) -> list[str]:
+    """Every question this thread has already put to the service, in order.
+
+    The replayed turns are the caller's own transcript, and they are the only record of
+    what was asked: the follow-up row a reader has clicked is a question in that list,
+    so a chip matching one of them has already been used up.
+    """
+    asked = [str(turn.get("question") or "") for turn in parsed.get("turns") or []
+             if isinstance(turn, dict)]
+    asked.append(str(parsed.get("question") or ""))
+    return [question for question in asked if question.strip()]
+
+
 def _refusal_trace_metadata(parsed: dict) -> dict:
     """Trace attributes for a turn that was refused before any work ran.
 
@@ -325,7 +339,7 @@ def _response_fields(state: dict) -> dict:
 
 async def _compose_success(
     question: str, state: dict, trace: str, *, want_follow_ups: bool = False,
-    outpatient: bool = False,
+    outpatient: bool = False, asked: Sequence[str] = (),
 ) -> dict:
     """Guard the answer, compose the presentation, validate the payload.
 
@@ -447,6 +461,9 @@ async def _compose_success(
             scope=presentation.get("scope"),
             state=state,
             outpatient=outpatient,
+            # Every question already asked in this thread, so a chip the reader has
+            # just clicked is consumed rather than offered back.
+            asked=asked,
         )
         if want_follow_ups
         else []
@@ -718,6 +735,7 @@ async def ask_route(request: Request) -> JSONResponse:
             parsed["question"], state, trace,
             want_follow_ups=parsed.get("follow_ups") is True,
             outpatient=parsed.get("hadm_id") in routing.OUTPATIENT_HADM_IDS,
+            asked=_asked_questions(parsed),
         )
     except AgentAnswerUnavailable as exc:
         # The record says which of the three it was, in the code and in the
@@ -975,6 +993,7 @@ async def _stream_chain(
                 parsed["question"], state, trace,
                 want_follow_ups=parsed.get("follow_ups") is True,
                 outpatient=parsed.get("hadm_id") in routing.OUTPATIENT_HADM_IDS,
+                asked=_asked_questions(parsed),
             )
         except AgentAnswerUnavailable as exc:
             log.record(

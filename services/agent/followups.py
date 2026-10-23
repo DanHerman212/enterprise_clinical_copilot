@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Sequence
 from typing import Any
 
 from services.agent import routing
@@ -371,7 +372,9 @@ def _candidates(*, state: dict[str, Any], scope: str | None, question: str,
 
     if scope == "literature":
         # A literature turn has no chart signals by construction; the only honest next
-        # question is about the published evidence itself.
+        # question is about the published evidence itself, and only when the search
+        # actually returned something. `None` means "no articles", which is a turn with
+        # nothing to follow up on — never a reason to fall back to the chart.
         topic = re.sub(r"^\s*(?:/pubmed|pubmed)\s*", "", question or "",
                        flags=re.I).strip(" ?.")
         chip = _filled(_LITERATURE, topic=topic[:120])
@@ -468,6 +471,72 @@ def _routable(chip: str, scope: str | None) -> bool:
     return not routing.asks_for_literature(chip)
 
 
+def _fingerprint(text: str) -> str:
+    """A question reduced to what it asks, for comparison with what was asked.
+
+    Case, punctuation and whitespace carry no meaning here: a chip the user clicked and
+    the question the client replays are the same question even when one has a trailing
+    question mark and the other does not.
+    """
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", str(text or "").casefold()).split())
+
+
+def _view(state: dict[str, Any], *, replayed: bool) -> dict[str, Any]:
+    """This turn's state, optionally with the earlier turns' tool calls.
+
+    The two are read separately because they answer different questions. This turn's
+    calls say what the answer just established; the replayed ones say what the
+    conversation already covered, and a chip is only worth offering about the latter
+    once the former is exhausted.
+    """
+    return {
+        "tool_calls": state.get("tool_calls") or [],
+        "replayed_tool_calls": (state.get("replayed_tool_calls") or []) if replayed else [],
+        "command": state.get("command"),
+        "command_payload": state.get("command_payload"),
+    }
+
+
+def _literature_articles(state: dict[str, Any]) -> int:
+    """How many articles this turn's own literature search returned."""
+    total = 0
+    for response in _responses(state, "search_literature"):
+        articles = response.get("articles")
+        if isinstance(articles, list):
+            total += len(articles)
+    return total
+
+
+def _fit(chips: list[str], *, asked: set[str], scope: str | None,
+         taken: list[str]) -> list[str]:
+    """The chips that can be offered, on top of the ones already taken.
+
+    Four filters, in the order that makes a rejection explainable: an identical chip
+    once, a question the thread has already asked never, the row cap, and the
+    literature veto. `asked` is fingerprinted so a click and its replayed text match.
+    """
+    kept = list(taken)
+    seen = {_fingerprint(chip) for chip in taken}
+    for chip in _distinct(chips):
+        if len(kept) >= FOLLOW_UP_COUNT:
+            break
+        fingerprint = _fingerprint(chip)
+        if fingerprint in seen:
+            continue
+        if fingerprint in asked:
+            logger.info("follow-up chip dropped: already asked in this thread")
+            continue
+        if len(chip) > _MAX_QUESTION_CHARS:
+            logger.info("follow-up chip dropped: %s characters", len(chip))
+            continue
+        if not _routable(chip, scope):
+            logger.info("follow-up chip dropped: it would route to the literature")
+            continue
+        seen.add(fingerprint)
+        kept.append(chip)
+    return kept
+
+
 def _distinct(chips: list[str]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
@@ -488,6 +557,7 @@ def suggest(
     scope: str | None = None,
     state: dict[str, Any] | None = None,
     outpatient: bool = False,
+    asked: Sequence[str] = (),
 ) -> list[str]:
     """Up to `FOLLOW_UP_COUNT` chips for this turn, chosen from the record.
 
@@ -498,21 +568,38 @@ def suggest(
     An empty answer yields no chips. That is what keeps `/risk` — which answers in a
     widget and carries no prose — from offering follow-ups on a turn whose answer text
     does not exist.
+
+    `asked` is every question already put to the service in this thread, this turn's
+    included. A chip that matches one of them is not offered: clicking the taper chip
+    used to re-render the taper chip, so the row repeated itself instead of advancing
+    (measured in the production UI, `agent-00173-9pv`, 2026-10-23).
+
+    A literature turn is answered from this turn's own search or not at all. It is never
+    filled from the chart: a PubMed turn that found nothing is a turn with no follow-up,
+    and reusing the replayed `/ehr` calls made it offer the chart chips it had just
+    replaced.
     """
     if not str(answer or "").strip():
         return []
 
-    chips = _candidates(state=state or {}, scope=scope,
-                        question=question, outpatient=outpatient)
-    kept: list[str] = []
-    for chip in _distinct(chips):
-        if len(chip) > _MAX_QUESTION_CHARS:
-            logger.info("follow-up chip dropped: %s characters", len(chip))
-            continue
-        if not _routable(chip, scope):
-            logger.info("follow-up chip dropped: it would route to the literature")
-            continue
-        kept.append(chip)
-        if len(kept) >= FOLLOW_UP_COUNT:
-            break
-    return kept
+    state = state or {}
+    asks = {_fingerprint(item) for item in (*asked, question) if str(item or "").strip()}
+
+    if scope == "literature":
+        if not _literature_articles(state):
+            # Nothing was found, so there is nothing to ask next about the evidence.
+            return []
+        return _fit(_candidates(state=_view(state, replayed=False), scope=scope,
+                                question=question, outpatient=outpatient),
+                    asked=asks, scope=scope, taken=[])
+
+    # This turn first: what the answer just established is the most useful thing to ask
+    # about next. The earlier turns are the fallback, not the starting point.
+    chips = _fit(_candidates(state=_view(state, replayed=False), scope=scope,
+                             question=question, outpatient=outpatient),
+                 asked=asks, scope=scope, taken=[])
+    if len(chips) < FOLLOW_UP_COUNT:
+        chips = _fit(_candidates(state=_view(state, replayed=True), scope=scope,
+                                 question=question, outpatient=outpatient),
+                     asked=asks, scope=scope, taken=chips)
+    return chips

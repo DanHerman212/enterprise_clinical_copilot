@@ -70,12 +70,14 @@ class _Model:
     def __init__(self, reply: str = ANSWER) -> None:
         self.reply = reply
         self.calls = 0
+        self.seen: list[list] = []
 
     def bind_tools(self, *args, **kwargs):  # pragma: no cover - must not run
         raise AssertionError("the formatting turn was given tools")
 
     async def ainvoke(self, messages, config=None):
         self.calls += 1
+        self.seen.append(list(messages))
         from langchain_core.messages import AIMessage
 
         return AIMessage(content=self.reply)
@@ -170,20 +172,36 @@ def test_the_formatter_is_told_to_cite_the_passage_not_the_section_position():
     assert "not the position of the section you are writing" in routing.EHR_FORMATTING
 
 
-def test_ordering_a_non_summary_call_is_a_no_op():
-    recorded = [{"name": "rag_search",
-                 "response": {"passages": [{"section": "zeta"}, {"section": "alpha"}]}}]
-    deterministic._order_summary_passages(recorded)
+def test_the_payload_hook_leaves_an_unnamed_section_alone():
+    payload = {"passages": [{"section": "zeta"}, {"section": "alpha"}]}
+    ordered = deterministic._ordered_summary_payload("rag_search", payload)
 
-    assert [p["section"] for p in recorded[0]["response"]["passages"]] == ["zeta", "alpha"]
+    assert [p["section"] for p in ordered["passages"]] == ["zeta", "alpha"]
 
 
 def test_a_response_without_sections_is_untouched():
-    recorded = [{"name": "rag_search", "response": {"passages": [{"text": "no section"}]}}]
-    before = list(recorded[0]["response"]["passages"])
-    deterministic._order_summary_passages(recorded)
+    payload = {"passages": [{"text": "no section"}, {"text": "also none"}]}
+    assert deterministic._ordered_summary_payload("rag_search", payload) is payload
 
-    assert recorded[0]["response"]["passages"] == before
+
+def test_the_formatter_reads_the_same_order_the_citation_layer_numbers():
+    """The regression this fix exists for.
+
+    Reordering the recorded payload alone left the model reading retrieval order while
+    the envelope numbered canonically, so `^[3]` still resolved to the wrong section —
+    in the other direction. The ordering has to happen before the tool result the model
+    is shown is rendered.
+    """
+    state, _, model = _run()
+    shown = model.seen[0][-1].content
+
+    positions = [shown.index(section) for section in SUMMARY_SECTIONS]
+    assert positions == sorted(positions), (
+        "the formatter was shown the sections out of canonical order")
+    recorded = [p["section"]
+                for call in state["tool_calls"]
+                for p in (call.get("response") or {}).get("passages") or []]
+    assert recorded == list(SUMMARY_SECTIONS)
 
 
 def test_tf8_prohibits_a_closing_vigilance_sentence():

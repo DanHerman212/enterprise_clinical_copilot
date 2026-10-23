@@ -446,6 +446,7 @@ async def _execute_tool_calls(
     guard: Callable[[str, dict], dict | None] | None = None,
     already_called: list[dict] | None = None,
     traced: bool = False,
+    order: Callable[[str, dict], dict] | None = None,
 ) -> tuple[list[BaseMessage], list[RecordedToolCall]]:
     """Run one turn's tool calls, refusing those beyond the per-turn budget.
 
@@ -535,6 +536,12 @@ async def _execute_tool_calls(
                 # ran: a refused call announces nothing, result included (rule 3).
                 _emit(on_event, stages.result_event(call["name"], payload))
         done.add(key)
+        # `order` rewrites the payload BEFORE the model is shown it and before it is
+        # recorded, so one order governs both. Doing it afterwards reordered the
+        # citation layer while the formatter kept reading retrieval order, and the
+        # markers stayed crossed in the other direction (TF-7, measured 2026-10-23).
+        if order is not None and isinstance(payload, dict):
+            payload = order(call["name"], payload)
         recorded.append(validate_recorded_tool_call({
             "name": call["name"], "args": arguments, "response": payload,
         }))

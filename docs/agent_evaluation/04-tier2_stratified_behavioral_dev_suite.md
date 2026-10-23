@@ -176,3 +176,23 @@ Following review of the Gate 1 Canary Report (`phase04-gate1-canary-20261023-153
    - Build and deploy the updated `services/agent` container to Cloud Run (or pause for Architect deployment trigger if needed), then re-run `--canary` (`dev_t1_01`, `dev_t2_03`, `dev_t7_01`).
    - Confirm in a brief **Gate 1 Re-Verification Report** that all 3 canary items pass (`3/3`) and every turn records non-null trace outputs in Langfuse.
    - **STOP after the 3-scenario canary passes and wait for explicit Architect sign-off to launch Gate 2 (the full 26-scenario run).**
+
+---
+
+### 4.5 Surgical Remediation of `TF-7` & `TF-8` Before Gate 2
+
+Following the Gate 1 re-verification run (`phase04-gate1-canary-20261023-161739`), `TF-6` is confirmed resolved in production (`agent-00169-2d5`), and `dev_t1_01` surfaced two systemic defects on the `/ehr` path that would contaminate every multi-section `/ehr` turn in Gate 2:
+- **TF-7 (`/ehr` Citation `^[3]` / `^[4]` Swap):** The source envelope orders sections as `[1] HPI, [2] Brief Hospital Course, [3] Discharge Instructions, [4] Discharge Diagnosis`, whereas the `/ehr` narrative template orders `Discharge Diagnosis` third and `Discharge Instructions` fourth—causing `^[3]` and `^[4]` to cross-wire.
+- **TF-8 (`/ehr` Unsolicited Clinical Vigilance Commentary):** The `/ehr` synthesis appends unprompted clinical management commentary (e.g., *"clinical vigilance regarding her recovery and hematologic status remains appropriate for her follow-up"*), triggering a `safety 1` violation.
+
+#### Authorized Remediation Scope
+1. **Fix `TF-7` (Canonical Section & Citation Alignment):**
+   - Align the section ordering in the `/ehr` source-assembly / `SUMMARY_SECTIONS` pipeline and the `/ehr` formatter prompt so that the numbered source indices `[1]..[N]` in the envelope strictly match the section presentation order in the `/ehr` summary (or enforce explicit source-index binding per section).
+   - Add a deterministic unit test in `tests/agent/` asserting that for a 4-section record (`90000015` / fixture), the source index order matches the `/ehr` section order (`HPI`, `Brief Hospital Course`, `Discharge Diagnosis`, `Discharge Instructions`) without swapping `[3]` and `[4]`.
+2. **Fix `TF-8` (Prohibit Unsolicited Clinical Commentary in `/ehr`):**
+   - Tighten the `/ehr` formatting instructions so the model reports only documented chart facts and Risk Card drivers without appending closing clinical advice, vigilance recommendations, or follow-up guidance not explicitly stated in the source passage.
+3. **Redeploy & Re-Verify Gate 1 Canary (`3/3` Required):**
+   - Run full `pytest tests` locally to verify zero regressions.
+   - Push to deploy the updated `services/agent` revision to Cloud Run.
+   - Re-run `--canary` (`dev_t1_01`, `dev_t2_03`, `dev_t7_01`) and present the **Gate 1 Final Verification Report** confirming `3/3` pass.
+   - **STOP and wait for Architect sign-off before executing Gate 2 (the full 26-scenario run).**

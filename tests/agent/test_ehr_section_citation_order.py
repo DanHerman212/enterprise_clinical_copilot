@@ -169,7 +169,29 @@ def test_the_ordering_is_scoped_to_the_summary_command():
 
 
 def test_the_formatter_is_told_to_cite_the_passage_not_the_section_position():
-    assert "not the position of the section you are writing" in routing.EHR_FORMATTING
+    # One assertion per line of the instruction, because the prose wraps and a
+    # substring that spans a wrap asserts nothing.
+    assert "position of the section you are writing" in routing.EHR_FORMATTING
+    assert "carries a `cite` value" in routing.EHR_FORMATTING
+
+
+def test_each_passage_carries_the_number_its_marker_must_use():
+    """The label that removes the counting step, and the reason TF-7 took two attempts.
+
+    The model used to read an unlabelled array and count positions; on a four-section
+    summary it put `^[3]` on the instructions and `^[4]` on the diagnosis, both of which
+    begin with "discharge". The rendered view now states the number.
+    """
+    from services.agent.graph import _render_tool_result  # noqa: PLC0415
+
+    rendered = _render_tool_result({"passages": [{"section": "a"}, {"section": "b"},
+                                                 {"section": "c"}]})
+    assert [entry["cite"] for entry in __import__("json").loads(rendered)["passages"]] \
+        == [1, 2, 3]
+    # And the payload the citation layer resolves against is untouched.
+    payload = {"passages": [{"section": "a"}, {"section": "b"}]}
+    _render_tool_result(payload)
+    assert all("cite" not in passage for passage in payload["passages"])
 
 
 def test_the_payload_hook_leaves_an_unnamed_section_alone():

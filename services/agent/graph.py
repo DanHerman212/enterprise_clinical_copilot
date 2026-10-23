@@ -183,9 +183,18 @@ def _render_tool_result(payload: Any) -> str:
     rendered = payload
     passages = payload.get("passages") if isinstance(payload, dict) else None
     if isinstance(passages, list):
+        # Each passage carries the number its citation marker must use. The model was
+        # previously handed an unlabelled array and had to count positions to emit
+        # `^[n]`, and on a four-section summary it counted wrong: `^[3]` went to the
+        # discharge instructions and `^[4]` to the discharge diagnosis, both of which
+        # begin with "discharge" (TF-7, measured 2026-10-23). The number is now given
+        # rather than inferred, and the positions the citation layer resolves against
+        # are the same numbers.
         rendered = dict(payload, passages=[
-            _render_passage(passage) if isinstance(passage, dict) else passage
-            for passage in passages
+            ({**(_render_passage(passage) if isinstance(passage, dict) else {}),
+              "cite": index})
+            if isinstance(passage, dict) else passage
+            for index, passage in enumerate(passages, start=1)
         ])
     return _escape_delimiter(json.dumps(rendered, ensure_ascii=False))
 

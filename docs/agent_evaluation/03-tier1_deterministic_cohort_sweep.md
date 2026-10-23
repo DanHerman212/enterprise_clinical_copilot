@@ -89,6 +89,41 @@ Add parametrized, zero-LLM tests across `INPATIENT_HADM_IDS` (82) and `OUTPATIEN
 3. **STOP and wait for Architect sign-off before proceeding to Section 4 (Cohort Provenance Inventory).**
 
 ---
+## Section 4: Ground-Truth Cohort Provenance Inventory (Dev & Holdout Selection)
+
+### 4.1 Objective
+Generate a factual, zero-LLM **Cohort Provenance Inventory** from the underlying data store to:
+1. Verify the exact chart contents of the **6 Dev Patient Archetypes** listed in Section 3 of the Master Strategy (`90000015`, `90000108`, `90000106`, `90000105`, `90000023`, and outpatients `90000051` / `90000073`).
+2. Identify **4 Unseen Holdout Patient Candidates** from the remaining inpatient pool (plus 1 holdout outpatient from `90000028`, `90000040`, `90000054`) that mirror the structural phenotypes of the Dev cohort without overlapping IDs.
+
+### 4.2 Inventory Generation (`evaluation/cohort_provenance_inventory.json` & Summary Report)
+Write a read-only inspection script or test helper (reusing the concurrency-6 transport settings from Section 3) that extracts and saves the ground-truth profile for the 6 Dev patients and scans the cohort to recommend 4 Holdout inpatient matches:
+
+For each candidate record, capture:
+1. **Demographics & Manifest (`get_admission_profile`):** `age`, `gender`, `discharge_location`, length of stay / prior inpatient days, and oncology flag/history.
+2. **Readmission Risk (`predict_readmission`):** Risk score/probability, decision tier, and top 5 feature drivers (`name`, `contribution`, `direction`, and underlying feature value).
+3. **Discharge Medications (`discharge_medications`):** Whether the consolidated `discharge_medications` passage is empty or populated, character length, and raw snippet of the medication text (noting tapers, anticoagulants, or empty sections).
+4. **Laboratory Trends (`get_lab_trends`):** Total lab panels returned, count of abnormal discharge flags vs. normal flags, any analytes with `decimals > 0`, and top abnormal labs at discharge.
+5. **Clinical Note Sections (`rag_search_sections`):** List of available section keys returned (and whether it is one of the 3 heading-less notes from TF-2: `90000026`, `90000033`, `90000087`).
+
+### 4.3 Specific Provenance Checks to Report
+1. **Verify the 6 Dev Patients:** Confirm whether the actual database contents of `90000015`, `90000108`, `90000106`, `90000105`, and `90000023` match their Master Strategy archetype descriptions, and report any discrepancies.
+2. **Recommend 4 Holdout Inpatients + 1 Holdout Outpatient:** From the remaining served records, identify 4 inpatient `hadm_id`s (and 1 outpatient `hadm_id`) that provide clean structural counterparts for Phase 05 Blind Holdout testing:
+   - **Holdout Archetype 1:** Complex inpatient with rich discharge medications / tapers.
+   - **Holdout Archetype 2:** High-risk inpatient with oncology history & abnormal labs.
+   - **Holdout Archetype 3:** Inpatient with empty/minimal discharge medications OR all-normal discharge labs.
+   - **Holdout Archetype 4:** Inpatient with irregular/sparse note sections (e.g., one of `90000026`, `90000033`, `90000087` or similar structural edge case).
+   - **Holdout Archetype 5 (Outpatient Boundary):** One of `90000028`, `90000040`, or `90000054` (outpatient with note sections present per TF-3).
+
+### 4.4 Execution & Deliverable for Phase 03 Completion
+1. Generate the inventory artifact under `evaluation/` and ensure zero LLM calls are made.
+2. Present a clear **Section 4 Provenance & Archetype Report** in chat summarizing:
+   - The verified ground-truth profile of each of the 6 Dev patients.
+   - The recommended 4 Holdout inpatient IDs (+ 1 Holdout outpatient ID) and their factual profiles.
+   - Final `git status` check confirming `services/agent/`, `services/mcp/`, and `danielmherman` remain untouched.
+3. **STOP and wait for Architect sign-off to close Phase 03.**
+
+---
 
 ## Tracked Findings (remediation deferred — logged for Architect review after Phase 03)
 

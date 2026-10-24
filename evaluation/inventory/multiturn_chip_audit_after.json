@@ -1,0 +1,1346 @@
+{
+  "90000015:/ehr": {
+    "rows": [
+      {
+        "record": 90000015,
+        "turn_1_cmd": "/ehr",
+        "chip": "What is the dosing and taper schedule for oxycodone SR at discharge?",
+        "turn_2_tools": "discharge_medications",
+        "turn_2_answer": "The discharge instructions specify that the patient is to take oxycodone SR 20 mg orally every 12 hours for five days, followed by a decrease to oxycodone SR 10 mg orally every 12 hours for five days ^[1].",
+        "turn_2_sources": 1,
+        "turn_2_verified": true,
+        "turn_2_follow_ups": [
+          "What is the discharge dosing and monitoring plan for Coumadin?",
+          "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+          "Why does admission type increase this patient's readmission risk driver?"
+        ],
+        "turn_2_status": 200,
+        "verdict": "GOOD",
+        "reason": ""
+      },
+      {
+        "record": 90000015,
+        "turn_1_cmd": "/ehr",
+        "chip": "What is the discharge dosing and monitoring plan for Coumadin?",
+        "turn_2_tools": "discharge_medications",
+        "turn_2_answer": "The discharge plan records that the patient is to take Coumadin 7 mg daily for 30 days ^[1]. The dose is to be adjusted based on INR results, which are to be obtained every Monday and Thursday and sent to Dr. A ^[1]. An additional INR was s\u2026",
+        "turn_2_sources": 1,
+        "turn_2_verified": true,
+        "turn_2_follow_ups": [
+          "What is the dosing and taper schedule for oxycodone SR at discharge?",
+          "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+          "Why does admission type increase this patient's readmission risk driver?"
+        ],
+        "turn_2_status": 200,
+        "verdict": "GOOD",
+        "reason": ""
+      },
+      {
+        "record": 90000015,
+        "turn_1_cmd": "/ehr",
+        "chip": "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+        "turn_2_tools": "rag_search, rag_search, rag_search, discharge_medications, rag_search",
+        "turn_2_answer": "The discharge instructions for this admission specify a follow-up appointment with the patient's surgeon, Dr. A, on 09/21/2007 at noon at his office ^[1]. The patient is also encouraged to follow up with her primary care physician, Dr. B ^[\u2026",
+        "turn_2_sources": 1,
+        "turn_2_verified": true,
+        "turn_2_follow_ups": [
+          "What is the dosing and taper schedule for oxycodone SR at discharge?",
+          "What is the discharge dosing and monitoring plan for Coumadin?",
+          "What were the primary diagnosis and hospital course documented in the clinical note?"
+        ],
+        "turn_2_status": 200,
+        "verdict": "GOOD",
+        "reason": ""
+      }
+    ],
+    "progression": {
+      "record": 90000015,
+      "turn_1_cmd": "/ehr",
+      "turn_1_follow_ups": [
+        "What is the dosing and taper schedule for oxycodone SR at discharge?",
+        "What is the discharge dosing and monitoring plan for Coumadin?",
+        "What outpatient follow-up appointments or clinic visits are scheduled after discharge?"
+      ],
+      "turns": [
+        {
+          "question": "What is the dosing and taper schedule for oxycodone SR at discharge?",
+          "follow_ups": [
+            "What is the discharge dosing and monitoring plan for Coumadin?",
+            "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+            "Why does admission type increase this patient's readmission risk driver?"
+          ]
+        },
+        {
+          "question": "What is the discharge dosing and monitoring plan for Coumadin?",
+          "follow_ups": [
+            "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+            "What were the primary diagnosis and hospital course documented in the clinical note?",
+            "Why does admission type increase this patient's readmission risk driver?"
+          ]
+        }
+      ]
+    },
+    "turn_1": {
+      "status": 200,
+      "answer": "**Hospital course.** The patient was admitted to the transitional care unit for rehabilitation following a right total knee replacement ^[1]. During this admission, she underwent physical and occupational therapy ^[2]. She was instructed on the use of a continuous passive motion machine, though early overuse resulted in increased knee pain and a requirement for additional pain management ^[2]. She was discharged on 09/03/2007 in stable and improved condition ^[3].\n\n**Discharge diagnosis.** The diagnoses include status post right total knee replacement secondary to degenerative joint disease, anxiety disorder, insomnia secondary to pain and anxiety, postoperative constipation, contact dermatitis, hypertension, hypothyroidism, gastroesophageal reflux disease, bilateral Morton neuroma, and a history of migraine headaches ^[4].\n\n**Discharge instructions.** The patient is scheduled for a follow-up appointment with her surgeon on 09/21/2007 and is encouraged to follow up with her primary care physician ^[3].\n\n**Readmission risk & trajectory.** The patient's readmission risk is 9.0%, which is below the 11.0% threshold. The risk is influenced by several factors: the lowest monocyte count, prior inpatient days, and oncology history act as factors that decrease the risk, while the admission type and red cell distribution width (RDW) are factors that increase the risk.",
+      "verified": true,
+      "scope": "patient_chart",
+      "sources": [
+        {
+          "cite": 1,
+          "section": "history_of_present_illness",
+          "text": "The patient is a 61-year-old white female status post right total knee replacement secondary to degenerative joint disease performed by Dr. A at ABCD Hospital on 08/21/2007. The patient was transfused with 2 units of autologous blood postoperatively. She received DVT prophylaxis with a combination of Coumadin, Lovenox, SCD boots, and TED stockings. The remainder of her postoperative course was uneventful. She was discharged on 08/24/2007 from ABCD Hospital and admitted to the transitional care unit at XYZ Services for evaluation and rehabilitation. The patient reports that her last bowel movement was on 08/24/2007 just prior to her discharge from ABCD Hospital. She denies any urological symptoms such as dysuria, incomplete bladder emptying or other voiding difficulties. She reports having some right knee pain, which is most intense at a \"certain position.\" The patient is unable to elaborate on which \"certain position\" causes her the most discomfort.",
+          "query": "discharge notes"
+        },
+        {
+          "cite": 2,
+          "section": "brief_hospital_course",
+          "text": "As mentioned above, the patient was admitted on 08/24/2007 to the Transitional Care Unit at XYZ Services for evaluation and rehabilitation. She was seen in consultation by Physical Therapy and Occupational Therapy and had begun her rehabilitation till recovery. The patient had been properly instructed regarding using the CPM machine and she had been instructed as well to limit each CPM session to two hours. Very early in her hospitalization, the patient enthusiastically used the CPM much longer than two hours and consequently had increased right knee pain. She remarked that she had a better degree of flexibility, but she did report an increased need for pain management.",
+          "query": "discharge notes"
+        },
+        {
+          "cite": 3,
+          "section": "discharge_instructions",
+          "text": "The patient is advised to continue taking the following medications: Celebrex 200 mg daily, for one month, Colace 100 mg b.i.d. for one month, Protonix 40 mg b.i.d. for one month, Synthroid 137 mcg daily, Diprosone cream 0.05% cream b.i.d. to the right arm and right abdomen, oxycodone SR 20 mg p.o. q.12h. for five days, then decrease to oxycodone SR 10 mg p.o. q.12h. for five days, Percocet 5/325 mg one to two tablets q.6h. to be used p.r.n. for breakthrough pain, trazodone 50 mg p.o. at bedtime p.r.n. for two weeks, Ativan 0.25 mg b.i.d. for two weeks, and Toprol-XL 50 mg daily. The patient will also take Coumadin and the dose will be adjusted according to the INRs, which will be obtained every Monday and Thursday with results being sent to Dr. A and his fax number is 831-5926. At the present time, the patient is taking Coumadin 7 mg daily. She will remain on Coumadin for 30 days. An INR is to be obtained on 09/03/2007 and should the Coumadin dose be changed, an addendum will be dictated to accompany this discharge summary. Finally, the patient has a followup appointment with Dr. A on 09/21/2007 at noon at his office. The patient is encouraged to follow up with her primary care physician, Dr. B. As mentioned above, the patient will be discharged on 09/03/2007 in stable and improved condition since she is status post right total knee replacement and has made good progress with her therapies and rehabilitation.",
+          "query": "discharge notes"
+        },
+        {
+          "cite": 4,
+          "section": "discharge_diagnosis",
+          "text": "1. Status post right total knee replacement secondary to degenerative joint disease performed on 08/21/2007.\n2. Anxiety disorder.\n3. Insomnia secondary to pain and anxiety postoperatively.\n4. Postoperative constipation.\n5. Contact dermatitis secondary to preoperative gardening activities.\n6. Hypertension.\n\n7. Hypothyroidism.\n8. Gastroesophageal reflux disease.\n9. Morton neuroma of the feet bilaterally.\n10. Distant history of migraine headaches.",
+          "query": "discharge notes"
+        }
+      ],
+      "follow_ups": [
+        "What is the dosing and taper schedule for oxycodone SR at discharge?",
+        "What is the discharge dosing and monitoring plan for Coumadin?",
+        "What outpatient follow-up appointments or clinic visits are scheduled after discharge?"
+      ],
+      "tool_calls": [
+        {
+          "name": "rag_search_sections",
+          "args": {
+            "hadm_id": 90000015
+          },
+          "response": {
+            "hadm_id": 90000015,
+            "query": "discharge notes",
+            "returned": 4,
+            "passages": [
+              {
+                "id": "MT-2788-DS_history_of_present_illness_1",
+                "section": "history_of_present_illness",
+                "text": "The patient is a 61-year-old white female status post right total knee replacement secondary to degenerative joint disease performed by Dr. A at ABCD Hospital on 08/21/2007. The patient was transfused with 2 units of autologous blood postoperatively. She received DVT prophylaxis with a combination of Coumadin, Lovenox, SCD boots, and TED stockings. The remainder of her postoperative course was uneventful. She was discharged on 08/24/2007 from ABCD Hospital and admitted to the transitional care unit at XYZ Services for evaluation and rehabilitation. The patient reports that her last bowel movement was on 08/24/2007 just prior to her discharge from ABCD Hospital. She denies any urological symptoms such as dysuria, incomplete bladder emptying or other voiding difficulties. She reports having some right knee pain, which is most intense at a \"certain position.\" The patient is unable to elaborate on which \"certain position\" causes her the most discomfort.",
+                "retrieval": "deterministic"
+              },
+              {
+                "id": "MT-2788-DS_brief_hospital_course_1",
+                "section": "brief_hospital_course",
+                "text": "As mentioned above, the patient was admitted on 08/24/2007 to the Transitional Care Unit at XYZ Services for evaluation and rehabilitation. She was seen in consultation by Physical Therapy and Occupational Therapy and had begun her rehabilitation till recovery. The patient had been properly instructed regarding using the CPM machine and she had been instructed as well to limit each CPM session to two hours. Very early in her hospitalization, the patient enthusiastically used the CPM much longer than two hours and consequently had increased right knee pain. She remarked that she had a better degree of flexibility, but she did report an increased need for pain management.",
+                "retrieval": "deterministic"
+              },
+              {
+                "id": "MT-2788-DS_discharge_diagnosis_1",
+                "section": "discharge_diagnosis",
+                "text": "1. Status post right total knee replacement secondary to degenerative joint disease performed on 08/21/2007.\n2. Anxiety disorder.\n3. Insomnia secondary to pain and anxiety postoperatively.\n4. Postoperative constipation.\n5. Contact dermatitis secondary to preoperative gardening activities.\n6. Hypertension.\n\n7. Hypothyroidism.\n8. Gastroesophageal reflux disease.\n9. Morton neuroma of the feet bilaterally.\n10. Distant history of migraine headaches.",
+                "retrieval": "deterministic"
+              },
+              {
+                "id": "MT-2788-DS_discharge_instructions_1",
+                "section": "discharge_instructions",
+                "text": "The patient is advised to continue taking the following medications: Celebrex 200 mg daily, for one month, Colace 100 mg b.i.d. for one month, Protonix 40 mg b.i.d. for one month, Synthroid 137 mcg daily, Diprosone cream 0.05% cream b.i.d. to the right arm and right abdomen, oxycodone SR 20 mg p.o. q.12h. for five days, then decrease to oxycodone SR 10 mg p.o. q.12h. for five days, Percocet 5/325 mg one to two tablets q.6h. to be used p.r.n. for breakthrough pain, trazodone 50 mg p.o. at bedtime p.r.n. for two weeks, Ativan 0.25 mg b.i.d. for two weeks, and Toprol-XL 50 mg daily. The patient will also take Coumadin and the dose will be adjusted according to the INRs, which will be obtained every Monday and Thursday with results being sent to Dr. A and his fax number is 831-5926. At the present time, the patient is taking Coumadin 7 mg daily. She will remain on Coumadin for 30 days. An INR is to be obtained on 09/03/2007 and should the Coumadin dose be changed, an addendum will be dictated to accompany this discharge summary. Finally, the patient has a followup appointment with Dr. A on 09/21/2007 at noon at his office. The patient is encouraged to follow up with her primary care physician, Dr. B. As mentioned above, the patient will be discharged on 09/03/2007 in stable and improved condition since she is status post right total knee replacement and has made good progress with her therapies and rehabilitation.",
+                "retrieval": "deterministic"
+              }
+            ]
+          },
+          "derivable": true
+        },
+        {
+          "name": "predict_readmission",
+          "args": {
+            "hadm_id": 90000015
+          },
+          "response": {
+            "hadm_id": 90000015,
+            "probability": 0.090459,
+            "threshold": 0.11,
+            "decision": 0,
+            "base_value": -1.767608,
+            "top_factors": [
+              {
+                "feature": "monocytes_min",
+                "contribution": -0.5138,
+                "direction": "decreases"
+              },
+              {
+                "feature": "prior_inpatient_days",
+                "contribution": -0.1544,
+                "direction": "decreases"
+              },
+              {
+                "feature": "oncology_flag",
+                "contribution": -0.1178,
+                "direction": "decreases"
+              },
+              {
+                "feature": "admission_type",
+                "contribution": 0.1121,
+                "direction": "increases"
+              },
+              {
+                "feature": "rdw_max",
+                "contribution": 0.0709,
+                "direction": "increases"
+              }
+            ],
+            "model_version": "readmission-final-20260917173317",
+            "feature_source": "bigquery"
+          },
+          "derivable": false
+        }
+      ],
+      "guardrail_flags": [
+        "citation_out_of_range:^5"
+      ],
+      "error": null
+    }
+  },
+  "90000015:/meds": {
+    "rows": [
+      {
+        "record": 90000015,
+        "turn_1_cmd": "/meds",
+        "chip": "What is the dosing and taper schedule for oxycodone SR at discharge?",
+        "turn_2_tools": "rag_search_sections, rag_search, rag_search, rag_search_sections, rag_search_sections",
+        "turn_2_answer": "The discharge instructions for this admission specify that the patient is to take oxycodone SR 20 mg orally every 12 hours for five days, followed by a decrease to 10 mg orally every 12 hours for five days ^[1].",
+        "turn_2_sources": 1,
+        "turn_2_verified": true,
+        "turn_2_follow_ups": [
+          "What is the discharge dosing and monitoring plan for Coumadin?",
+          "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+          "What were the primary diagnosis and hospital course documented in the clinical note?"
+        ],
+        "turn_2_status": 200,
+        "verdict": "GOOD",
+        "reason": ""
+      },
+      {
+        "record": 90000015,
+        "turn_1_cmd": "/meds",
+        "chip": "What is the discharge dosing and monitoring plan for Coumadin?",
+        "turn_2_tools": "rag_search, rag_search, rag_search, rag_search, rag_search",
+        "turn_2_answer": "The discharge plan for Coumadin is 7 mg daily for 30 days ^[1]. The dose will be adjusted based on INR results, which are to be obtained every Monday and Thursday and sent to Dr. A ^[1]. An INR is specifically scheduled for 09/03/2007, and \u2026",
+        "turn_2_sources": 1,
+        "turn_2_verified": true,
+        "turn_2_follow_ups": [
+          "What is the dosing and taper schedule for oxycodone SR at discharge?",
+          "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+          "What were the primary diagnosis and hospital course documented in the clinical note?"
+        ],
+        "turn_2_status": 200,
+        "verdict": "GOOD",
+        "reason": ""
+      },
+      {
+        "record": 90000015,
+        "turn_1_cmd": "/meds",
+        "chip": "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+        "turn_2_tools": "rag_search",
+        "turn_2_answer": "The discharge instructions document a follow-up appointment with Dr. A on 09/21/2007 at noon at his office ^[1]. Additionally, the patient is encouraged to follow up with her primary care physician, Dr. B ^[1].",
+        "turn_2_sources": 1,
+        "turn_2_verified": true,
+        "turn_2_follow_ups": [
+          "What is the dosing and taper schedule for oxycodone SR at discharge?",
+          "What is the discharge dosing and monitoring plan for Coumadin?",
+          "What were the primary diagnosis and hospital course documented in the clinical note?"
+        ],
+        "turn_2_status": 200,
+        "verdict": "GOOD",
+        "reason": ""
+      }
+    ],
+    "progression": {
+      "record": 90000015,
+      "turn_1_cmd": "/meds",
+      "turn_1_follow_ups": [
+        "What is the dosing and taper schedule for oxycodone SR at discharge?",
+        "What is the discharge dosing and monitoring plan for Coumadin?",
+        "What outpatient follow-up appointments or clinic visits are scheduled after discharge?"
+      ],
+      "turns": [
+        {
+          "question": "What is the dosing and taper schedule for oxycodone SR at discharge?",
+          "follow_ups": [
+            "What is the discharge dosing and monitoring plan for Coumadin?",
+            "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+            "What were the primary diagnosis and hospital course documented in the clinical note?"
+          ]
+        },
+        {
+          "question": "What is the discharge dosing and monitoring plan for Coumadin?",
+          "follow_ups": [
+            "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+            "What were the primary diagnosis and hospital course documented in the clinical note?"
+          ]
+        }
+      ]
+    },
+    "turn_1": {
+      "status": 200,
+      "answer": "13 discharge medications, as recorded in the discharge note: Celebrex, Coumadin, Colace, Synthroid, Lovenox, Percocet, Toprol XL, niacin, trazodone, Protonix, Diprosone cream, oxycodone SR, Ativan ^[1].",
+      "verified": true,
+      "scope": "patient_chart",
+      "sources": [
+        {
+          "cite": 1,
+          "section": "discharge_medications",
+          "text": "On transfer, Celebrex, Coumadin, Colace, Synthroid, Lovenox, Percocet, Toprol XL, niacin, and trazodone.\n\nThe patient is advised to continue taking the following medications: Celebrex 200 mg daily, for one month, Colace 100 mg b.i.d. for one month, Protonix 40 mg b.i.d. for one month, Synthroid 137 mcg daily, Diprosone cream 0.05% cream b.i.d. to the right arm and right abdomen, oxycodone SR 20 mg p.o. q.12h. for five days, then decrease to oxycodone SR 10 mg p.o. q.12h. for five days, Percocet 5/325 mg one to two tablets q.6h. to be used p.r.n. for breakthrough pain, trazodone 50 mg p.o. at bedtime p.r.n. for two weeks, Ativan 0.25 mg b.i.d. for two weeks, and Toprol-XL 50 mg daily. The patient will also take Coumadin and the dose will be adjusted according to the INRs, which will be obtained every Monday and Thursday with results being sent to Dr. A and his fax number is 831-5926. At the present time, the patient is taking Coumadin 7 mg daily. She will remain on Coumadin for 30 days. An INR is to be obtained on 09/03/2007 and should the Coumadin dose be changed, an addendum will be dictated to accompany this discharge summary. Finally, the patient has a followup appointment with Dr. A on 09/21/2007 at noon at his office. The patient is encouraged to follow up with her primary care physician, Dr. B. As mentioned above, the patient will be discharged on 09/03/2007 in stable and improved condition since she is status post right total knee replacement and has made good progress with her therapies and rehabilitation.",
+          "query": "discharge medications"
+        }
+      ],
+      "follow_ups": [
+        "What is the dosing and taper schedule for oxycodone SR at discharge?",
+        "What is the discharge dosing and monitoring plan for Coumadin?",
+        "What outpatient follow-up appointments or clinic visits are scheduled after discharge?"
+      ],
+      "tool_calls": [
+        {
+          "name": "discharge_medications",
+          "args": {
+            "hadm_id": 90000015
+          },
+          "response": {
+            "hadm_id": 90000015,
+            "query": "discharge medications",
+            "returned": 1,
+            "passages": [
+              {
+                "id": "MT-2788-DS_discharge_medications_1",
+                "section": "discharge_medications",
+                "text": "On transfer, Celebrex, Coumadin, Colace, Synthroid, Lovenox, Percocet, Toprol XL, niacin, and trazodone.\n\nThe patient is advised to continue taking the following medications: Celebrex 200 mg daily, for one month, Colace 100 mg b.i.d. for one month, Protonix 40 mg b.i.d. for one month, Synthroid 137 mcg daily, Diprosone cream 0.05% cream b.i.d. to the right arm and right abdomen, oxycodone SR 20 mg p.o. q.12h. for five days, then decrease to oxycodone SR 10 mg p.o. q.12h. for five days, Percocet 5/325 mg one to two tablets q.6h. to be used p.r.n. for breakthrough pain, trazodone 50 mg p.o. at bedtime p.r.n. for two weeks, Ativan 0.25 mg b.i.d. for two weeks, and Toprol-XL 50 mg daily. The patient will also take Coumadin and the dose will be adjusted according to the INRs, which will be obtained every Monday and Thursday with results being sent to Dr. A and his fax number is 831-5926. At the present time, the patient is taking Coumadin 7 mg daily. She will remain on Coumadin for 30 days. An INR is to be obtained on 09/03/2007 and should the Coumadin dose be changed, an addendum will be dictated to accompany this discharge summary. Finally, the patient has a followup appointment with Dr. A on 09/21/2007 at noon at his office. The patient is encouraged to follow up with her primary care physician, Dr. B. As mentioned above, the patient will be discharged on 09/03/2007 in stable and improved condition since she is status post right total knee replacement and has made good progress with her therapies and rehabilitation.",
+                "retrieval": "deterministic"
+              }
+            ]
+          },
+          "derivable": true
+        }
+      ],
+      "guardrail_flags": [],
+      "error": null
+    }
+  },
+  "90000023:/ehr": {
+    "rows": [
+      {
+        "record": 90000023,
+        "turn_1_cmd": "/ehr",
+        "chip": "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+        "turn_2_tools": "rag_search",
+        "turn_2_answer": "The discharge instructions document the following post-discharge guidance: * **Diet:** The patient is instructed to follow a low-fat, low-salt, low-cholesterol, and heart-healthy diabetic diet ^[1]. * **Activity Restrictions:** The patient \u2026",
+        "turn_2_sources": 1,
+        "turn_2_verified": true,
+        "turn_2_follow_ups": [
+          "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+          "What were the primary diagnosis and hospital course documented in the clinical note?",
+          "Why does oncology history increase this patient's readmission risk driver?"
+        ],
+        "turn_2_status": 200,
+        "verdict": "GOOD",
+        "reason": ""
+      },
+      {
+        "record": 90000023,
+        "turn_1_cmd": "/ehr",
+        "chip": "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+        "turn_2_tools": "rag_search_sections",
+        "turn_2_answer": "The discharge instructions specify the following follow-up appointments: * **Primary Care Physician:** To be seen within one to two weeks ^[1]. * **Cardiology (Dr. XYZ's clinic):** To return in four to six weeks; an appointment card will be\u2026",
+        "turn_2_sources": 1,
+        "turn_2_verified": true,
+        "turn_2_follow_ups": [
+          "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+          "What were the primary diagnosis and hospital course documented in the clinical note?",
+          "Why does oncology history increase this patient's readmission risk driver?"
+        ],
+        "turn_2_status": 200,
+        "verdict": "GOOD",
+        "reason": ""
+      },
+      {
+        "record": 90000023,
+        "turn_1_cmd": "/ehr",
+        "chip": "Why does oncology history increase this patient's readmission risk driver?",
+        "turn_2_tools": "get_lab_trends",
+        "turn_2_answer": "The readmission risk model identifies \"oncology_flag\" as a factor that increases this patient's risk of 30-day unplanned readmission, with a contribution of in logit space. The patient's medical history, as documented in the discharge notes\u2026",
+        "turn_2_sources": 1,
+        "turn_2_verified": true,
+        "turn_2_follow_ups": [
+          "How does the abnormal discharge Red blood cells (3.33 x10^6/uL) compare to its reference range and trend?",
+          "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+          "What outpatient follow-up appointments or clinic visits are scheduled after discharge?"
+        ],
+        "turn_2_status": 200,
+        "verdict": "GOOD",
+        "reason": ""
+      }
+    ],
+    "progression": {
+      "record": 90000023,
+      "turn_1_cmd": "/ehr",
+      "turn_1_follow_ups": [
+        "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+        "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+        "Why does oncology history increase this patient's readmission risk driver?"
+      ],
+      "turns": [
+        {
+          "question": "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+          "follow_ups": [
+            "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+            "What were the primary diagnosis and hospital course documented in the clinical note?",
+            "Why does oncology history increase this patient's readmission risk driver?"
+          ]
+        },
+        {
+          "question": "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+          "follow_ups": [
+            "What were the primary diagnosis and hospital course documented in the clinical note?",
+            "Why does oncology history increase this patient's readmission risk driver?"
+          ]
+        }
+      ]
+    },
+    "turn_1": {
+      "status": 200,
+      "answer": "**Hospital course.** The patient was admitted for a planned cystectomy but underwent a cardiac evaluation after abnormal pre-operative testing ^[1]. A cardiac stress MRI revealed inducible ischemia, and subsequent left heart catheterization identified two-vessel coronary artery disease involving the right coronary artery and the left anterior descending artery ^[2]. Four bare metal stents were placed to address these lesions, and the patient remained stable throughout the post-intervention period ^[2].\n\n**Discharge diagnosis.** The patient was diagnosed with coronary artery disease status post percutaneous coronary artery intervention, bladder cancer, diabetes, dyslipidemia, hypertension, and carotid artery stenosis status post right carotid endarterectomy ^[3]. Additional history includes multiple bladder tumor resections, an appendectomy, and ankle surgery ^[3].\n\n**Discharge instructions.** The patient was discharged home with instructions to follow a heart-healthy diabetic diet and adhere to post-coronary intervention activity restrictions, including limits on lifting, driving, and water immersion ^[4]. He was advised to monitor his groin site for signs of bleeding, edema, or infection and to follow up with his primary care physician, cardiology, and urology clinics ^[4].\n\n**Readmission risk & trajectory.** The patient's readmission risk is 31.7%, which exceeds the 11.0% threshold. The primary drivers increasing this risk include oncology history, prior inpatient days, red cell distribution width (RDW), and lowest monocyte count, while medication order count acts as a modest contributor to decreasing the risk. These factors suggest a need for close monitoring during the transition to outpatient care, particularly regarding the patient's complex medical history and recent cardiac intervention.",
+      "verified": true,
+      "scope": "patient_chart",
+      "sources": [
+        {
+          "cite": 1,
+          "section": "history_of_present_illness",
+          "text": "Mr. ABC is a 60-year-old white male veteran with multiple comorbidities, who has a history of bladder cancer diagnosed approximately two years ago by the VA Hospital. He underwent a resection there. He was to be admitted to the Day Hospital for cystectomy. He was seen in Urology Clinic and Radiology Clinic on MM/DD/YYYY.",
+          "query": "discharge notes"
+        },
+        {
+          "cite": 2,
+          "section": "brief_hospital_course",
+          "text": "Mr. ABC presented to the Day Hospital in anticipation for Urology surgery. On evaluation, EKG, echocardiogram was abnormal, a Cardiology consult was obtained. A cardiac adenosine stress MRI was then proceeded, same was positive for inducible ischemia, mild-to-moderate inferolateral subendocardial infarction with peri-infarct ischemia. In addition, inducible ischemia seen in the inferior lateral septum. Mr. ABC underwent a left heart catheterization, which revealed two vessel coronary artery disease. The RCA, proximal was 95% stenosed and the distal 80% stenosed. The mid LAD was 85% stenosed and the distal LAD was 85% stenosed. There was four Multi-Link Vision bare metal stents placed to decrease all four lesions to 0%. Following intervention, Mr. ABC was admitted to 7 Ardmore Tower under Cardiology Service under the direction of Dr. XYZ. Mr. ABC had a noncomplicated post-intervention hospital course. He was stable for discharge home on MM/DD/YYYY with instructions to take Plavix daily for one month and Urology is aware of the same.",
+          "query": "discharge notes"
+        },
+        {
+          "cite": 3,
+          "section": "discharge_diagnosis",
+          "text": "1. Coronary artery disease status post percutaneous coronary artery intervention to the right coronary artery and to the LAD.\n2. Bladder cancer.\n3. Diabetes.\n4. Dyslipidemia.\n5. Hypertension.\n6. Carotid artery stenosis, status post right carotid endarterectomy in 2004.\n\n7. Multiple resections of the bladder tumor.\n8. Distant history of appendectomy.\n9. Distant history of ankle surgery.",
+          "query": "discharge notes"
+        },
+        {
+          "cite": 4,
+          "section": "discharge_instructions",
+          "text": "Mr. ABC is discharged home. He should follow a low-fat, low-salt, low-cholesterol, and heart healthy diabetic diet. He should follow post-coronary artery intervention restrictions. He should not lift greater than 10 pounds for seven days. He should not drive for two days. He should not immerse in water for two weeks. Groin site care reviewed with patient prior to being discharged home. He should check groin for bleeding, edema, and signs of infection. Mr. ABC is to see his primary care physician within one to two weeks, return to Dr. XYZ's clinic in four to six weeks, appointment card to be mailed him. He is to follow up with Urology in their clinic on MM/DD/YYYY at 10 o'clock and then to scheduled CT scan at that time.",
+          "query": "discharge notes"
+        }
+      ],
+      "follow_ups": [
+        "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+        "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+        "Why does oncology history increase this patient's readmission risk driver?"
+      ],
+      "tool_calls": [
+        {
+          "name": "rag_search_sections",
+          "args": {
+            "hadm_id": 90000023
+          },
+          "response": {
+            "hadm_id": 90000023,
+            "query": "discharge notes",
+            "returned": 4,
+            "passages": [
+              {
+                "id": "MT-1054-DS_history_of_present_illness_1",
+                "section": "history_of_present_illness",
+                "text": "Mr. ABC is a 60-year-old white male veteran with multiple comorbidities, who has a history of bladder cancer diagnosed approximately two years ago by the VA Hospital. He underwent a resection there. He was to be admitted to the Day Hospital for cystectomy. He was seen in Urology Clinic and Radiology Clinic on MM/DD/YYYY.",
+                "retrieval": "deterministic"
+              },
+              {
+                "id": "MT-1054-DS_brief_hospital_course_1",
+                "section": "brief_hospital_course",
+                "text": "Mr. ABC presented to the Day Hospital in anticipation for Urology surgery. On evaluation, EKG, echocardiogram was abnormal, a Cardiology consult was obtained. A cardiac adenosine stress MRI was then proceeded, same was positive for inducible ischemia, mild-to-moderate inferolateral subendocardial infarction with peri-infarct ischemia. In addition, inducible ischemia seen in the inferior lateral septum. Mr. ABC underwent a left heart catheterization, which revealed two vessel coronary artery disease. The RCA, proximal was 95% stenosed and the distal 80% stenosed. The mid LAD was 85% stenosed and the distal LAD was 85% stenosed. There was four Multi-Link Vision bare metal stents placed to decrease all four lesions to 0%. Following intervention, Mr. ABC was admitted to 7 Ardmore Tower under Cardiology Service under the direction of Dr. XYZ. Mr. ABC had a noncomplicated post-intervention hospital course. He was stable for discharge home on MM/DD/YYYY with instructions to take Plavix daily for one month and Urology is aware of the same.",
+                "retrieval": "deterministic"
+              },
+              {
+                "id": "MT-1054-DS_discharge_diagnosis_1",
+                "section": "discharge_diagnosis",
+                "text": "1. Coronary artery disease status post percutaneous coronary artery intervention to the right coronary artery and to the LAD.\n2. Bladder cancer.\n3. Diabetes.\n4. Dyslipidemia.\n5. Hypertension.\n6. Carotid artery stenosis, status post right carotid endarterectomy in 2004.\n\n7. Multiple resections of the bladder tumor.\n8. Distant history of appendectomy.\n9. Distant history of ankle surgery.",
+                "retrieval": "deterministic"
+              },
+              {
+                "id": "MT-1054-DS_discharge_instructions_1",
+                "section": "discharge_instructions",
+                "text": "Mr. ABC is discharged home. He should follow a low-fat, low-salt, low-cholesterol, and heart healthy diabetic diet. He should follow post-coronary artery intervention restrictions. He should not lift greater than 10 pounds for seven days. He should not drive for two days. He should not immerse in water for two weeks. Groin site care reviewed with patient prior to being discharged home. He should check groin for bleeding, edema, and signs of infection. Mr. ABC is to see his primary care physician within one to two weeks, return to Dr. XYZ's clinic in four to six weeks, appointment card to be mailed him. He is to follow up with Urology in their clinic on MM/DD/YYYY at 10 o'clock and then to scheduled CT scan at that time.",
+                "retrieval": "deterministic"
+              }
+            ]
+          },
+          "derivable": true
+        },
+        {
+          "name": "predict_readmission",
+          "args": {
+            "hadm_id": 90000023
+          },
+          "response": {
+            "hadm_id": 90000023,
+            "probability": 0.316788,
+            "threshold": 0.11,
+            "decision": 1,
+            "base_value": -1.767608,
+            "top_factors": [
+              {
+                "feature": "oncology_flag",
+                "contribution": 0.4104,
+                "direction": "increases"
+              },
+              {
+                "feature": "prior_inpatient_days",
+                "contribution": 0.119,
+                "direction": "increases"
+              },
+              {
+                "feature": "rdw_max",
+                "contribution": 0.113,
+                "direction": "increases"
+              },
+              {
+                "feature": "monocytes_min",
+                "contribution": 0.0824,
+                "direction": "increases"
+              },
+              {
+                "feature": "medication_order_count",
+                "contribution": -0.0768,
+                "direction": "decreases"
+              }
+            ],
+            "model_version": "readmission-final-20260917173317",
+            "feature_source": "bigquery"
+          },
+          "derivable": false
+        }
+      ],
+      "guardrail_flags": [],
+      "error": null
+    }
+  },
+  "90000023:/meds": {
+    "rows": [
+      {
+        "record": 90000023,
+        "turn_1_cmd": "/meds",
+        "chip": "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+        "turn_2_tools": "rag_search_sections",
+        "turn_2_answer": "The discharge instructions document the following post-discharge guidance for the patient: **Dietary instructions.** The patient is instructed to follow a low-fat, low-salt, low-cholesterol, and heart-healthy diabetic diet ^[1]. **Activity \u2026",
+        "turn_2_sources": 1,
+        "turn_2_verified": true,
+        "turn_2_follow_ups": [
+          "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+          "What were the primary diagnosis and hospital course documented in the clinical note?"
+        ],
+        "turn_2_status": 200,
+        "verdict": "GOOD",
+        "reason": ""
+      },
+      {
+        "record": 90000023,
+        "turn_1_cmd": "/meds",
+        "chip": "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+        "turn_2_tools": "rag_search_sections",
+        "turn_2_answer": "The discharge instructions document the following follow-up appointments for the patient: * A visit with his primary care physician within one to two weeks ^[1]. * A return visit to Dr. XYZ's clinic in four to six weeks, with an appointment\u2026",
+        "turn_2_sources": 1,
+        "turn_2_verified": true,
+        "turn_2_follow_ups": [
+          "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+          "What were the primary diagnosis and hospital course documented in the clinical note?"
+        ],
+        "turn_2_status": 200,
+        "verdict": "GOOD",
+        "reason": ""
+      }
+    ],
+    "progression": {
+      "record": 90000023,
+      "turn_1_cmd": "/meds",
+      "turn_1_follow_ups": [
+        "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+        "What outpatient follow-up appointments or clinic visits are scheduled after discharge?"
+      ],
+      "turns": [
+        {
+          "question": "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+          "follow_ups": [
+            "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+            "What were the primary diagnosis and hospital course documented in the clinical note?"
+          ]
+        },
+        {
+          "question": "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+          "follow_ups": [
+            "How does the abnormal discharge Red blood cells (3.33 x10^6/uL) compare to its reference range and trend?",
+            "What were the primary diagnosis and hospital course documented in the clinical note?"
+          ]
+        }
+      ]
+    },
+    "turn_1": {
+      "status": 200,
+      "answer": "The discharge medications section was retrieved, but no medication could be read from it ^[1].",
+      "verified": true,
+      "scope": "patient_chart",
+      "sources": [
+        {
+          "cite": 1,
+          "section": "discharge_instructions",
+          "text": "Mr. ABC is discharged home. He should follow a low-fat, low-salt, low-cholesterol, and heart healthy diabetic diet. He should follow post-coronary artery intervention restrictions. He should not lift greater than 10 pounds for seven days. He should not drive for two days. He should not immerse in water for two weeks. Groin site care reviewed with patient prior to being discharged home. He should check groin for bleeding, edema, and signs of infection. Mr. ABC is to see his primary care physician within one to two weeks, return to Dr. XYZ's clinic in four to six weeks, appointment card to be mailed him. He is to follow up with Urology in their clinic on MM/DD/YYYY at 10 o'clock and then to scheduled CT scan at that time.",
+          "query": "discharge medications"
+        }
+      ],
+      "follow_ups": [
+        "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+        "What outpatient follow-up appointments or clinic visits are scheduled after discharge?"
+      ],
+      "tool_calls": [
+        {
+          "name": "discharge_medications",
+          "args": {
+            "hadm_id": 90000023
+          },
+          "response": {
+            "hadm_id": 90000023,
+            "query": "discharge medications",
+            "returned": 1,
+            "passages": [
+              {
+                "id": "MT-1054-DS_discharge_instructions_1",
+                "section": "discharge_instructions",
+                "text": "Mr. ABC is discharged home. He should follow a low-fat, low-salt, low-cholesterol, and heart healthy diabetic diet. He should follow post-coronary artery intervention restrictions. He should not lift greater than 10 pounds for seven days. He should not drive for two days. He should not immerse in water for two weeks. Groin site care reviewed with patient prior to being discharged home. He should check groin for bleeding, edema, and signs of infection. Mr. ABC is to see his primary care physician within one to two weeks, return to Dr. XYZ's clinic in four to six weeks, appointment card to be mailed him. He is to follow up with Urology in their clinic on MM/DD/YYYY at 10 o'clock and then to scheduled CT scan at that time.",
+                "retrieval": "deterministic"
+              }
+            ]
+          },
+          "derivable": true
+        }
+      ],
+      "guardrail_flags": [],
+      "error": null
+    }
+  },
+  "90000105:/ehr": {
+    "rows": [
+      {
+        "record": 90000105,
+        "turn_1_cmd": "/ehr",
+        "chip": "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+        "turn_2_tools": "rag_search",
+        "turn_2_answer": "The discharge instructions document the following post-discharge guidance: * **Diet:** The patient is to maintain a bariatric clear liquid diet at home, with a goal of 64 ounces per day ^[1]. * **Activity:** The patient is instructed to mai\u2026",
+        "turn_2_sources": 1,
+        "turn_2_verified": true,
+        "turn_2_follow_ups": [
+          "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+          "What were the primary diagnosis and hospital course documented in the clinical note?"
+        ],
+        "turn_2_status": 200,
+        "verdict": "GOOD",
+        "reason": ""
+      },
+      {
+        "record": 90000105,
+        "turn_1_cmd": "/ehr",
+        "chip": "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+        "turn_2_tools": "rag_search",
+        "turn_2_answer": "The discharge instructions state that the patient is to re-appoint in the office within the next week ^[1].",
+        "turn_2_sources": 1,
+        "turn_2_verified": true,
+        "turn_2_follow_ups": [
+          "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+          "What were the primary diagnosis and hospital course documented in the clinical note?"
+        ],
+        "turn_2_status": 200,
+        "verdict": "GOOD",
+        "reason": ""
+      }
+    ],
+    "progression": {
+      "record": 90000105,
+      "turn_1_cmd": "/ehr",
+      "turn_1_follow_ups": [
+        "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+        "What outpatient follow-up appointments or clinic visits are scheduled after discharge?"
+      ],
+      "turns": [
+        {
+          "question": "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+          "follow_ups": [
+            "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+            "What were the primary diagnosis and hospital course documented in the clinical note?"
+          ]
+        },
+        {
+          "question": "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+          "follow_ups": [
+            "What were the primary diagnosis and hospital course documented in the clinical note?"
+          ]
+        }
+      ]
+    },
+    "turn_1": {
+      "status": 200,
+      "answer": "**Hospital course.** This 30-year-old male underwent an elective laparoscopic Roux-en-Y gastric bypass for morbid obesity ^[1]. Following the procedure, he recovered in the PACU and was transferred to the floor for routine care, including DVT prophylaxis, pain management, and CPAP use ^[1]. By the second postoperative day, he was tolerating advanced clear liquids, had his drains removed, and was discharged in stable condition ^[1].\n\n**Discharge diagnosis.** The patient was diagnosed with morbid obesity, status post laparoscopic Roux-en-Y gastric bypass, hypertension, and obstructive sleep apnea ^[2].\n\n**Discharge instructions.** The patient is to follow up in the office within the next week and contact the clinic if any significant concerns arise ^[3]. He is instructed to maintain a bariatric clear liquid diet with a goal of 64 ounces per day and to maintain activity levels while avoiding heavy lifting or straining ^[3]. Wound care and drain site care were reviewed, and he may begin showering the day after discharge ^[3].\n\n**Readmission risk & trajectory.** The patient's risk of readmission is 3.0%, which is below the 11.0% threshold. The factors contributing to this low risk include prior inpatient days, lowest sodium, procedures, medication order count, and highest sodium, all of which serve to decrease the likelihood of readmission.",
+      "verified": true,
+      "scope": "patient_chart",
+      "sources": [
+        {
+          "cite": 1,
+          "section": "brief_hospital_course",
+          "text": "This is a 30-year-old male, who presented recently to the Bariatric Center for evaluation and treatment of longstanding morbid obesity and associated comorbidities. Underwent standard bariatric evaluation, consults, diagnostics, and preop Medifast induced weight loss in anticipation of elective bariatric surgery.\n\nTaken to the OR via same day surgery process for elective gastric bypass, tolerated well, recovered in the PACU, and sent to the floor for routine postoperative care. There, DVT prophylaxis was continued with subcu heparin, early and frequent mobilization, and SCDs. PCA was utilized for pain control, efficaciously, he utilized the CPAP, was monitored, and had no new cardiopulmonary complaints. Postop day #1, labs within normal limits, able to clinically start bariatric clear liquids at 2 ounces per hour, this was tolerated well. He was ambulatory, had no cardiopulmonary complaints, no unusual fever or concerning symptoms. By the second postoperative day, was able to advance to four ounces per hour, tolerated this well, and is able to discharge in stable and improved condition today. He had his drains removed today as well.",
+          "query": "discharge notes"
+        },
+        {
+          "cite": 2,
+          "section": "discharge_diagnosis",
+          "text": "1. Morbid obesity, status post laparoscopic Roux-en-Y gastric bypass.\n2. Hypertension.\n3. Obstructive sleep apnea, on CPAP.\n\nOPERATION AND PROCEDURE: Laparoscopic Roux-en-Y gastric bypass.",
+          "query": "discharge notes"
+        },
+        {
+          "cite": 3,
+          "section": "discharge_instructions",
+          "text": "Include re-appointment in the office in the next week, call in the interim if any significant concerning complaints. Scripts left in the chart for omeprazole and Lortab. Med rec sheet completed (on no meds). He will maintain bariatric clear liquids at home, goal 64 ounces per day, maintain activity at home, but no heavy lifting or straining. Can shower starting tomorrow, drain site care and wound care reviewed. He will re-appoint in the office in the next week, certainly call in the interim if any significant concerning complaints.",
+          "query": "discharge notes"
+        }
+      ],
+      "follow_ups": [
+        "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+        "What outpatient follow-up appointments or clinic visits are scheduled after discharge?"
+      ],
+      "tool_calls": [
+        {
+          "name": "rag_search_sections",
+          "args": {
+            "hadm_id": 90000105
+          },
+          "response": {
+            "hadm_id": 90000105,
+            "query": "discharge notes",
+            "returned": 3,
+            "passages": [
+              {
+                "id": "MT-1246-DS_brief_hospital_course_1",
+                "section": "brief_hospital_course",
+                "text": "This is a 30-year-old male, who presented recently to the Bariatric Center for evaluation and treatment of longstanding morbid obesity and associated comorbidities. Underwent standard bariatric evaluation, consults, diagnostics, and preop Medifast induced weight loss in anticipation of elective bariatric surgery.\n\nTaken to the OR via same day surgery process for elective gastric bypass, tolerated well, recovered in the PACU, and sent to the floor for routine postoperative care. There, DVT prophylaxis was continued with subcu heparin, early and frequent mobilization, and SCDs. PCA was utilized for pain control, efficaciously, he utilized the CPAP, was monitored, and had no new cardiopulmonary complaints. Postop day #1, labs within normal limits, able to clinically start bariatric clear liquids at 2 ounces per hour, this was tolerated well. He was ambulatory, had no cardiopulmonary complaints, no unusual fever or concerning symptoms. By the second postoperative day, was able to advance to four ounces per hour, tolerated this well, and is able to discharge in stable and improved condition today. He had his drains removed today as well.",
+                "retrieval": "deterministic"
+              },
+              {
+                "id": "MT-1246-DS_discharge_diagnosis_1",
+                "section": "discharge_diagnosis",
+                "text": "1. Morbid obesity, status post laparoscopic Roux-en-Y gastric bypass.\n2. Hypertension.\n3. Obstructive sleep apnea, on CPAP.\n\nOPERATION AND PROCEDURE: Laparoscopic Roux-en-Y gastric bypass.",
+                "retrieval": "deterministic"
+              },
+              {
+                "id": "MT-1246-DS_discharge_instructions_1",
+                "section": "discharge_instructions",
+                "text": "Include re-appointment in the office in the next week, call in the interim if any significant concerning complaints. Scripts left in the chart for omeprazole and Lortab. Med rec sheet completed (on no meds). He will maintain bariatric clear liquids at home, goal 64 ounces per day, maintain activity at home, but no heavy lifting or straining. Can shower starting tomorrow, drain site care and wound care reviewed. He will re-appoint in the office in the next week, certainly call in the interim if any significant concerning complaints.",
+                "retrieval": "deterministic"
+              }
+            ]
+          },
+          "derivable": true
+        },
+        {
+          "name": "predict_readmission",
+          "args": {
+            "hadm_id": 90000105
+          },
+          "response": {
+            "hadm_id": 90000105,
+            "probability": 0.030344,
+            "threshold": 0.11,
+            "decision": 0,
+            "base_value": -1.767608,
+            "top_factors": [
+              {
+                "feature": "prior_inpatient_days",
+                "contribution": -0.3304,
+                "direction": "decreases"
+              },
+              {
+                "feature": "sodium_min",
+                "contribution": -0.1985,
+                "direction": "decreases"
+              },
+              {
+                "feature": "procedure_count",
+                "contribution": -0.1688,
+                "direction": "decreases"
+              },
+              {
+                "feature": "medication_order_count",
+                "contribution": -0.1622,
+                "direction": "decreases"
+              },
+              {
+                "feature": "sodium_max",
+                "contribution": -0.1527,
+                "direction": "decreases"
+              }
+            ],
+            "model_version": "readmission-final-20260917173317",
+            "feature_source": "bigquery"
+          },
+          "derivable": false
+        }
+      ],
+      "guardrail_flags": [],
+      "error": null
+    }
+  },
+  "90000105:/meds": {
+    "rows": [
+      {
+        "record": 90000105,
+        "turn_1_cmd": "/meds",
+        "chip": "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+        "turn_2_tools": "rag_search_sections",
+        "turn_2_answer": "The discharge instructions document the following post-discharge guidance: **Activity restrictions.** The patient is instructed to maintain activity at home, but to avoid heavy lifting or straining ^[1]. **Diet instructions.** The patient i\u2026",
+        "turn_2_sources": 1,
+        "turn_2_verified": true,
+        "turn_2_follow_ups": [
+          "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+          "What were the primary diagnosis and hospital course documented in the clinical note?"
+        ],
+        "turn_2_status": 200,
+        "verdict": "GOOD",
+        "reason": ""
+      },
+      {
+        "record": 90000105,
+        "turn_1_cmd": "/meds",
+        "chip": "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+        "turn_2_tools": "rag_search_sections",
+        "turn_2_answer": "The discharge instructions state that the patient is to re-appoint in the office within the next week ^[1].",
+        "turn_2_sources": 1,
+        "turn_2_verified": true,
+        "turn_2_follow_ups": [
+          "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+          "What were the primary diagnosis and hospital course documented in the clinical note?"
+        ],
+        "turn_2_status": 200,
+        "verdict": "GOOD",
+        "reason": ""
+      },
+      {
+        "record": 90000105,
+        "turn_1_cmd": "/meds",
+        "chip": "What are the discharge dosing instructions for omeprazole and Lortab?",
+        "turn_2_tools": "rag_search, discharge_medications, rag_search, rag_search, rag_search",
+        "turn_2_answer": "The discharge note states that scripts for omeprazole and Lortab were left in the chart, but it does not document the specific dosing instructions for either medication ^[1].",
+        "turn_2_sources": 1,
+        "turn_2_verified": true,
+        "turn_2_follow_ups": [
+          "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+          "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+          "What were the primary diagnosis and hospital course documented in the clinical note?"
+        ],
+        "turn_2_status": 200,
+        "verdict": "GOOD",
+        "reason": ""
+      }
+    ],
+    "progression": {
+      "record": 90000105,
+      "turn_1_cmd": "/meds",
+      "turn_1_follow_ups": [
+        "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+        "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+        "What are the discharge dosing instructions for omeprazole and Lortab?"
+      ],
+      "turns": [
+        {
+          "question": "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+          "follow_ups": [
+            "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+            "What were the primary diagnosis and hospital course documented in the clinical note?"
+          ]
+        },
+        {
+          "question": "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+          "follow_ups": [
+            "What were the primary diagnosis and hospital course documented in the clinical note?"
+          ]
+        }
+      ]
+    },
+    "turn_1": {
+      "status": 200,
+      "answer": "2 discharge medications, as recorded in the discharge note: omeprazole, Lortab ^[1].",
+      "verified": true,
+      "scope": "patient_chart",
+      "sources": [
+        {
+          "cite": 1,
+          "section": "discharge_instructions",
+          "text": "Include re-appointment in the office in the next week, call in the interim if any significant concerning complaints. Scripts left in the chart for omeprazole and Lortab. Med rec sheet completed (on no meds). He will maintain bariatric clear liquids at home, goal 64 ounces per day, maintain activity at home, but no heavy lifting or straining. Can shower starting tomorrow, drain site care and wound care reviewed. He will re-appoint in the office in the next week, certainly call in the interim if any significant concerning complaints.",
+          "query": "discharge medications"
+        }
+      ],
+      "follow_ups": [
+        "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+        "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+        "What are the discharge dosing instructions for omeprazole and Lortab?"
+      ],
+      "tool_calls": [
+        {
+          "name": "discharge_medications",
+          "args": {
+            "hadm_id": 90000105
+          },
+          "response": {
+            "hadm_id": 90000105,
+            "query": "discharge medications",
+            "returned": 1,
+            "passages": [
+              {
+                "id": "MT-1246-DS_discharge_instructions_1",
+                "section": "discharge_instructions",
+                "text": "Include re-appointment in the office in the next week, call in the interim if any significant concerning complaints. Scripts left in the chart for omeprazole and Lortab. Med rec sheet completed (on no meds). He will maintain bariatric clear liquids at home, goal 64 ounces per day, maintain activity at home, but no heavy lifting or straining. Can shower starting tomorrow, drain site care and wound care reviewed. He will re-appoint in the office in the next week, certainly call in the interim if any significant concerning complaints.",
+                "retrieval": "deterministic"
+              }
+            ]
+          },
+          "derivable": true
+        }
+      ],
+      "guardrail_flags": [],
+      "error": null
+    }
+  },
+  "90000106:/ehr": {
+    "rows": [
+      {
+        "record": 90000106,
+        "turn_1_cmd": "/ehr",
+        "chip": "Why does red cell distribution width (RDW) increase this patient's readmission risk driver?",
+        "turn_2_tools": "get_lab_trends",
+        "turn_2_answer": "The readmission risk model identifies red cell distribution width (RDW) as a factor that increases this patient's risk of 30-day unplanned readmission. During this admission, the patient's RDW trajectory showed a progressive increase, risin\u2026",
+        "turn_2_sources": 0,
+        "turn_2_verified": true,
+        "turn_2_follow_ups": [
+          "How does the abnormal discharge RDW (23.7 %) compare to its reference range and trend?",
+          "What were the primary diagnosis and hospital course documented in the clinical note?"
+        ],
+        "turn_2_status": 200,
+        "verdict": "GOOD",
+        "reason": ""
+      }
+    ],
+    "progression": {
+      "record": 90000106,
+      "turn_1_cmd": "/ehr",
+      "turn_1_follow_ups": [
+        "Why does red cell distribution width (RDW) increase this patient's readmission risk driver?"
+      ],
+      "turns": [
+        {
+          "question": "Why does red cell distribution width (RDW) increase this patient's readmission risk driver?",
+          "follow_ups": [
+            "How does the abnormal discharge RDW (23.7 %) compare to its reference range and trend?",
+            "What were the primary diagnosis and hospital course documented in the clinical note?"
+          ]
+        },
+        {
+          "question": "How does the abnormal discharge RDW (23.7 %) compare to its reference range and trend?",
+          "follow_ups": [
+            "What were the primary diagnosis and hospital course documented in the clinical note?"
+          ]
+        }
+      ]
+    },
+    "turn_1": {
+      "status": 200,
+      "answer": "**Hospital course.** The patient was admitted to the emergency room and treated for respiratory distress. ^[1] Diagnostic imaging included a carotid ultrasound, which revealed a 50 to 69% obstruction of the left internal carotid, and a CT angiogram, which showed no additional significant obstructive lesions. A head MRI was also performed. Following the initiation of physical therapy, the patient demonstrated improved strength in the right arm and experienced no further clinical progression.\n\n**Discharge diagnosis.** The diagnoses for this admission include cerebrovascular accident with right arm weakness, bronchitis, atherosclerotic cardiovascular disease, hyperlipidemia, and thrombocytopenia. ^[2]\n\n**Readmission risk & trajectory.** The patient's readmission risk is 10.1%, which is below the 11.0% threshold. The primary drivers increasing the risk of readmission are the patient's red cell distribution width, prior inpatient days, and recent red blood cell count. Conversely, the patient's age and lowest monocyte count are factors that decrease the risk of readmission.",
+      "verified": true,
+      "scope": "patient_chart",
+      "sources": [
+        {
+          "cite": 1,
+          "section": "brief_hospital_course",
+          "text": "The patient was admitted to the emergency room. Plavix was started in addition to baby aspirin. He was kept on oral Zithromax for his cough. He was given Xopenex treatment, because of his respiratory distress. Carotid ultrasound was reviewed and revealed a 50 to 69% obstruction of left internal carotid. Dr. X saw him in consultation and recommended CT angiogram. This showed no significant obstructive lesion other than what was known on the ultrasound. Head MRI was done and revealed the above findings. The patient was begun on PT and improved. By discharge, he had much improved strength in his right arm. He had no further progressions.",
+          "query": "discharge notes"
+        },
+        {
+          "cite": 2,
+          "section": "discharge_diagnosis",
+          "text": "1. Cerebrovascular accident (CVA) with right arm weakness.\n2. Bronchitis.\n3. Atherosclerotic cardiovascular disease.\n4. Hyperlipidemia.\n5. Thrombocytopenia.",
+          "query": "discharge notes"
+        }
+      ],
+      "follow_ups": [
+        "Why does red cell distribution width (RDW) increase this patient's readmission risk driver?"
+      ],
+      "tool_calls": [
+        {
+          "name": "rag_search_sections",
+          "args": {
+            "hadm_id": 90000106
+          },
+          "response": {
+            "hadm_id": 90000106,
+            "query": "discharge notes",
+            "returned": 2,
+            "passages": [
+              {
+                "id": "MT-2588-DS_brief_hospital_course_1",
+                "section": "brief_hospital_course",
+                "text": "The patient was admitted to the emergency room. Plavix was started in addition to baby aspirin. He was kept on oral Zithromax for his cough. He was given Xopenex treatment, because of his respiratory distress. Carotid ultrasound was reviewed and revealed a 50 to 69% obstruction of left internal carotid. Dr. X saw him in consultation and recommended CT angiogram. This showed no significant obstructive lesion other than what was known on the ultrasound. Head MRI was done and revealed the above findings. The patient was begun on PT and improved. By discharge, he had much improved strength in his right arm. He had no further progressions.",
+                "retrieval": "deterministic"
+              },
+              {
+                "id": "MT-2588-DS_discharge_diagnosis_1",
+                "section": "discharge_diagnosis",
+                "text": "1. Cerebrovascular accident (CVA) with right arm weakness.\n2. Bronchitis.\n3. Atherosclerotic cardiovascular disease.\n4. Hyperlipidemia.\n5. Thrombocytopenia.",
+                "retrieval": "deterministic"
+              }
+            ]
+          },
+          "derivable": true
+        },
+        {
+          "name": "predict_readmission",
+          "args": {
+            "hadm_id": 90000106
+          },
+          "response": {
+            "hadm_id": 90000106,
+            "probability": 0.10086,
+            "threshold": 0.11,
+            "decision": 0,
+            "base_value": -1.767608,
+            "top_factors": [
+              {
+                "feature": "monocytes_min",
+                "contribution": -0.5449,
+                "direction": "decreases"
+              },
+              {
+                "feature": "rdw_max",
+                "contribution": 0.2178,
+                "direction": "increases"
+              },
+              {
+                "feature": "prior_inpatient_days",
+                "contribution": 0.2041,
+                "direction": "increases"
+              },
+              {
+                "feature": "age",
+                "contribution": -0.1326,
+                "direction": "decreases"
+              },
+              {
+                "feature": "rbc_last",
+                "contribution": 0.0974,
+                "direction": "increases"
+              }
+            ],
+            "model_version": "readmission-final-20260917173317",
+            "feature_source": "bigquery"
+          },
+          "derivable": false
+        }
+      ],
+      "guardrail_flags": [],
+      "error": null
+    }
+  },
+  "90000106:/meds": {
+    "rows": [],
+    "progression": {
+      "record": 90000106,
+      "turn_1_cmd": "/meds",
+      "turn_1_follow_ups": [],
+      "turns": []
+    },
+    "turn_1": {
+      "status": 200,
+      "answer": "No specific discharge medication information is available for this admission.",
+      "verified": true,
+      "scope": "patient_chart",
+      "sources": [],
+      "follow_ups": [],
+      "tool_calls": [
+        {
+          "name": "discharge_medications",
+          "args": {
+            "hadm_id": 90000106
+          },
+          "response": {
+            "hadm_id": 90000106,
+            "query": "discharge medications",
+            "returned": 0,
+            "passages": [],
+            "note": "the note has no discharge_medications section; the note has no discharge_instructions section"
+          },
+          "derivable": true
+        }
+      ],
+      "guardrail_flags": [],
+      "error": null
+    }
+  },
+  "90000108:/ehr": {
+    "rows": [
+      {
+        "record": 90000108,
+        "turn_1_cmd": "/ehr",
+        "chip": "Why does oncology history increase this patient's readmission risk driver?",
+        "turn_2_tools": "rag_search",
+        "turn_2_answer": "The patient's oncology status, specifically his diagnosis of metastatic pancreatic cancer, is identified by the readmission model as a factor that increases his risk of 30-day unplanned readmission, with a contribution of in logit space ^[1\u2026",
+        "turn_2_sources": 1,
+        "turn_2_verified": true,
+        "turn_2_follow_ups": [
+          "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+          "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+          "What were the primary diagnosis and hospital course documented in the clinical note?"
+        ],
+        "turn_2_status": 200,
+        "verdict": "GOOD",
+        "reason": ""
+      }
+    ],
+    "progression": {
+      "record": 90000108,
+      "turn_1_cmd": "/ehr",
+      "turn_1_follow_ups": [
+        "Why does oncology history increase this patient's readmission risk driver?"
+      ],
+      "turns": [
+        {
+          "question": "Why does oncology history increase this patient's readmission risk driver?",
+          "follow_ups": [
+            "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+            "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+            "What were the primary diagnosis and hospital course documented in the clinical note?"
+          ]
+        },
+        {
+          "question": "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+          "follow_ups": [
+            "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+            "What were the primary diagnosis and hospital course documented in the clinical note?"
+          ]
+        }
+      ]
+    },
+    "turn_1": {
+      "status": 200,
+      "answer": "**Hospital course.** The patient, a 48-year-old man, presented with abdominal pain, a 30-pound weight loss, and jaundice ^[1]. Imaging revealed a 4 x 3 x 2 cm pancreatic mass with lymph node involvement and liver metastases, alongside a possible pseudocyst in the pancreatic tail ^[1]. During this admission, he underwent an ERCP, which identified strictures in the pancreatic and bile ducts, and a 10-french by 9 cm stent was placed to facilitate drainage ^[1].\n\n**Readmission risk & trajectory.** The patient's readmission risk is 17.6%, which is above the 11.0% threshold. The primary drivers increasing this risk include his oncology history, elevated red cell distribution width (RDW), and his lowest sodium level. Conversely, his lowest monocyte count and prior inpatient days are factors that decrease the risk of readmission.",
+      "verified": true,
+      "scope": "patient_chart",
+      "sources": [
+        {
+          "cite": 1,
+          "section": "history_of_present_illness",
+          "text": "The patient is a 48-year-old man who has had abdominal pain since October of last year associated with a 30-pound weight loss and then developed jaundice. He had epigastric pain and was admitted to the hospital. A thin-slice CT scan was performed, which revealed a 4 x 3 x 2 cm pancreatic mass with involved lymph nodes and ring enhancing lesions consistent with liver metastases. The patient, additionally, had a questionable pseudocyst in the tail of the pancreas. The patient underwent ERCP on 04/04/2007 with placement of a stent. This revealed a strictured pancreatic duct, as well as strictured bile duct. A 10-french x 9 cm stent was placed with good drainage.",
+          "query": "discharge notes"
+        }
+      ],
+      "follow_ups": [
+        "Why does oncology history increase this patient's readmission risk driver?"
+      ],
+      "tool_calls": [
+        {
+          "name": "rag_search_sections",
+          "args": {
+            "hadm_id": 90000108
+          },
+          "response": {
+            "hadm_id": 90000108,
+            "query": "discharge notes",
+            "returned": 1,
+            "passages": [
+              {
+                "id": "MT-2163-DS_history_of_present_illness_1",
+                "section": "history_of_present_illness",
+                "text": "The patient is a 48-year-old man who has had abdominal pain since October of last year associated with a 30-pound weight loss and then developed jaundice. He had epigastric pain and was admitted to the hospital. A thin-slice CT scan was performed, which revealed a 4 x 3 x 2 cm pancreatic mass with involved lymph nodes and ring enhancing lesions consistent with liver metastases. The patient, additionally, had a questionable pseudocyst in the tail of the pancreas. The patient underwent ERCP on 04/04/2007 with placement of a stent. This revealed a strictured pancreatic duct, as well as strictured bile duct. A 10-french x 9 cm stent was placed with good drainage.",
+                "retrieval": "deterministic"
+              }
+            ]
+          },
+          "derivable": true
+        },
+        {
+          "name": "predict_readmission",
+          "args": {
+            "hadm_id": 90000108
+          },
+          "response": {
+            "hadm_id": 90000108,
+            "probability": 0.175919,
+            "threshold": 0.11,
+            "decision": 1,
+            "base_value": -1.767608,
+            "top_factors": [
+              {
+                "feature": "monocytes_min",
+                "contribution": -0.5619,
+                "direction": "decreases"
+              },
+              {
+                "feature": "oncology_flag",
+                "contribution": 0.3075,
+                "direction": "increases"
+              },
+              {
+                "feature": "prior_inpatient_days",
+                "contribution": -0.2527,
+                "direction": "decreases"
+              },
+              {
+                "feature": "rdw_max",
+                "contribution": 0.1172,
+                "direction": "increases"
+              },
+              {
+                "feature": "sodium_min",
+                "contribution": 0.1125,
+                "direction": "increases"
+              }
+            ],
+            "model_version": "readmission-final-20260917173317",
+            "feature_source": "bigquery"
+          },
+          "derivable": false
+        }
+      ],
+      "guardrail_flags": [],
+      "error": null
+    }
+  },
+  "90000108:/meds": {
+    "rows": [
+      {
+        "record": 90000108,
+        "turn_1_cmd": "/meds",
+        "chip": "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+        "turn_2_tools": "rag_search_sections, rag_search",
+        "turn_2_answer": "The discharge plan documents that the patient should return for a repeat ERCP if there are signs of stent occlusion, specifically noting fever, increased bilirubin, or worsening pain ^[1]. Regarding diet and activity, the patient is to be k\u2026",
+        "turn_2_sources": 1,
+        "turn_2_verified": true,
+        "turn_2_follow_ups": [
+          "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+          "What were the primary diagnosis and hospital course documented in the clinical note?"
+        ],
+        "turn_2_status": 200,
+        "verdict": "GOOD",
+        "reason": ""
+      },
+      {
+        "record": 90000108,
+        "turn_1_cmd": "/meds",
+        "chip": "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+        "turn_2_tools": "rag_search",
+        "turn_2_answer": "The discharge note does not document any specific scheduled outpatient follow-up appointments or clinic visits. It notes that the patient will be transferred to Pelican Bay Infirmary under the care of Dr. X, who will manage his hypertension\u2026",
+        "turn_2_sources": 1,
+        "turn_2_verified": true,
+        "turn_2_follow_ups": [
+          "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+          "What were the primary diagnosis and hospital course documented in the clinical note?"
+        ],
+        "turn_2_status": 200,
+        "verdict": "GOOD",
+        "reason": ""
+      },
+      {
+        "record": 90000108,
+        "turn_1_cmd": "/meds",
+        "chip": "What are the discharge dosing instructions for Phenergan and Duragesic patch?",
+        "turn_2_tools": "discharge_medications",
+        "turn_2_answer": "The discharge instructions for these medications are as follows: * **Phenergan:** 25 mg every 6 hours as needed ^[1]. * **Duragesic patch:** 100 mcg every 3 days ^[1].",
+        "turn_2_sources": 1,
+        "turn_2_verified": true,
+        "turn_2_follow_ups": [
+          "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+          "What outpatient follow-up appointments or clinic visits are scheduled after discharge?"
+        ],
+        "turn_2_status": 200,
+        "verdict": "GOOD",
+        "reason": ""
+      }
+    ],
+    "progression": {
+      "record": 90000108,
+      "turn_1_cmd": "/meds",
+      "turn_1_follow_ups": [
+        "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+        "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+        "What are the discharge dosing instructions for Phenergan and Duragesic patch?"
+      ],
+      "turns": [
+        {
+          "question": "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+          "follow_ups": [
+            "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+            "What were the primary diagnosis and hospital course documented in the clinical note?"
+          ]
+        },
+        {
+          "question": "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+          "follow_ups": [
+            "What were the primary diagnosis and hospital course documented in the clinical note?"
+          ]
+        }
+      ]
+    },
+    "turn_1": {
+      "status": 200,
+      "answer": "4 discharge medications, as recorded in the discharge note: Phenergan, Duragesic patch, Benadryl, Enalapril ^[1].",
+      "verified": true,
+      "scope": "patient_chart",
+      "sources": [
+        {
+          "cite": 1,
+          "section": "discharge_medications",
+          "text": "1. Phenergan 25 mg q.6. p.r.n.\n2. Duragesic patch 100 mcg q.3.d.\n3. Benadryl 25-50 mg p.o. q.i.d. for pruritus.\n4. Sliding scale will be discontinued at the time of discharge and will be reinstituted on arrival at Pelican Bay Infirmary.\n5. The patient had initially been on enalapril here. His hypertension will be managed by Dr. X as well.\n\nPLAN: The patient should return for repeat ERCP if there are signs of stent occlusion such as fever, increased bilirubin, worsening pain. In the meantime, he will be kept on a regular diet and activity per Dr. X.",
+          "query": "discharge medications"
+        }
+      ],
+      "follow_ups": [
+        "What post-discharge activity restrictions, diet instructions, or warning signs are documented?",
+        "What outpatient follow-up appointments or clinic visits are scheduled after discharge?",
+        "What are the discharge dosing instructions for Phenergan and Duragesic patch?"
+      ],
+      "tool_calls": [
+        {
+          "name": "discharge_medications",
+          "args": {
+            "hadm_id": 90000108
+          },
+          "response": {
+            "hadm_id": 90000108,
+            "query": "discharge medications",
+            "returned": 1,
+            "passages": [
+              {
+                "id": "MT-2163-DS_discharge_medications_1",
+                "section": "discharge_medications",
+                "text": "1. Phenergan 25 mg q.6. p.r.n.\n2. Duragesic patch 100 mcg q.3.d.\n3. Benadryl 25-50 mg p.o. q.i.d. for pruritus.\n4. Sliding scale will be discontinued at the time of discharge and will be reinstituted on arrival at Pelican Bay Infirmary.\n5. The patient had initially been on enalapril here. His hypertension will be managed by Dr. X as well.\n\nPLAN: The patient should return for repeat ERCP if there are signs of stent occlusion such as fever, increased bilirubin, worsening pain. In the meantime, he will be kept on a regular diet and activity per Dr. X.",
+                "retrieval": "deterministic"
+              }
+            ]
+          },
+          "derivable": true
+        }
+      ],
+      "guardrail_flags": [],
+      "error": null
+    }
+  }
+}

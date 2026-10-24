@@ -93,3 +93,46 @@ def test_a_replayed_turn_and_the_current_turn_are_read_the_same_way():
     )
 
     assert _asked_questions(parsed) == [CHIP, "and the potassium?"]
+
+
+def test_a_chip_stored_as_a_composed_question_still_counts_as_asked():
+    """§5.5.1: the row advanced on Turn 2 and rehydrated on Turn 3.
+
+    The site stores the COMPOSED question on each stored turn — that is what the agent
+    was asked — so Turn 2's chip comes back as `... For admission 90000015.`. Compared
+    raw it matches no chip, so the chip Turn 1 had already excluded returned.
+    """
+    composed_chip = f"{CHIP} For admission 90000015."
+    composed_command = ("Summarize the recent discharge notes for this patient. "
+                        "For admission 90000015.")
+    parsed = parse_agent_request(
+        {
+            "question": "How does the sodium compare?",
+            "hadm_id": 90000015,
+            "turns": [
+                {"question": composed_command, "answer": "She was admitted…"},
+                {"question": composed_chip, "answer": "20 mg then 10 mg."},
+            ],
+        },
+        max_question_chars=500,
+    )
+
+    asked = _asked_questions(parsed)
+
+    assert asked[1] == CHIP
+    assert CHIP not in suggest(parsed["question"], "answer text", state=_state(),
+                               asked=asked)
+
+
+def test_the_default_question_is_not_reduced_to_a_fragment():
+    """Only a sentence appended AFTER a finished one is the admission suffix.
+
+    The default question names the admission inside its own sentence, so a looser
+    pattern turned "Assess the 30-day readmission risk for admission 90000015." into
+    "Assess the 30-day readmission risk".
+    """
+    parsed = parse_agent_request({"hadm_id": 90000015}, max_question_chars=500)
+
+    assert _asked_questions(parsed) == [
+        "Assess the 30-day readmission risk for admission 90000015.",
+    ]

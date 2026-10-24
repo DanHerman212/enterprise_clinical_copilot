@@ -470,6 +470,84 @@ def _predict_values(tool_calls: list[dict]) -> list[float]:
     return values
 
 
+def _factor_values(tool_calls: list[dict]) -> list[float]:
+    """The served values of the drivers themselves, one per top factor.
+
+    Separate from `_predict_values` on purpose: those are the score and its threshold,
+    these are the patient's own numbers — days, counts, measurements — which the model
+    may quote in prose and which the service returns at full floating-point precision.
+    """
+    values: list[float] = []
+    for tc in tool_calls or []:
+        if tc.get("name") != "predict_readmission":
+            continue
+        resp = tc.get("response") or {}
+        if not isinstance(resp, dict) or resp.get("error"):
+            continue
+        for factor in resp.get("top_factors") or []:
+            if not isinstance(factor, dict):
+                continue
+            v = factor.get("value")
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                values.append(float(v))
+    return values
+
+
+def _clean_number(value: float) -> str:
+    """One decimal at most, and no trailing zeros: 16.0417 -> "16", 2.5 -> "2.5"."""
+    rounded = round(value, 1)
+    if rounded == int(rounded):
+        return str(int(rounded))
+    return f"{rounded:.1f}"
+
+
+def normalise_factor_values(answer: str,
+                            tool_calls: list[dict]) -> tuple[str, list[str]]:
+    """Rewrite a raw served factor value into the number a clinician would write.
+
+    The service returns `prior_inpatient_days` as 16.0417 because that is the encoded
+    feature, not an observation. The model copied it verbatim — "16.0417 days" — into a
+    risk-driver answer (measured in the production UI, `agent-00176-ngw`, 2026-10-24),
+    where four decimals claim a precision the record does not have. Prompting the format
+    alone was already tried for the score and needed `display_probability` beside it, for
+    the same reason: a rule the model may follow is not a guarantee, and the number is
+    arithmetic rather than a clinical fact.
+
+    Only a value the turn was actually served is rewritten, and only when it was written
+    with three or more decimals, so a lab value quoted from a note passage keeps its own
+    precision. Runs after the lab and risk guards so it cannot make a number they have
+    already checked disagree with them.
+    """
+    flags: list[str] = []
+    out = answer
+    for value in _factor_values(tool_calls):
+        raw = repr(value)
+        if "." not in raw:
+            continue
+        _, _, frac = raw.partition(".")
+        if len(frac.rstrip("0")) < 3:
+            # The served value is already written the way a clinician would, so there is
+            # nothing to correct and nothing a pattern could safely catch.
+            continue
+        # Any token carrying two or more decimals that names the same value at two
+        # decimals. The model may copy `16.0417` whole or write `16.04`; both claim a
+        # precision the feature does not have, and both are the same served arithmetic.
+        def _replace(match: re.Match) -> str:
+            try:
+                written = float(match.group(0))
+            except ValueError:  # pragma: no cover - the pattern only matches numbers
+                return match.group(0)
+            if abs(written - round(value, 2)) > 0.005:
+                return match.group(0)
+            return _clean_number(value)
+
+        rewritten = re.sub(r"(?<![\d.])\d+\.\d{2,}(?![\d])", _replace, out)
+        if rewritten != out:
+            flags.append(f"factor_value_rounded:{raw}")
+            out = rewritten
+    return out, flags
+
+
 def verify_risk_numbers(
     answer: str, tool_calls: list[dict], evidence_text: str = "",
     literature_text: str = "", lab_text: str = "",
@@ -958,6 +1036,8 @@ def guard_answer(
     flags += f
     answer, f = verify_lab_values(answer, full_text, _lab_text(evidence),
                                   json.dumps(evidence, default=str))
+    flags += f
+    answer, f = normalise_factor_values(answer, evidence)
     flags += f
     flags += flag_invented_dates(answer, passages)
     turn_passages, _ = _passage_sections(tool_calls)

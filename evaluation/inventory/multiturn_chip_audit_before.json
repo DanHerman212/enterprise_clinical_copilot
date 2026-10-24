@@ -908,8 +908,8 @@
           "What were the primary diagnosis and hospital course documented in the clinical note?"
         ],
         "turn_2_status": 200,
-        "verdict": "BAD",
-        "reason": "no resolving ^[n] citation"
+        "verdict": "GOOD",
+        "reason": ""
       }
     ],
     "progression": {

@@ -127,13 +127,21 @@ def test_the_loop_is_bound_with_the_allow_list():
     assert source.count("bind_tools(freetext_tools") == 2
 
     assert graph._freetext_allowed(False, False) == routing.FREETEXT_TOOLS
+    # A driver question adds the attribution and NARROWS the standing set: the lab
+    # series documents nothing a question about a count or a disposition asked, and
+    # calling it anyway put a lab chip under a utilization answer (agent-00176-ngw,
+    # 2026-10-24). A driver that IS an analyte keeps it — see
+    # `tests/agent/test_risk_driver_turn.py`.
     assert graph._freetext_allowed(True, False) == frozenset(
+        ({*routing.FREETEXT_TOOLS, "predict_readmission"} - {"get_lab_trends"}))
+    assert graph._freetext_allowed(True, False, True) == frozenset(
         {*routing.FREETEXT_TOOLS, "predict_readmission"})
     # Published evidence is bound only when the question asked for it (Phase 02.5).
     assert graph._freetext_allowed(False, True) == frozenset(
         {*routing.FREETEXT_TOOLS, "search_literature"})
     assert graph._freetext_allowed(True, True) == frozenset(
-        {*routing.FREETEXT_TOOLS, "predict_readmission", "search_literature"})
+        {*routing.FREETEXT_TOOLS, "predict_readmission", "search_literature"} - {
+            "get_lab_trends"})
 
 
 # --- what an empty search becomes --------------------------------------------

@@ -15,6 +15,8 @@ says; anything else would be a prompt change smuggled in as a refactor, and
 prompt changes move answers.
 """
 
+import re
+
 # The starter chips the console offers, and the question each one asks.
 CHIP_QUESTIONS = {
     "risk": "Assess the 30-day readmission risk for this patient.",
@@ -111,3 +113,29 @@ def compose_question(*, chip=None, question=None, hadm_id=None, topic=None) -> s
     if hadm_id is not None and wording != DEFAULT_TEMPLATE.format(hadm_id=hadm_id):
         wording += ADMISSION_TEMPLATE.format(hadm_id=hadm_id)
     return wording
+
+
+#: The admission sentence `compose_question` appends, at the end of a question. It
+#: always follows a finished sentence — the composed question ends in a full stop before
+#: it — so the period is part of the anchor. Without it, the default question's own
+#: "for admission 90000015." was eaten and a whole sentence became a fragment.
+_ADMISSION_SUFFIX = re.compile(r"(?<=[.?!])\s+For admission \d+\.\s*$", re.IGNORECASE)
+
+
+def words_of(question: str) -> str:
+    """A question reduced back to the words the reader used, whoever wrote it down.
+
+    The site stores the COMPOSED question on the turn — that is what the agent was
+    asked, and it is what a follow-up has to be replayed against — so every replayed
+    turn carries the admission sentence the current turn's `own_words` does not.
+    Fingerprinting the two against a chip therefore matched on the turn the chip was
+    clicked and matched nothing afterwards, which is how a chip rehydrated on Turn 3
+    (measured in the production UI, `agent-00176-ngw`, 2026-10-24): Turn 1 excluded
+    it, Turn 2's stored question carried `For admission 90000015.` and did not.
+
+    Text that never carried the suffix comes back unchanged, so this is safe to apply
+    to every replayed question rather than only the ones this deployment composed.
+    """
+    text = " ".join(str(question or "").split())
+    stripped = _ADMISSION_SUFFIX.sub("", text).strip()
+    return stripped or text

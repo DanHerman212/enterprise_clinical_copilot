@@ -26,7 +26,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from services.agent import chain, model_turn, routing, stages
-from services.agent import admission_context, followups
+from services.agent import admission_context, followups, questions
 from services.agent.a2ui import compose_presentation
 from services.agent.contracts import (
     RE_DERIVABLE_TOOLS,
@@ -211,10 +211,20 @@ def _asked_questions(parsed: dict) -> list[str]:
     `agent-00175-ttr`, 2026-10-24). The replayed turns hold the words the reader used, so
     the current turn has to be read the same way or the two ends of the comparison
     disagree.
+
+    The replayed turns need the same reduction, and they need it for a second reason:
+    the site stores the COMPOSED question on each stored turn, because that is what the
+    agent was asked. Reading those raw matched on the turn a chip was clicked and matched
+    nothing afterwards, so a chip asked on Turn 2 came back on Turn 3 — the row advanced
+    once and then rehydrated (measured in the production UI, `agent-00176-ngw`,
+    2026-10-24). `questions.words_of` removes the admission sentence from every stored
+    question, which is what makes "already asked" a fact about the thread rather than
+    about the most recent turn.
     """
-    asked = [str(turn.get("question") or "") for turn in parsed.get("turns") or []
-             if isinstance(turn, dict)]
-    asked.append(str(parsed.get("own_words") or parsed.get("question") or ""))
+    asked = [questions.words_of(turn.get("question"))
+             for turn in parsed.get("turns") or [] if isinstance(turn, dict)]
+    asked.append(str(parsed.get("own_words")
+                     or questions.words_of(parsed.get("question") or "")))
     return [question for question in asked if question.strip()]
 
 

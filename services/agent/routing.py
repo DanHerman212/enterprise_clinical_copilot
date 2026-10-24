@@ -774,6 +774,43 @@ def wants_risk_driver(question: str, intent: str | None = None) -> bool:
     return intent == "risk_driver" or asks_why_risk_driver(question)
 
 
+#: How a question names one of the laboratory features the model scores. Two sources,
+#: because a clinician may quote either: the model's feature language ("lowest
+#: hemoglobin") and the note's analyte language ("Hgb", "RDW"). Kept to the features
+#: `feature_labels.FEATURE_LABELS` actually carries — a word that is not a driver in
+#: this model cannot make a lab tool necessary.
+_LAB_ANALYTE_WORDS = (
+    "hemoglobin", "haemoglobin", "hgb",
+    "sodium",
+    "red blood cell", "rbc", "erythrocyte",
+    "rdw", "red cell distribution width",
+    "monocyte",
+)
+
+_LAB_ANALYTE = re.compile(
+    r"\b(?:" + "|".join(re.escape(word) for word in _LAB_ANALYTE_WORDS) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def asks_about_a_lab_analyte(question: str) -> bool:
+    """Whether this question is about a laboratory measurement rather than a count.
+
+    The distinction decides one tool on one kind of turn. A risk-driver question is
+    answered from the model's attribution plus whatever documents it; when the driver IS
+    a lab value ("why is the RDW a driver?") that documentation is the series, and
+    `get_lab_trends` is how it is read. When the driver is not ("why do prior inpatient
+    days drive this?"), the series documents nothing the question asked — and calling it
+    anyway put a lab panel in `state["tool_calls"]`, which then offered an unrelated lab
+    follow-up chip under a utilization answer (measured in the production UI,
+    `agent-00176-ngw`, 2026-10-24).
+
+    Negative for anything that names no analyte, which is the safe direction: the tool
+    is withheld, and a note search still answers what the record says.
+    """
+    return bool(_LAB_ANALYTE.search(question or ""))
+
+
 def _templated_arguments(args: dict, hadm_id: int | None,
                          command: Command) -> dict:
     """`args` over `hadm_id`, refusing when an admission is needed and absent.

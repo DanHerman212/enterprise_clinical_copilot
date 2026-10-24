@@ -658,7 +658,8 @@ def _tools(toolbox: MCPToolbox,
 
 
 def _freetext_allowed(risk_driver_question: bool,
-                      wants_literature: bool) -> frozenset[str]:
+                      wants_literature: bool,
+                      lab_driver_question: bool = False) -> frozenset[str]:
     """The tools the reasoning loop may call on this turn.
 
     `routing.FREETEXT_TOOLS` is the standing boundary: a command's tool is absent rather
@@ -672,6 +673,14 @@ def _freetext_allowed(risk_driver_question: bool,
       (`routing.asks_for_literature`). Bound unconditionally before 2026-10-22, which put
       an empty `LiteratureList` over chart follow-ups and discarded their note citations.
 
+    A driver question also NARROWS the standing set. `get_lab_trends` is admitted to free
+    text for the lab drill-down, and a driver question kept it unconditionally: asked why
+    prior inpatient days drive the score, the loop read a lab panel, answered from the
+    model's mechanics, and the turn then offered a lab chip under a utilization answer
+    (measured in the production UI, `agent-00176-ngw`, 2026-10-24). The series documents
+    nothing such a question asked, so it is withheld unless the driver IS an analyte
+    (`routing.asks_about_a_lab_analyte`).
+
     What is NOT relaxed: the rule that no risk SCORE is produced in free text. The
     projection in `tool_node` shows the model display strings and driver names with
     directions, never a bare float, and the /risk command remains the thing that draws
@@ -682,6 +691,8 @@ def _freetext_allowed(risk_driver_question: bool,
         allowed |= routing.LITERATURE_TOOLS
     if risk_driver_question:
         allowed.add("predict_readmission")
+        if not lab_driver_question:
+            allowed.discard("get_lab_trends")
     return frozenset(allowed)
 
 
@@ -862,6 +873,7 @@ def build_graph(
     risk_driver_question: bool = False,
     risk_driver_declared: bool = False,
     wants_literature: bool = False,
+    lab_driver_question: bool = False,
 ):
     """Compile the graph. `on_event` receives progress stages; None disables them.
 
@@ -896,7 +908,8 @@ def build_graph(
     # "has the model spoken" is true before this run has done anything and would never
     # force anything on the questions that need it most.
     freetext_tools = _tools(
-        toolbox, allowed=_freetext_allowed(risk_driver_question, wants_literature),
+        toolbox, allowed=_freetext_allowed(risk_driver_question, wants_literature,
+                                          lab_driver_question),
     )
     chat_model = _build_llm(model)
     llm = chat_model.bind_tools(freetext_tools)
@@ -1241,6 +1254,10 @@ async def ask(
         # a turn that asked for it, so a chart question cannot come back with a
         # `LiteratureList` and no note citations.
         wants_literature=routing.asks_for_literature(question),
+        # And the half that WITHHOLDS a tool: a driver question about a count or a
+        # disposition is not documented by a lab series, so asking for one put a panel in
+        # the turn's evidence and a lab chip under an answer about utilization.
+        lab_driver_question=routing.asks_about_a_lab_analyte(question),
     )
 
     config: dict = {"recursion_limit": RECURSION_LIMIT}

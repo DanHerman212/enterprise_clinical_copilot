@@ -63,6 +63,28 @@ _FIELDS: tuple[tuple[str, str], ...] = (
 )
 
 
+def _display(value: Any) -> str:
+    """A number the way a clinician writes it, and everything else as it stands.
+
+    The feature store returns `prior_inpatient_days` as 16.0417 because that is the
+    encoded row, not an observation. `_clean` used to stringify it verbatim, so the
+    manifest stated "prior_inpatient_days: 16.0417" and a risk-driver answer quoted it
+    back as "recorded as 16.0417 days" (measured in the production UI,
+    `agent-00177-qr5`, 2026-10-24). Four decimals claim a precision neither the record
+    nor the model has.
+
+    Counts and days are whole numbers; anything genuinely fractional keeps one decimal.
+    Formatting here rather than downstream is deliberate: the number is shown to the
+    model, and a prompt rule asking it to round is a request it can decline.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return str(value)
+    rounded = round(float(value), 1)
+    if rounded.is_integer():
+        return str(int(rounded))
+    return f"{rounded:.1f}"
+
+
 def _clean(value: Any) -> str:
     """One line, no markup. The values are ours, and this keeps them ours.
 
@@ -70,7 +92,7 @@ def _clean(value: Any) -> str:
     data value change the shape of the instruction around it. Nothing upstream
     produces such a value today; the check costs nothing and removes the class.
     """
-    text = " ".join(str(value).split())
+    text = " ".join(_display(value).split())
     return text.replace("<", "(").replace(">", ")")
 
 

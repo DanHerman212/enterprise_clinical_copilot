@@ -307,3 +307,26 @@ def test_a_declaration_without_a_replayed_score_still_retrieves():
     _ask(model, DRIVER_QUESTION, MANIFEST, intent="risk_driver")
 
     assert model.calls == 2
+
+
+def test_a_machine_float_is_stated_as_the_count_it_is():
+    """§5.5.2: the manifest said 16.0417 and the answer quoted it back.
+
+    The feature store returns the encoded row, not an observation: `prior_inpatient_days`
+    arrives as 16.0417. The model copied it verbatim into a risk-driver answer, where four
+    decimals claim a precision neither the record nor the model has. The block is
+    formatted here because this is where the number is shown to the model.
+    """
+    block = admission_context.render(
+        90000078, {"prior_inpatient_days": 16.0417, "prior_admission_count": 3},
+    )
+
+    assert "prior_inpatient_days: 16\n" in block
+    assert "16.0417" not in block
+    assert "prior_admissions: 3" in block
+
+
+def test_a_genuinely_fractional_value_keeps_one_decimal():
+    block = admission_context.render(90000078, {"index_los_days": 4.46})
+
+    assert "length_of_stay_days: 4.5" in block

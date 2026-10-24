@@ -474,13 +474,16 @@ def test_a_note_value_quoted_from_a_replayed_passage_is_supported():
     assert out["flags"] == []
 
 
-def test_citations_stay_scoped_to_the_turn_that_composed_them():
-    """`^[1]` addresses a slot in THIS turn's presentation.
+def test_a_marker_into_a_replayed_passage_resolves_against_the_conversation():
+    """Superseded 2026-10-24 (TF-10's other half).
 
-    The presentation is composed from this turn's calls, so a marker counted
-    against a replayed turn's passages would validate a citation the caller
-    cannot resolve. Replayed passages are evidence for what the answer may
-    claim, never for how it numbers what it cites.
+    This test used to pin the opposite rule — that `^[1]` could only address a slot in
+    this turn's own presentation — because the renderer restarted numbering at 1 per
+    tool result. Numbering now runs continuously across the replayed turns and this one
+    (`graph._render_tool_result`), and `a2ui.compose_presentation` resolves against the
+    same concatenation, so the guard has to count the same array or a correct marker is
+    deleted. Measured live on `agent-00175-ttr`: a chip answer citing `^[6]` against six
+    passages was served as `chart_synthesis_without_citations`.
     """
     replayed = [{
         "name": "rag_search", "args": {},
@@ -490,8 +493,22 @@ def test_citations_stay_scoped_to_the_turn_that_composed_them():
 
     out = g.guard_answer("He was admitted with hip pain ^[1].", [], replayed)
 
-    assert "^[1]" not in out["answer"]
-    assert out["flags"] == ["citation_out_of_range:^1"]
+    assert "^[1]" in out["answer"]
+    assert out["flags"] == []
+
+
+def test_a_marker_past_the_conversation_is_still_stripped():
+    """Widening the count must not accept a citation to nothing."""
+    replayed = [{
+        "name": "rag_search", "args": {},
+        "response": {"passages": [{"section": "brief_hospital_course",
+                                   "text": "Admitted with hip pain."}]},
+    }]
+
+    out = g.guard_answer("He was admitted with hip pain ^[2].", [], replayed)
+
+    assert "^[2]" not in out["answer"]
+    assert out["flags"] == ["citation_out_of_range:^2"]
 
 
 # --- dose removal by span (ECC-11) --------------------------------------------

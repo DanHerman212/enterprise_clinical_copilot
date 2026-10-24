@@ -25,8 +25,35 @@ def test_parse_agent_request_canonicalises_the_question():
     """
     assert parse_agent_request(
         {"question": " assess risk "}, max_question_chars=20
-    ) == {"question": "assess risk", "kind": None, "hadm_id": None,
-          "topic": None, "turns": [], "stream_prose": False, "follow_ups": False}
+    ) == {"question": "assess risk", "own_words": "assess risk", "kind": None,
+          "hadm_id": None, "topic": None, "turns": [], "stream_prose": False,
+          "follow_ups": False}
+
+
+def test_the_request_keeps_the_words_the_reader_used():
+    """`question` is the prompt; `own_words` is what the reader asked.
+
+    The follow-up selector compares chips against questions, and a chip is the
+    reader's wording — no `For admission ...` sentence on the end. Comparing the
+    composed prompt to a chip never matched, so a clicked chip came back
+    (`agent-00175-ttr`, 2026-10-24).
+    """
+    parsed = parse_agent_request(
+        {"question": "What is the taper?", "hadm_id": 90000015},
+        max_question_chars=500,
+    )
+
+    assert parsed["question"] == "What is the taper? For admission 90000015."
+    assert parsed["own_words"] == "What is the taper?"
+
+
+def test_a_chip_request_reports_the_chip_wording_as_the_reader_words():
+    parsed = parse_agent_request(
+        {"chip": "risk", "hadm_id": 90000015}, max_question_chars=500,
+    )
+
+    assert parsed["own_words"] == "Assess the 30-day readmission risk for this patient."
+    assert parsed["question"].endswith("For admission 90000015.")
 
 
 # The shape of a request is a decision, not an accident. These pin the refusal,
@@ -89,8 +116,9 @@ def test_the_closed_contract_still_accepts_the_three_shapes():
     """Closing the field set must not narrow what already worked."""
     assert parse_agent_request(
         {"question": "why?"}, max_question_chars=2000
-    ) == {"question": "why?", "kind": None, "hadm_id": None,
-          "topic": None, "turns": [], "stream_prose": False, "follow_ups": False}
+    ) == {"question": "why?", "own_words": "why?", "kind": None,
+          "hadm_id": None, "topic": None, "turns": [], "stream_prose": False,
+          "follow_ups": False}
     assert parse_agent_request(
         {"chip": "risk", "hadm_id": 90000009}, max_question_chars=2000
     )
@@ -181,6 +209,7 @@ def test_a_chip_and_admission_compose_what_the_website_used_to_build():
             "Assess the 30-day readmission risk for this patient. "
             "For admission 90000009."
         ),
+        "own_words": "Assess the 30-day readmission risk for this patient.",
         "kind": "risk",
         "hadm_id": 90000009,
         "topic": None,
@@ -196,6 +225,7 @@ def test_free_text_with_an_admission_gets_the_same_suffix_the_website_added():
         max_question_chars=2000,
     ) == {
         "question": "Why was this patient flagged? For admission 90000009.",
+        "own_words": "Why was this patient flagged?",
         "kind": None,
         "hadm_id": 90000009,
         "topic": None,
@@ -216,6 +246,7 @@ def test_an_admission_alone_asks_the_default_question():
         {"hadm_id": 90000009}, max_question_chars=2000
     ) == {
         "question": "Assess the 30-day readmission risk for admission 90000009.",
+        "own_words": "Assess the 30-day readmission risk for admission 90000009.",
         "kind": None,
         "hadm_id": 90000009,
         "topic": None,

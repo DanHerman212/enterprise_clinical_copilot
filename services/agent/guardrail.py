@@ -961,11 +961,25 @@ def guard_answer(
     flags += f
     flags += flag_invented_dates(answer, passages)
     turn_passages, _ = _passage_sections(tool_calls)
+    # Slots are the numbering the MODEL was shown, which since TF-10 runs across the
+    # replayed turns and this one: `graph._render_tool_result` numbers every passage in
+    # the conversation continuously, and `a2ui.compose_presentation` resolves against the
+    # same concatenation. Counting this turn alone deleted the markers a follow-up
+    # legitimately placed in an earlier turn's passage — observed live on
+    # `agent-00175-ttr`, 2026-10-24, where a chip answer citing `^[6]` against six
+    # passages (five replayed, one fresh) was served as `chart_synthesis_without_citations`
+    # with `citation_out_of_range:^6`. The marker was correct; the count was not.
+    replayed_passages, _ = _passage_sections(conversation_calls or [])
     # Passages for a note turn, articles for a literature turn: both are citation slots.
     # A literature turn has no passages at all, so counting only passages stripped every
-    # marker out of a properly grounded summary (observed live 2026-10-13). The identifiers
-    # travel too, because the model cites by PMID as well as by position.
-    slots = len(turn_passages) or _literature_slots(tool_calls)
+    # marker out of a properly grounded summary (observed live 2026-10-13). The
+    # identifiers travel too, because the model cites by PMID as well as by position.
+    #
+    # Only the passage count crosses turns. A PMID is not a position: it names a record
+    # the reader can open, and the canvas draws this turn's search, so a PMID from an
+    # earlier turn would be a link to a record this turn never showed.
+    slots = (len(turn_passages) + len(replayed_passages)
+             or _literature_slots(tool_calls))
     answer, f = check_citations(answer, slots, _literature_pmids(tool_calls))
     flags += f
 

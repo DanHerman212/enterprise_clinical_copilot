@@ -4,7 +4,7 @@ import re
 from typing import Any, NotRequired, TypedDict
 
 from services.agent import routing
-from services.agent.questions import UnknownChip, compose_question
+from services.agent.questions import UnknownChip, compose_question, own_words
 
 
 class AgentRequest(TypedDict):
@@ -32,6 +32,11 @@ class AgentRequest(TypedDict):
     """
 
     question: str
+    #: The question in the caller's own words, before the admission was appended.
+    #: `question` is what the model is asked; this is what the reader asked, and it
+    #: is what the follow-up selector compares a chip against. Two different readers,
+    #: two different strings, both of them honest.
+    own_words: str
     kind: str | None
     hadm_id: int | None
     topic: str | None
@@ -559,6 +564,9 @@ def parse_agent_request(body: Any, *, max_question_chars: int) -> AgentRequest:
         composed = compose_question(
             chip=chip, question=question, hadm_id=hadm_id, topic=topic
         )
+        asked_in_own_words = own_words(
+            chip=chip, question=question, hadm_id=hadm_id, topic=topic
+        )
     except UnknownChip as exc:
         # Raised before UnknownChip's parent ValueError: it is the more specific
         # answer and the caller can act on it.
@@ -578,6 +586,7 @@ def parse_agent_request(body: Any, *, max_question_chars: int) -> AgentRequest:
         )
     parsed = {
         "question": composed,
+        "own_words": asked_in_own_words,
         "kind": chip,
         "hadm_id": hadm_id,
         "topic": topic,

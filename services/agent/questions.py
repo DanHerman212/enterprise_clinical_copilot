@@ -62,6 +62,36 @@ class UnknownChip(ValueError):
         self.chip = chip
 
 
+def own_words(*, chip=None, question=None, hadm_id=None, topic=None) -> str:
+    """The question in the caller's own words, without the admission appended.
+
+    Separate from `compose_question` because two different readers want two
+    different things from the same intent. The model is asked the composed
+    question, admission and all; the follow-up selector has to recognise the
+    question the reader just asked, and it recognises it by the words the reader
+    used. Comparing a chip against the composed text never matches — the chip
+    carries no `For admission 90000015.` — so a clicked chip was offered back
+    (measured in the production UI, `agent-00175-ttr`, 2026-10-24).
+
+    Raises exactly what `compose_question` raises, for the same reasons.
+    """
+    if chip is not None:
+        wording = CHIP_QUESTIONS.get(chip)
+        if wording is None:
+            raise UnknownChip(chip)
+        template = TOPIC_QUESTIONS.get(chip)
+        if template is not None:
+            if not (topic or "").strip():
+                raise ValueError(f"{chip} was asked with no topic")
+            wording = template.format(topic=topic.strip())
+        return wording
+    if isinstance(question, str) and question.strip():
+        return question.strip()
+    if hadm_id is not None:
+        return DEFAULT_TEMPLATE.format(hadm_id=hadm_id)
+    raise ValueError("nothing to ask: no chip, no question, no admission")
+
+
 def compose_question(*, chip=None, question=None, hadm_id=None, topic=None) -> str:
     """Build the question the model is asked, from the caller's intent.
 
@@ -74,22 +104,10 @@ def compose_question(*, chip=None, question=None, hadm_id=None, topic=None) -> s
     is what the model is asked, a topic is what the tool is called with, and a
     command may have the second without the first.
     """
-    if chip is not None:
-        wording = CHIP_QUESTIONS.get(chip)
-        if wording is None:
-            raise UnknownChip(chip)
-        template = TOPIC_QUESTIONS.get(chip)
-        if template is not None:
-            if not (topic or "").strip():
-                raise ValueError(f"{chip} was asked with no topic")
-            wording = template.format(topic=topic.strip())
-    elif isinstance(question, str) and question.strip():
-        wording = question.strip()
-    elif hadm_id is not None:
-        return DEFAULT_TEMPLATE.format(hadm_id=hadm_id)
-    else:
-        raise ValueError("nothing to ask: no chip, no question, no admission")
-
-    if hadm_id is not None:
+    wording = own_words(chip=chip, question=question, hadm_id=hadm_id,
+                        topic=topic)
+    # The default is a whole sentence naming the admission, so appending the
+    # admission to it would say it twice.
+    if hadm_id is not None and wording != DEFAULT_TEMPLATE.format(hadm_id=hadm_id):
         wording += ADMISSION_TEMPLATE.format(hadm_id=hadm_id)
     return wording

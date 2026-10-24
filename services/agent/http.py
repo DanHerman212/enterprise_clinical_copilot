@@ -203,10 +203,18 @@ def _asked_questions(parsed: dict) -> list[str]:
     The replayed turns are the caller's own transcript, and they are the only record of
     what was asked: the follow-up row a reader has clicked is a question in that list,
     so a chip matching one of them has already been used up.
+
+    This turn's own entry is `own_words`, not `question`. `question` is the composed
+    prompt — the caller's words plus `For admission 90000015.` — and a chip never
+    carries that sentence, so the composed text matched no chip and the row offered back
+    the question the reader had just clicked (measured in the production UI,
+    `agent-00175-ttr`, 2026-10-24). The replayed turns hold the words the reader used, so
+    the current turn has to be read the same way or the two ends of the comparison
+    disagree.
     """
     asked = [str(turn.get("question") or "") for turn in parsed.get("turns") or []
              if isinstance(turn, dict)]
-    asked.append(str(parsed.get("question") or ""))
+    asked.append(str(parsed.get("own_words") or parsed.get("question") or ""))
     return [question for question in asked if question.strip()]
 
 

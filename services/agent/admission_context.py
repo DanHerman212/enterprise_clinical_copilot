@@ -77,9 +77,24 @@ def _display(value: Any) -> str:
     Formatting here rather than downstream is deliberate: the number is shown to the
     model, and a prompt rule asking it to round is a request it can decline.
     """
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if isinstance(value, bool):
         return str(value)
-    rounded = round(float(value), 1)
+    if isinstance(value, (int, float)):
+        rounded = round(float(value), 1)
+        if rounded.is_integer():
+            return str(int(rounded))
+        return f"{rounded:.1f}"
+    # The profile arrives from BigQuery with every column as a string, so the count that
+    # needs formatting is usually `"16.0417"` rather than 16.0417. A value that is not a
+    # number — "Emergency (EMER)", "Home" — is returned untouched.
+    text = str(value).strip()
+    try:
+        number = float(text)
+    except (TypeError, ValueError):
+        return str(value)
+    if text.isdigit():
+        return text
+    rounded = round(number, 1)
     if rounded.is_integer():
         return str(int(rounded))
     return f"{rounded:.1f}"

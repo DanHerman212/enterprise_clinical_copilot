@@ -312,21 +312,31 @@ def test_a_declaration_without_a_replayed_score_still_retrieves():
 def test_a_machine_float_is_stated_as_the_count_it_is():
     """§5.5.2: the manifest said 16.0417 and the answer quoted it back.
 
-    The feature store returns the encoded row, not an observation: `prior_inpatient_days`
-    arrives as 16.0417. The model copied it verbatim into a risk-driver answer, where four
-    decimals claim a precision neither the record nor the model has. The block is
-    formatted here because this is where the number is shown to the model.
+    The profile arrives from BigQuery with every column as a string, so the value that
+    needed formatting was `"16.0417"`, not the float. Formatting only floats left the
+    manifest — and the answer — saying "recorded as 16.0417 days" (measured in the
+    production UI, `agent-00178-2zh`, 2026-10-24).
     """
     block = admission_context.render(
-        90000078, {"prior_inpatient_days": 16.0417, "prior_admission_count": 3},
+        90000078, {"prior_inpatient_days": "16.0417",
+                   "prior_admission_count": "4",
+                   "admission_type": "Emergency (EW EMER.)"},
     )
 
     assert "prior_inpatient_days: 16\n" in block
     assert "16.0417" not in block
-    assert "prior_admissions: 3" in block
+    assert "prior_admissions: 4" in block
+    # A non-numeric column is quoted as it stands.
+    assert "admission_type: Emergency (EW EMER.)" in block
+
+
+def test_a_numeric_float_is_formatted_the_same_way():
+    block = admission_context.render(90000078, {"prior_inpatient_days": 16.0417})
+
+    assert "prior_inpatient_days: 16\n" in block
 
 
 def test_a_genuinely_fractional_value_keeps_one_decimal():
-    block = admission_context.render(90000078, {"index_los_days": 4.46})
+    block = admission_context.render(90000078, {"index_los_days": "4.46"})
 
     assert "length_of_stay_days: 4.5" in block

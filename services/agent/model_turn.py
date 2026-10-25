@@ -244,3 +244,38 @@ def classify(message: Any) -> tuple[str, str, str | None]:
     if kind == TRUNCATED:
         return "answer_truncated", TRUNCATED_SENTENCE, reason
     return "answer_unavailable", UNKNOWN_SENTENCE, reason
+
+
+def text_of(content: Any) -> str:
+    """The text in a message's `content`, whether it is a string or blocks.
+
+    A model message's `content` is not always a string. Gemini answers with content
+    blocks, so it arrives as a list shaped like `[{'type': 'text', 'text': '…'}]`,
+    and a caller that assumes a string gets the repr of that list instead of the
+    prose.
+
+    This was `message_text.text_of`, a module with one function in it. The rule it
+    enforces is the one `finish_reason` and `safety_ratings` enforce — read the
+    response rather than guess at it — so it belongs beside them.
+
+    Two callers are why it exists at all. `final_text` wore this unwrapping inline
+    until the streaming paths needed it too: each chunk is shaped like the whole
+    message, so the naive `str(chunk.content)` put `[{'type': 'text', 'text': …}]`
+    on the wire. Measured live against `/ehr` on 2026-10-14 — 6,116 announced
+    characters against a 1,021-character answer, every one of them envelope. The
+    rule had two callers and had already drifted once, which is why it is a
+    function rather than an inline copy.
+
+    Blocks that carry no text — a function call, a thought signature, an image —
+    contribute nothing. A list entry that is not a dict is stringified rather than
+    dropped, which is what the original unwrapping did and is what keeps a plain
+    list of strings working.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            block.get("text", "") if isinstance(block, dict) else str(block)
+            for block in content
+        )
+    return ""

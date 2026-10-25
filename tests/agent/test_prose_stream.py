@@ -29,7 +29,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk  # noqa: E402
 
 from services.agent import graph, http, routing, stages  # noqa: E402
 from services.agent.contracts import AgentRequestError, parse_agent_request  # noqa: E402
-from services.agent.message_text import text_of  # noqa: E402
+from services.agent.model_turn import text_of  # noqa: E402
 from services.agent.deterministic import run_command  # noqa: E402
 
 PREDICTION = {
@@ -364,7 +364,7 @@ def test_a_turn_of_empty_chunks_announces_nothing():
 # Gemini answers in content blocks, so `chunk.content` is usually a list. The streaming
 # paths announced `str(chunk.content)` and put the envelope on the wire instead of the
 # prose. Measured live against `/ehr` on 2026-10-14: 6,116 announced characters against
-# a 1,021-character answer. `message_text.text_of` is the one implementation of the
+# a 1,021-character answer. `model_turn.text_of` is the one implementation of the
 # unwrapping, and these are its cases.
 
 

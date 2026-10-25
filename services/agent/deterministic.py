@@ -54,7 +54,7 @@ from services.agent import routing
 from services.agent import stages
 from services.agent.contracts import RecordedToolCall
 from services.agent.feature_labels import humanize
-from services.agent.message_text import text_of
+from services.agent.model_turn import text_of
 from services.agent.prompts import SYSTEM_PROMPT
 from services.agent.routing import (
     EHR_RECORD_QUERY,
@@ -502,7 +502,7 @@ async def _formatting_turn(
         turn = chunk if turn is None else turn + chunk
         # The chunk's own text, not its repr: Gemini answers in content blocks, so
         # announcing `str(chunk.content)` would put the envelope on screen instead of
-        # the summary (see `message_text`).
+        # the summary (see `model_turn.text_of`).
         piece = text_of(chunk.content)
         if piece:
             announce(piece)

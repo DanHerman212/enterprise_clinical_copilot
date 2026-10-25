@@ -17,7 +17,8 @@ rendered and says so, and the caller is owed that notice rather than left to not
 The measurement is therefore no longer a diagnostic — it was one while the policy was
 "announce nothing that might move" — it is the trigger for the correction. The one
 case where text is still withheld is the ReAct turn's opening chunks, because there
-the text might not be the answer at all: see `PROSE_LOOKAHEAD_CHUNKS` in `graph`.
+the text might not be the answer at all: see `PROSE_LOOKAHEAD_CHUNKS` in
+`model_runtime`.
 
 This module exists to keep the progress frames honest. Five rules:
 
@@ -59,7 +60,11 @@ internal steps is invented — same reasoning as the layer 1 decision that the
 agent resolves citations and the browser renders them.
 """
 
+import logging
+from collections.abc import Callable
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # --- The closed vocabulary -------------------------------------------------
 # The first model turn reads the question; any later model turn is looking at
@@ -306,3 +311,30 @@ def prose_settled_event(swap: str) -> dict[str, Any]:
     would invent a step that never happened.
     """
     return {"stage": STAGE_PROSE_SETTLED, "swap": swap}
+
+
+def emit(on_event: Callable[[dict[str, Any]], None] | None, event: dict[str, Any]) -> None:
+    """Announce a stage, if anyone is listening.
+
+    A progress callback is a courtesy to the caller, never a load-bearing part
+    of the answer, so a listener that raises must not take the answer down with
+    it. The event is dropped and the run continues — the worst case is a
+    missing progress line, against the alternative of a 502 caused by the
+    progress reporting itself.
+
+    An unknown tool name is logged here rather than at the call site: this is
+    the only place that sees every stage, so it is the only place that can
+    notice `TOOL_LABELS` has fallen behind the MCP server's tool list.
+    """
+    if on_event is None:
+        return
+    if event.get("stage") == STAGE_TOOL and event.get("tool") not in TOOL_LABELS:
+        logger.warning(
+            "no progress label for tool %r — add it to stages.TOOL_LABELS",
+            event.get("tool"),
+        )
+    try:
+        on_event(event)
+    except Exception:
+        logger.warning("progress callback failed; continuing", exc_info=True)
+

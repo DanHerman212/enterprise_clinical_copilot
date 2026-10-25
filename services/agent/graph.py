@@ -33,27 +33,30 @@ from typing import Annotated, Any, Callable, TypedDict
 
 from langchain_core.messages import (
     AIMessage,
-    AIMessageChunk,
     BaseMessage,
     HumanMessage,
     SystemMessage,
     ToolMessage,
 )
 from langchain_core.tools import BaseTool
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, START, StateGraph
 
-from services.agent.message_text import text_of
-from services.mcp.config import (
-    GEMINI_LOCATION,
-    GEMINI_MAX_OUTPUT_TOKENS,
-    GEMINI_REASONING_EFFORT,
-    GEMINI_SAFETY_THRESHOLDS,
-    PROJECT,
-)
-from services.mcp.runtime import timeout_chain
+from services.agent.model_turn import text_of
 
 from services.agent.chain import MODEL_ID
+# Layer 4 lives in `model_runtime`; these names stay bound here because eleven
+# tests patch `graph._build_llm` to substitute a fake model, `deterministic.py`
+# imports `_build_llm` from here at call time, and `test_model_bounds` reads
+# `graph.MODEL_TIMEOUT_SECONDS`. Because the call sites below resolve them as
+# globals of THIS module, patching them here still intercepts.
+from services.agent.model_runtime import (
+    MODEL_TIMEOUT_SECONDS,  # noqa: F401 — read by test_model_bounds
+    PROSE_LOOKAHEAD_CHUNKS,  # noqa: F401 — re-exported for the same reason
+    build_llm as _build_llm,
+    has_tool_call as _has_tool_call,  # noqa: F401 — re-exported; used in
+    streamed_turn as _streamed_turn,  #    `model_runtime.streamed_turn`.
+)
+from services.agent.stages import emit as _emit
 
 from services.agent.mcp_client import MCPToolbox, _clean_schema
 from services.agent.contracts import RecordedToolCall, validate_recorded_tool_call
@@ -117,14 +120,6 @@ BUDGET_EXHAUSTED_ANSWER = (
     "part of the record, or one thing at a time — and I'll answer from that."
 )
 
-# One model call, bounded. The bound is part of the chain `timeout_chain`
-# enforces at startup — model < tool < ask < the proxy's own limit — and it is set
-# on the client rather than left absent for two reasons: a call that stalls should
-# fail as a model failure rather than spend the whole question's deadline looking
-# like a slow answer, and with no timeout at all the SDK's retry-on-timeout can
-# never fire, so the retry policy would be inert for the one failure it is most
-# needed for.
-MODEL_TIMEOUT_SECONDS = timeout_chain().model
 
 # What one passage may contribute to the prompt (G1: a tool result is untrusted
 # input, and this is the last point before it is read as one). The serving
@@ -359,32 +354,6 @@ def no_evidence_answer(
     return NO_EVIDENCE_TEMPLATE.format(topic=topic) if topic else NO_EVIDENCE_UNKNOWN_TOPIC
 
 
-def _emit(on_event: Callable[[dict[str, Any]], None] | None, event: dict[str, Any]) -> None:
-    """Announce a stage, if anyone is listening.
-
-    A progress callback is a courtesy to the caller, never a load-bearing part
-    of the answer, so a listener that raises must not take the answer down with
-    it. The event is dropped and the run continues — the worst case is a
-    missing progress line, against the alternative of a 502 caused by the
-    progress reporting itself.
-
-    An unknown tool name is logged here rather than at the call site: this is
-    the only place that sees every stage, so it is the only place that can
-    notice `stages.TOOL_LABELS` has fallen behind the MCP server's tool list.
-    """
-    if on_event is None:
-        return
-    if event.get("stage") == stages.STAGE_TOOL and event.get("tool") not in stages.TOOL_LABELS:
-        logger.warning(
-            "no progress label for tool %r — add it to stages.TOOL_LABELS",
-            event.get("tool"),
-        )
-    try:
-        on_event(event)
-    except Exception:
-        logger.warning("progress callback failed; continuing", exc_info=True)
-
-
 def _outbound_patient_identifier(
     name: str, args: dict, hadm_id: int | None
 ) -> dict | None:
@@ -598,39 +567,6 @@ class _MCPTool(BaseTool):
         return await self.box.call(self.name, dict(kwargs))
 
 
-def _build_llm(model: str) -> ChatGoogleGenerativeAI:
-    """The chat model, bound to the Vertex backend with our generation config."""
-    return ChatGoogleGenerativeAI(
-        model=model,
-        project=PROJECT,
-        # The model's endpoint, not the project's region: the pinned model has no
-        # regional endpoint, and `LOCATION` also names the vector index and the
-        # prediction endpoint, which do. See the note on `GEMINI_LOCATION`.
-        location=GEMINI_LOCATION,
-        vertexai=True,
-        temperature=0,
-        # The allowance covers thinking AND the answer. Too small and the model
-        # spends it all on thoughts, returns finish_reason=MAX_TOKENS with empty
-        # text, and raises nothing — which in a graph looks like a silently
-        # skipped tool call. See §9.
-        max_output_tokens=GEMINI_MAX_OUTPUT_TOKENS,
-        # ...so thinking is bounded separately rather than left to take what it
-        # likes from that allowance. A level bounds effort rather than tokens, so
-        # what it will spend is only known afterwards; `GEMINI_REASONING_EFFORT`
-        # carries the measurements. The pin and this parameter move together: the
-        # 2.5 family rejects a level outright, and the 3.x family deprecates the
-        # budget, so there is no value both accept.
-        reasoning_effort=GEMINI_REASONING_EFFORT,
-        max_retries=3,
-        timeout=MODEL_TIMEOUT_SECONDS,
-        # The content filters are set explicitly, per category, rather than left to
-        # the model's default — which differs between models, and is `OFF` on the
-        # ones this pin is due to move to. What is set here is what applies; there
-        # is no other place content filtering is configured.
-        safety_settings=dict(GEMINI_SAFETY_THRESHOLDS),
-    )
-
-
 def _tools(toolbox: MCPToolbox,
            allowed: frozenset[str] | None = None) -> list[BaseTool]:
     """Build one LangChain tool per MCP tool, sharing the toolbox.
@@ -694,99 +630,6 @@ def _freetext_allowed(risk_driver_question: bool,
         if not lab_driver_question:
             allowed.discard("get_lab_trends")
     return frozenset(allowed)
-
-
-#: How many opening chunks are held before a model turn is declared an answer.
-#
-# The hold exists because `agent_node` writes two different things through one call:
-# the deliberation that picks a tool, and the answer the reader came for. Which one
-# it is cannot be known until the turn ends, and announcing a routing thought and then
-# withdrawing it is the mutation the streaming policy forbids (`stages.py`). A turn
-# that calls a tool writes the call first, so holding the opening few chunks is enough
-# to tell the two apart, and the latency it costs an answer is a fraction of a
-# sentence.
-#
-# The residual assumption is named rather than hidden: a model that writes a paragraph
-# and *then* calls a tool would have that paragraph announced before the call arrived.
-# `http._prose_settled` measures announced prose against the prose finally served on
-# every streamed turn, so that case is logged where it happens rather than assumed away
-# here. Lowering this number widens that exposure, which is the trade below.
-#
-# Why it is 1 rather than 3 (2026-10-15), and the reason is measured. The client paces
-# the draft to a reading cadence, but everything held here is released as ONE burst and
-# painted at once — so this number sets how much of an answer is never paced at all. On
-# a 593-character answer a three-chunk hold released 426 characters in the first paint:
-# 72% of the text was on screen before the cadence had anything to do. At one chunk the
-# first paint is a single chunk, and the cadence governs the rest.
-#
-# One chunk still keeps routing off the screen, because a turn that calls a tool opens
-# with the call. It does not cover a model that opens with prose and calls the tool
-# later; that is the case `_prose_settled` reports, and an unmasked deliberation would
-# be worse than a first paint a beat larger.
-PROSE_LOOKAHEAD_CHUNKS = 1
-
-
-def _has_tool_call(chunk: AIMessageChunk) -> bool:
-    """Whether this chunk carries any part of a tool call.
-
-    Read from `tool_call_chunks`, which arrives as fragments: a chunk can carry a
-    name without arguments, or arguments without a name. Any fragment at all means
-    the model is calling a tool, which is all this needs to know.
-    """
-    return bool(getattr(chunk, "tool_call_chunks", None))
-
-
-async def _streamed_turn(llm, messages, on_event) -> AIMessage:
-    """One model turn announced as it is written, unless it turns out to be routing.
-
-    Concatenates as it goes: `AIMessageChunk + AIMessageChunk` is how LangChain
-    accumulates a streamed turn, and `AIMessageChunk` subclasses `AIMessage`, so the
-    accumulator satisfies every `isinstance(m, AIMessage)` reading the graph already
-    does — `route()` and `final_message()` included.
-    """
-    held: list[str] = []
-    announcing = False
-    routing = False
-    turn: AIMessageChunk | None = None
-
-    async for chunk in llm.astream(messages):
-        turn = chunk if turn is None else turn + chunk
-        if routing:
-            # A tool call was seen: this turn is deliberation and none of it goes to
-            # the caller. The held prefix is dropped unannounced.
-            continue
-        if _has_tool_call(chunk):
-            routing = True
-            held = []
-            continue
-        # The chunk's own text, not its repr. Gemini answers in content blocks, and
-        # `str(chunk.content)` announced the envelope and not the prose — measured live
-        # on `/ehr`, 2026-10-14 (see `message_text`).
-        piece = text_of(chunk.content)
-        if announcing:
-            if piece:
-                _emit(on_event, stages.answer_delta_event(piece))
-            continue
-        held.append(piece)
-        if len(held) >= PROSE_LOOKAHEAD_CHUNKS:
-            announcing = True
-            for piece in held:
-                if piece:
-                    _emit(on_event, stages.answer_delta_event(piece))
-            held = []
-
-    if turn is None:
-        raise RuntimeError("the model returned no chunks")
-
-    if not routing and not announcing:
-        # Shorter than the lookahead and no tool call: an answer that arrived in fewer
-        # chunks than the hold. It is announced now rather than withheld — the hold is
-        # a gate on ordering, not a reason to suppress a short answer.
-        for piece in held:
-            if piece:
-                _emit(on_event, stages.answer_delta_event(piece))
-
-    return turn
 
 
 # Sent to the model when a run is about to end with an answer and no retrieval happened.
@@ -1498,7 +1341,7 @@ def final_text(state: dict) -> str:
     if message is None:
         return ""
     # One implementation of "where is the text in a message", shared with the
-    # streaming paths. It lived here until they needed it too (`message_text`).
+    # streaming paths. It lived here until they needed it too (`model_turn.text_of`).
     return text_of(message.content).strip()
 
 

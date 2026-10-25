@@ -286,10 +286,6 @@ def test_stream_sends_stages_then_one_answer_frame():
         # rather than inside them. Added 2026-10-08 with the literature tool; the
         # canvas renders these, so a frame that omitted them would draw nothing.
         "literature",
-        # The strict payload (UX Phase 1). Additive: the fields above still carry
-        # what the console renders, and these three are what the Phase 2
-        # components are built against.
-        "narrative_text", "citations", "ui_components",
         # Phase 4A-2. `follow_ups` is empty unless the caller asked for it; `scope`
         # and `references` are derived from the tool calls and the resolved
         # citations, so they are always present and cost nothing.
@@ -302,10 +298,6 @@ def test_stream_sends_stages_then_one_answer_frame():
         "command", "routed_to",
     }
     assert answer["answer"].strip()
-    # The narrative and the citations are the legacy fields under the contract's
-    # names, not a second copy that could disagree with them.
-    assert answer["narrative_text"] == answer["answer"]
-    assert answer["citations"] == answer["sources"]
 
     # The streamed frame is what the site stores and later replays, so it has to
     # carry the same tool-call detail the single-response route carries.

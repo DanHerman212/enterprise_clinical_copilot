@@ -696,44 +696,6 @@ def validate_agent_success(payload: Any) -> AgentSuccess:
     if payload.get("a2ui") is not None and not isinstance(payload["a2ui"], dict):
         raise AgentResponseError("Agent produced malformed A2UI data.")
 
-    # The strict payload (UX Phase 1). Required rather than optional, unlike the
-    # site's copy of this contract: the agent is the only producer of these
-    # fields, so an agent revision that omitted one is a bug rather than a
-    # deployment-order question. The site can be lenient about them precisely
-    # because they are additive on its side.
-    # A blank narrative is legitimate for exactly one shape: a payload whose answer is
-    # drawn by its own surface. `/risk` returns the widget and no prose, because the
-    # widget prints the score, the band and the threshold, and a sentence beneath it
-    # said the same thing a second time. The rule stays narrow on purpose — a blank
-    # narrative with no surface is still a bug, because then nothing carries the
-    # answer at all.
-    narrative = payload.get("narrative_text")
-    drawn_by_surface = _draws_the_answer(payload)
-    if not isinstance(narrative, str):
-        raise AgentResponseError("Agent produced no narrative text.")
-    if not narrative.strip() and not drawn_by_surface:
-        raise AgentResponseError("Agent produced no narrative text.")
-
-    citations = payload.get("citations")
-    if not isinstance(citations, list) or not all(
-        isinstance(citation, dict) for citation in citations
-    ):
-        raise AgentResponseError("Agent produced malformed citations.")
-
-    components = payload.get("ui_components")
-    if not isinstance(components, list):
-        raise AgentResponseError("Agent produced malformed UI components.")
-    for component in components:
-        if not isinstance(component, dict):
-            raise AgentResponseError("Agent produced malformed UI components.")
-        if not isinstance(component.get("component"), str):
-            raise AgentResponseError("Agent produced malformed UI components.")
-        # `props` is the component's whole input, so it has to be an object even
-        # when it is empty: a list would be read as positional arguments by a
-        # caller that spreads it, which is a failure mode with no upside.
-        if not isinstance(component.get("props", {}), dict):
-            raise AgentResponseError("Agent produced malformed UI components.")
-
     sources = payload.get("sources")
     if not isinstance(sources, list):
         raise AgentResponseError("Agent produced malformed sources.")

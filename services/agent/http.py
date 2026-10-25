@@ -39,7 +39,6 @@ from services.agent.graph import ask, final_message, final_text
 from services.agent.guardrail import guard_answer
 from services.agent.mcp_client import MCP_TRANSPORT, toolbox
 from services.agent import observability
-from services.agent.payload import build_ui_components
 from services.agent.served_admissions import is_served
 from services.mcp.runtime import requires_cloud_run_auth, timeout_chain
 
@@ -538,19 +537,6 @@ async def _compose_success(
         # articles, so they have to cross this boundary or the swap has nothing to
         # draw.
         "literature": presentation["literature"],
-        # The strict payload (UX Phase 1): the narrative, the citations that
-        # narrative's markers resolve against, and the components to draw it
-        # with. Additive on purpose — every field above still carries what the
-        # console renders today, so the site, the renderer and the new
-        # components can each move on their own revision (see payload.py).
-        "narrative_text": presentation["answer"],
-        # The same list as `sources`, under the contract's name. One source of
-        # truth, two names: the console looks a footnote up in `sources`, and the
-        # Phase 2 components were specified against `citations`.
-        "citations": presentation["sources"],
-        "ui_components": build_ui_components(
-            state.get("command"), trimmed_calls, state.get("command_payload")
-        ),
         "model": chain.MODEL_ID,
         # The revision that produced this answer travels with it. A stored turn
         # without it cannot be explained once the code has moved on, which is

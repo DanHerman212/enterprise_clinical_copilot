@@ -47,7 +47,7 @@ def _answer_text(response: dict) -> str:
     prose = (response.get("answer") or "").strip()
     if prose:
         return prose
-    card = response.get("a2ui") or response.get("ui_components")
+    card = response.get("a2ui")
     if card:
         return card_to_text(card)
     status = response.get("status")

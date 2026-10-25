@@ -30,7 +30,6 @@ from langchain_core.messages import SystemMessage  # noqa: E402
 
 from services.agent import graph  # noqa: E402
 from services.agent import routing  # noqa: E402
-from services.agent import payload as payload_module  # noqa: E402
 from services.agent.deterministic import (  # noqa: E402
     _NO_READMISSION,
     _presented_prediction,
@@ -40,7 +39,6 @@ from services.agent.deterministic import (  # noqa: E402
 )
 from services.agent.contracts import parse_agent_request  # noqa: E402
 from services.agent.contracts import AgentRequestError  # noqa: E402
-from services.agent.payload import build_ui_components  # noqa: E402
 from services.mcp.tools import __all__ as REGISTERED_TOOLS  # noqa: E402
 
 
@@ -81,19 +79,6 @@ class _NoToolsModel:
 
         return AIMessage(content=self.reply)
 
-
-# The component each command is drawn as, written out longhand from the design
-# document and keyed by the WIRE name. Both halves matter: the left column is the
-# vocabulary the request carries, and the right column is what the document asks
-# for.
-EXPECTED_COMPONENTS = {
-    "risk": "risk_visualizer",
-    "meds": "medication_table",
-    "summarize": "narrative_with_sources",
-    "literature": "literature_cards",
-    # Phase 4B: the lab trajectories, which had no command at all until then.
-    "labs": "lab_trends",
-}
 
 # The caller's own words, for the one command that needs them.
 #
@@ -692,8 +677,8 @@ def test_the_narrative_cites_the_passage_it_reports_on():
 
 
 def test_the_medication_command_hands_the_payload_the_verified_rows_only():
-    """Through the command, not just the parser: the widget is built from the
-    verified rows, so a dropped row cannot reach the grid."""
+    """Through the command, not just the parser: the grid is built from the
+    verified rows, so a dropped row cannot reach it."""
     reply = json.dumps({"medications": [
         {"medication": "Tylenol", "dosage": "650 mg"},
         {"medication": "Warfarin", "dosage": "5 mg"},
@@ -710,86 +695,6 @@ def test_the_medication_command_hands_the_payload_the_verified_rows_only():
     medications = state["command_payload"]["medications"]
     assert [row["medication"] for row in medications] == ["Tylenol"]
     assert state["command_payload"]["dropped"][0]["medication"] == "Warfarin"
-
-    components = build_ui_components("meds", state["tool_calls"],
-                                     state["command_payload"])
-    assert [c["component"] for c in components] == ["medication_table"]
-    assert [row["medication"] for row in components[0]["props"]["medications"]] == [
-        "Tylenol"]
-    assert components[0]["props"]["dropped"][0]["medication"] == "Warfarin"
-
-
-# --- the payload the answer is delivered as ---------------------------------
-
-@pytest.mark.parametrize("command", routing.COMMANDS, ids=lambda c: c.wire)
-def test_each_command_is_drawn_as_exactly_its_own_component(command):
-    """One component per command, named by the table. A second component would
-    mean the command reached for evidence it does not own."""
-    components = build_ui_components(command.wire, [], {})
-
-    assert [c["component"] for c in components] == [
-        EXPECTED_COMPONENTS[command.wire]]
-
-
-def test_the_component_table_is_keyed_by_the_wire_vocabulary():
-    """Checked in both directions, because the mistake this guards against is
-    invisible: a table keyed by the clinician-facing names covers half the
-    commands and hands the other half to the derived path, which draws something
-    plausible. `risk` and `meds` are the same word in both vocabularies;
-    `summarize` and `literature` are not.
-    """
-    routed = {command.wire for command in routing.COMMANDS}
-
-    assert set(payload_module.COMMAND_COMPONENTS) == routed
-    assert payload_module.COMMAND_COMPONENTS == EXPECTED_COMPONENTS
-
-
-def test_a_component_whose_data_is_missing_says_why_rather_than_nothing():
-    """Omitting it renders as "nothing to show", which a clinician reads as "the
-    notes say nothing" — a different and worse statement than "the tool failed"."""
-    components = build_ui_components("literature", [], None)
-
-    assert [c["component"] for c in components] == ["literature_cards"]
-    assert "unavailable" in components[0]["props"]
-
-
-def test_the_risk_component_carries_the_score_and_its_attributions():
-    calls = [{
-        "name": "predict_readmission",
-        "args": {"hadm_id": 90000023},
-        "response": {
-            "hadm_id": 90000023, "probability": 0.3443, "threshold": 0.11,
-            "decision": 1, "model_version": "risk-1",
-            "top_factors": [{"feature": "length of stay", "contribution": 0.4,
-                             "direction": "increases"}],
-        },
-    }]
-
-    props = build_ui_components("risk", calls, None)[0]["props"]
-
-    # The served probability is 0.3443; the component carries it at the precision
-    # the narrative describes it at, so the prose and the widget agree.
-    assert props["probability"] == 0.34
-    assert props["threshold"] == 0.11
-    assert props["top_factors"][0]["feature"] == "length of stay"
-
-
-def test_a_free_text_answer_is_drawn_as_what_its_own_evidence_calls_for():
-    """The field is not command-only: free text gets the components its calls
-    produced, in call order, deduplicated."""
-    calls = [
-        {"name": "rag_search", "args": {}, "response": {"passages": [
-            {"section": "brief_hospital_course", "text": "..."}]}},
-        {"name": "rag_search", "args": {}, "response": {"passages": [
-            {"section": "discharge_diagnosis", "text": "..."}]}},
-        {"name": "search_literature", "args": {}, "response": {
-            "returned": 1, "articles": [{"pmid": "1", "title": "T", "abstract": "A"}]}},
-    ]
-
-    components = build_ui_components(None, calls, None)
-
-    assert [c["component"] for c in components] == [
-        "source_cards", "literature_cards"]
 
 
 # --- the request that carries both -------------------------------------------

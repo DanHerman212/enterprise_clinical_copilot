@@ -19,7 +19,7 @@ if str(_REPO) not in sys.path:
 
 import pytest  # noqa: E402
 
-from services.agent import contracts, payload, routing  # noqa: E402
+from services.agent import contracts, routing  # noqa: E402
 from services.agent.guardrail import _passage_sections  # noqa: E402
 
 
@@ -72,24 +72,6 @@ MEDS_CALL = {
          "text": "Discharge Medications: oxycodone SR 20 mg q.12h."},
     ]},
 }
-
-
-def test_the_free_text_medication_call_draws_source_cards():
-    """The grid belongs to /meds; a prose answer's evidence is passages."""
-    components = payload.build_ui_components(None, [MEDS_CALL])
-
-    assert [c["component"] for c in components] == ["source_cards"]
-    assert "unavailable" not in str(components), components
-
-
-def test_the_meds_command_still_draws_the_grid():
-    rows = {"medications": [{"medication": "oxycodone SR", "dosage": "20 mg",
-                             "frequency": "q.12h."}],
-            "dropped": [], "returned_passages": 1}
-    components = payload.build_ui_components("meds", [MEDS_CALL], rows)
-
-    assert [c["component"] for c in components] == ["medication_table"]
-    assert components[0]["props"]["medications"] == rows["medications"]
 
 
 def test_a_free_text_medication_answer_resolves_citations_from_its_passages():

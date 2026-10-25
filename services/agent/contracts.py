@@ -116,15 +116,22 @@ class LiteratureResult(TypedDict):
 # attached, so there is no note text among its results for the store to be careful
 # with in the first place.
 RE_DERIVABLE_TOOLS = frozenset(
-    # `get_lab_trends` joins them (Phase 3, 2026-10-16) and is the clearest case of the
-    # rule: its series are generated from the admission's own feature row by a seeded
-    # function, so asking again returns the same numbers by construction rather than by
-    # luck. It also carries no note prose — values, intervals and flags — so there is
-    # nothing in its result for the store to be careful with.
     {"rag_search", "rag_search_sections", "discharge_medications",
-     "search_literature", "get_lab_trends"}
+     "search_literature"}
 )
-RESULT_KEPT_TOOLS = frozenset({"predict_readmission"})
+#: Results a caller must keep if it wants to replay a turn cheaply.
+#:
+#: `predict_readmission` was alone here until Phase 5C. `get_lab_trends` joined it on
+#: 2026-10-25, and the reason is not that its result became less reproducible — it is
+#: as reproducible as it ever was — but that "reproducible" was read as "free". The
+#: replay re-runs every derivable call to rebuild the transcript, which means a thread
+#: that had ever answered `/labs` paid for `get_lab_trends` again on **every subsequent
+#: turn**, before the model was asked anything, and nothing was emitted as a progress
+#: stage because the replay happens before the run (see `graph.replay_messages`). The
+#: series is values, intervals and flags, generated from the admission's own feature
+#: row — it carries no note prose — so keeping it in the site's database costs nothing
+#: the memory policy protects, and it stops the round trip.
+RESULT_KEPT_TOOLS = frozenset({"predict_readmission", "get_lab_trends"})
 
 
 class AgentSuccess(TypedDict):

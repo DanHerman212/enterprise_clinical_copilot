@@ -148,6 +148,12 @@ def rag_payload(tool_calls: list[dict]) -> dict | None:
 def lab_trend_payload(tool_calls: list[dict]) -> dict | None:
     """The `get_lab_trends` response for this run, or None.
 
+    This run, not this conversation. `compose_presentation` hands this turn's calls here
+    while the citation layer and the scope read the whole conversation's evidence: a
+    series the transcript already holds is quoted in prose and cited, and it is not drawn
+    again. The card answers "show me the course", which is a question this turn either
+    asked or did not.
+
     None for a failed call as well as for no call: the card draws a course, and a course
     with no values in it is not a shorter answer, it is a wrong one. The turn still says
     what happened — the tool's error reaches the model like any other result.
@@ -292,7 +298,15 @@ def compose_presentation(question: str, answer: str,
     evidence_calls = list(evidence) if evidence is not None else tool_calls
     rag = rag_payload(evidence_calls)
     literature = literature_payload(evidence_calls)
-    labs = lab_trend_payload(evidence_calls)
+    # The lab card reads THIS turn's calls, not the conversation's. `evidence_calls` is
+    # the right array for what the answer rests on and for how its markers are numbered
+    # (TF-10, 2026-10-23), but a chart is not a provenance statement — it is a drawing
+    # of a course this turn read. Composed from the replay, a follow-up about anything
+    # at all — the discharge diagnosis, a medication — redrew the sparkline panel of a
+    # `/labs` turn from three turns ago, and each extra `/labs` turn in the thread added
+    # another one (reported from the production UI, 2026-10-25). The comparative matrix
+    # beside it is gated the same way and for the same reason (see `_draws_matrix`).
+    labs = lab_trend_payload(tool_calls)
     sources = resolve_sources(renumbered, remap, rag, intent)
     narrative = _narrative(renumbered, sources, literature)
 
@@ -326,7 +340,12 @@ def compose_presentation(question: str, answer: str,
     # withheld the scope AND raised a visible safety swap over an answer nothing had been
     # removed from. The same false correction the comparator turn produced, from the same
     # cause: a channel added after the rule was written.
-    lab_evidenced = bool((labs or {}).get("trends"))
+    # Read from the conversation's evidence, not from the drawing. These are two
+    # different questions that used to share one variable: `labs` above answers "does
+    # this turn draw a course", and this answers "was there a trajectory behind this
+    # answer at all". A follow-up that quotes a replayed series is still a chart answer
+    # — the scope pill says so — even though it no longer redraws the panel.
+    lab_evidenced = bool((lab_trend_payload(evidence_calls) or {}).get("trends"))
     # A command's own structured result is a fourth channel (2026-10-18). `/risk` answers
     # from the model estimate and `/meds` from an extraction verified against the note,
     # so `sources` is empty on both by construction — not because a citation failed to

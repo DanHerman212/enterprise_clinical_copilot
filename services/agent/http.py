@@ -426,6 +426,23 @@ async def ask_stream_route(request: Request) -> Response:
     )
 
 
+def _keeps_the_announcement(stage: str) -> bool:
+    """Whether prose announced so far still belongs to the answer that will be served.
+
+    False for every frame that means the run went back for evidence. A tool round and a
+    retrieval demand both end the pass that was speaking, and the graph answers again:
+    the prose the reader was shown belongs to a draft that is not served, so comparing it
+    against the settled answer would report a correction to text nobody is holding — and
+    report it as a withdrawal from the record whenever a guardrail flag was set for any
+    other reason.
+
+    True for `verify` because it is emitted after the chain has finished and before
+    composition; clearing on it would discard every announcement and the verdict would
+    never fire at all.
+    """
+    return stage in (stages.STAGE_ANSWER_DELTA, stages.STAGE_VERIFY)
+
+
 def _prose_settled(announced: list[str], payload: dict, trace: str) -> str | None:
     """Whether the prose a caller watched arrive survived into the served answer.
 
@@ -523,9 +540,25 @@ async def _stream_chain(
             if event is _CHAIN_DONE:
                 break
             # Kept so the settled answer can be compared with what was announced
-            # once the guardrails have run (see `_prose_settled`).
+            # once the guardrails have run (see `_prose_settled`). Cleared when the run
+            # goes back for more evidence — a tool round, or the retrieval demand.
+            #
+            # What was announced before that belongs to a pass whose answer is not the
+            # one served: the model spoke, was sent back for a retrieval, and answered
+            # again. Comparing that first pass against the served text reported a
+            # correction to prose the reader is no longer holding — and because the
+            # verdict is `visible` whenever a guardrail flag is set, it reported it as a
+            # withdrawal from the record. What the badge is for is the second pass: the
+            # text on screen at the end against the text served, which is what the
+            # accumulator holds once the loop has stopped moving.
+            #
+            # `verify` is excluded because it arrives after the chain has finished and
+            # before composition — clearing on it would discard every announcement and
+            # the verdict would never fire at all.
             if event.get("stage") == stages.STAGE_ANSWER_DELTA:
                 announced.append(event.get("text") or "")
+            elif not _keeps_the_announcement(event.get("stage")):
+                announced.clear()
             yield _sse(event["stage"], event)
 
         try:

@@ -705,6 +705,44 @@ def _transcript_carries_attribution(state: AgentState) -> bool:
     )
 
 
+def _transcript_carries_lab_series(state: AgentState) -> bool:
+    """Whether the replayed turns already hold a lab series this question can read.
+
+    The same reading as `_transcript_carries_attribution`, for the other tool whose
+    result the transcript keeps. A question about an analyte that the conversation has
+    already answered has its series in the transcript, and `prompts.py` states the rule
+    the model is under: cite the passage you have, do not re-run a search to produce a
+    marker for something you were already given. Demanding a retrieval anyway forced a
+    tool call the model had no reason to make, and the tool it reached for was the one
+    whose result was already printed above it.
+
+    Read from `replayed_tool_calls`, not `tool_calls`: the latter is this run's, and this
+    asks what the run was handed.
+    """
+    for call in state.get("replayed_tool_calls") or []:
+        if call.get("name") != "get_lab_trends":
+            continue
+        response = call.get("response") or {}
+        if isinstance(response, dict) and not response.get("error") and response.get("trends"):
+            return True
+    return False
+
+
+def _demand_withholds_labs(state: AgentState, lab_question: bool) -> bool:
+    """Whether the forced retrieval round must be bound without `get_lab_trends`.
+
+    Two ways it must be. A question that names no analyte is not answered by a series,
+    so binding one put a lab panel in an answer about a disposition — the same finding
+    that narrowed the driver turn (`_freetext_allowed`). And a question that DOES name
+    one has its series in the transcript already, which is the case `route` exempts
+    before this is ever consulted; the check is repeated here so the tool is absent
+    rather than merely discouraged if the exemption is ever widened.
+    """
+    if not lab_question:
+        return True
+    return _transcript_carries_lab_series(state)
+
+
 def build_graph(
     toolbox: MCPToolbox,
     model: str = MODEL_ID,
@@ -757,6 +795,21 @@ def build_graph(
     chat_model = _build_llm(model)
     llm = chat_model.bind_tools(freetext_tools)
     llm_retrieving = chat_model.bind_tools(freetext_tools, tool_choice="any")
+    # The forced round has a second shape, with `get_lab_trends` absent. Which one a turn
+    # gets is decided when the demand fires and not here, because the answer depends on
+    # what the replay carries (`_demand_withholds_labs`). Built once per run rather than
+    # per call: binding is a template, and the same two are reused for every round.
+    notes_only = frozenset(
+        getattr(tool, "name", "") for tool in freetext_tools
+    ) - {"get_lab_trends"}
+    llm_retrieving_notes = (
+        chat_model.bind_tools(
+            [tool for tool in freetext_tools if getattr(tool, "name", "") in notes_only],
+            tool_choice="any",
+        )
+        if "get_lab_trends" in {getattr(tool, "name", "") for tool in freetext_tools}
+        else llm_retrieving
+    )
     async def agent_node(state: AgentState) -> dict:
         # Which turn this is decides the label, and the transcript is the only
         # honest source for that. No prior AIMessage means the model has not
@@ -789,8 +842,19 @@ def build_graph(
         spent = len(state.get("tool_calls") or [])
         if spent >= MAX_TOOL_CALLS_PER_TURN:
             answering_llm = chat_model
+        elif state["retrieval_demanded"]:
+            # The forced round, and which tools it may reach for depends on the question
+            # and on what the replay already holds. A demand that fires on a follow-up
+            # about the discharge diagnosis must pull from the chart notes; the lab
+            # series is not evidence for that question, and calling it put a panel in
+            # `state["tool_calls"]` — and therefore a sparkline card on the turn.
+            answering_llm = (
+                llm_retrieving_notes
+                if _demand_withholds_labs(state, lab_driver_question)
+                else llm_retrieving
+            )
         else:
-            answering_llm = llm_retrieving if state["retrieval_demanded"] else llm
+            answering_llm = llm
         if prose_stream and on_event is not None:
             response = await _streamed_turn(answering_llm, state["messages"], on_event)
         else:
@@ -880,6 +944,21 @@ def build_graph(
             # the transcript, so a forced search buys nothing and costs the answer.
             # Declared, not inferred from the wording — the drill-down knows what it
             # is, and only that declaration distinguishes it from a first turn.
+            return END
+        if lab_driver_question and _transcript_carries_lab_series(state):
+            # A question about an analyte whose series the conversation already holds.
+            # The model answered from the transcript because the prompt tells it to
+            # ("the lab series from a previous /labs turn ... cite the passage you
+            # have"), and demanding a retrieval here contradicted that instruction and
+            # spent a round trip to make it call the tool whose result was already
+            # printed above the question.
+            #
+            # Deliberately narrow. It is the question that has to be about an analyte
+            # AND the series that has to be present; a follow-up about the discharge
+            # diagnosis after a /labs turn is not exempt, because a note search is
+            # exactly what that question needs. Exempting on the replay alone would
+            # answer new chart questions from whatever happened to be in the
+            # transcript.
             return END
         return "demand_retrieval"
 

@@ -123,3 +123,89 @@ Before pushing and deploying:
 Once the new revision is deployed and the `3/3` Canary passes:
 1. Report the live Cloud Run revision name, Canary Run 4 telemetry table (`3/3`), and a quick test checklist of suggested patients/commands (`90000015`, `90000108`, `90000106`) for the Architect to test directly in the production web UI.
 2. **STOP and wait for the Architect's manual production UX sign-off before executing the full 26-scenario Gate 2 evaluation suite.**
+
+---
+
+---
+
+## Section 4: Sprint 1 — Multi-Turn Follow-Up De-Duplication & Current-Turn Scoping
+
+### 4.1 Manual Production UX Findings (`agent-00173-9pv`)
+Manual multi-turn testing on patient `90000015` (`/ehr` $\rightarrow$ click `"What is the dosing and taper schedule for oxycodone SR at discharge?"` $\rightarrow$ ask `"how long do patients typically need pain meds after surgery?"`) exposed two UX defects in how `followups.suggest()` handles multi-turn state:
+1. **Self-Echo / Prior-Turn Repetition:** Clicking `"What is the dosing and taper schedule for oxycodone SR at discharge?"` on Turn 2 caused Turn 2 (and Turn 3) to re-render the exact same `"What is the dosing and taper schedule for oxycodone SR at discharge?"` chip back to the user.
+2. **Replayed Tool-Call Bleed on `literature` / Free-Text Turns:** Because `followups.suggest()` inspects `state["replayed_tool_calls"]` identically to `state["tool_calls"]`, Turn 3 (a `scope == "literature"` turn where PubMed returned `0` records) fell back to Turn 1's replayed `/ehr` payload and repeated the exact same 3 `/ehr` chips (`oxycodone SR`, `Coumadin`, `outpatient follow-up`).
+
+### 4.2 Required Fixes (`services/agent/followups.py` & `services/agent/http.py`)
+
+1. **Conversation History De-Duplication (Never Repeat an Asked Question):**
+   - Pass prior turn user questions (`turns` from the request / `state`) alongside the current `question` into `followups.suggest()`.
+   - Normalize all previously asked user questions in the thread (plus the current turn's `question`) via casefolding, punctuation stripping, and whitespace collapsing.
+   - Exclude any candidate follow-up chip that matches a question already asked in the current turn or any prior turn in the conversation thread.
+
+2. **Strict Scope Boundary on `scope == "literature"` Turns:**
+   - When `presentation.get("scope") == "literature"`, `followups.suggest()` must evaluate **only** `P11` (`LITERATURE_SCOPE` from current-turn `search_literature` articles).
+   - If `search_literature` returned `0` articles on a `literature`-scoped turn, return `[]` immediately. **Never** fall back to `state["replayed_tool_calls"]` to emit `patient_chart` chips on a `literature`-scoped turn.
+
+3. **Current-Turn Priority Before Replayed Fallback (`patient_chart` Scope):**
+   - On `patient_chart` turns, evaluate candidate templates against **current-turn `state["tool_calls"]` first** (excluding any chip already asked in conversation history).
+   - Only if current-turn `state["tool_calls"]` produces fewer than `FOLLOW_UP_COUNT` (`3`) unasked chips, fill remaining slots from `state["replayed_tool_calls"]` (again strictly excluding any question already asked in the thread).
+   - Ensure that as a user clicks through chips across Turns 2, 3, and 4, each clicked chip is consumed and replaced by the next available unasked candidate in the taxonomy (e.g., `P5` `MED_SPECIFIC_REGIMEN`, `P6` `RISK_TOP_DRIVER`, `P9` `NOTE_DIAGNOSIS_COURSE`) until no unasked verified chips remain.
+
+### 4.3 Unit Tests (`tests/agent/test_followups.py`)
+Add unit tests covering:
+- Clicking `follow_ups[0]` on Turn 2 never re-emits that question in Turn 2's `follow_ups` list.
+- Multi-turn progression (`Turn 1` $\rightarrow$ `Turn 2` $\rightarrow$ `Turn 3`) consumes previously asked questions and advances down the taxonomy without repeating prior user turns.
+- A `scope == "literature"` turn with `0` PubMed articles and populated `replayed_tool_calls` returns `[]` (zero chart-chip bleed).
+
+### 4.4 Deploy & STOP for Manual Production UI Verification (Do Not Run Canary or Gate 2)
+1. Run the local unit test suite and confirm 100% pass.
+2. Commit and push the Section 4 changes to deploy the new Cloud Run revision.
+3. **STOP IMMEDIATELY AFTER DEPLOYMENT.** Report the live Cloud Run revision name and wait for the Architect to manually verify multi-turn chip progression in the production UI. **Do NOT execute Canary or Gate 2 in Sprint 1.**
+---
+
+---
+
+---
+
+## Section 5.5: Fix Turn 3+ Chip Rehydration & `P6` (`RISK_TOP_DRIVER`) Turn-2 Grounding/Chip Leak
+
+### 5.5.1 Manual UI Observations (`agent-00176-ngw`)
+1. **Turn 3+ Chip Rehydration:** On `90000015` (`/ehr` $\rightarrow$ click Chip 1 $\rightarrow$ click Chip 2), Chip 1 is properly excluded on Turn 2, but **rehydrates (reappears) in the follow-up chip set after Turn 3**.
+2. **`P6` (`RISK_TOP_DRIVER`) Uncited ML Prose & Unrelated Lab Chip Leak:** On `90000078`, `/ehr` rendered 1 chip (`"Why does prior inpatient days increase this patient's readmission risk driver profile?"`). Clicking it produced:
+   - Raw float formatting (`"16.0417 days"`) and ungrounded ML mechanics prose (*"contributing to the logit-space risk score. The model uses this historical utilization metric as a statistical indicator..."*) with **zero `^[n]` citations** to the patient's chart passages.
+   - An unrelated **Labs follow-up chip** on Turn 2 (because the ReAct loop called `get_lab_trends` during a non-lab risk-driver turn, causing `followups.py` to fire `P7`/`P8`).
+
+### 5.5.2 Required Remediations
+
+1. **Fix Turn 3+ Chip Rehydration Across Full Thread History (`http.py` / `contracts.py` / `questions.py`):**
+   - Trace `_asked_questions` across a 4-turn browser session (`Turn 1` $\rightarrow$ `Turn 2` $\rightarrow$ `Turn 3` $\rightarrow$ `Turn 4`).
+   - Ensure `questions.own_words()` normalization (stripping `"For admission <hadm_id>."` and any command/prompt wrappers) is applied to **every historical `turn.question` in `request.turns`**, not only the current turn's `own_words`.
+   - Verify that no question asked on Turn 1, 2, or 3 can ever reappear on Turn 3, Turn 4, or later turns.
+
+2. **Fix `P6` (`RISK_TOP_DRIVER`) Turn-2 Grounding, Citations & Float Formatting (`graph.py` / `prompts.py` / `routing.py`):**
+   - **Tool Scoping on Risk-Driver Turns:** When `routing.wants_risk_driver(question, intent)` is true and the asked driver is **not** a laboratory analyte, do not call `get_lab_trends` (restrict tools to `predict_readmission` + note retrieval `rag_search_sections`/`rag_search`) so the ReAct loop does not pollute `state["tool_calls"]` with unrequested lab panels or emit an unrelated `P7`/`P8` lab chip.
+   - **Chart-Cited Explanation (No ML Jargon):** In the synthesis instructions for risk-driver questions, forbid ML/statistical jargon (*"logit-space"*, *"statistical indicator"*), format numeric feature values cleanly (e.g., `16 days` or `16.0 days`, never raw 4-decimal floats like `16.0417`), and require the answer to cite the replayed/retrieved EHR note passages (`^[n]`) that document the relevant clinical background (or explicitly state with an inline `^[n]` citation to the
+
+---
+
+## Section 6: Final Canary 5 Verification (`3/3`) & Gate 2 Full Suite Execution
+
+### 6.1 Section 5 & 5.5 Sign-Off
+The `agent-00180-k8n` remediations (`questions.words_of()` multi-turn history normalization, `routing.asks_about_a_lab_analyte()` tool scoping, `admission_context._display()` numeric-string formatting, and chart-cited risk-driver synthesis; `1349 passed, 1 skipped`) are approved.
+
+### 6.2 Step 1: Execute Gate 1 Canary (Run 5 — `3/3` Required)
+1. Run the Gate 1 Canary (`--canary`: `dev_t1_01`, `dev_t2_03`, `dev_t7_01`) against live Cloud Run revision `agent-00180-k8n`.
+2. Verify that **all 3 scenarios pass (`3 / 3`, `verdict = 1`, zero structural failures)**:
+   - `dev_t1_01`: All dimensions `>= 2` (confirming `judge_call.py` published `sources` alignment resolves the prior `citation: 1` evaluator artifact).
+   - `dev_t2_03`: Turn 1 deterministically selects the `oxycodone SR` taper chip, and Turn 2 passes with verified inline citations (`citation >= 2`, `responsiveness >= 2`).
+   - `dev_t7_01`: Passes outpatient boundary checks (`verdict = 1`).
+3. If any Canary item fails, **STOP immediately** and report the trace diagnostic without launching Gate 2.
+
+### 6.3 Step 2: Execute Gate 2 (Full 26-Scenario Dev Suite Run)
+Immediately upon confirming `3 / 3` on Canary Run 5:
+1. Execute the full 26-scenario evaluation run against `ecc-tier2-dev-suite` on `agent-00180-k8n`.
+2. Write the complete scorecard to `evaluation/results/phase04_dev_scorecard.md` and present the summary in chat, including:
+   - Serving Cloud Run revision (`agent-00180-k8n`) and Langfuse dataset run ID.
+   - Overall pass rate (`X / 26`) and mean dimension scores (`fidelity`, `grounding`, `citation`, `responsiveness`, `safety`, `context`).
+   - Per-trajectory pass breakdown across Trajectories 1–7 (`T1`–`T7`).
+   - Full diagnostic table for any failing scenario, strictly classified as either an **Evaluator Artifact** or an **Application Defect** (keeping `services/agent/` strictly frozen after the run pending Architect review).

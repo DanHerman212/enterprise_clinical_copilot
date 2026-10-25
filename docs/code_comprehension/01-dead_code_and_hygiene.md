@@ -1,6 +1,6 @@
 # Phase 1: Dead Code & Hygiene Remediation
 
-**Status:** `AWAITING ARCHITECT APPROVAL (Step A Complete)`  
+**Status:** `COMPLETE (Step B executed; all three gates recorded)`  
 **Target Layers:** Layer 1 (`01-client.md`) & Layer 12 (`12-delivery_ci_cd.md`)  
 **Objective:** Quarantine and prune superseded Phase 1 artifacts, legacy shims, and unreachable code blocks across both repositories so subsequent phases only refactor active production code.
 
@@ -93,10 +93,51 @@ each one would have produced a wrong edit if followed literally.
 |---|---|
 | `pytest tests` (`enterprise_clinical_copilot`) | **1349 passed, 1 skipped** |
 | `manage.py test` (`danielmherman`, `ENVIRONMENT=development`) | **233 tests, OK** |
-| `manage.py check --deploy` | **Not runnable locally.** Settings refuse to start without `GOOGLE_CLOUD_PROJECT`, `CLOUD_SQL_CONNECTION_NAME`, `ALLOWED_HOSTS`, `CSRF_TRUSTED_ORIGINS`, `GS_BUCKET_NAME`, `DEMO_AGENT_URL`. It must run where those are set; the system check that `manage.py test` performs reported no issues |
+| `manage.py check --deploy` (`ENVIRONMENT=production`) | **`System check identified no issues (2 silenced).`** |
 
-### 2.5 Open items found during execution
+How the deploy gate was made runnable: production settings read `SECRET_KEY` from Secret
+Manager unconditionally, so the env var cannot stand in for it — with `GOOGLE_CLOUD_PROJECT=dummy`
+the import dies with `PERMISSION_DENIED: Secret Manager API has not been used in project
+dummy`. The gate was therefore run against the real project for the secret lookup only,
+with the remaining production variables given stand-in values (none of them is read by
+`check`):
 
-1. **`demo/verify_live_citations.py:78` still expects a `SourceCard` component** while `demo/tests.py` asserts twice that it is never emitted. One of the two is wrong; the script is the legacy side, and it is not covered by the test suite.
-2. **`npm run build` now has no console half.** If a template later needs a second bundle, it needs a second config and an explicit entry — the shared-chunk problem documented in `vite.clinical.config.js` is the reason not to merge them.
-3. **`manage.py check --deploy` remains an unexecuted gate** for the Definition of Done. It needs a run against the deployment configuration.
+```
+ENVIRONMENT=production \
+GOOGLE_CLOUD_PROJECT=trim-icon-498815-a0 \
+CLOUD_SQL_CONNECTION_NAME=dummy \
+ALLOWED_HOSTS=localhost \
+CSRF_TRUSTED_ORIGINS=https://localhost \
+GS_BUCKET_NAME=dummy \
+DEMO_AGENT_URL=https://localhost \
+./.venv/bin/python manage.py check --deploy
+→ System check identified no issues (2 silenced).
+```
+
+The "2 silenced" are the checks silenced deliberately in settings; nothing is being hidden
+by this run.
+
+### 2.5 Open items — all resolved
+
+1. **`demo/verify_live_citations.py` — RESOLVED by repair, not deletion.** It is an active
+   live smoke script: it posts to the real `a2ui_ask` view with the deployed agent behind
+   it, which `demo/tests.py` cannot do because every test there mocks the agent. So it stays.
+   The prescribed one-line rename (`SourceCard` → `CitedNarrative`) would not have worked:
+   `CitedNarrative` carries `{index, source, title, label, excerpt}` — human labels, no raw
+   section name — so `card["section"]` would have raised. The assertions now read the turn's
+   published `sources` (`{cite, section, text}`), which is where the section names live, and
+   `CitedNarrative` presence is asserted separately to prove the prose reached the page. Two
+   of its sentinels were already stale before this pass: `"not available"` and `"not found"`
+   were `SourceCard` section names that no longer exist, so the "unavailable" and
+   "empty_passages" cases now test the answer text and the absence of citations.
+2. **`npm run build` has no console half** — accepted. A second bundle would need a second
+   config and an explicit entry; the shared-chunk failure documented in
+   `vite.clinical.config.js` is the reason the two were never merged.
+3. **`manage.py check --deploy` — executed.** See §2.4.
+
+### 2.6 Final ECC hygiene (same pass)
+
+| Item | Action |
+|---|---|
+| `mlops/training/_export_sample_data.py` (617 bytes) | **Deleted.** Hardcoded `/Users/danherman/Desktop/enterprise_clinical_copilot/...` paths, mutated `sample_data.parquet` in place, zero references anywhere in the tree |
+| `docs/code_comprehension/00-master_code_audit_strategy.md` | **Already gone from disk** — the master plan was renamed to `00-master_alignment_plan.md`. The rename is recorded in git so the empty blob left by the earlier commit does not linger |

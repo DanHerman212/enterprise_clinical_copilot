@@ -91,3 +91,5 @@ docs/.obsidian
 docs/ux_workshop/screenshots/
 docs/ux_workshop/turns/
 docs/ux_workshop/phase1/live/
+# Clean context archives (generated for review, never committed)
+/*-clean.zip

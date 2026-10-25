@@ -573,7 +573,9 @@ def test_an_empty_search_still_draws_a_narrative_with_nothing_cited():
 
     assert narrative["text"] == "The search returned no records."
     assert narrative["citations"] == []
-    assert narrative["streaming"] is False
+    # No `streaming` key: see `test_a2ui.py` — the component's inert-marker state had
+    # no writer and is gone.
+    assert set(narrative) == {"text", "citations"}
 
 
 def test_the_canvas_root_is_a_column_and_the_prose_leads_it():

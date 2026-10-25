@@ -177,8 +177,15 @@ def narrative_surface(answer: str, citations: list[dict]) -> dict:
     `citations` are built by the caller from the evidence this turn actually rests on;
     see `note_citations` and `literature_citations`. Each entry's `index` is the
     number the marker shows, so the two cannot drift.
+
+    There is no `streaming` key. There was one — a boolean the component read to draw
+    its markers inert while the answer was still arriving — and no caller could ever set
+    it: this envelope is composed once the turn has finished, so the value was `False`
+    on every payload that ever reached a browser. The draft that fills the canvas while
+    the answer is being written is drawn by the page (Phase 5B), not by this component,
+    so the key was removed from the contract rather than left as a promise nothing kept.
     """
-    return {"text": answer, "citations": citations, "streaming": False}
+    return {"text": answer, "citations": citations}
 
 
 def note_citations(sources: list[dict]) -> list[dict]:

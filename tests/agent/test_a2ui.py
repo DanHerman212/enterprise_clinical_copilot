@@ -407,7 +407,11 @@ class TestPresentationContract:
         narrative = _by_id(out["a2ui"])["narrative"]
         assert narrative["text"] == out["answer"]
         assert [c["index"] for c in narrative["citations"]] == [1]
-        assert narrative["streaming"] is False
+        # The narrative carries the prose and its evidence and nothing else. The old
+        # `streaming` key was read by the component as "draw the markers inert" and no
+        # caller could ever set it true — this envelope is composed after the turn has
+        # finished. Removed in Phase 5B; the browser draws the draft itself.
+        assert set(narrative) == {"id", "component", "text", "citations"}
 
     def test_compose_presentation_renumbers_out_of_order_citations(self):
         out = compose_presentation(

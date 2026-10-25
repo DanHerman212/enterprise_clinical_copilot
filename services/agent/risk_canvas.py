@@ -274,7 +274,6 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
             "component": "CitedNarrative",
             "text": narrative["text"],
             "citations": narrative["citations"],
-            "streaming": bool(narrative.get("streaming")),
         })
 
     # The lab trajectories, when this turn asked for them. Second in the column and directly

@@ -569,3 +569,41 @@ def test_turn2_collector_preserves_run_tag():
     assert body["run_tag"] == "pilot-x"
     assert body["turns"] == [{"question": "/ehr", "answer": "", "tool_calls": []}]
     assert body["question"] == "What was the plan?"
+
+
+# --- the other half of the cohort -------------------------------------------
+
+#: The site's seed artifact, when the sibling repository is checked out beside this
+#: one. CI builds one repository per runner, so the read is guarded rather than
+#: assumed — the same pattern as `test_wire_contract_parity.py`.
+SITE_SEED = (_REPO.parent / "danielmherman" / "demo" / "data" / "demo_cohort.json")
+
+
+def test_every_admission_the_site_offers_is_one_this_agent_will_answer():
+    """`SERVED_HADM_IDS` is only half the cohort, and this is the other half.
+
+    The list above is pinned to the evaluation census, so it is the agent's own
+    idea of who exists. But the patients a clinician can actually pick come from
+    the site's seed artifact, and a request for one the agent refuses is answered
+    "Admission not found" — offered, then denied. Nothing compared the two until
+    Phase 4 (2026-10-25); they happened to agree.
+
+    Subset rather than equality, and deliberately: the served set is expected to
+    outgrow the demo cohort, while a demo patient the agent cannot open is always
+    a bug.
+    """
+    import json
+
+    import pytest
+
+    from services.agent.served_admissions import SERVED_HADM_IDS
+
+    if not SITE_SEED.is_file():
+        pytest.skip(f"site repository not checked out ({SITE_SEED})")
+
+    seed = json.loads(SITE_SEED.read_text())
+    patients = seed["patients"] if isinstance(seed, dict) else seed
+    seeded = {int(p["hadm_id"]) for p in patients}
+
+    assert seeded, "the seed artifact names no patients"
+    assert seeded <= SERVED_HADM_IDS, sorted(seeded - SERVED_HADM_IDS)

@@ -24,6 +24,7 @@ from services.mcp.contracts import (
 )
 from services.mcp.dependencies.features import FEATURE_SOURCE, get_feature_source
 from services.mcp.dependencies.labs.synthetic import lab_trends
+from services.mcp.tools._validation import valid_hadm_id
 
 #: Analytes this tool will draw, named for the caller. Derived from the panel rather than
 #: listed again, so a row added to the generator is reachable the moment it exists.
@@ -56,6 +57,17 @@ async def get_lab_trends(hadm_id: int, analyte: str = "") -> LabTrendResult | To
         analyte: One analyte key to draw. Empty draws the full panel, which is what a
             drill-down that has no specific analyte in mind should ask for.
     """
+    # The same check its five siblings make, and for the reason `_validation` gives:
+    # bool is an int subclass, and `hadm_id=True` would otherwise bind as admission 1
+    # and come back as `unknown_patient` — a wrong code for a malformed request. A
+    # non-numeric id used to raise inside the BigQuery client, outside this tool's
+    # handlers, so the caller got a transport failure instead of `bad_request`.
+    # Before the source is acquired, so a malformed id never builds a client.
+    if not valid_hadm_id(hadm_id):
+        return _log_and_error(
+            "bad_request", "hadm_id must be a positive integer", hadm_id,
+        )
+
     source = get_feature_source()
     if not await asyncio.to_thread(source.exists, hadm_id):
         return _log_and_error(

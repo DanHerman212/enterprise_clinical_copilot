@@ -79,3 +79,25 @@ def test_nothing_resolves_identity_from_the_registry_any_more():
     import services.mcp.dependencies.features.manifest as manifest_module
 
     assert not hasattr(manifest_module, "model_version")
+
+
+def test_the_operating_threshold_comes_from_the_response_not_from_here():
+    """ECC-68 — the threshold is an artefact, not a constant in this repository.
+
+    The served operating point is a recall-weighted F2 optimum, typically well
+    below 0.5. A literal here would be a second definition of it, and the failure
+    that causes is silent: every payload still looks well-formed, and the band
+    drawn above or below the line flips for every patient whose probability falls
+    between the two numbers.
+    """
+    served = 0.077  # deliberately not 0.5, and not this repository's business
+
+    with patch.object(pr, "feature_order", lambda: ["f1"]), \
+         patch.object(pr, "_source", lambda: _Source()), \
+         patch.object(pr, "predict_one",
+                      lambda instance: (_reply(threshold=served), _DEPLOYED_ID)):
+        result = pr._predict(90000009)
+
+    assert result["threshold"] == served
+    assert result["threshold"] != 0.5
+    validate_prediction_result(result)

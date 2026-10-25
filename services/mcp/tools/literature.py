@@ -419,4 +419,11 @@ async def search_literature(
     # Clamped rather than trusted. The advertised schema tells the model the bounds,
     # and the bounds are enforced again here, because the schema is advice.
     limit = max(MAX_RESULTS_MIN, min(int(max_results), MAX_RESULTS_MAX))
+    # Returned unvalidated on purpose (Phase 4, 2026-10-25). Its siblings call their
+    # own validators before returning; this one relies on `TOOL_CONTRACTS` at the
+    # agent boundary, which is the hop that actually sees what the model reads. Adding
+    # a second check of the same payload on the same hop would buy nothing and would
+    # put two definitions of the literature contract in two processes — the exact
+    # drift the registry exists to prevent. Do not "fix" this asymmetry without
+    # removing the registry entry in the same change.
     return await _fetch(cleaned[:MAX_QUERY_CHARS], limit)

@@ -329,15 +329,53 @@ def validate_lab_trend_result(payload: Any) -> LabTrendResult | ToolError:
     return payload
 
 
+def validate_admission_profile_result(
+    payload: Any,
+) -> AdmissionProfileResult | ToolError:
+    """The readable profile behind one risk score.
+
+    Every value is checked as a string because that is what the payload promises and
+    what `admission_context` renders: a count arrives as "Not recorded" rather than
+    null, so a numeric value here would reach the prompt as a formatting fault. The
+    reader coerces with `str()` anyway, which is why this went unnoticed — a hole in
+    the contract is not visible from the side that tolerates it.
+    """
+    if not isinstance(payload, dict):
+        raise ToolContractError("Admission-profile payload is not an object.")
+    if "error" in payload:
+        return _validate_error(payload)
+    if any(field not in payload for field in ("hadm_id", "profile", "feature_source")):
+        raise ToolContractError("Admission-profile payload is missing a required field.")
+    if not isinstance(payload["hadm_id"], int) or isinstance(payload["hadm_id"], bool):
+        raise ToolContractError("Admission-profile hadm_id is invalid.")
+    profile = payload["profile"]
+    if not isinstance(profile, dict):
+        raise ToolContractError("Admission-profile profile is not an object.")
+    for key, value in profile.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise ToolContractError("Admission-profile value is not a string.")
+    if not isinstance(payload["feature_source"], str) or not payload["feature_source"]:
+        raise ToolContractError("Admission-profile feature_source is invalid.")
+    return payload
+
+
 # Which validator applies to which tool. Keyed by the name the server advertises, because
 # that is all a client has when a result arrives — the payload does not say what it is meant
-# to be. Both sides of the boundary import this, so a tool and its contract cannot ship apart.
+# to be. Both sides of the boundary import this, so a tool and its contract cannot ship
+# apart.
+#
+# Every tool in `services.mcp.tools.__all__` is listed. Two were missing until Phase 4
+# (2026-10-25): `discharge_medications`, whose payload therefore reached the model
+# unchecked, and `get_admission_profile`, which had no contract at all. A test pins the
+# coverage against `__all__`, so a new tool cannot be added without deciding its contract.
 TOOL_CONTRACTS = {
     "predict_readmission": validate_prediction_result,
     "rag_search": validate_retrieval_result,
     "rag_search_sections": validate_retrieval_result,
+    "discharge_medications": validate_retrieval_result,
     "search_literature": validate_literature_result,
     "get_lab_trends": validate_lab_trend_result,
+    "get_admission_profile": validate_admission_profile_result,
 }
 
 

@@ -5,8 +5,8 @@ markdown the directive asks for — the answerability table with the columns it 
 and the three-turn progression that proves a clicked chip is consumed.
 
     ./.venv/bin/python evaluation/inventory/multiturn_chip_audit_report.py \
-        --before evaluation/inventory/multiturn_chip_audit_before.json \
-        --after  evaluation/inventory/multiturn_chip_audit_after.json \
+        --before evaluation/results/multiturn_chip_audit_before.json \
+        --after  evaluation/results/multiturn_chip_audit_after.json \
         --out    evaluation/results/phase05_chip_answerability.md
 """
 

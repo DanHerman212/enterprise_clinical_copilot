@@ -225,6 +225,36 @@ def _abstract(article: ElementTree.Element) -> str:
     return " ".join(parts)
 
 
+def _authors(article: ElementTree.Element) -> str:
+    """The first three authors, as a citation writes them, or empty.
+
+    Phase F (2026-10-26): a reference line reads `Journal. Year. Authors. · PMID`, and
+the authors have to come from the record rather than from a second lookup. PubMed
+names an author as `<LastName>` plus either `<Initials>` or `<ForeName>`; the first
+three are named and the rest are elided, which is the convention a bibliography uses
+and the only form that fits beside a journal and a year.
+
+    A record with no author list returns empty rather than a placeholder: a collective
+or anonymous work states no author, and "et al." against nobody would be a claim.
+    """
+    names: list[str] = []
+    for node in article.findall(".//AuthorList/Author"):
+        last = _text(node.find("LastName"))
+        if not last:
+            # A collective name ("The SPRINT Research Group") is not a person and is
+            # not abbreviated; it is used whole or not at all.
+            collective = _text(node.find("CollectiveName"))
+            if collective:
+                names.append(collective)
+            continue
+        initials = _text(node.find("Initials"))
+        names.append(f"{last} {initials}".strip())
+    if not names:
+        return ""
+    head = ", ".join(names[:3])
+    return f"{head}, et al." if len(names) > 3 else head
+
+
 def _pmids(payload: Any) -> list[str]:
     """PMIDs from an esearch response.
 
@@ -261,6 +291,9 @@ def _articles(root: ElementTree.Element) -> list[dict[str, str]]:
             "title": _text(node.find(".//Article/ArticleTitle")),
             "journal": journal,
             "pub_date": _pub_date(node),
+            # The citation line's third part. Empty when the record states no author,
+            # which the reference then leaves out rather than inventing.
+            "authors": _authors(node),
             "abstract": _abstract(node),
             "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
         })

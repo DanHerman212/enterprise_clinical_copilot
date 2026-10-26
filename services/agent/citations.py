@@ -366,3 +366,117 @@ def intent_sections(question: str | None) -> tuple[str, ...]:
     if len(matched) != 1:
         return ()
     return matched[0]
+
+
+# ---------------------------------------------------------------------------
+# What in a tool result is citable, and what number it carries
+# ---------------------------------------------------------------------------
+#
+# A marker addresses one array, and that array is every citable thing the conversation
+# has put in front of the model — counted CONTINUOUSLY across tool calls and across
+# replayed turns. Two layers have to agree on it: `graph` numbers what it shows the model,
+# and the citation layer resolves the number the model wrote. They agreed by both counting
+# `len(payload["passages"])`, which was the whole story while note passages were the only
+# citable evidence.
+#
+# They are not any more. `get_lab_trends` returns a series rather than a passage array, so
+# it counted as nothing: the model was handed a lab trajectory with no number on it, and
+# `TF-10` requires every clinical answer to carry a `^[n]`. A question about a red-cell
+# count therefore had no citable answer in front of it, and the loop went and searched the
+# discharge note — for a citable passage, not for a fact — then appended a second
+# paragraph drawn from the notes to have something to cite (90000023, 2026-10-26). One
+# analyte is one unit of evidence; it gets one number, and the two layers count it the
+# same way because they call this function.
+
+#: The section a laboratory trajectory is filed under. Not a note heading — it is the
+#: other channel a chart answer can rest on, and it is named here so the label map in
+#: `note_presentation` has one key to translate rather than a second vocabulary.
+LAB_SECTION = "laboratory_trends"
+
+#: What the marker says for a laboratory citation, before the analyte is named.
+LAB_SOURCE = "Laboratory trends"
+
+
+def _format_reading(value: object, decimals: object) -> str:
+    """One measured value, at the precision the panel reports it to."""
+    try:
+        places = int(decimals) if decimals is not None else 2
+    except (TypeError, ValueError):
+        places = 2
+    try:
+        return f"{float(value):.{places}f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def lab_passage(trend: dict) -> dict:
+    """One analyte's trajectory, as a passage a citation can resolve to.
+
+    The text is what a reader sees when they open the marker: the values in order with
+    the days they were drawn, the flags the panel raised, and the interval they were read
+    against. A marker that opened onto "Creatinine" and no numbers would be a citation to
+    a heading.
+    """
+    label = str(trend.get("label") or trend.get("key") or "Laboratory value").strip()
+    unit = str(trend.get("unit") or "").strip()
+    readings: list[str] = []
+    for point in trend.get("series") or []:
+        if not isinstance(point, dict):
+            continue
+        value = _format_reading(point.get("value"), trend.get("decimals"))
+        day = point.get("day")
+        flag = str(point.get("flag") or "").strip()
+        when = f"day {day}" if isinstance(day, (int, float)) else "day unknown"
+        # The flag is what made the value interesting, so it rides with the value rather
+        # than in a separate list the reader has to line up by position.
+        readings.append(f"{value} ({when}{', ' + flag if flag and flag != 'normal' else ''})")
+    low, high = trend.get("reference_low"), trend.get("reference_high")
+    interval = ""
+    if isinstance(low, (int, float)) and isinstance(high, (int, float)):
+        interval = (
+            f" Reference interval {_format_reading(low, trend.get('decimals'))}"
+            f"-{_format_reading(high, trend.get('decimals'))}"
+            f"{' ' + unit if unit else ''}."
+        )
+    trajectory = "; ".join(readings) if readings else "no values recorded"
+    return {
+        "section": LAB_SECTION,
+        "text": (
+            f"{label}{' (' + unit + ')' if unit else ''} across this admission: "
+            f"{trajectory}.{interval}"
+        ).strip(),
+        # What a citation for this passage calls itself. Read by `note_citations`, so the
+        # marker and the drawer row say "Creatinine trajectory" rather than naming the
+        # whole panel, which is what a reader clicked on.
+        "cite_source": LAB_SOURCE,
+        "cite_title": f"{label} trajectory",
+    }
+
+
+def citable_passages(payload: object) -> list[dict]:
+    """The citable units one tool result contributes, in the order it gave them.
+
+    `passages` when the tool returns note passages — the retrieval tools — and one entry
+    per analyte when it returns a laboratory panel. A payload with neither contributes
+    nothing, which is correct: a prediction, a search result set and a medication list are
+    answers rather than evidence, and none of them is citable as a passage.
+    """
+    if not isinstance(payload, dict):
+        return []
+    passages = payload.get("passages")
+    if isinstance(passages, list):
+        return [passage for passage in passages if isinstance(passage, dict)]
+    trends = payload.get("trends")
+    if isinstance(trends, list):
+        return [lab_passage(trend) for trend in trends if isinstance(trend, dict)]
+    return []
+
+
+def passage_total(payload: object) -> int:
+    """How many citation numbers one tool result consumes.
+
+    The single definition of that count. `graph` advances its running number by this and
+    the citation layer concatenates the same array, so a marker the model was given and
+    the record it opens are the same position by construction.
+    """
+    return len(citable_passages(payload))

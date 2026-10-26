@@ -52,6 +52,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from services.agent import routing
 from services.agent import stages
+from services.agent import citations
 from services.agent.contracts import RecordedToolCall
 from services.agent.feature_labels import humanize
 from services.agent.model_turn import text_of
@@ -569,9 +570,13 @@ async def run_command(
     # numbering and the citation layer's numbering are the same order (TF-7).
     order = _ordered_summary_payload if command.wire == "summarize" else None
     # Numbering continues from what the replayed turns already showed the model, because
-    # a marker is resolved against the whole conversation's passages (TF-10).
+    # a marker is resolved against the whole conversation's citable units (TF-10) — and
+    # those units are counted by `citations.passage_total`, which knows that a laboratory
+    # panel contributes one per analyte as well as that a retrieval contributes one per
+    # passage. Counting `passages` here would restart the numbering at a number the
+    # replayed turns had already used (Phase E, 2026-10-26).
     cite_offset = sum(
-        len((call.get("response") or {}).get("passages") or [])
+        citations.passage_total(call.get("response"))
         for call in (replayed_calls or [])
         if isinstance(call.get("response"), dict)
     )

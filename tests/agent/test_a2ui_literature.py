@@ -87,9 +87,9 @@ def _matrix(envelope):
 def test_a_resolved_phenotype_draws_the_comparison_above_the_records():
     """Order asserted, not merely presence.
 
-    The value is relational — a table of cohort rates below a list of citations reads as
-    an appendix to them — so "it appears" would pass while the feature missed. The first
-    three, not the whole list: the provenance caption trails both and is not the subject.
+    The records are no longer a child of this column (Phase F, 2026-10-26): they are
+    citations in the prose and rows in the turn's references list, so what the canvas
+    draws on a literature turn is the comparison and nothing that duplicates it.
     """
     envelope = compose_risk_canvas(
         PREDICT, None, literature=_search(),
@@ -97,7 +97,8 @@ def test_a_resolved_phenotype_draws_the_comparison_above_the_records():
         query="congestive heart failure 30-day readmission risk",
         command="literature")
 
-    assert _types(envelope)[:3] == ["Column", "ComparativeRiskMatrix", "LiteratureList"]
+    assert _types(envelope)[:2] == ["Column", "ComparativeRiskMatrix"]
+    assert "LiteratureList" not in _types(envelope)
 
 
 def test_the_condition_lock_refuses_a_query_about_another_condition():
@@ -117,7 +118,9 @@ def test_the_condition_lock_refuses_a_query_about_another_condition():
         query="congestive heart failure 30-day readmission risk")
 
     assert "ComparativeRiskMatrix" not in _types(envelope)
-    assert "LiteratureList" in _types(envelope)
+    # The records are still the answer; they are drawn as citations now, so this canvas
+    # carries neither the table nor a second copy of them.
+    assert "LiteratureList" not in _types(envelope)
 
 
 def test_a_query_naming_no_condition_draws_no_comparison():
@@ -255,17 +258,18 @@ def test_rows_are_ordered_strongest_evidence_first():
 
 
 def test_a_phenotype_with_no_curated_cohort_draws_no_comparison():
-    """Psychiatric is a bucket with no rows, and the table must simply not appear.
+    """A turn with no command carries no table, whatever its phenotype.
 
-    The alternative — reaching for a bucket that does have rows — is the whole failure
-    this phase exists to remove, so it is asserted rather than left to the selector's
-    implementation.
+    The command gate is what this pins: only `/ehr` and a `/pubmed` turn about this
+    patient's own condition ask the question the table answers. (Psychiatric admissions
+    are compared — against the hospital-wide cohort — but only from those two commands,
+    which is Phase E's change and is covered by `test_phenotype_coverage`.)
     """
     envelope = compose_risk_canvas(
         PREDICT, None, literature=_search(), phenotype="psychiatric")
 
     assert "ComparativeRiskMatrix" not in _types(envelope)
-    assert "LiteratureList" in _types(envelope)
+    assert "LiteratureList" not in _types(envelope)
 
 
 def test_an_unresolved_admission_draws_no_comparison():
@@ -290,13 +294,13 @@ def test_the_table_draws_without_an_estimate_and_says_which_it_is():
 
 
 def test_a_long_journal_name_is_cut_to_the_marker_budget():
-    """A pill sits inside a sentence, so its label has a length budget (2026-10-16).
+    """A pill sits inside a sentence, so its journal part has a length budget.
 
-    Reported from the live turn: a button wraps its own text by default, so "Journal of the
-    American College of Cardiology" broke the pill's box across two lines and the rounded
-    border read as a pill cut in half. The journal was kept and bounded rather than
-    replaced by the identifier again — the full title is on the marker's popover and in the
-    record list beneath the answer.
+    Reported from the live turn (2026-10-16): a button wraps its own text by default, so
+    "Journal of the American College of Cardiology" broke the pill's box across two lines
+    and the rounded border read as a pill cut in half. Phase F (2026-10-26) gave the pill
+    a leading number like every other citation in the product, so the budget is asserted
+    on the journal part and the whole label is checked for the number it opens with.
     """
     citations = literature_citations([
         {**ARTICLE, "journal": "Journal of the American College of Cardiology"},
@@ -304,13 +308,16 @@ def test_a_long_journal_name_is_cut_to_the_marker_budget():
     ])
 
     long_label = citations[0]["label"]
-    assert len(long_label) <= 25, long_label          # 24 characters, plus the ellipsis
+    assert long_label.startswith("1 · ")
+    journal_part = long_label.split(" · ")[1]
+    assert len(journal_part) <= 25, journal_part    # 24 characters, plus the ellipsis
     # Marked, not silently cut: an unmarked cut reads as the whole name.
-    assert long_label.endswith("…")
+    assert journal_part.endswith("…")
     assert "Journal of the American College of Cardiology".startswith(
-        long_label[:-1].rstrip())
-    # A name inside the budget is passed through whole and unmarked.
-    assert citations[1]["label"] == "Home healthcare now"
+        journal_part[:-1].rstrip())
+    # A name inside the budget is passed through whole and unmarked, and the year closes
+    # the pill so a reader can tell a 2009 record from a 2024 one without opening it.
+    assert citations[1]["label"] == "2 · Home healthcare now · 2025"
 
 
 # --- selecting the payload -------------------------------------------------
@@ -350,8 +357,13 @@ def test_articles_coerce_missing_fields_rather_than_omitting_them():
     payload = _search(articles=[{"pmid": "1", "title": "Only a title"}])
 
     article = _usable_articles(payload)[0]
-    assert set(article) == {"pmid", "title", "journal", "pub_date", "url"}
+    assert set(article) == {"pmid", "title", "journal", "pub_date", "authors",
+                            "abstract", "url"}
     assert article["journal"] == ""
+    # Phase F: the authors and the abstract are what the reference row and the hover card
+    # are made of, so a record that states neither is coerced to empty rather than absent.
+    assert article["authors"] == ""
+    assert article["abstract"] == ""
 
 
 def test_articles_is_empty_for_a_payload_that_is_not_one():
@@ -361,36 +373,49 @@ def test_articles_is_empty_for_a_payload_that_is_not_one():
 
 # --- the swap --------------------------------------------------------------
 
-def test_a_literature_answer_draws_articles_instead_of_the_risk_view():
+def test_a_literature_answer_draws_no_risk_view():
+    """The swap the feature exists for, and the reason it is still a swap. """
     envelope = compose_risk_canvas(None, None, literature=_search())
 
-    assert "LiteratureList" in _types(envelope)
     assert "RiskInfluencers" not in _types(envelope)
+    # And no second copy of the records: they are citations on this turn, poured into the
+    # same reference list a note citation uses (Phase F, 2026-10-26).
+    assert "LiteratureList" not in _types(envelope)
 
 
-def test_the_records_reach_the_canvas_as_the_tool_returned_them():
+def test_the_records_reach_the_citation_channel_as_the_tool_returned_them():
     """The citation details are the record's own, so the row a reader checks and the
-    summary they are checking it against are the same publication."""
-    envelope = compose_risk_canvas(None, None, literature=_search())
+    summary they are checking it against are the same publication.
 
-    rendered = next(c for c in _components(envelope) if c["component"] == "LiteratureList")
-    record = rendered["articles"][0]
-    assert record["pmid"] == ARTICLE["pmid"]
-    assert record["title"] == ARTICLE["title"]
-    assert record["journal"] == ARTICLE["journal"]
-    assert record["pub_date"] == ARTICLE["pub_date"]
-    assert record["url"].endswith("31234567/")
+    Asserted on `sources` rather than on a canvas card, because that is where a record
+    lives once it is a citation: the hover card and the drawer row are both built from
+    this entry.
+    """
+    presentation = compose_presentation(
+        "/pubmed ceftriaxone cellulitis", "One article.^[PMID: 31234567]",
+        _call(_search()))
+
+    (article,) = [source for source in presentation["sources"]
+                  if source.get("kind") == "Literature"]
+    assert article["pmid"] == ARTICLE["pmid"]
+    assert article["title"] == ARTICLE["title"]
+    assert article["section"] == "N Engl J Med · 2025"
+    assert article["url"].endswith("31234567/")
 
 
-def test_the_abstract_is_not_put_on_the_wire_at_all():
-    """Nothing renders it since the marker became a link to the source, and a field
-    no component draws is a promise the schema is no longer keeping — the records it
-    was duplicated into carried the same text a second time."""
-    envelope = compose_risk_canvas(None, None, literature=_search())
+def test_the_abstract_is_the_passage_the_reference_opens():
+    """It was removed on 2026-10-13 because the only surface was a card showing a title
+    and a journal. A reference that opens onto a title cannot be weighed, so the abstract
+    is the excerpt now — carried once, in the citation, and not duplicated into a list.
+    """
+    presentation = compose_presentation(
+        "/pubmed ceftriaxone cellulitis", "One article.^[PMID: 31234567]",
+        _call(_search()))
 
-    rendered = next(c for c in _components(envelope) if c["component"] == "LiteratureList")
-    assert "abstract" not in rendered["articles"][0]
-    assert "excerpt" not in rendered["articles"][0]
+    (row,) = [entry for entry in presentation["references"]
+              if entry.get("pmid") == ARTICLE["pmid"]]
+    assert row["excerpt"] == ARTICLE["abstract"]
+    assert "LiteratureList" not in _types(presentation["a2ui"])
 
 
 def test_the_risk_view_is_unchanged_without_literature():
@@ -404,8 +429,8 @@ def test_literature_takes_the_canvas_over_an_estimate_in_the_same_turn():
     """The swap is the requested behaviour, so it wins a tie rather than merging."""
     envelope = compose_risk_canvas(PREDICT, None, literature=_search())
 
-    assert "LiteratureList" in _types(envelope)
     assert "RiskInfluencers" not in _types(envelope)
+    assert "RiskInfluencersWidget" not in _types(envelope)
 
 
 def test_a_literature_turn_does_not_claim_no_note_passage_was_found():
@@ -477,7 +502,10 @@ def test_citations_are_numbered_in_the_order_the_model_was_given_the_records():
 
     assert [c["index"] for c in citations] == [1, 2]
     assert [c["title"] for c in citations] == [ARTICLE["title"], "Second record"]
-    assert citations[0]["source"] == "PubMed"
+    # The eyebrow under the title is the citation line, because the title is the article
+    # now — there is no section to name instead.
+    assert citations[0]["source"] == (
+        "N Engl J Med. 2025. · PMID 31234567")
     assert citations[0]["url"] == ARTICLE["url"]
 
 
@@ -491,12 +519,28 @@ def test_a_citation_carries_the_pmid_its_marker_displays():
     assert citations[1]["pmid"] == _second()["pmid"]
 
 
-def test_a_citation_carries_no_abstract():
-    """It was the popover's excerpt. The popover no longer opens on this path, and the
-    text travelled as a second copy of what the record already carried."""
+def test_a_citation_carries_the_abstract_as_its_excerpt():
+    """It was the popover's excerpt all along; Phase F makes the popover the surface
+    again, so the text comes back — bounded, because the card floats over the answer
+    being read."""
     citation = literature_citations([ARTICLE])[0]
 
-    assert "excerpt" not in citation
+    assert citation["excerpt"] == ARTICLE["abstract"]
+
+
+def test_a_long_abstract_is_an_opening_rather_than_the_whole_record():
+    """The card is 340px wide. A 2,000-character abstract in it would push the page
+    it is hovering over off the screen."""
+    long_abstract = "BACKGROUND: Cellulitis is common. " * 200
+    citation = literature_citations([{**ARTICLE, "abstract": long_abstract}])[0]
+
+    assert len(citation["excerpt"]) <= 401
+    assert citation["excerpt"].startswith("BACKGROUND: Cellulitis is common.")
+    # Marked as an opening: either it lands on a sentence end inside the budget, or the
+    # cut is shown with an ellipsis. What it must never be is an unmarked cut, which reads
+    # as the whole abstract.
+    assert (citation["excerpt"].endswith(".")
+            or citation["excerpt"].endswith("…"))
 
 
 def test_a_citation_with_no_pmid_still_carries_its_title():
@@ -509,12 +553,12 @@ def test_a_citation_with_no_pmid_still_carries_its_title():
     assert citation["index"] == 1
 
 
-def test_a_record_with_no_url_carries_no_url_key():
-    """The component's schema is strict: an empty string would be a link to nowhere
-    and an explicit null would take the narrative down with it."""
+def test_a_record_with_no_url_key_still_links_to_its_record():
+    """The url is derived from the identifier rather than trusted, so a record that
+    omitted it cannot produce a link to nowhere."""
     citation = literature_citations([{"pmid": "1", "title": "Only a title"}])[0]
 
-    assert "url" not in citation
+    assert citation["url"] == "https://pubmed.ncbi.nlm.nih.gov/1/"
     assert citation["pmid"] == "1"
     assert citation["title"] == "Only a title"
 
@@ -542,7 +586,10 @@ def test_a_literature_summary_is_cited_to_its_articles_not_to_the_note():
 
     narrative = _narrative("Day-case surgery had lower odds ^[1].", sources, _search())
 
-    assert [c["source"] for c in narrative["citations"]] == ["PubMed"]
+    # The eyebrow is the citation line now; the article title is the heading the card
+    # shows, and the identifier is still what the marker resolves against.
+    assert [c["subtitle"] for c in narrative["citations"]] == [
+        "N Engl J Med. 2025. · PMID 31234567"]
     assert narrative["citations"][0]["title"] == ARTICLE["title"]
     assert narrative["citations"][0]["pmid"] == ARTICLE["pmid"]
 
@@ -579,9 +626,9 @@ def test_an_empty_search_still_draws_a_narrative_with_nothing_cited():
 
 
 def test_the_canvas_root_is_a_column_and_the_prose_leads_it():
-    """Ruled flat: the prose sits under the root beside the records rather than in a
-    card of its own, and above them — a reader who scrolls past the records to find
-    the sentence that explains them has been given the parts in the wrong order."""
+    """Ruled flat: the prose sits under the root beside nothing else on a literature
+    turn — the records are its citations, and their list is the turn's reference drawer,
+    which the page draws rather than the canvas."""
     narrative = _narrative("Day-case surgery had lower odds ^[1].", [], _search())
     envelope = compose_risk_canvas(None, None, literature=_search(),
                                    narrative=narrative)
@@ -591,7 +638,7 @@ def test_the_canvas_root_is_a_column_and_the_prose_leads_it():
     assert root["id"] == "root"
     assert root["component"] == "Column"
     assert root["children"][0] == "narrative"
-    assert "literature" in root["children"]
+    assert "literature" not in root["children"]
     assert envelope["renders_prose"] is True
 
 
@@ -609,14 +656,19 @@ def test_the_narrative_is_still_drawn_when_there_is_no_records_list_to_lead():
 
 # --- the whole presentation ------------------------------------------------
 
-def test_compose_presentation_carries_literature_beside_the_note_sources():
+def test_compose_presentation_publishes_the_records_as_citations():
+    """Phase F (2026-10-26): a literature turn used to carry an empty `sources` and a
+    boxed card. It now carries the articles in the citation channel, numbered, so the
+    marker, the hover card and the reference row name one record."""
     presentation = compose_presentation(
-        "search pubmed for recent literature", "One article.", _call(_search())
+        "search pubmed for recent literature", "One article.^[PMID: 31234567]",
+        _call(_search())
     )
 
     assert presentation["literature"]["query"] == "ceftriaxone cellulitis"
-    assert presentation["sources"] == []
-    assert "LiteratureList" in _types(presentation["a2ui"])
+    assert [source["pmid"] for source in presentation["sources"]] == ["31234567"]
+    assert presentation["sources"][0]["cite"] == 1
+    assert "LiteratureList" not in _types(presentation["a2ui"])
 
 
 def test_compose_presentation_reports_no_literature_when_none_ran():
@@ -663,10 +715,14 @@ def test_a_degraded_search_still_takes_the_canvas():
 
 
 def test_a_normal_search_is_not_marked_degraded():
-    envelope = compose_risk_canvas(None, None, literature=_search())
+    """A search that returned records carries no degraded flag — and, on this surface,
+    no records list either: the flag is what the empty case reads."""
+    presentation = compose_presentation(
+        "/pubmed ceftriaxone cellulitis", "One article.^[PMID: 31234567]",
+        _call(_search()))
 
-    rendered = next(c for c in _components(envelope) if c["component"] == "LiteratureList")
-    assert rendered["degraded"] is False
+    assert not presentation["literature"].get("degraded")
+    assert "LiteratureList" not in _types(presentation["a2ui"])
 
 
 def test_an_empty_search_is_not_marked_degraded():

@@ -202,14 +202,17 @@ def test_a_refused_call_announces_nothing():
 
     The calls are distinct on purpose. Identical ones are refused earlier, by the
     repeat rule, which would let this pass without the budget being the thing
-    that stopped them. They are also `get_lab_trends` rather than `rag_search`: the
-    note-reading tools are capped at one call per turn (`graph.ONCE_PER_TURN`), so a
-    hunger for those is stopped by the cap and would leave the budget untested here.
+    that stopped them. They are `search_literature` rather than `get_lab_trends` since
+    Phase E (2026-10-26): the chart tools — note reads, the lab panel, the discharge
+    medication list — are each capped at one call per turn (`graph.ONCE_PER_TURN`), so a
+    hunger for those is stopped by the cap and would leave the budget untested here. A
+    literature search takes the clinician's own words and has no such cap, which makes it
+    the one tool a turn can legitimately spend its budget on.
     """
     box = _StubToolbox()
     events = []
     calls = [
-        {"name": "get_lab_trends", "args": {"analyte": f"a{i}"}, "id": str(i)}
+        {"name": "search_literature", "args": {"query": f"topic {i}"}, "id": str(i)}
         for i in range(MAX_TOOL_CALLS_PER_TURN + 2)
     ]
 

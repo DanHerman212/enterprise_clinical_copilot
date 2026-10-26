@@ -22,7 +22,7 @@ from services.agent.a2ui_envelope import (
     CATALOG_ID,
     SURFACE_ID,
 )
-from services.agent.admission_phenotypes import phenotype_of_query
+from services.agent.admission_phenotypes import GENERAL_INPATIENT, phenotype_of_query
 from services.agent.feature_labels import display_probability, humanize
 from services.agent.literature_benchmarks import benchmarks_for_phenotype
 from services.agent.note_presentation import _usable_articles
@@ -150,18 +150,29 @@ def _comparative_matrix(estimate: dict | None, phenotype: str | None) -> dict | 
     """This patient's estimate set against the published cohorts, or None.
 
     Rows come from `literature_benchmarks`, selected by the admission's resolved
-    phenotype (`admission_phenotypes`). None when the admission resolved to no phenotype,
-    or to one the curated corpus has no cohort for. The PMIDs a search returned have
-    nothing to do with whether the table draws, and that is the Phase 4B change: under the
-    rule this replaces, rows were matched against the records a search returned, no live
-    search ever returned a curated one, and the matrix therefore did not render at all.
+    phenotype (`admission_phenotypes`). None only when there is no phenotype at all — the
+    record is not a stay, or the turn never read a chart to resolve one from.
+
+    A phenotype with no curated rows of its own falls back to the all-cause hospital-wide
+    cohort (`GENERAL_INPATIENT`) rather than returning nothing. That fallback is what makes
+    coverage a property of the code instead of a property of the curation: before it, an
+    admission whose condition nobody had curated drew no table, and "no table" is
+    indistinguishable on screen from "this patient cannot be compared" — a third of the
+    demo corpus was silently missing a section of its own briefing (Phase E, 2026-10-26).
+    The row says what it is: its `cohort_summary` begins "Hospital-wide, all conditions",
+    so a reader is never shown a specialty rate borrowed for a patient it does not
+    describe. Nothing is invented to fill the gap and no specialty row is substituted.
 
     A missing estimate does NOT suppress the table. The cohorts are worth reading on
     their own, and the component is told which of the two things it is drawing: with a
     baseline row when there is an estimate, and with a sentence saying so when there is
     not. What it must never do is draw the baseline row with an empty figure in it.
     """
+    if not phenotype:
+        return None
     benchmarks = benchmarks_for_phenotype(phenotype)
+    if not benchmarks and phenotype != GENERAL_INPATIENT:
+        benchmarks = benchmarks_for_phenotype(GENERAL_INPATIENT)
     if not benchmarks:
         return None
     # `matched_features` is dropped here rather than sent and ignored. The component's
@@ -333,19 +344,26 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
 
         # Literature takes the canvas. This is the swap the feature exists for: the
         # question was about published evidence, so the risk widgets are not merely
-        # absent — they are the wrong thing to be looking at. The records are shown
-        # as the tool returned them, unedited, which is what lets the clinician
-        # check the summary instead of trusting it.
+        # absent — they are the wrong thing to be looking at.
         #
-        # An empty result keeps the swap and carries a note instead. Leaving the
-        # previous view standing would be worse than showing nothing: the clinician
-        # clicked a chip, and a canvas that did not change reads as a click that did
-        # not work.
-        children += ["literature"]
-        components.append({"id": "literature", "component": "LiteratureList",
-                           "articles": articles,
-                           "note": note,
-                           "degraded": degraded})
+        # What it does NOT do any more is draw the records as a second surface (Phase F,
+        # 2026-10-26). A literature turn now publishes its records in the same citation
+        # channel as every other source, so each one draws as a numbered pill in the
+        # prose, a hover card, and a row in the turn's references list. A boxed card
+        # listing the same records underneath the narrative was the same evidence twice,
+        # and the two renderings could disagree — the card showed a title and a journal
+        # while the reference row showed the citation line and the abstract.
+        #
+        # The component is kept for the one case where it is the only thing that can
+        # speak: a search that returned nothing, or one that could not be made. Those are
+        # statements about the question, not records, and there is no reference row for a
+        # sentence saying "no matching literature was found".
+        if not articles:
+            children += ["literature"]
+            components.append({"id": "literature", "component": "LiteratureList",
+                               "articles": [],
+                               "note": note,
+                               "degraded": degraded})
         query_text = (literature or {}).get("query") or ""
         if articles:
             fallback = (

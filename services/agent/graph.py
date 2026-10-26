@@ -56,6 +56,7 @@ from services.agent.model_runtime import (
     streamed_turn as _streamed_turn,  #    `model_runtime.streamed_turn`.
 )
 from services.agent.stages import emit as _emit
+from services.agent import citations
 
 from services.agent.mcp_client import MCPToolbox, _clean_schema
 from services.agent.contracts import RecordedToolCall, validate_recorded_tool_call
@@ -113,9 +114,18 @@ RECURSION_LIMIT = 25
 #: improve an answer. `rag_search` is a vector search and a second call COULD return
 #: something new, which is why the cap is a product decision rather than a proof: one
 #: focused query per turn, and a question that needs a second one is answered from the
-#: first with what it does and does not cover. `discharge_medications` and
-#: `get_lab_trends` are not capped — the budget is what bounds those.
-ONCE_PER_TURN: frozenset[str] = frozenset({"rag_search", "rag_search_sections"})
+#: first with what it does and does not cover.
+#:
+#: `get_lab_trends` and `discharge_medications` join them (Phase E, 2026-10-26), and for a
+#: strictly stronger reason: neither takes a question. `get_lab_trends` draws a panel from
+#: an admission's feature row and `discharge_medications` extracts the discharge list; each
+#: is a complete answer that happens to be shaped as evidence, and asking a second time
+#: cannot return anything the first call did not. A lab follow-up after `/labs` spent
+#: eighteen steps and three more `get_lab_trends(analyte=…)` calls inside a budget that
+#: allowed five, and re-rendered the panel each time (90000023, 2026-10-26).
+ONCE_PER_TURN: frozenset[str] = frozenset({
+    "rag_search", "rag_search_sections", "get_lab_trends", "discharge_medications",
+})
 
 #: Tools a turn may not call when the REPLAYED turns already called them.
 #:
@@ -124,9 +134,25 @@ ONCE_PER_TURN: frozenset[str] = frozenset({"rag_search", "rag_search_sections"})
 #: second call returns the same passages under a new citation number, so the loop pays a
 #: round trip and a step count to re-read its own context.
 #:
+#: `get_lab_trends` and `discharge_medications` are here too, with the qualification in
+#: `_fulfilled_by_replay`: what makes a lab call redundant is that the FULL panel is
+#: already in the transcript, and a turn that asks about one analyte it has not been shown
+#: is asking a new question. The medication list has no such qualifier — the tool returns
+#: the discharge list, whole.
+#:
 #: `rag_search` is deliberately NOT here: a follow-up asks a new question, and the
 #: recorded search answered the old one.
-ONCE_PER_TRANSCRIPT: frozenset[str] = frozenset({"rag_search_sections"})
+ONCE_PER_TRANSCRIPT: frozenset[str] = frozenset({
+    "rag_search_sections", "get_lab_trends", "discharge_medications",
+})
+
+#: Tools whose transcript allowance depends on WHAT was fetched rather than that it was.
+#:
+#: `get_lab_trends` takes an optional `analyte`. Called without one it draws the whole
+#: panel, and every later lab question is answerable from the payload already in the
+#: transcript; called with one it draws that analyte alone, so the rest of the panel is
+#: still unread and a follow-up about a different analyte has somewhere to go.
+FULL_FETCH_UNFILTERED: frozenset[str] = frozenset({"get_lab_trends"})
 
 # What a turn says when its lookup budget is gone and the model still wants to look
 # something up. A turn that has spent its budget is given no tools, but a model can
@@ -200,31 +226,45 @@ def _render_tool_result(payload: Any, *, offset: int = 0) -> str:
     A refused passage keeps its slot, with the refusal in place of its text, so
     the positions every citation refers to do not shift.
 
-    `offset` is how many passages the model has already been shown in this
+    `offset` is how many citable units the model has already been shown in this
     conversation. Citation numbers are global across tool results and across the
     replayed turns, because that is the array the citation layer resolves against
-    (`a2ui.rag_payload` concatenates the same calls in the same order). Restarting
-    at 1 per result meant `^[1]` named the first passage of whichever result the
-    reader happened to look at (TF-10, 2026-10-23).
+    (`citations.citable_passages` concatenates the same units in the same order).
+    Restarting at 1 per result meant `^[1]` named the first passage of whichever result
+    the reader happened to look at (TF-10, 2026-10-23).
     """
     if isinstance(payload, str):
         return _escape_delimiter(payload)
     rendered = payload
-    passages = payload.get("passages") if isinstance(payload, dict) else None
-    if isinstance(passages, list):
-        # Each passage carries the number its citation marker must use. The model was
-        # previously handed an unlabelled array and had to count positions to emit
-        # `^[n]`, and on a four-section summary it counted wrong: `^[3]` went to the
-        # discharge instructions and `^[4]` to the discharge diagnosis, both of which
-        # begin with "discharge" (TF-7, measured 2026-10-23). The number is now given
-        # rather than inferred, and the positions the citation layer resolves against
-        # are the same numbers.
-        rendered = dict(payload, passages=[
-            ({**(_render_passage(passage) if isinstance(passage, dict) else {}),
-              "cite": offset + index})
-            if isinstance(passage, dict) else passage
-            for index, passage in enumerate(passages, start=1)
-        ])
+    if isinstance(payload, dict):
+        passages = payload.get("passages")
+        if isinstance(passages, list):
+            # Each passage carries the number its citation marker must use. The model was
+            # previously handed an unlabelled array and had to count positions to emit
+            # `^[n]`, and on a four-section summary it counted wrong: `^[3]` went to the
+            # discharge instructions and `^[4]` to the discharge diagnosis, both of which
+            # begin with "discharge" (TF-7, measured 2026-10-23). The number is now given
+            # rather than inferred, and the positions the citation layer resolves against
+            # are the same numbers.
+            rendered = dict(payload, passages=[
+                ({**(_render_passage(passage) if isinstance(passage, dict) else {}),
+                  "cite": offset + index})
+                if isinstance(passage, dict) else passage
+                for index, passage in enumerate(passages, start=1)
+            ])
+        else:
+            # A laboratory panel is the second kind of citable evidence (Phase E,
+            # 2026-10-26). Without a number the trajectory was not something the model
+            # could cite, and a question about an analyte therefore had no citable answer
+            # in front of it: the loop searched the note for a citable passage and
+            # appended a second paragraph drawn from it. One analyte, one number.
+            trends = payload.get("trends")
+            if isinstance(trends, list):
+                rendered = dict(payload, trends=[
+                    ({**trend, "cite": offset + index} if isinstance(trend, dict)
+                     else trend)
+                    for index, trend in enumerate(trends, start=1)
+                ])
     return _escape_delimiter(json.dumps(rendered, ensure_ascii=False))
 
 
@@ -757,6 +797,22 @@ def _budget_exhausted_turn(response: AIMessage) -> AIMessage:
     )
 
 
+def _fulfilled_by_replay(name: str, replayed: list[dict]) -> bool:
+    """Whether the replayed turns already hold what a call to `name` would return.
+
+    The transcript rule, with the one qualification `FULL_FETCH_UNFILTERED` describes: a
+    tool whose result depends on an argument is only spent when the replayed calls satisfied
+    the widest form of it. Anything not in that set is spent by any replayed call, because
+    its result is a fact about the admission rather than about the request.
+    """
+    made = [call for call in replayed if str(call.get("name")) == name]
+    if not made:
+        return False
+    if name not in FULL_FETCH_UNFILTERED:
+        return True
+    return any(not (call.get("args") or {}).get("analyte") for call in made)
+
+
 def _still_bound(allowed: frozenset[str], state: AgentState) -> frozenset[str]:
     """The tools still worth binding, given what this turn and its replay have run.
 
@@ -766,13 +822,13 @@ def _still_bound(allowed: frozenset[str], state: AgentState) -> frozenset[str]:
     the only bound that holds (see `ONCE_PER_TURN`).
     """
     spent = {str(call.get("name")) for call in state.get("tool_calls") or []}
-    replayed = {
-        str(call.get("name")) for call in state.get("replayed_tool_calls") or []
-    }
+    replayed = [
+        call for call in state.get("replayed_tool_calls") or [] if isinstance(call, dict)
+    ]
     return frozenset(
         name for name in allowed
         if not (name in ONCE_PER_TURN and name in spent)
-        and not (name in ONCE_PER_TRANSCRIPT and name in replayed)
+        and not (name in ONCE_PER_TRANSCRIPT and _fulfilled_by_replay(name, replayed))
     )
 
 
@@ -1218,6 +1274,12 @@ async def ask(
         routing.asks_for_administrative_detail(question)
     )
 
+    # Whether this turn is about published records, asked once because two things depend
+    # on it and they must not disagree: which tools are bound (`_freetext_allowed`) and
+    # whether the replayed turns' OWN searches are carried into this one
+    # (`replay_messages`). A chart turn keeps neither.
+    wants_literature = routing.asks_for_literature(question)
+
     graph = build_graph(
         toolbox, model=model, on_event=on_event, question_kind=question_kind,
         # The one identifier this turn holds, checked against what is about to
@@ -1244,7 +1306,7 @@ async def ask(
         # The other half of `_freetext_allowed`: published evidence is searched only on
         # a turn that asked for it, so a chart question cannot come back with a
         # `LiteratureList` and no note citations.
-        wants_literature=routing.asks_for_literature(question),
+        wants_literature=wants_literature,
         # And the half that WITHHOLDS a tool: a driver question about a count or a
         # disposition is not documented by a lab series, so asking for one put a panel in
         # the turn's evidence and a lab chip under an answer about utilization.
@@ -1272,7 +1334,12 @@ async def ask(
     if tracing is not None:
         config["callbacks"] = [tracing]
 
-    replayed, replayed_calls = await replay_messages(toolbox, turns)
+    # Earlier turns' published-records searches are carried only into a turn that is
+    # itself about published records. See `replay_messages`: a `search_literature`
+    # result left in the transcript re-entered every later turn, binding a marker to an
+    # article nobody had been shown and badging a chart answer as general evidence.
+    replayed, replayed_calls = await replay_messages(
+        toolbox, turns, keep_literature=wants_literature)
 
     # The same root span the command path uses, for the same two reasons: the trace
     # gets its tags and session id from us rather than depending on the SDK reading
@@ -1381,9 +1448,13 @@ def replayed_turns(turns: list[dict[str, str]] | None) -> list[BaseMessage]:
 
 
 def _passage_total(payload: Any) -> int:
-    """How many passages a payload puts in front of the model."""
-    passages = payload.get("passages") if isinstance(payload, dict) else None
-    return len(passages) if isinstance(passages, list) else 0
+    """How many citation numbers a payload consumes.
+
+    One definition, in `citations`, because two layers count and they must agree: this one
+    advances the running number the model is shown, and `citations.citable_passages`
+    builds the array a marker resolves against.
+    """
+    return citations.passage_total(payload)
 
 
 def _replayed_tool_messages(
@@ -1412,7 +1483,8 @@ def _replayed_tool_messages(
 
 
 async def replay_messages(
-    toolbox: MCPToolbox, turns: list[dict[str, Any]] | None
+    toolbox: MCPToolbox, turns: list[dict[str, Any]] | None,
+    *, keep_literature: bool = True,
 ) -> tuple[list[BaseMessage], list[RecordedToolCall]]:
     """The earlier conversation, as the messages the model would have seen.
 
@@ -1441,6 +1513,20 @@ async def replay_messages(
     for turn_index, turn in enumerate(turns or []):
         messages.append(HumanMessage(content=turn["question"]))
         for call_index, call in enumerate(turn.get("tool_calls") or []):
+            # A published-records search is not carried into a turn that is not about
+            # published records (Phase E, 2026-10-26).
+            #
+            # `search_literature` returns somebody else's patients. Kept in the transcript,
+            # it re-entered every later turn: a `/meds` follow-up was answered with `^[1]`
+            # bound to a World Neurosurgery article, badged General Medical Evidence, with
+            # the old `LiteratureList` re-rendered under the medication instructions
+            # (90000058). The records were retrieved for a question that was asked and
+            # answered; a later question about this patient's chart is not a reason to show
+            # them again. Nothing is dropped that the current turn asked for —
+            # `keep_literature` is set from the question itself, and a genuine literature
+            # question is bound the same tool anyway.
+            if not keep_literature and str(call.get("name")) in routing.LITERATURE_TOOLS:
+                continue
             payload = call.get("payload")
             if payload is None:
                 logger.info(
@@ -1454,7 +1540,7 @@ async def replay_messages(
                                         offset=offset)
             )
             # The numbering continues across turns, because the citation layer resolves
-            # a marker against every passage the conversation has shown.
+            # a marker against every citable unit the conversation has shown.
             offset += _passage_total(payload)
             calls.append({
                 "name": call["name"],

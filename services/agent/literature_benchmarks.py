@@ -67,6 +67,8 @@ the same map the bars use (`feature_labels.humanize`).
 
 from dataclasses import dataclass
 
+from services.agent.admission_phenotypes import GENERAL_INPATIENT
+
 #: The horizon the model's estimate is made at, in days.
 #:
 #: The matrix compares only rows at this horizon, and it is declared here rather than
@@ -368,6 +370,46 @@ BENCHMARKS: dict[str, CohortBenchmark] = {
         ),
         evidence_tier="Observational Cohort",
         horizon_days=30,
+        matched_features=(),
+    ),
+    # The fallback cohort (Phase E, 2026-10-26). Every inpatient gets a comparison, and
+    # this is the one an admission gets when its own condition has no curated row — or
+    # when the chart does not name a condition this corpus carries at all. It is the
+    # all-cause, hospital-wide figure, which is the quantity the model estimates: a
+    # readmission of any kind within 30 days of discharge, across every condition.
+    #
+    # The rate is quoted from the abstract's RESULTS sentence, and the qualifier is part
+    # of the figure — "almost one fifth (19.6%)" is what the paper says, and printing
+    # 19.6% alone would turn a hedged sentence into a measured one.
+    "19339721": CohortBenchmark(
+        pmid="19339721",
+        phenotype=GENERAL_INPATIENT,
+        reported_rate="19.6%",
+        journal="The New England Journal of Medicine",
+        year="2009",
+        title=(
+            "Rehospitalizations among patients in the Medicare fee-for-service "
+            "program."
+        ),
+        authors="Jencks SF, Williams MV, Coleman EA.",
+        rate_sentence=(
+            "Almost one fifth (19.6%) of the 11,855,702 Medicare beneficiaries who had "
+            "been discharged from a hospital were rehospitalized within 30 days, and "
+            "34.0% were rehospitalized within 90 days."
+        ),
+        cohort_summary=(
+            "Hospital-wide, all conditions — Medicare fee-for-service claims for "
+            "11,855,702 beneficiaries discharged from a hospital, 2003-2004, national "
+            "analysis"
+        ),
+        # An observational analysis of a national claims cohort. Named as what it is
+        # rather than promoted to a tier it does not hold: this row is a fallback, and a
+        # fallback that overstates its own strength is worse than no row.
+        evidence_tier="Observational Cohort",
+        horizon_days=30,
+        # The paper names demographic and hospital characteristics as correlates, not
+        # this patient's own drivers, so the column stays empty rather than borrowing
+        # cohort composition for a claim the record did not make.
         matched_features=(),
     ),
 }

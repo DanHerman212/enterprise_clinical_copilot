@@ -74,6 +74,11 @@ class LiteratureArticle(TypedDict):
     # no month. Deliberately not normalised into a date type: the reader is judging
     # whether the paper is current, and the record's own precision is the honest one.
     pub_date: str
+    # The first three authors, as a citation writes them ("Foroutan F, Rayner DG,
+    # Ross HJ, et al."), or empty when the record names none. Phase F (2026-10-26):
+    # the reference line is `Journal. Year. Authors. · PMID`, so the authors have to
+    # travel with the record that states them.
+    authors: str
     abstract: str
     url: str
 
@@ -224,7 +229,8 @@ def validate_literature_result(payload: Any) -> LiteratureResult | ToolError:
     for article in articles:
         if not isinstance(article, dict) or any(
             not isinstance(article.get(field), str)
-            for field in ("pmid", "title", "journal", "pub_date", "abstract", "url")
+            for field in ("pmid", "title", "journal", "pub_date", "authors",
+                          "abstract", "url")
         ):
             raise ToolContractError("Literature article is malformed.")
         # A record with no identifier cannot be cited or linked, which is the whole

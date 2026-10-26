@@ -472,16 +472,22 @@ class TestPresentationContract:
         citations — so it dropped its scope pill AND raised a visible safety swap over an
         answer nothing had been removed from.
 
-        The admission is one the reviewed map carries (Phase 4B), because the matrix is
-        selected by the patient's own phenotype now: a comparison needs an admission whose
-        condition is known, and an id that resolves to nothing draws no table. That is
-        asserted separately; here it is only the vehicle.
+        The admission is one whose CHART this turn read (Phase E, 2026-10-26): the
+        matrix is selected by the condition the note states, and a turn that read no chart
+        draws the records alone. The note sections below are the evidence that makes this
+        turn a comparison rather than a search — which is the rule, and the case where it
+        is absent has its own test.
         """
         out = compose_presentation(
             "Compare this patient's readmission risk against peer-reviewed clinical "
             "cohorts.",
             "His 9.0% sits below the 13.2% pooled for hospitalised heart failure^[1].",
             [
+                {"name": "rag_search_sections", "args": {"hadm_id": 90000023},
+                 "response": {"query": "sections", "returned": 1, "passages": [{
+                     "section": "discharge_diagnosis",
+                     "text": "Discharge Diagnosis: Acute decompensated heart failure",
+                 }]}},
                 {"name": "search_literature", "args": {"query": "heart failure"},
                  "response": {"query": "heart failure", "returned": 1, "articles": [{
                      "pmid": "37495280",
@@ -506,6 +512,42 @@ class TestPresentationContract:
         types = [c["component"] for c in
                  out["a2ui"]["messages"][1]["updateComponents"]["components"]]
         assert "ComparativeRiskMatrix" in types
+
+    def test_a_literature_turn_that_read_no_chart_draws_the_records_alone(self):
+        """The condition-lock's own premise, applied to the case the map used to cover.
+
+        A condition resolved from an admission id is a claim nobody checked; resolved from
+        the discharge diagnosis, it is a claim the turn is holding. So a `/pubmed` turn
+        that read no note — a search opened on a fresh thread — shows the records and no
+        cohort table. The alternative is drawing a heart-failure cohort under a question
+        about a patient whose condition the turn never established.
+        """
+        out = compose_presentation(
+            "Compare this patient's readmission risk against peer-reviewed clinical "
+            "cohorts.",
+            "His 9.0% sits below the 13.2% pooled for hospitalised heart failure^[1].",
+            [
+                {"name": "search_literature", "args": {"query": "heart failure"},
+                 "response": {"query": "heart failure", "returned": 1, "articles": [{
+                     "pmid": "37495280",
+                     "title": "Global Comparison of Readmission Rates.",
+                     "journal": "JACC",
+                     "pub_date": "2023 Aug 01",
+                     "url": "https://pubmed.ncbi.nlm.nih.gov/37495280/"}]}},
+                {"name": "predict_readmission", "args": {"hadm_id": 90000023},
+                 "response": GOOD_PAYLOAD},
+            ],
+            command="literature",
+        )
+
+        types = [c["component"] for c in
+                 out["a2ui"]["messages"][1]["updateComponents"]["components"]]
+        assert "ComparativeRiskMatrix" not in types
+        # The records are the answer here, and since Phase F they are citations: numbered
+        # pills in the prose and rows in the references list, not a boxed card.
+        assert "LiteratureList" not in types
+        assert [source["kind"] for source in out["sources"]] == ["Literature"]
+        assert out["references"][0]["pmid"] == "37495280"
 
 
 class TestUnifiedEhrRiskTurn:

@@ -44,9 +44,10 @@ from services.agent.citations import (
     renumber_citations,
 )
 from services.agent.admission_phenotypes import (
-    bucket_for,
-    is_matrix_eligible,
+    GENERAL_INPATIENT,
     NON_ADMISSION,
+    is_matrix_eligible,
+    resolve_phenotype,
 )
 
 # The citation records live in `note_presentation`. Imported by name here because
@@ -67,6 +68,7 @@ from services.agent.note_presentation import (  # noqa: F401 — re-exported
     _unavailable_text,
     _usable_articles,
     literature_citations,
+    literature_sources,
     narrative_surface,
     note_citations,
     register_benchmark_sources,
@@ -212,41 +214,73 @@ def turn_scope(tool_calls: list[dict]) -> str | None:
     return SCOPE_GENERAL
 
 
-def turn_phenotype(tool_calls: list[dict]) -> str:
-    """The phenotypic bucket this turn's admission resolved to, or "".
+def _note_sections(tool_calls: list[dict]) -> dict[str, str]:
+    """Every note section the evidence carries, section name -> its text.
 
-    Read off the `hadm_id` the tools were actually given, the same way `turn_scope` reads
-    the scope, so a tool added later is classified by what it did. The admission id
-    travels as an argument rather than being passed alongside the calls because this
-    layer's whole job is to derive the surface from the evidence the turn produced.
-
-    Three ways to get nothing back, and the caller cannot tell them apart — which is
-    correct, because the consequence is the same and it is the safe one:
-
-      * no tool carried an admission (a condition-only search, a free-text question);
-      * the admission is not in the reviewed map, so its condition is unknown;
-      * the admission resolved to a bucket whose policy is no comparison, or is not a
-        hospital admission at all.
-
-    The condition-lock is enforced here rather than at the matrix, so a mismatched
-    comparison cannot be drawn by any caller that forgets a check: a `/pubmed` turn whose
-    query is about a condition this patient does not have still carries `hadm_id` for the
-    estimate, and the matrix for it is selected by the PATIENT's phenotype. A query about
-    heart failure on an orthopedic admission therefore draws the orthopedic rows beside
-    her estimate or, when the query is the point, the records alone — never heart failure
-    cohorts pinned under an orthopedic patient.
+    Read off the retrieval payloads rather than fetched: this is the chart the turn
+    actually read, which is the only chart the composer is entitled to describe a patient
+    from. A passage labelled with a section is that section; two passages labelled alike
+    are joined, because a whole-note chunk and a sectioned one can both land on the same
+    retrieval and the classifier should see the text once.
     """
+    sections: dict[str, str] = {}
     for call in tool_calls or []:
-        hadm_id = (call.get("args") or {}).get("hadm_id")
-        if not isinstance(hadm_id, int) or isinstance(hadm_id, bool):
+        if not isinstance(call, dict):
             continue
-        # The first admission the turn used is the one it is about: every call in a turn
-        # carries the same one, so there is nothing here to reconcile between calls.
-        if not is_matrix_eligible(hadm_id):
-            return ""
-        bucket = bucket_for(hadm_id)
-        return bucket.key if bucket else ""
-    return ""
+        response = call.get("response")
+        if not isinstance(response, dict):
+            continue
+        for passage in response.get("passages") or []:
+            if not isinstance(passage, dict):
+                continue
+            name = str(passage.get("section") or "").strip()
+            text = str(passage.get("text") or "").strip()
+            if not name or not text:
+                continue
+            sections[name] = f"{sections[name]} {text}".strip() if name in sections else text
+    return sections
+
+
+def turn_phenotype(tool_calls: list[dict],
+                   evidence: list[dict] | None = None) -> str:
+    """The condition this turn's patient has, resolved from the chart it read.
+
+    Read from the note sections the evidence carries, in the order a clinician reads a
+    discharge summary (see `admission_phenotypes.resolve_phenotype`), and NOT from the
+    admission's identifier. The reviewed map answered that question for the 84 rows it
+    carried and answered nothing for any other admission — and "nothing" reached the
+    surface as a table that was simply absent, which no reader can tell apart from a
+    patient who cannot be compared at all. A patient admitted tomorrow has a note, so a
+    patient admitted tomorrow resolves.
+
+    `evidence` is the whole conversation's calls, because a `/pubmed` turn reads no chart
+    of its own and a question about the patient's condition is still about this patient.
+    What it must not be is the answer to a different question: a condition asserted from
+    an identifier is exactly the hardcoded claim this replaces, so a turn with no chart
+    anywhere in reach resolves nothing and draws no comparison. That is a real cost — a
+    literature turn opened on a fresh thread shows records alone — and it is the honest
+    one: without a chart there is no evidence for whose condition the cohorts are.
+
+    An unresolved INPATIENT resolves to `GENERAL_INPATIENT` rather than to nothing, and
+    the difference matters: the vocabulary failing to name a condition is a limit of the
+    vocabulary, while a stay is still a stay and the all-cause hospital-wide rate is still
+    the right thing to hold it against. A record that was never a stay resolves nothing,
+    because a readmission rate does not describe it.
+    """
+    calls = [*(evidence or []), *(tool_calls or [])]
+    hadm_id = next(
+        (int((call.get("args") or {})["hadm_id"]) for call in calls
+         if isinstance(call, dict)
+         and isinstance((call.get("args") or {}).get("hadm_id"), int)
+         and not isinstance((call.get("args") or {}).get("hadm_id"), bool)),
+        None,
+    )
+    if hadm_id is not None and not is_matrix_eligible(hadm_id):
+        return ""
+    return resolve_phenotype(
+        _note_sections(calls),
+        fallback=GENERAL_INPATIENT if hadm_id is not None else "",
+    )
 
 
 def compose_presentation(question: str, answer: str,
@@ -298,7 +332,15 @@ def compose_presentation(question: str, answer: str,
     # marker that pointed at nothing (TF-10, 2026-10-23).
     evidence_calls = list(evidence) if evidence is not None else tool_calls
     rag = rag_payload(evidence_calls)
-    literature = literature_payload(evidence_calls)
+    # The literature surface is THIS turn's search and nothing else.
+    #
+    # Read from the conversation, a `search_literature` call made three turns ago came
+    # back on every turn after it: `resolve_sources` bound `^[1]` to a PubMed record the
+    # reader was not being shown, the badge flipped to General Medical Evidence over an
+    # answer about the discharge note, and `LiteratureList` re-rendered under medication
+    # instructions (90000058, 2026-10-26). A search is an event, not a state: what this
+    # turn answers from is what this turn looked up.
+    literature = literature_payload(tool_calls)
     # The lab card reads THIS turn's calls, not the conversation's. `evidence_calls` is
     # the right array for what the answer rests on and for how its markers are numbered
     # (TF-10, 2026-10-23), but a chart is not a provenance statement — it is a drawing
@@ -308,8 +350,19 @@ def compose_presentation(question: str, answer: str,
     # another one (reported from the production UI, 2026-10-25). The comparative matrix
     # beside it is gated the same way and for the same reason (see `_draws_matrix`).
     labs = lab_trend_payload(tool_calls)
-    sources = resolve_sources(renumbered, remap, rag, intent)
-    narrative = _narrative(renumbered, sources, literature)
+    # Resolved against the conversation's evidence, and against EVERY kind of it. A marker
+    # addresses one array — the citable units the model was shown, numbered continuously
+    # across the replayed turns and this one — and that array now holds laboratory
+    # trajectories beside note passages. Resolving against the retrieval payload alone left
+    # a lab citation pointing at a note passage, or at nothing.
+    #
+    # Named `record_sources` because these are the ones that ground the answer in THIS
+    # patient's chart. What the turn publishes in `sources` is a wider list (see below);
+    # what `verified` is decided from is this one, and the two must not be confused by a
+    # later edit that adds a channel.
+    record_sources = resolve_sources(renumbered, remap, rag, intent,
+                                     evidence=evidence_calls)
+    narrative = _narrative(renumbered, record_sources, literature)
 
     scope = turn_scope(evidence_calls)
 
@@ -365,7 +418,7 @@ def compose_presentation(question: str, answer: str,
     # the canvas is the answer, and the reader was never shown a claim needing
     # attribution.
     no_prose = not (renumbered or "").strip()
-    scope_suppressed = (scope == SCOPE_PATIENT and not sources
+    scope_suppressed = (scope == SCOPE_PATIENT and not record_sources
                         and not lab_evidenced and not payload_evidenced
                         and not no_prose)
     if scope_suppressed:
@@ -384,7 +437,7 @@ def compose_presentation(question: str, answer: str,
     # question nobody asked of the literature (2026-10-22).
     articles = _usable_articles(literature or {})
     draws_literature = bool(articles) or (
-        literature is not None and not sources and not lab_evidenced
+        literature is not None and not record_sources and not lab_evidenced
         and not payload_evidenced
     )
     drawn_literature = literature if draws_literature else None
@@ -404,14 +457,19 @@ def compose_presentation(question: str, answer: str,
     # this admission. A driver question reaches the same place from free text.
     estimate_evidenced = _usable_estimate(predict_payload(tool_calls)) is not None
     grounded_in_record = (
-        bool(sources) or lab_evidenced or payload_evidenced or estimate_evidenced
+        bool(record_sources) or lab_evidenced or payload_evidenced or estimate_evidenced
         or bool(context_grounded)
     )
     # A literature turn is about other people's patients, whatever rides beside it — the
     # comparator turn draws this patient's estimate as a baseline row and is still an
-    # answer about published cohorts. Note sources are the exception: a turn that cites
-    # the record is grounded in it, whichever surface it drew.
-    literature_only = draws_literature and not sources
+    # answer about published cohorts. Note passages and laboratory trajectories are the
+    # exception: a turn that cites the record IS grounded in it, whichever surface it drew.
+    #
+    # Decided from `record_sources` and NOT from the published `sources` list, which now
+    # also carries the retrieved articles. Reading that list here would let a PubMed turn
+    # vouch for itself: the records are somebody else's patients, and `dev_t1_06` asserts
+    # exactly this turn is not chart-grounded.
+    literature_only = draws_literature and not record_sources
     # A widget IS an answer. `/risk` returns no prose by design, so "substantive" cannot
     # mean "has prose" — it means there is something the reader was given that can be
     # vouched for, and a drawn estimate is that.
@@ -426,7 +484,7 @@ def compose_presentation(question: str, answer: str,
         rag,
         cite=first_citation(renumbered),
         sections=intent,
-        source=sources[0] if sources else None,
+        source=record_sources[0] if record_sources else None,
         literature=drawn_literature,
         labs=labs,
         medications=command_payload,
@@ -436,7 +494,10 @@ def compose_presentation(question: str, answer: str,
         # The patient's own condition selects the cohort rows, whatever the
         # question was about (see `turn_phenotype`), and `command` decides whether
         # this turn is one that carries the table at all (see `_draws_matrix`).
-        phenotype=turn_phenotype(tool_calls),
+        # Resolved from the chart the conversation has read, so a follow-up and a
+        # `/pubmed` turn that came after an `/ehr` still know whose condition the
+        # cohorts are being compared against.
+        phenotype=turn_phenotype(tool_calls, evidence_calls),
         eligible=admission_eligible(tool_calls),
         # The clinician's own words, when the turn had any: the other half of the
         # condition-lock, so a question about a condition this patient does not have
@@ -453,6 +514,17 @@ def compose_presentation(question: str, answer: str,
     #
     # Appended here, after every flag above, so nothing about this turn's grounding is
     # re-read from a list that now counts somebody else's patients.
+    # The records the search returned, in the same numbered channel as every other
+    # citable source, numbered from 1 and continuing into the comparison table's cohorts.
+    #
+    # A literature turn published no `sources` before Phase F (2026-10-26): the articles
+    # lived only in the `literature` payload, which the canvas drew as boxed cards, so the
+    # inline pill had nothing to address and the reference list did not exist on that
+    # surface at all. They are registered here so a marker, a hover card and a drawer row
+    # name one record — the same treatment `/ehr` and `/meds` citations already had.
+    published_sources = literature_sources(articles)
+    sources = record_sources + published_sources
+
     benchmark_sources, benchmark_references = register_benchmark_sources(
         canvas, start=len(sources) + 1,
         existing_pmids=[entry.get("pmid") for entry in sources],
@@ -462,15 +534,15 @@ def compose_presentation(question: str, answer: str,
         "answer": renumbered,
         "citation_map": remap,
         "intent_sections": list(intent),
-        # The note passages first, then the cohorts the comparison table draws. The
-        # second group is numbered to continue the first, so a marker written anywhere
-        # in this turn addresses one array.
+        # Note passages and laboratory trajectories first, then the published records the
+        # search returned, then the cohorts the comparison table draws. Each group is
+        # numbered to continue the one before it, so a marker written anywhere in this turn
+        # addresses one array.
         "sources": sources + benchmark_sources,
         # The published records a search RETURNED, passed through whole. Kept separate
-        # from `sources` on purpose: that list is the citation channel — numbered, and
-        # addressable by a marker — and a returned article is drawn by the canvas rather
-        # than cited. The comparison table's curated cohorts are the exception and are
-        # in `sources`, because the table names them on screen and a reader can open one.
+        # from `sources` because it is the tool's own answer — `None` (no search) and an
+        # empty list (searched, found nothing) must not collapse into each other — while
+        # `sources` is the citation channel the records are addressed by.
         "literature": drawn_literature,
         # Whether this answer was checked against, and grounded in, the patient's own
         # record. Stated once, here, because the turns that qualify are decided by

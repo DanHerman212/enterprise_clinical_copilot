@@ -18,12 +18,24 @@ UNAVAILABLE search stay with the canvas, because they are wording for a surface
 that did not get any records.
 """
 
-from services.agent.citations import cited_numbers, extract_section
+from services.agent.citations import (
+    citable_passages,
+    cited_numbers,
+    extract_section,
+)
 
 # The fields a literature record is put on the wire with, in the order the card shows
-# them. The abstract is not among them: nothing renders it — the reader's next step is
-# the record at PubMed, not a second copy of its text here (UX ruling 2026-10-13).
-_LITERATURE_FIELDS = ("pmid", "title", "journal", "pub_date", "url")
+# them.
+#
+# The abstract was removed from this list on 2026-10-13 with the ruling that "the
+# reader's next step is the record at PubMed, not a second copy of its text here" — at
+# the time the only surface was a card that showed a title and a journal. Phase F
+# (2026-10-26) puts the record behind a citation marker like every other source in the
+# product, and a reference that opens onto a title and nothing else is not a reference:
+# the reader cannot weigh a claim whose evidence is a heading. The abstract is the
+# passage, so it travels.
+_LITERATURE_FIELDS = ("pmid", "title", "journal", "pub_date", "authors", "abstract",
+                      "url")
 
 def _usable_articles(literature) -> list[dict]:
     """The articles from a literature payload, each shaped for the canvas.
@@ -116,7 +128,14 @@ def resolve_source(passages: list[dict], passage_n: int,
         section_text = extract_section(cited.get("text", ""), shown_section)
 
     return {"section": shown_section,
-            "text": section_text or cited.get("text", "")}
+            "text": section_text or cited.get("text", ""),
+            # What a citation for this passage calls itself, when the passage is not a
+            # note section. A laboratory trajectory is evidence of a different kind — it
+            # has an analyte rather than a heading — so it names itself here and
+            # `note_citations` uses the name instead of a section label it would have to
+            # guess at.
+            "cite_source": str(cited.get("cite_source") or ""),
+            "cite_title": str(cited.get("cite_title") or "")}
 
 
 #: The badge a published record carries. One word, because a pill is a tag beside a
@@ -255,7 +274,8 @@ def register_benchmark_sources(canvas: dict | None, start: int,
 
 
 def resolve_sources(answer: str, citation_map: dict[str, int],
-                    rag: dict | None, sections: tuple[str, ...]) -> list[dict]:
+                    rag: dict | None, sections: tuple[str, ...],
+                    evidence: list[dict] | None = None) -> list[dict]:
     """One resolved source per citation number in the (renumbered) answer.
 
     This is the list the browser renders on a footnote click: it looks up the
@@ -263,8 +283,21 @@ def resolve_sources(answer: str, citation_map: dict[str, int],
     Section intent is applied only to a single-citation answer; a
     multi-citation answer cites its passages in array order and maps by
     number.
+
+    `evidence` is the whole conversation's tool calls, in the order the model was shown
+    them, and it supersedes `rag` when given: a marker addresses ONE array, and that array
+    holds every citable unit the conversation produced — four note sections from `/ehr`,
+    then ten analytes from a lab drill-down — not only the passages of a single retrieval
+    payload. Resolving against the retrieval alone left a lab citation pointing at a note
+    passage or at nothing (Phase E, 2026-10-26).
     """
-    passages = (rag or {}).get("passages") or []
+    if evidence is not None:
+        passages = [
+            passage for call in evidence
+            for passage in citable_passages((call or {}).get("response"))
+        ]
+    else:
+        passages = (rag or {}).get("passages") or []
     if not passages:
         return []
     query = (rag or {}).get("query") or "discharge note"
@@ -293,6 +326,11 @@ _SECTION_LABELS = {
     "discharge_condition": "Discharge condition",
     "discharge_disposition": "Discharge disposition",
     "followup_instructions": "Follow-up instructions",
+    # Not a note heading: a laboratory trajectory, the other channel a chart answer can
+    # rest on. It is here because this map is where a section key becomes words a reader
+    # sees, and a lab citation that fell through to the generic branch would read
+    # "laboratory trends" in lower case beside "Discharge diagnosis".
+    "laboratory_trends": "Laboratory trends",
 }
 
 
@@ -324,30 +362,37 @@ def narrative_surface(answer: str, citations: list[dict]) -> dict:
 
 
 def note_citations(sources: list[dict]) -> list[dict]:
-    """One citation per resolved note passage, keyed by its renumbered marker.
+    """One citation per resolved source, keyed by its renumbered marker.
 
     The citation layer renumbers `^[n]` to first-appearance order; reading the
     renumbered `cite` here keeps the marker and the popover in step without a second
     mapping to drift.
+
+    A source that names itself wins over the section vocabulary. A note passage does not
+    need to — every note passage is a discharge note and differs only by section — but a
+    laboratory trajectory is not a note passage at all, and labelling it "Discharge note"
+    would tell the reader their creatinine came out of the prose.
     """
-    return [
-        {
+    citations = []
+    for source in sources:
+        title = str(source.get("cite_title") or "") or _section_label(
+            source.get("section"))
+        citations.append({
             "index": int(source["cite"]),
             # The channel the evidence came from. Note passages all share one channel
             # and differ by section, so the section becomes the title.
-            "source": "Discharge note",
-            "title": _section_label(source.get("section")),
+            "source": str(source.get("cite_source") or "Discharge note"),
+            "title": title,
             # What the marker SAYS, resolved here rather than in the browser. The marker
             # reads `1 · Hospital Course` and not a bare `1`, because a number tells the
             # reader nothing about what they are about to open — and resolving it here
             # keeps the section vocabulary in the one module that already owns it
             # (`_SECTION_LABELS`), rather than a second copy in the client that would
             # drift the first time a section is renamed.
-            "label": f"{int(source['cite'])} · {_section_label(source.get('section'))}",
+            "label": f"{int(source['cite'])} · {title}",
             "excerpt": str(source.get("text") or ""),
-        }
-        for source in sources
-    ]
+        })
+    return citations
 
 
 #: How long a literature marker's source token may get before it is cut back.
@@ -380,55 +425,165 @@ def _short_source(name: str) -> str:
     return cut.rstrip(" ,.;:") + "…"
 
 
+def _year_of(pub_date: object) -> str:
+    """The four-digit year a PubMed date states, or an empty string.
+
+    PubMed dates are not one format — "2023", "2023 Aug 01", "2022 Sep-Oct" — so this
+    reads the year off rather than parsing a date. Nothing here needs a day.
+    """
+    for token in str(pub_date or "").replace("-", " ").split():
+        if len(token) == 4 and token.isdigit():
+            return token
+    return ""
+
+
+#: How much of an abstract a hover card carries.
+#:
+#: The card is 340px wide and floats over the answer being read, so it is a place to judge
+#: a source, not a place to read one. 400 characters is the opening of a structured
+#: abstract — enough to see what the study did and found — and the record itself is one
+#: click away on the title above it. Cut at a sentence end where there is one inside the
+#: budget, because a cut mid-clause reads as a truncation error rather than as a summary.
+_CITE_EXCERPT_CHARS = 400
+
+
+def _excerpt(text: object) -> str:
+    """The opening of an abstract, bounded and marked as an opening."""
+    body = " ".join(str(text or "").split())
+    if len(body) <= _CITE_EXCERPT_CHARS:
+        return body
+    cut = body[:_CITE_EXCERPT_CHARS]
+    stop = max(cut.rfind(". "), cut.rfind("? "), cut.rfind("! "))
+    if stop > _CITE_EXCERPT_CHARS // 2:
+        return cut[: stop + 1]
+    space = cut.rfind(" ")
+    return (cut[:space] if space > 0 else cut).rstrip(" ,.;:") + "…"
+
+
+def _article_record(article: dict, index: int) -> dict:
+    """One published record, in the shape every other citable source already has.
+
+    Built once and read by both channels — the narrative's citations and the turn's
+    `sources` — so a marker, a hover card and a drawer row cannot disagree about which
+    paper they name. Phase F (2026-10-26): a literature turn used to be the one surface
+    with its own presentation, a boxed card under the prose and a marker that opened
+    PubMed directly; what it never had was the hover card and the reference row that
+    every other citation in the product gets.
+    """
+    journal = str(article.get("journal") or "").strip()
+    year = _year_of(article.get("pub_date"))
+    authors = str(article.get("authors") or "").strip()
+    pmid = str(article.get("pmid") or "").strip()
+    title = str(article.get("title") or "Untitled record").strip()
+    # The citation line, in the order a reader reads one: where it was published, when,
+    # by whom, and which record it is. Every part is optional except the identifier,
+    # because a record that states no author must not render as "et al." against nobody.
+    journal_citation = " ".join(part for part in (
+        f"{journal}." if journal else "",
+        f"{year}." if year else "",
+        authors,
+    ) if part).strip()
+    subtitle = " · ".join(part for part in (journal_citation, f"PMID {pmid}")
+                           if part)
+    # What the pill SAYS. The journal and the year, because a pill is set inside a
+    # sentence and a title is not; cut to a marker's length by `_short_source`, which is
+    # the same budget the comparative table's pill uses.
+    label = f"{index} · " + " · ".join(part for part in (
+        _short_source(journal) or "PubMed", year) if part)
+    return {
+        "index": index,
+        "kind": "Literature",
+        "badge": _LITERATURE_BADGE,
+        "title": title,
+        "journal": journal,
+        "year": year,
+        "authors": authors,
+        "label": label,
+        "subtitle": subtitle,
+        "journal_citation": journal_citation,
+        # The passage: what the record reports. A reference that opens onto a title and
+        # nothing else cannot be weighed.
+        "text": _excerpt(article.get("abstract")),
+        "pmid": pmid,
+        "url": str(article.get("url") or "").strip() or (
+            f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/" if pmid else ""),
+    }
+
+
 def literature_citations(articles: list[dict]) -> list[dict]:
-    """One citation per retrieved article, numbered as the summary cites them.
+    """One citation per retrieved article, shaped like every other citation.
 
     `index` is the 1-based position in the record order the model was given, which is
-    exactly what the formatting instruction tells it to cite — so the marker in the
-    prose and the record beneath it are the same record by construction, and a marker
-    with no record behind it can only mean the model cited a number it never got.
+    exactly what the formatting instruction tells it to cite — the marker in the prose and
+    the record beneath it are the same record by construction.
 
-    `label` is what the marker DISPLAYS and `pmid` is what it links to. The two used to be
-    one string: the marker printed the identifier, on the reasoning that a literature
-    question is answered against published records and the reader's next step is to open
-    one. The 2026-10-15 remediation moved the display to the journal, because on a
-    literature turn the reader is weighing sources and the journal is what says what kind
-    of claim a record makes. The identifier is still on screen a hover away and is still
-    the link target, so nothing became unactionable — but this is a deliberate trade of a
-    terse identifier for an informative name, and it is the thing to revisit first if the
-    inline pills start reading long.
+    The marker's DISPLAY is the number, the journal and the year; the identifier stays the
+    link target so a reader who wants the paper is one click from the card's title. That
+    trade was made on 2026-10-15 (journal over identifier), revisited on 2026-10-16 (the
+    pills were reading long, so the journal is cut to `_CITE_SOURCE_CHARS`), and completed
+    here: the record now also carries the article, its authors and its abstract, because
+    the card behind the pill is the same card a note citation opens.
 
-    The number stays as the wire index because the prose the model wrote is numbered;
-    what that number looks like on screen is the console's decision, not the model's.
-
-    The trade made on 2026-10-15 was revisited on 2026-10-16, which is what the paragraph
-    above asked for: the pills WERE reading long. The journal is kept and cut to
-    `_CITE_SOURCE_CHARS`, so the marker still says what kind of source a record is without
-    its box wrapping inside a sentence. The identifier is untouched as the link target.
-
-    No excerpt. That was the abstract, kept for a popover that no longer exists on this
-    path, and it travelled as a second copy of text the record already carries.
+    `source` is the EYEBROW the card shows under the title. For a note passage that is
+    "Discharge note" and the section is the title; for a published record the title is the
+    article, so the eyebrow is the citation line itself.
     """
     citations = []
     for position, article in enumerate(articles, start=1):
-        journal = str(article.get("journal") or "").strip()
+        record = _article_record(article, position)
         citation = {
-            "index": position,
-            "source": "PubMed",
-            "title": str(article.get("title") or "Untitled record"),
-            # The journal when the record carries one, the identifier otherwise. Chosen
-            # from what the record actually has rather than assumed: a record with no
-            # journal must not render as an empty pill. Cut to a marker's length — see
-            # `_short_source` for why, and for why the cut is marked.
-            "label": _short_source(journal) or (
-                f"PMID {article['pmid']}" if article.get("pmid") else "PubMed"),
+            "index": record["index"],
+            "source": record["subtitle"],
+            "title": record["title"],
+            "label": record["label"],
+            "subtitle": record["subtitle"],
+            "authors": record["authors"],
+            "journal_citation": record["journal_citation"],
+            "excerpt": record["text"],
         }
-        if article.get("pmid"):
-            citation["pmid"] = str(article["pmid"])
-        if article.get("url"):
-            citation["url"] = str(article["url"])
+        if record["pmid"]:
+            citation["pmid"] = record["pmid"]
+        if record["url"]:
+            citation["url"] = record["url"]
         citations.append(citation)
     return citations
+
+
+def literature_sources(articles: list[dict], start: int = 1) -> list[dict]:
+    """The retrieved records as `sources` entries, numbered from `start`.
+
+    A literature turn had no `sources` at all: the records lived in the `literature`
+    payload, which the canvas drew as cards, and the citation channel held only note
+    passages. The consequence was a turn whose markers could not address anything — the
+    browser resolved `^[PMID: n]` by identifier as a special case, and a `^[1]` written on
+    a literature turn pointed at nothing.
+
+    They are `kind="Literature"` for the same reason the comparison table's cohorts are:
+    a published record was not retrieved from THIS patient's note, so it carries the
+    identifier and the link a reader can open instead of a retrieval query.
+    """
+    sources = []
+    for offset, article in enumerate(articles):
+        record = _article_record(article, start + offset)
+        sources.append({
+            "cite": record["index"],
+            "kind": record["kind"],
+            "badge": record["badge"],
+            "title": record["title"],
+            "authors": record["authors"],
+            "label": record["label"],
+            "subtitle": record["subtitle"],
+            "journal_citation": record["journal_citation"],
+            # The section a note passage would name. For a published record it is the
+            # citation tram, which is what the table's benchmark rows use too.
+            "section": " · ".join(part for part in (record["journal"], record["year"])
+                                  if part) or record["badge"],
+            "text": record["text"],
+            "tier": "",
+            "pmid": record["pmid"],
+            "url": record["url"],
+        })
+    return sources
 
 
 def _narrative(answer: str, sources: list[dict], literature: dict | None) -> dict | None:

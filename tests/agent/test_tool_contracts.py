@@ -168,6 +168,9 @@ def _literature_article(**overrides):
         "title": "Ceftriaxone for lower extremity edema",
         "journal": "N Engl J Med",
         "pub_date": "2025 Mar 12",
+        # Phase F: the citation line reads `Journal. Year. Authors. · PMID`, so the
+        # record that states an author has to carry it, and the contract requires it.
+        "authors": "Smith JA, Doe B, Roe C, et al.",
         "abstract": "BACKGROUND: Cellulitis is common.",
         "url": "https://pubmed.ncbi.nlm.nih.gov/31234567/",
     }

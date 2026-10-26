@@ -125,7 +125,7 @@ def _run(*tools, replayed=None, wants=("rag_search_sections", "rag_search")):
     box, called = _box(*tools)
     events: list[dict] = []
 
-    async def replay(toolbox, turns):
+    async def replay(toolbox, turns, **_kwargs):
         return [], list(replayed or [])
 
     with patch.object(graph, "_build_llm", lambda name: model), \

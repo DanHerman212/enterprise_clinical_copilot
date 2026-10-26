@@ -124,6 +124,13 @@ def test_an_empty_literature_result_does_not_take_the_note_citations():
 
 
 def test_a_real_literature_result_still_takes_the_canvas():
+    """The swap survives Phase F; the records list does not.
+
+    A literature turn still suppresses the risk widgets — the question was about published
+    evidence, so a widget would be the wrong thing to be looking at. What changed is where
+    the records live: in the citation channel, so they draw as numbered pills and
+    reference rows rather than as a second list under the prose.
+    """
     out = compose_presentation(
         "What does the literature say about sepsis readmission?",
         "Readmission is common^[1].",
@@ -131,7 +138,8 @@ def test_a_real_literature_result_still_takes_the_canvas():
     )
 
     assert out["literature"] is not None
-    assert "LiteratureList" in _types(out)
+    assert "LiteratureList" not in _types(out)
+    assert "RiskInfluencers" not in _types(out)
 
 
 # --- Defect 4: /meds cites the whole list -------------------------------------

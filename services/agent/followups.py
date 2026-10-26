@@ -15,8 +15,10 @@ How this works instead, in three steps and no network calls:
    for a medication extraction. Nothing is re-fetched: the audit of 2026-10-23 measured
    that every command leaves enough here for its own templates, and a store lookup on
    this path would put a network call inside a flourish that must never fail a turn.
-2. **Phenotypes.** Each template declares the signal it needs, in priority order
-   (P1…P11 below). A template whose signal is absent does not fire.
+2. **Phenotypes.** Each template declares the signal it needs, in priority order (P1…P9
+   below, plus the literature chip). Nine numbered families, eleven template strings:
+   P2 has two wordings and P7/P8 are two numbers over one block. A template whose
+   signal is absent does not fire.
 3. **Slots.** The slot values — a drug name, a lab analyte and value, a driver label —
    come from the verified payload, never composed. A template whose slot cannot be
    filled from the record is dropped rather than emitted with a guess, because a chip
@@ -28,8 +30,11 @@ Two invariants are contractual rather than stylistic:
   which binds `search_literature` on any literature cue (`routing.asks_for_literature`).
   A chart chip carrying the word "evidence" or "studies" would swap a chart answer for a
   literature list, so every patient-chart chip is vetoed by that same predicate before
-  it is returned. Risk chips are worded to satisfy `routing.asks_why_risk_driver`, which
-  is what unlocks `predict_readmission` when the chip is clicked.
+  it is returned. No chip needs a cue test to unlock its tool: the chip is generated from
+  a tool result that is in the transcript by the time it is clicked, the console declares
+  `intent="follow_up"`, and a declared follow-up binds neither `predict_readmission` nor
+  `search_literature` (`graph._freetext_allowed`) because the replay already holds what
+  they would return.
 * **Answerability.** A chip is offered only when the data behind it is in the record.
   Medication chips are suppressed on a record with no discharge medications rather than
   asking about drugs that are not there.
@@ -279,7 +284,7 @@ _CARE_RED_FLAGS = ("What post-discharge activity restrictions, diet instructions
 _CARE_FOLLOW_UP = ("What outpatient follow-up appointments or clinic visits are "
                    "scheduled after discharge?")
 _MED_REGIMEN = "What are the discharge dosing instructions for {first} and {second}?"
-_RISK_DRIVER = "Why does {driver} increase this patient's readmission risk driver?"
+_RISK_DRIVER = "Why does {driver} increase this patient's readmission risk?"
 _LAB_ABNORMAL = ("How does the abnormal discharge {label} ({value} {unit}) compare to "
                  "its reference range and trend?")
 _LAB_NORMAL = ("What were the discharge values for {first} and {second} across the "

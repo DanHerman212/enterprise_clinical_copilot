@@ -13,9 +13,20 @@ questions that only a live run can answer:
      (the loop did not retrieve or cite what is there).
 
 This script drives `/ask` exactly as the browser does — the same `turns` payload the
-site replays, the same `follow_ups: true` — and writes one JSON record per
+site replays, the same `follow_ups: true`, and the same `intent="follow_up"` the console
+declares when a chip is clicked — and writes one JSON record per
 `(record, turn_1_command, chip)` tuple plus the three-turn progression per
 `(record, turn_1_command)`.
+
+All four commands that offer a chip row are covered: `/ehr` and `/meds` (the chart
+surveys), `/labs` (the P7/P8 lab chips) and `/pubmed` (the literature chip). `/risk` is
+absent by construction — it answers in a widget with no prose, and `followups.suggest`
+returns nothing for an empty answer.
+
+The declaration matters to what this audit measures. `route` ends a declared follow-up
+at its first pass, because the chip was generated from a tool result that the replay
+already carries. An audit that omitted the declaration would drive a path no browser
+takes, and would report a second retrieval round as normal.
 
 Three turns per progression, per §5.2.1: Turn 1 is the command, Turn 2 clicks
 `follow_ups[0]`, Turn 3 clicks Turn 2's `follow_ups[0]`. That is the sequence a reader
@@ -51,9 +62,17 @@ from evaluation.platform.run import DEFAULT_AGENT, _identity_token, make_ask  # 
 #: they never offer.
 RECORDS = (90000015, 90000108, 90000106, 90000105, 90000023)
 
-#: The two commands that offer chips. `/risk` is a widget turn with no chips by
-#: construction, and `/labs` is audited by the lab-trend tests.
-COMMANDS = ("/ehr", "/meds")
+#: The commands that offer a chip row, and the question each one is asked. `/risk` is a
+#: widget turn with no chips by construction. `/pubmed` needs a topic — a command without
+#: one is refused by the agent — so every record is searched for the same clinical topic,
+#: which keeps the run comparable across records.
+COMMAND_QUESTIONS: dict[str, str] = {
+    "/ehr": "/ehr",
+    "/meds": "/meds",
+    "/labs": "/labs",
+    "/pubmed": "/pubmed heart failure readmission",
+}
+COMMANDS = tuple(COMMAND_QUESTIONS)
 
 #: The number of chips to click per Turn 1 — the row is at most three.
 MAX_CHIPS = 3
@@ -99,6 +118,16 @@ def _tools(calls: list[dict]) -> str:
     return ", ".join(call.get("name") or "?" for call in calls or []) or "none"
 
 
+def _tool_names(calls: list[dict]) -> set[str]:
+    return {call.get("name") or "" for call in calls or []} - {""}
+
+
+#: Tools whose answers rest on structured evidence rather than on a note passage, so a
+#: correct answer carries no `^[n]` marker by design (`get_lab_trends` returns series,
+#: `predict_readmission` an estimate, `search_literature` journal records).
+STRUCTURED_TOOLS = frozenset({"get_lab_trends", "predict_readmission", "search_literature"})
+
+
 def _read(envelope: dict) -> dict:
     """The parts of a `/ask` envelope the audit scores, flattened."""
     return {
@@ -114,12 +143,18 @@ def _read(envelope: dict) -> dict:
     }
 
 
-def _verdict(turn: dict, *, chip: str, asked_before: list[str]) -> tuple[str, str]:
+def _verdict(turn: dict, *, chip: str, asked_before: list[str],
+             backing: set[str] = frozenset()) -> tuple[str, str]:
     """GOOD / BAD plus the reason, from §5.2.2's four flag conditions.
 
     Scored on what a reader is given, not on what the pipeline intended: an answer
     counts as cited when it carries a marker AND that marker resolves to a published
     source, which is the pair the console renders together.
+
+    `backing` is the Turn-1 tool set the chip was generated from. It matters now that a
+    chip is answered in one pass: a declared follow-up calls nothing, so reading only
+    this turn's calls would score a correct lab or literature answer as uncited purely
+    because the evidence it quoted came from the turn before.
     """
     if turn["status"] != 200:
         return "BAD", f"http {turn['status']} {turn['error'] or ''}".strip()
@@ -140,9 +175,9 @@ def _verdict(turn: dict, *, chip: str, asked_before: list[str]) -> tuple[str, st
         # `^[n]` by design, so scoring them as uncited would report a contract the
         # product never made. Read the same channels it does, off the tools the turn
         # called.
-        trajectory = any(call.get("name") in ("get_lab_trends", "predict_readmission")
+        trajectory = any(call.get("name") in STRUCTURED_TOOLS
                          for call in turn["tool_calls"])
-        if turn["verified"] is True and trajectory:
+        if turn["verified"] is True and (trajectory or backing & STRUCTURED_TOOLS):
             return "GOOD", ""
         return "BAD", "no resolving ^[n] citation"
     if turn["verified"] is not True:
@@ -165,31 +200,40 @@ def _excerpt(answer: str, limit: int = 240) -> str:
 
 
 def _ask_turn(ask, *, question: str, hadm_id: int, turns: list[dict],
-              run_tag: str) -> dict:
+              run_tag: str, intent: str | None = None) -> dict:
     envelope = ask(question=question, hadm_id=hadm_id, run_tag=run_tag,
-                   turns=turns or None, follow_ups=True)
+                   turns=turns or None, follow_ups=True, intent=intent)
     return _read(envelope)
 
 
 def _audit_command(ask, *, hadm_id: int, command: str, run_tag: str) -> dict:
-    """Turn 1, every chip from it, and the three-turn progression."""
-    turn1 = _ask_turn(ask, question=command, hadm_id=hadm_id, turns=[],
+    """Turn 1, every chip from it, and the three-turn progression.
+
+    Turn 1 is the command, asked in its own words. Every later turn is a CLICK, so it
+    carries the declaration the console sends — `intent="follow_up"` — which is what
+    lets the run end at its first pass instead of going back for evidence the replay
+    already holds.
+    """
+    asked = COMMAND_QUESTIONS[command]
+    turn1 = _ask_turn(ask, question=asked, hadm_id=hadm_id, turns=[],
                       run_tag=run_tag)
     chips = turn1["follow_ups"][:MAX_CHIPS]
+    backing = _tool_names(turn1["tool_calls"])
 
     rows = []
     for chip in chips:
         turn2 = _ask_turn(
             ask, question=chip, hadm_id=hadm_id,
-            turns=[_turn_payload(command, turn1["answer"], turn1["tool_calls"])],
-            run_tag=run_tag,
+            turns=[_turn_payload(asked, turn1["answer"], turn1["tool_calls"])],
+            run_tag=run_tag, intent="follow_up",
         )
         verdict, reason = _verdict(turn2, chip=chip,
-                                   asked_before=[command, chip])
+                                   asked_before=[asked, chip], backing=backing)
         rows.append({
             "record": hadm_id,
             "turn_1_cmd": command,
             "chip": chip,
+            "declared": True,
             "turn_2_tools": _tools(turn2["tool_calls"]),
             "turn_2_answer": _excerpt(turn2["answer"]),
             "turn_2_sources": len(turn2["sources"]),
@@ -207,8 +251,8 @@ def _audit_command(ask, *, hadm_id: int, command: str, run_tag: str) -> dict:
         first = chips[0]
         turn2 = _ask_turn(
             ask, question=first, hadm_id=hadm_id,
-            turns=[_turn_payload(command, turn1["answer"], turn1["tool_calls"])],
-            run_tag=run_tag,
+            turns=[_turn_payload(asked, turn1["answer"], turn1["tool_calls"])],
+            run_tag=run_tag, intent="follow_up",
         )
         progression["turns"].append({"question": first,
                                      "follow_ups": turn2["follow_ups"]})
@@ -217,10 +261,10 @@ def _audit_command(ask, *, hadm_id: int, command: str, run_tag: str) -> dict:
             turn3 = _ask_turn(
                 ask, question=second, hadm_id=hadm_id,
                 turns=[
-                    _turn_payload(command, turn1["answer"], turn1["tool_calls"]),
+                    _turn_payload(asked, turn1["answer"], turn1["tool_calls"]),
                     _turn_payload(first, turn2["answer"], turn2["tool_calls"]),
                 ],
-                run_tag=run_tag,
+                run_tag=run_tag, intent="follow_up",
             )
             progression["turns"].append({"question": second,
                                          "follow_ups": turn3["follow_ups"]})

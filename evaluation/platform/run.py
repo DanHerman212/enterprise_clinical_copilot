@@ -44,7 +44,7 @@ def make_ask(agent_url: str, token: str, *, timeout: float = 240.0):
     """One `/ask` round-trip. Returns the envelope plus its HTTP status."""
 
     def ask(*, question, hadm_id, run_tag, session_id=None, turns=None,
-            follow_ups=False) -> dict:
+            follow_ups=False, intent=None) -> dict:
         body: dict = {"question": question, "hadm_id": hadm_id, "run_tag": run_tag}
         if turns:
             body["turns"] = turns
@@ -52,6 +52,11 @@ def make_ask(agent_url: str, token: str, *, timeout: float = 240.0):
             # Only a loop-back item asks: `follow_ups` makes the service propose the
             # next questions, and every other turn has its own wording.
             body["follow_ups"] = True
+        if intent:
+            # What a rendered control declares about its own question. Only present when
+            # the caller is reproducing a click: an evaluation turn that names nothing is
+            # an ordinary turn, and the agent treats an absent key as exactly that.
+            body["intent"] = intent
         last: dict = {}
         for attempt in range(3):
             try:

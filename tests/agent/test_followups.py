@@ -10,8 +10,9 @@ Three things are asserted over and over, because they are the contract:
 * a slot is filled from the payload or the template does not fire;
 * no patient-chart chip trips `routing.asks_for_literature`, which is the predicate that
   would bind PubMed on the click; and
-* the risk chip satisfies `routing.asks_why_risk_driver`, which is what unlocks
-  `predict_readmission`.
+* no chip depends on a cue test to unlock its tool. A chip is generated from a tool
+  result that is in the transcript when it is clicked, the console declares
+  `intent="follow_up"`, and a declared follow-up binds neither crossing tool.
 
 All fixtures are synthetic. No Dev or Holdout record is referenced by id.
 """
@@ -259,9 +260,14 @@ def test_p6_asks_why_the_top_increasing_driver_raises_the_risk():
     # The label is the curated feature label, not the raw column name: a chip that says
     # "oncology_flag" is a developer string in a clinician's row.
     assert chips[0] == ("Why does oncology history increase this patient's readmission "
-                        "risk driver?")
-    assert routing.asks_why_risk_driver(chips[0]), (
-        "the chip must unlock predict_readmission on the click")
+                        "risk?")
+    # The sentence is a question a clinician can read. It used to end "…readmission risk
+    # driver?", where "driver" belonged to the slot rather than to the sentence, and the
+    # only thing holding that word in place was `routing.asks_why_risk_driver` — a cue
+    # test whose whole job is to bind `predict_readmission`. The chip does not need the
+    # predictor: the prediction it asks about is in the transcript by the time the chip
+    # is clicked, and a declared follow-up binds nothing it can replay.
+    assert routing.asks_for_literature(chips[0]) is False
 
 
 def test_p6_never_asks_for_the_number():
@@ -273,7 +279,7 @@ def test_p6_never_asks_for_the_number():
 def test_p6_does_not_fire_without_an_increasing_driver():
     state = _risk_state(factors=[{"feature": "monocytes_min", "contribution": -0.5,
                                   "direction": "decreases", "value": 0.2}])
-    assert not any("readmission risk driver" in chip for chip in _chips(state))
+    assert not any("readmission risk" in chip for chip in _chips(state))
 
 
 # --------------------------------------------------------------------------- P7/P8

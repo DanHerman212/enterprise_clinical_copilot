@@ -595,7 +595,8 @@ def _tools(toolbox: MCPToolbox,
 
 def _freetext_allowed(risk_driver_question: bool,
                       wants_literature: bool,
-                      lab_driver_question: bool = False) -> frozenset[str]:
+                      lab_driver_question: bool = False,
+                      declared_follow_up: bool = False) -> frozenset[str]:
     """The tools the reasoning loop may call on this turn.
 
     `routing.FREETEXT_TOOLS` is the standing boundary: a command's tool is absent rather
@@ -609,13 +610,25 @@ def _freetext_allowed(risk_driver_question: bool,
       (`routing.asks_for_literature`). Bound unconditionally before 2026-10-22, which put
       an empty `LiteratureList` over chart follow-ups and discarded their note citations.
 
-    A driver question also NARROWS the standing set. `get_lab_trends` is admitted to free
-    text for the lab drill-down, and a driver question kept it unconditionally: asked why
-    prior inpatient days drive the score, the loop read a lab panel, answered from the
-    model's mechanics, and the turn then offered a lab chip under a utilization answer
-    (measured in the production UI, `agent-00176-ngw`, 2026-10-24). The series documents
-    nothing such a question asked, so it is withheld unless the driver IS an analyte
-    (`routing.asks_about_a_lab_analyte`).
+    Both crossings are withheld on a DECLARED follow-up. The two conditions above ask
+    whether the question reads like a request for the tool, which is a guess about
+    wording; a declaration is a fact about where the question came from. `followups`
+    offers a chip only when the tool result behind it is in the turn that offered it, so
+    by the time the chip is clicked that result is in the replay — the predictor's
+    attribution and the literature records are already in the transcript. Binding the
+    tool anyway is what makes a click able to go back for what it already has: on
+    2026-10-26 the `_RISK_DRIVER` and `_LITERATURE` chips bound a tool each, and a model
+    that took the offer re-entered the loop, which the declaration cannot prevent because
+    `route` tests the model's own tool calls before every exemption. Absent rather than
+    refused, for the same reason the command tools are absent.
+
+    A driver question also NARROWS the standing set, declared or not. `get_lab_trends` is
+    admitted to free text for the lab drill-down, and a driver question kept it
+    unconditionally: asked why prior inpatient days drive the score, the loop read a lab
+    panel, answered from the model's mechanics, and the turn then offered a lab chip under
+    a utilization answer (measured in the production UI, `agent-00176-ngw`, 2026-10-24).
+    The series documents nothing such a question asked, so it is withheld unless the
+    driver IS an analyte (`routing.asks_about_a_lab_analyte`).
 
     What is NOT relaxed: the rule that no risk SCORE is produced in free text. The
     projection in `tool_node` shows the model display strings and driver names with
@@ -623,10 +636,11 @@ def _freetext_allowed(risk_driver_question: bool,
     the score.
     """
     allowed = set(routing.FREETEXT_TOOLS)
-    if wants_literature:
+    if wants_literature and not declared_follow_up:
         allowed |= routing.LITERATURE_TOOLS
     if risk_driver_question:
-        allowed.add("predict_readmission")
+        if not declared_follow_up:
+            allowed.add("predict_readmission")
         if not lab_driver_question:
             allowed.discard("get_lab_trends")
     return frozenset(allowed)
@@ -753,7 +767,7 @@ def build_graph(
     # force anything on the questions that need it most.
     freetext_tools = _tools(
         toolbox, allowed=_freetext_allowed(risk_driver_question, wants_literature,
-                                          lab_driver_question),
+                                          lab_driver_question, follow_up_declared),
     )
     chat_model = _build_llm(model)
     llm = chat_model.bind_tools(freetext_tools)

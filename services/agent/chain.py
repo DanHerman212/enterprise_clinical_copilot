@@ -91,6 +91,11 @@ RECORD_FIELDS = (
     # the list is chosen after the turn's span has closed, so this line is the only
     # record that carries it.
     "follow_ups",
+    # What a control declared this turn to be. Added 2026-10-26, after a follow-up chip
+    # looped in production and neither the record nor the trace could say whether the
+    # declaration had arrived — the one fact the run's routing turns on was the one fact
+    # neither artifact kept.
+    "intent",
 )
 
 
@@ -110,6 +115,7 @@ def record_execution(
     guardrail_flags: Iterable[str] = (),
     langfuse_trace_id: str = "",
     follow_ups: Sequence[str] = (),
+    intent: str | None = None,
     error: str | None = None,
     model: str = MODEL_ID,
     code_revision: str = CODE_REVISION,
@@ -185,6 +191,12 @@ def record_execution(
         # recorded against the run (Phase 05 §2, 2026-10-23). Always present, empty when
         # the caller did not ask for them or when no template fired.
         "follow_ups": list(follow_ups),
+        # The declaration a control sent, verbatim, and null when none was sent. Always
+        # present for the same reason `langfuse_trace_id` is: "was this turn declared?"
+        # has to be answerable from the artifact, because a run that goes back for
+        # evidence it already holds is either a routing defect or a declaration that
+        # never arrived, and the difference is this field.
+        "intent": intent,
     }
     if error:
         record["error"] = error

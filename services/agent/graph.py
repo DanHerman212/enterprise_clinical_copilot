@@ -942,7 +942,7 @@ def _context_block(admission_context: str, hadm_id: int | None = None) -> str:
 
 def _trace_metadata(
     hadm_id: int | None, question_kind: str | None, run_tag: str | None = None,
-    turns: list[dict[str, str]] | None = None,
+    turns: list[dict[str, str]] | None = None, intent: str | None = None,
 ) -> dict:
     """What a Langfuse trace needs in order to be found again by patient or by run.
 
@@ -960,6 +960,13 @@ def _trace_metadata(
     the admission — so "which traces belong to that eval" could only be answered by
     guessing at a time window (observed 2026-10-17, when a cleanup had to do exactly
     that and could not prove it had spared production traffic).
+
+    `intent:` is the declaration a control sent, when one did. Added 2026-10-26 after a
+    follow-up chip looped in production: `route` ends a declared follow-up in one pass,
+    so the trace of a chip that looped could not be read without knowing what the
+    request had declared — and that was the one fact the trace did not keep. The tag is
+    written only when a declaration arrived, so `intent:follow_up` is a filter and an
+    untagged trace means no control spoke.
     """
     tags: list[str] = []
     meta: dict[str, object] = {}
@@ -981,6 +988,9 @@ def _trace_metadata(
     if question_kind:
         tags.append(f"command:{question_kind}")
         meta["command"] = str(question_kind)
+    if intent:
+        tags.append(f"intent:{intent}")
+        meta["intent"] = str(intent)
     if run_tag:
         tags.append(f"run:{run_tag}")
         meta["run_tag"] = str(run_tag)
@@ -1051,7 +1061,7 @@ async def ask(
         # The span is also the ROOT TRACE, so the metadata goes on here rather than
         # only into the formatting model's config: `/risk` makes no LLM call at all,
         # so a trace whose tags depended on a model run carried none.
-        command_meta = _trace_metadata(hadm_id, question_kind, run_tag, turns)
+        command_meta = _trace_metadata(hadm_id, question_kind, run_tag, turns, intent)
         with observability.observation(f"command.{question_kind}",
                                        trace_metadata=command_meta) as root_span:
             command_state = await run_command(
@@ -1126,7 +1136,7 @@ async def ask(
     )
 
     config: dict = {"recursion_limit": RECURSION_LIMIT}
-    trace_meta = _trace_metadata(hadm_id, question_kind, run_tag, turns)
+    trace_meta = _trace_metadata(hadm_id, question_kind, run_tag, turns, intent)
     if trace_meta:
         # Langfuse reads `langfuse_tags` from run metadata; the other keys ride along
         # so the admission and command are visible on the trace itself.

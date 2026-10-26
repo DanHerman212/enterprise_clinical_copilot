@@ -266,7 +266,7 @@ async def ask_route(request: Request) -> JSONResponse:
 
     # Input validation is settled: from here the chain runs, and every exit below
     # emits exactly one execution record.
-    log = _StageLog()
+    log = _StageLog(intent=parsed.get("intent"))
     # Before the chain, because "is this admission served?" is a lookup and a lookup
     # answered deterministically cannot be talked into inventing a patient.
     refusal = await _unserved_admission(parsed, trace)
@@ -505,7 +505,7 @@ async def _stream_chain(
 
     # The events the caller sees are also the record of what ran: the sink relays
     # them, the log timestamps them.
-    log = _StageLog(sink=queue.put_nowait)
+    log = _StageLog(sink=queue.put_nowait, intent=parsed.get("intent"))
     task = asyncio.create_task(_run_chain(parsed, on_event=log))
 
     def _finished(finished: asyncio.Task) -> None:

@@ -364,10 +364,16 @@ class StageLog:
     two lists that agree today.
     """
 
-    def __init__(self, sink: Callable[[dict], None] | None = None):
+    def __init__(self, sink: Callable[[dict], None] | None = None,
+                 intent: str | None = None):
         self.stages: list[dict] = []
         self._sink = sink
         self._started = time.monotonic()
+        # What a control declared this turn to be, held here rather than passed to each
+        # `record` call: every exit from a request records exactly one line, and a
+        # declaration that only four of five exits carried would be unqueryable beside
+        # the failures it matters most for.
+        self.intent = intent
 
     def __call__(self, event: dict) -> None:
         # Only the stage, its tool and its timing are recorded. A result stage's
@@ -393,6 +399,7 @@ class StageLog:
             stages=self.stages,
             duration_ms=self.duration_ms,
             outcome=outcome,
+            intent=self.intent,
             **kwargs,
         )
 
@@ -417,8 +424,9 @@ async def unserved_admission(parsed: dict, trace: str) -> dict | None:
         return None
     # Its own record: this exit happens before the route's stage log exists, and every
     # exit from a request records exactly one line.
-    StageLog().record(trace, parsed.get("question") or "", "refused",
-                       error="admission_not_found")
+    StageLog(intent=parsed.get("intent")).record(
+        trace, parsed.get("question") or "", "refused",
+        error="admission_not_found")
     # Composed through the shared pipeline rather than hand-built, so this refusal
     # carries exactly the fields every other answer carries — including its trace id,
     # which the pipeline cannot supply here because no span is open around this exit.

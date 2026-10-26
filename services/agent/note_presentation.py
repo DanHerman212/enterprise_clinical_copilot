@@ -181,14 +181,34 @@ def register_benchmark_sources(canvas: dict | None, start: int,
             if not pmid or pmid in seen:
                 continue
             seen.add(pmid)
-            # The journal and the year together, which is how the table names the row
-            # and how a reader would look it up.
+            # What the table calls the row: the journal and the year. It stays the pill's
+            # label, because a pill is set inside a sentence or a cell and a full article
+            # title is not.
             citation = str(row.get("source") or "").strip() or f"PMID {pmid}"
             label = f"{index} · {citation}"
             url = str(row.get("url") or "").strip() or (
                 f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/")
-            # The cohort and the sentence the rate was read from: what the popover has to
-            # show for the reader to weigh the comparison rather than take it.
+            # The article, which is what the record IS. A row that named only its journal
+            # left the drawer showing `5. The Journal of Arthroplasty · 2022` and nothing
+            # else — no paper, no authors, nothing to weigh it by.
+            title = str(row.get("title") or "").strip() or citation
+            authors = str(row.get("authors") or "").strip()
+            journal = str(row.get("journal") or "").strip()
+            year = str(row.get("year") or "").strip()
+            # A citation line, in the order a reader reads one: where it was published,
+            # when, by whom, and which record it is.
+            journal_citation = " ".join(
+                part for part in (
+                    f"{journal}." if journal else "",
+                    f"{year}." if year else "",
+                    authors,
+                ) if part
+            ).strip()
+            subtitle = " · ".join(
+                part for part in (journal_citation, f"PMID {pmid}") if part
+            )
+            # The cohort and the sentence the rate was read from: what the popover and the
+            # drawer show for the reader to weigh the comparison rather than take it.
             passage = " — ".join(
                 part for part in (str(row.get("cohort_summary") or "").strip(),
                                   str(row.get("excerpt") or "").strip())
@@ -202,20 +222,30 @@ def register_benchmark_sources(canvas: dict | None, start: int,
                 "cite": index,
                 "kind": "Literature",
                 "badge": _LITERATURE_BADGE,
-                "title": citation,
+                # The article, not its journal: this is the field the card's heading and
+                # the drawer's row are titled from.
+                "title": title,
+                "authors": authors,
                 "label": label,
-                "subtitle": f"PMID {pmid} · "
-                            f"{row.get('evidence_tier') or 'Published cohort'}",
+                "subtitle": subtitle,
+                "journal_citation": journal_citation,
                 "section": citation,
                 "text": passage,
+                "tier": str(row.get("evidence_tier") or "").strip(),
                 "pmid": pmid,
                 "url": url,
             })
             references.append({
                 "index": index,
                 "source": _LITERATURE_BADGE,
-                "title": citation,
+                # The drawer's own row, shaped like the note rows beside it: a title, a
+                # subtitle and the passage. `title` is the article — a row headed with its
+                # journal was the naked `5. The Journal of Arthroplasty · 2022` a reader
+                # reported, with nothing to weigh it by.
+                "title": title,
                 "label": label,
+                "subtitle": subtitle,
+                "authors": authors,
                 "excerpt": passage,
                 "pmid": pmid,
                 "url": url,

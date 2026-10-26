@@ -26,7 +26,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from services.agent.a2ui import compose_presentation  # noqa: E402
 
 BENCHMARK_PMID = "34793857"
-BENCHMARK_TITLE = "The Journal of Arthroplasty · 2022"
+#: What the table calls the row: the journal and the year. This stays the pill's label.
+BENCHMARK_CITATION = "The Journal of Arthroplasty · 2022"
+#: The article, which is what the record IS.
+BENCHMARK_TITLE = (
+    "The Impact of Pre-Operative Healthcare Utilization on Complications, "
+    "Readmissions, and Post-Operative Healthcare Utilization Following "
+    "Total Joint Arthroplasty."
+)
+BENCHMARK_AUTHORS = "Creager AE, Kleven AD, Kesimoglu ZN, et al."
+BENCHMARK_SUBTITLE = (
+    f"The Journal of Arthroplasty. 2022. {BENCHMARK_AUTHORS} · PMID {BENCHMARK_PMID}"
+)
 
 SECTIONS = [
     ("history_of_present_illness", "History of Present Illness: Knee pain for two years."),
@@ -92,9 +103,16 @@ def test_the_benchmark_is_the_fifth_source_with_everything_a_reader_opens():
     assert benchmark["kind"] == "Literature"
     assert benchmark["badge"] == "PubMed"
     assert benchmark["pmid"] == BENCHMARK_PMID
+    # The article, not its journal. A source titled with its journal gave the drawer
+    # `5. The Journal of Arthroplasty · 2022` and nothing else — no paper, no authors.
     assert benchmark["title"] == BENCHMARK_TITLE
-    assert benchmark["label"] == f"5 · {BENCHMARK_TITLE}"
-    assert benchmark["subtitle"] == f"PMID {BENCHMARK_PMID} · Retrospective Cohort"
+    assert benchmark["authors"] == BENCHMARK_AUTHORS
+    assert benchmark["label"] == f"5 · {BENCHMARK_CITATION}"
+    assert benchmark["journal_citation"] == (
+        f"The Journal of Arthroplasty. 2022. {BENCHMARK_AUTHORS}"
+    )
+    assert benchmark["subtitle"] == BENCHMARK_SUBTITLE
+    assert benchmark["tier"] == "Retrospective Cohort"
     assert benchmark["url"] == f"https://pubmed.ncbi.nlm.nih.gov/{BENCHMARK_PMID}/"
     # The passage is what the popover shows, so it has to be the cohort and the sentence
     # the rate came from rather than a label the reader already has.
@@ -110,6 +128,10 @@ def test_the_drawer_gets_the_benchmark_as_its_own_row():
     assert row["source"] == "PubMed"
     assert row["pmid"] == BENCHMARK_PMID
     assert row["title"] == BENCHMARK_TITLE
+    assert row["authors"] == BENCHMARK_AUTHORS
+    # The drawer renders the title, then this line, then the passage. A row that carried
+    # only `5 · The Journal of Arthroplasty · 2022` was the naked row a reader reported.
+    assert row["subtitle"] == BENCHMARK_SUBTITLE
     assert row["excerpt"] == payload["sources"][-1]["text"]
 
 
@@ -120,7 +142,7 @@ def test_the_row_carries_the_number_the_pill_will_show():
     rows = _matrix_rows(payload)
     assert rows, "the comparison table did not draw"
     assert rows[0]["source_index"] == 5
-    assert rows[0]["source_label"] == f"5 · {BENCHMARK_TITLE}"
+    assert rows[0]["source_label"] == f"5 · {BENCHMARK_CITATION}"
 
 
 def test_the_prose_citations_and_the_badge_are_untouched():
@@ -159,7 +181,7 @@ def test_the_benchmark_is_registered_once_however_the_surface_repeats_it():
 
     row = {
         "pmid": BENCHMARK_PMID,
-        "source": BENCHMARK_TITLE,
+        "source": BENCHMARK_CITATION,
         "cohort_summary": "One institution, 2015-2019.",
         "excerpt": "The 30-day readmission rate was 3.4%.",
         "evidence_tier": "Retrospective Cohort",
@@ -176,3 +198,33 @@ def test_the_benchmark_is_registered_once_however_the_surface_repeats_it():
     assert [source["pmid"] for source in sources] == [BENCHMARK_PMID]
     assert [source["cite"] for source in sources] == [5]
     assert [reference["index"] for reference in references] == [5]
+
+
+def test_every_curated_benchmark_can_be_cited_as_a_paper():
+    """Every row in the corpus, not just the one this admission happens to select.
+
+    The corpus is what the comparison table draws from, and a phenotype that is reached
+    tomorrow reaches a row that was never opened. `title` and `authors` fall back to the
+    journal line when absent, so a missing one degrades silently: the drawer would show a
+    naked journal line again, for that cohort only, and nothing would fail.
+    """
+    from services.agent.literature_benchmarks import BENCHMARKS, benchmarks_for_phenotype
+
+    assert BENCHMARKS, "the curated corpus is empty"
+    for pmid, benchmark in BENCHMARKS.items():
+        assert benchmark.title.strip(), f"{pmid} has no article title"
+        assert benchmark.authors.strip(), f"{pmid} has no authors"
+        assert benchmark.journal.strip(), f"{pmid} has no journal"
+        assert benchmark.year.strip(), f"{pmid} has no year"
+        # The fields the citations are built from have to survive the trip through the
+        # surface, not just exist on the dataclass.
+        (row,) = [
+            candidate
+            for phenotype in {benchmark.phenotype}
+            for candidate in benchmarks_for_phenotype(phenotype)
+            if candidate["pmid"] == pmid
+        ]
+        assert row["title"] == benchmark.title
+        assert row["authors"] == benchmark.authors
+        assert row["journal"] == benchmark.journal
+        assert row["year"] == benchmark.year

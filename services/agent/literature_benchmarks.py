@@ -99,6 +99,11 @@ class CohortBenchmark:
     #: with the search is exactly what this replaces, so these are the only copy.
     journal: str = ""
     year: str = ""
+    #: The article's own title, and its first three authors. Read off the record
+    #: once (NCBI esummary) and carried here so the references drawer shows the
+    #: paper rather than a journal name — the row a reader opens is the paper.
+    title: str = ""
+    authors: str = ""
     #: This patient's drivers, as feature keys, that the cohort itself named.
     matched_features: tuple[str, ...] = ()
 
@@ -115,6 +120,11 @@ BENCHMARKS: dict[str, CohortBenchmark] = {
         reported_rate="13.2%",
         journal="Journal of the American College of Cardiology",
         year="2023",
+        title=(
+            "Global Comparison of Readmission Rates for Patients With Heart "
+            "Failure."
+        ),
+        authors="Foroutan F, Rayner DG, Ross HJ, et al.",
         rate_sentence=(
             "Of the 1.5 million individuals at risk, 13.2% (95% CI: 10.5%-16.1%) were "
             "readmitted within 30 days and 35.7% (95% CI: 27.1%-44.9%) within 1 year."
@@ -139,6 +149,11 @@ BENCHMARKS: dict[str, CohortBenchmark] = {
         reported_rate="11%",
         journal="Respiratory Medicine",
         year="2023",
+        title=(
+            "Readmission rate for acute exacerbation of chronic obstructive "
+            "pulmonary disease: A systematic review and meta-analysis."
+        ),
+        authors="Ruan H, Zhang H, Wang J, et al.",
         rate_sentence=(
             "The pooled 30-, 60-, 90-, 180-, and 365-day readmission rates were 11%, "
             "17%, 17%, 30%, and 37%, respectively."
@@ -170,6 +185,11 @@ BENCHMARKS: dict[str, CohortBenchmark] = {
         reported_rate="≈20%",
         journal="American Journal of Respiratory and Critical Care Medicine",
         year="2023",
+        title=(
+            "Differential Diagnosis of Suspected Chronic Obstructive Pulmonary "
+            "Disease Exacerbations in the Acute Care Setting: Best Practice."
+        ),
+        authors="Celli BR, Fabbri LM, Aaron SD, et al.",
         rate_sentence=(
             "Importantly, close to 20% of patients are readmitted within 30 days "
             "after hospital discharge, with great cost to the person and society."
@@ -193,6 +213,11 @@ BENCHMARKS: dict[str, CohortBenchmark] = {
         reported_rate="3.8%",
         journal="North American Spine Society Journal",
         year="2026",
+        title=(
+            "Readmission rates after intraoperative durotomy and repair in "
+            "outpatient lumbar spinal surgery."
+        ),
+        authors="Proal JD, Moon AS, LaHaise K, et al.",
         rate_sentence=(
             "Of the 52 patients discharged home same day, 2 were readmitted (3.8%); "
             "of the 59 patients admitted postoperatively, 5 were readmitted (8.5%)."
@@ -221,6 +246,12 @@ BENCHMARKS: dict[str, CohortBenchmark] = {
         reported_rate="3.4%",
         journal="The Journal of Arthroplasty",
         year="2022",
+        title=(
+            "The Impact of Pre-Operative Healthcare Utilization on Complications, "
+            "Readmissions, and Post-Operative Healthcare Utilization Following "
+            "Total Joint Arthroplasty."
+        ),
+        authors="Creager AE, Kleven AD, Kesimoglu ZN, et al.",
         rate_sentence=(
             "The 30-day readmission rate was 3.2% and 3.4% and the CMS-defined "
             "complication rate was 3.8% and 2.9% for THA and TKA, respectively."
@@ -251,6 +282,12 @@ BENCHMARKS: dict[str, CohortBenchmark] = {
         reported_rate="5.5%",
         journal="Spine",
         year="2020",
+        title=(
+            "Prolonged Length of Stay and Risk of Unplanned 30-Day Readmission "
+            "After Elective Spine Surgery: Propensity Score-Matched Analysis of "
+            "33,840 Patients."
+        ),
+        authors="Kim RB, Wilkerson C, Karsy M, et al.",
         rate_sentence=(
             "The overall 30-day unplanned readmission rate of these 33,840 patients "
             "was 5.5%."
@@ -281,6 +318,11 @@ BENCHMARKS: dict[str, CohortBenchmark] = {
         reported_rate="17.4%",
         journal="Journal of Gastroenterology and Hepatology",
         year="2023",
+        title=(
+            "30-day readmission rates among upper gastrointestinal bleeds: A "
+            "systematic review and meta-analysis."
+        ),
+        authors="Dunne CL, Kaur S, Delacruz B, et al.",
         rate_sentence=(
             "UGIB had a 30-day all-cause readmission rate of 17.4% (95% confidence "
             "interval [CI] 16.7-18.2%), stratification revealed a higher rate for "
@@ -309,6 +351,11 @@ BENCHMARKS: dict[str, CohortBenchmark] = {
         reported_rate="18.4%",
         journal="JAMA Network Open",
         year="2020",
+        title=(
+            "Variation in Acute Care Rehabilitation and 30-Day Hospital "
+            "Readmission or Mortality in Adult Patients With Pneumonia."
+        ),
+        authors="Freburger JK, Chou A, Euloth T, et al.",
         rate_sentence=(
             "The 30-day readmission rate was 18.4% (5645 patients), the 30-day death "
             "rate was 3.7% (1146 patients), and the rate of either outcome was 19.7% "
@@ -387,6 +434,16 @@ def benchmarks_for_phenotype(phenotype: str | None) -> list[dict]:
             "source": " · ".join(
                 part for part in (benchmark.journal, benchmark.year) if part
             ),
+            # The paper itself, so the row and the card can name it. `source` is the
+            # citation tram: a journal and a year locate the record, and the reference
+            # that a reader opens is the article.
+            "title": benchmark.title,
+            "authors": benchmark.authors,
+            # The parts `source` joins, kept as themselves: a citation line reads
+            # `Journal. Year. Authors.` and a pre-joined string cannot be punctuated
+            # back into that without guessing where the join was.
+            "journal": benchmark.journal,
+            "year": benchmark.year,
             "reported_rate": benchmark.reported_rate,
             "cohort_summary": benchmark.cohort_summary,
             "matched_features": list(benchmark.matched_features),

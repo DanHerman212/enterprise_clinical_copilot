@@ -111,7 +111,17 @@ def test_the_chip_vocabulary_is_the_five_commands_and_nothing_else():
 
 
 def test_the_declared_intents_are_the_controls_a_surface_can_draw():
-    assert contracts.REQUEST_INTENTS == {"risk_driver"}
+    """An intent is a control saying what kind of question it just asked, so this set is
+    the list of controls that can say it.
+
+    `risk_driver` — a clicked driver bar, whose text is a feature label and therefore
+    says nothing structural. `follow_up` — a chip this product generated from a tool
+    result, which the agent must answer from the transcript rather than send the model
+    back for evidence it already holds (Phase 5C, 2026-10-25). Both are declared by the
+    console and never inferred from wording; the two attempts at inference are the reason
+    the second one exists.
+    """
+    assert contracts.REQUEST_INTENTS == {"risk_driver", "follow_up"}
 
 
 # --- the constants both repositories hold ------------------------------------

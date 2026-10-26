@@ -189,7 +189,7 @@ ACCEPTED_REQUEST_FIELDS = frozenset(
 #: A closed vocabulary, deliberately: an intent the service does not know is refused
 #: rather than ignored, because a surface that thinks it declared something and did not
 #: would be silently back to the wording game.
-REQUEST_INTENTS = frozenset({"risk_driver"})
+REQUEST_INTENTS = frozenset({"risk_driver", "follow_up"})
 
 # Names a caller reaches for when it expects the agent to remember the
 # conversation by itself. The agent holds nothing between requests, so a turn is

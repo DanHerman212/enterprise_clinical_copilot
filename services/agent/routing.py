@@ -774,21 +774,37 @@ def wants_risk_driver(question: str, intent: str | None = None) -> bool:
     return intent == "risk_driver" or asks_why_risk_driver(question)
 
 
-#: How a question names one of the laboratory features the model scores. Two sources,
-#: because a clinician may quote either: the model's feature language ("lowest
-#: hemoglobin") and the note's analyte language ("Hgb", "RDW"). Kept to the features
-#: `feature_labels.FEATURE_LABELS` actually carries — a word that is not a driver in
-#: this model cannot make a lab tool necessary.
+#: How a question names one of the analytes the lab series carries.
+#:
+#: Two vocabularies meet here, and this list is the only place they are reconciled. A
+#: chip is worded from the SERIES label — `dependencies/labs/synthetic.Analyte.label`:
+#: "Red blood cells", "Monocytes", "eGFR", "NT-proBNP" — while this predicate began as
+#: the model's feature language, which is why it carried five singular stems.
+#:
+#: On 2026-10-25 a `/labs` follow-up read "How does the abnormal discharge Red blood
+#: cells (3.47 x10^6/uL) compare to its reference range and trend?" and this returned
+#: False: `\b` after "cell" has no boundary before the plural "s". Eight of the ten
+#: labels the series can produce could not satisfy it. A test now holds this list to
+#: `synthetic.PANEL`, so an analyte cannot be added without a name here.
 _LAB_ANALYTE_WORDS = (
-    "hemoglobin", "haemoglobin", "hgb",
+    # The five the model scores on, whose driver drill-downs are the other caller.
+    "hemoglobin", "haemoglobin", "hgb", "hb",
     "sodium",
     "red blood cell", "rbc", "erythrocyte",
     "rdw", "red cell distribution width",
     "monocyte",
+    # The clinical panel: carried by the series, never model inputs.
+    "creatinine",
+    "egfr", "gfr",
+    "potassium",
+    "white blood cell", "wbc", "leukocyte",
+    "nt-probnp", "bnp",
 )
 
+#: Every word above, and its plural. The series labels are written in the plural that
+#: clinicians use ("Red blood cells"), so a singular-only stem is the bug this prevents.
 _LAB_ANALYTE = re.compile(
-    r"\b(?:" + "|".join(re.escape(word) for word in _LAB_ANALYTE_WORDS) + r")\b",
+    r"\b(?:" + "|".join(re.escape(word) + "s?" for word in _LAB_ANALYTE_WORDS) + r")\b",
     re.IGNORECASE,
 )
 

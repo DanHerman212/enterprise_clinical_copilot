@@ -143,48 +143,13 @@ class TestTheCardIsThisTurnsDrawing:
         assert out["scope"] == "patient_chart"
 
 
-# --- RC-3: the forced retrieval, and what it may reach for ----------------------
-
-class TestTheRetrievalDemandIsNarrowed:
-    def test_a_replayed_series_with_trends_is_evidence_a_question_can_read(self):
-        state = {"replayed_tool_calls": [LAB_CALL]}
-        assert graph._transcript_carries_lab_series(state) is True
-
-    def test_a_failed_or_empty_series_is_not_evidence(self):
-        failed = {"name": "get_lab_trends", "args": {"hadm_id": 90000015},
-                  "response": {"error": "no labs"}}
-        empty = {"name": "get_lab_trends", "args": {"hadm_id": 90000015},
-                 "response": {"trends": []}}
-
-        assert graph._transcript_carries_lab_series(
-            {"replayed_tool_calls": [failed]}) is False
-        assert graph._transcript_carries_lab_series(
-            {"replayed_tool_calls": [empty]}) is False
-        assert graph._transcript_carries_lab_series(
-            {"replayed_tool_calls": []}) is False
-
-    def test_only_a_chart_read_is_not_a_lab_series(self):
-        scoring = {"name": "predict_readmission", "args": {"hadm_id": 90000015},
-                   "response": {"probability": 0.31}}
-
-        assert graph._transcript_carries_lab_series(
-            {"replayed_tool_calls": [scoring]}) is False
-
-    def test_the_forced_round_withholds_the_lab_tool_from_a_question_that_is_not_about_one(self):
-        """A question that names no analyte is not answered by a series, so the forced
-        round must pull from the chart notes."""
-        assert graph._demand_withholds_labs({"replayed_tool_calls": []},
-                                            lab_question=False) is True
-
-    def test_the_forced_round_withholds_the_lab_tool_when_the_series_is_already_there(self):
-        state = {"replayed_tool_calls": [LAB_CALL]}
-        assert graph._demand_withholds_labs(state, lab_question=True) is True
-
-    def test_a_lab_question_with_no_series_may_read_one(self):
-        """The one case where the forced round needs the tool: the question is about an
-        analyte and the conversation has not answered it yet."""
-        assert graph._demand_withholds_labs({"replayed_tool_calls": []},
-                                            lab_question=True) is False
+# --- RC-3 lives in `test_followup_routing.py` ---------------------------------
+#
+# The two rules that were here — a transcript test keyed on the question's wording, and
+# a forced round bound without `get_lab_trends` — were reverted on 2026-10-25: between
+# them they turned a redundant call into a wrong answer. What replaced them is the
+# client declaring what a chip is, which is tested alongside the vocabulary it no longer
+# depends on.
 
 
 # --- RC-4: the announcement belongs to the pass that is served ------------------

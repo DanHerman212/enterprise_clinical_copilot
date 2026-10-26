@@ -48,13 +48,18 @@ class _Bound:
 
     async def ainvoke(self, messages, **kwargs):
         self._owner.bound_turns += 1
-        # A different query each time, so the repeat guard is not what stops this:
+        # `get_lab_trends` rather than `rag_search`: the note-reading tools are capped at
+        # ONE call per turn (`graph.ONCE_PER_TURN`), so a hunger for those is now stopped
+        # by the absence of the tool rather than by the budget. This test is about the
+        # budget, so it spends a tool the budget alone bounds.
+        #
+        # A different argument each time, so the repeat guard is not what stops this:
         # the budget has to be, even for calls it has never seen.
         return AIMessage(
             content="",
             tool_calls=[{
-                "name": "rag_search",
-                "args": {"hadm_id": 90000015, "query": f"question {self._owner.bound_turns}"},
+                "name": "get_lab_trends",
+                "args": {"hadm_id": 90000015, "analyte": f"analyte {self._owner.bound_turns}"},
                 "id": f"call-{self._owner.bound_turns}",
             }],
         )
@@ -78,7 +83,7 @@ def _box():
     from services.agent.mcp_client import MCPToolbox
 
     box = MCPToolbox(session=None)
-    box._tools = {"rag_search": _FakeTool()}
+    box._tools = {"get_lab_trends": _FakeTool()}
 
     async def call(name, arguments):
         return {"hadm_id": arguments["hadm_id"], "passages": []}

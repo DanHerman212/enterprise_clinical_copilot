@@ -51,7 +51,6 @@ from services.agent.chain import MODEL_ID
 # globals of THIS module, patching them here still intercepts.
 from services.agent.model_runtime import (
     MODEL_TIMEOUT_SECONDS,  # noqa: F401 — read by test_model_bounds
-    PROSE_LOOKAHEAD_CHUNKS,  # noqa: F401 — re-exported for the same reason
     build_llm as _build_llm,
     has_tool_call as _has_tool_call,  # noqa: F401 — re-exported; used in
     streamed_turn as _streamed_turn,  #    `model_runtime.streamed_turn`.
@@ -100,6 +99,34 @@ class AgentState(TypedDict):
 # somehow keeps asking for tools after the budget is spent.
 MAX_TOOL_CALLS_PER_TURN = 5
 RECURSION_LIMIT = 25
+
+#: Tools a turn may call ONCE, whatever its budget still allows.
+#:
+#: The budget above is a spend cap, not a shape. A follow-up after `/ehr` spent eighteen
+#: workflow steps inside it on 2026-10-26: `rag_search_sections` for four discharge-summary
+#: sections that were already in the transcript, then four separate `rag_search` calls
+#: looking for an "Inpatient diagnosis" heading this cohort does not document. Five calls
+#: is within the budget, and five calls is still a loop.
+#:
+#: Both note-reading tools are here. `rag_search_sections` is deterministic — asked the
+#: same question twice it returns the same four passages — so a second call cannot
+#: improve an answer. `rag_search` is a vector search and a second call COULD return
+#: something new, which is why the cap is a product decision rather than a proof: one
+#: focused query per turn, and a question that needs a second one is answered from the
+#: first with what it does and does not cover. `discharge_medications` and
+#: `get_lab_trends` are not capped — the budget is what bounds those.
+ONCE_PER_TURN: frozenset[str] = frozenset({"rag_search", "rag_search_sections"})
+
+#: Tools a turn may not call when the REPLAYED turns already called them.
+#:
+#: `rag_search_sections` answers from the admission's four canonical summary sections.
+#: Once those are in the transcript — which is what a replayed `/ehr` turn leaves — a
+#: second call returns the same passages under a new citation number, so the loop pays a
+#: round trip and a step count to re-read its own context.
+#:
+#: `rag_search` is deliberately NOT here: a follow-up asks a new question, and the
+#: recorded search answered the old one.
+ONCE_PER_TRANSCRIPT: frozenset[str] = frozenset({"rag_search_sections"})
 
 # What a turn says when its lookup budget is gone and the model still wants to look
 # something up. A turn that has spent its budget is given no tools, but a model can
@@ -433,6 +460,7 @@ async def _execute_tool_calls(
     traced: bool = False,
     order: Callable[[str, dict], dict] | None = None,
     cite_offset: int = 0,
+    used_up: frozenset[str] = frozenset(),
 ) -> tuple[list[BaseMessage], list[RecordedToolCall]]:
     """Run one turn's tool calls, refusing those beyond the per-turn budget.
 
@@ -454,6 +482,11 @@ async def _execute_tool_calls(
     turn made eight calls against a budget of five, looped until the graph's recursion
     limit, and settled as an EMPTY ANSWER rather than a failure (observed live 2026-10-16,
     twice, on a lab question).
+
+    `used_up` is the second line of the `ONCE_PER_TURN` cap. Not binding a spent tool is
+    the first, and it is the one that holds; this catches the case the budget comments
+    already name — a model that emits a call for a tool that is absent from its request.
+    Such a call is refused rather than run, and announces no stage (rule 3).
     """
     messages: list[BaseMessage] = []
     recorded: list[RecordedToolCall] = []
@@ -461,18 +494,35 @@ async def _execute_tool_calls(
     numbered = cite_offset
     done = {_call_key(str(call.get("name")), dict(call.get("args") or {}))
             for call in prior}
+    # Grows as the round executes, for the tools capped at one call: a single model turn
+    # can ask for the same tool twice, and the cap is a property of the turn rather than
+    # of one iteration of the loop around it.
+    spent = set(used_up)
     for index, call in enumerate(calls):
         arguments = dict(call.get("args") or {})
         key = _call_key(str(call.get("name")), arguments)
-        spent = len(prior) + index
-        if spent >= MAX_TOOL_CALLS_PER_TURN:
+        spent_count = len(prior) + index
+        # Whether this call was turned away rather than run. A refusal must not consume a
+        # capped tool's allowance: the model gets one honest call, not that call minus the
+        # attempts nothing was ever dispatched for.
+        refused = True
+        if call["name"] in spent:
+            payload: dict[str, Any] = {
+                "error": "tool_already_spent",
+                "message": (
+                    f"{call['name']} has already been used for this question and will "
+                    "not run again. Its result is above: answer from it, and say what it "
+                    "does and does not cover."
+                ),
+            }
+        elif spent_count >= MAX_TOOL_CALLS_PER_TURN:
             # The message says what to DO, not only what was refused. A refusal a model
             # cannot act on is read as a transient failure and retried, which is the loop
             # this line exists to end.
-            payload: dict[str, Any] = {
+            payload = {
                 "error": "tool_call_limit",
                 "message": (
-                    f"This turn has already made {spent} tool calls and its budget is "
+                    f"This turn has already made {spent_count} tool calls and its budget is "
                     f"{MAX_TOOL_CALLS_PER_TURN}. Answer from the results you have, or say "
                     "plainly what you could not determine."
                 ),
@@ -491,6 +541,7 @@ async def _execute_tool_calls(
         else:
             payload = guard(call["name"], arguments) if guard is not None else None
             if payload is None:
+                refused = False
                 # Emitted HERE, one line above the call it describes: the stage is
                 # derived from an execution that is about to happen, not from a
                 # script of what should happen. A refused call (the branches
@@ -523,6 +574,8 @@ async def _execute_tool_calls(
                 # ran: a refused call announces nothing, result included (rule 3).
                 _emit(on_event, stages.result_event(call["name"], payload))
         done.add(key)
+        if not refused and call["name"] in ONCE_PER_TURN:
+            spent.add(call["name"])
         # `order` rewrites the payload BEFORE the model is shown it and before it is
         # recorded, so one order governs both. Doing it afterwards reordered the
         # citation layer while the formatter kept reading retrieval order, and the
@@ -704,6 +757,25 @@ def _budget_exhausted_turn(response: AIMessage) -> AIMessage:
     )
 
 
+def _still_bound(allowed: frozenset[str], state: AgentState) -> frozenset[str]:
+    """The tools still worth binding, given what this turn and its replay have run.
+
+    A tool that has spent its allowance is REMOVED from the bound set rather than refused
+    when it is called: a refusal is something the model can ignore and retry, which is the
+    loop `MAX_TOOL_CALLS_PER_TURN` exists to end, and the absence of anything to call is
+    the only bound that holds (see `ONCE_PER_TURN`).
+    """
+    spent = {str(call.get("name")) for call in state.get("tool_calls") or []}
+    replayed = {
+        str(call.get("name")) for call in state.get("replayed_tool_calls") or []
+    }
+    return frozenset(
+        name for name in allowed
+        if not (name in ONCE_PER_TURN and name in spent)
+        and not (name in ONCE_PER_TRANSCRIPT and name in replayed)
+    )
+
+
 def _transcript_carries_attribution(state: AgentState) -> bool:
     """Whether the replayed turns already hold the model's risk attribution.
 
@@ -765,13 +837,36 @@ def build_graph(
     # transcript of a follow-up question already contains the model's earlier turns, so
     # "has the model spoken" is true before this run has done anything and would never
     # force anything on the questions that need it most.
-    freetext_tools = _tools(
-        toolbox, allowed=_freetext_allowed(risk_driver_question, wants_literature,
-                                          lab_driver_question, follow_up_declared),
-    )
+    allowed = _freetext_allowed(risk_driver_question, wants_literature,
+                               lab_driver_question, follow_up_declared)
+    freetext_tools = _tools(toolbox, allowed=allowed)
     chat_model = _build_llm(model)
     llm = chat_model.bind_tools(freetext_tools)
     llm_retrieving = chat_model.bind_tools(freetext_tools, tool_choice="any")
+
+    def bound_for(state: AgentState) -> Any:
+        """The model, bound to what this turn may still call.
+
+        Re-bound per turn rather than once, because the set SHRINKS as the turn spends
+        it: `_still_bound` drops a tool that has run its allowance, and nothing left to
+        bind means nothing left to call. The unchanged case reuses the binding made
+        above, which is every first turn and the common second one.
+        """
+        remaining = _still_bound(allowed, state)
+        if remaining == allowed:
+            return llm_retrieving if state["retrieval_demanded"] else llm
+        if not remaining:
+            return chat_model
+        tools = _tools(toolbox, allowed=remaining)
+        # A set that survives the caps but is not advertised by this server binds
+        # nothing, and binding nothing is the same bound as taking the tool away:
+        # hand the model the unbound one rather than an empty tool list.
+        if not tools:
+            return chat_model
+        if state["retrieval_demanded"]:
+            return chat_model.bind_tools(tools, tool_choice="any")
+        return chat_model.bind_tools(tools)
+
     async def agent_node(state: AgentState) -> dict:
         # Which turn this is decides the label, and the transcript is the only
         # honest source for that. No prior AIMessage means the model has not
@@ -805,7 +900,7 @@ def build_graph(
         if spent >= MAX_TOOL_CALLS_PER_TURN:
             answering_llm = chat_model
         else:
-            answering_llm = llm_retrieving if state["retrieval_demanded"] else llm
+            answering_llm = bound_for(state)
         if prose_stream and on_event is not None:
             response = await _streamed_turn(answering_llm, state["messages"], on_event)
         else:
@@ -832,6 +927,11 @@ def build_graph(
             # Everything this turn has already spent, so the budget is a budget for the
             # turn rather than for one iteration of the loop around it.
             already_called=list(state.get("tool_calls") or []),
+            # And everything the caps have taken away: a note-reading tool this turn has
+            # already used, or a section read the replayed turns already hold. Not
+            # binding it is the first line; this refuses the call a model can still write
+            # for a tool that is missing from its request.
+            used_up=allowed - _still_bound(allowed, state),
             # Numbering continues from the passages the replayed turns already showed
             # and from the calls this turn has made so far.
             cite_offset=(_passage_total({"passages": [
@@ -1048,11 +1148,13 @@ async def ask(
 
     `prose_stream` is the caller asking to be shown the prose as it is written, and
     it now reaches both paths: a command's formatting turn, and the free-text model
-    turn through `_streamed_turn` and its lookahead. Nothing is withheld from the
-    caller until the guardrails have run any more; what a caller watches arrive is
-    provisional, and `http` measures it against the prose finally served on every
-    streamed turn. (UX Phase 4, reversing the Phase 2 per-path policy — the reasons
-    the reversal is made, and what carries it, are in `stages.py`.)
+    turn through `_streamed_turn`. On the free-text path the prose is held to the end
+    of each model turn and announced only if that turn called no tool, because a ReAct
+    turn's first paragraph may be deliberation rather than answer. Nothing is withheld
+    until the guardrails have run; what a caller watches arrive is still provisional,
+    and `http` measures it against the prose finally served on every streamed turn.
+    (UX Phase 4, reversing the Phase 2 per-path policy — the reasons the reversal is
+    made, and what carries it, are in `stages.py`.)
 
     `turns` is the earlier conversation, as the caller understands it. Each turn
     is replayed as its own messages rather than pasted into the prompt, so the

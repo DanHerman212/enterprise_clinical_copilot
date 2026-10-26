@@ -15,6 +15,7 @@ from services.agent.citations import (  # noqa: E402
     SECTION_ALIASES,
     citation_remap,
     cited_numbers,
+    dedupe_list_citations,
     extract_section,
     first_citation,
     intent_sections,
@@ -252,3 +253,84 @@ class TestExtractSection:
     def test_missing_section_returns_none(self):
         assert extract_section("CHIEF COMPLAINT: Knee pain.",
                                "discharge_medications") is None
+
+
+class TestListCitationDeduplication:
+    r"""One list, one marker.
+
+    A ten-item list of discharge diagnoses arrived from the model with `^[3]` at the end
+    of every item. The claim the marker supports is the LIST; eleven identical badges
+    read as eleven sources, and a reader cannot tell that list from one where the model
+    stopped checking. `dedupe_list_citations` moves the marker to the sentence that
+    introduces the list and takes it off the items.
+
+    Deterministic rather than prompted, because it is a shape and not a judgement: a
+    contiguous list whose items all close with the SAME marker is a list attributed to one
+    passage, and the move is the same every time. Mixed-source lists are left alone — that
+    is a list making a per-item claim, and hoisting one marker would leave the rest
+    unattributed.
+    """
+
+    def test_a_repeated_marker_is_hoisted_onto_the_lead_in(self):
+        lead_in = "The discharge diagnoses recorded for this admission are:"
+        items = "\n".join(f"{position}. Diagnosis {position} ^[3]"
+                          for position in range(1, 11))
+        answer = lead_in + "\n" + items
+
+        lines = dedupe_list_citations(answer).splitlines()
+
+        assert lines[0] == (
+            "The discharge diagnoses recorded for this admission are ^[3]:"
+        )
+        assert all("^[" not in line for line in lines[1:]), "\n".join(lines)
+        # The list itself is untouched apart from the markers.
+        assert lines[1] == "1. Diagnosis 1"
+        assert lines[10] == "10. Diagnosis 10"
+
+    def test_with_no_lead_in_the_marker_stays_on_the_last_item(self):
+        answer = "- Item one ^[2]\n- Item two ^[2]\n- Item three ^[2]"
+
+        assert dedupe_list_citations(answer).splitlines() == [
+            "- Item one", "- Item two", "- Item three ^[2]",
+        ]
+
+    def test_a_lead_in_that_already_cites_keeps_its_marker(self):
+        answer = "Findings are summarised below ^[2]:\n- A ^[2]\n- B ^[2]"
+
+        assert dedupe_list_citations(answer).splitlines() == [
+            "Findings are summarised below ^[2]:", "- A", "- B",
+        ]
+
+    def test_a_list_citing_different_passages_is_left_alone(self):
+        answer = "Findings:\n- A ^[1]\n- B ^[3]\n- C ^[1]"
+
+        assert dedupe_list_citations(answer) == answer
+
+    def test_a_list_whose_items_are_not_all_cited_is_left_alone(self):
+        answer = "Findings:\n- A ^[3]\n- B"
+
+        assert dedupe_list_citations(answer) == answer
+
+    def test_a_single_item_list_is_not_a_list(self):
+        answer = "The diagnosis:\n1. Sepsis ^[3]"
+
+        assert dedupe_list_citations(answer) == answer
+
+    def test_the_hoisted_marker_is_then_renumbered_and_remapped(self):
+        """The seam the passes share: dedupe first, then renumber, then remap.
+
+        A marker taken off the list is a marker that no longer takes a number, so a remap
+        built from the un-deduped answer would shift every later citation by one.
+        """
+        answer = (
+            "The findings are:\n"
+            "- A ^[3]\n"
+            "- B ^[3]\n"
+            "The impression follows ^[7]."
+        )
+
+        renumbered = renumber_citations(answer).splitlines()
+        assert renumbered[0] == "The findings are ^[1]:"
+        # `^[7]` is the second distinct passage the answer cites, so it becomes `2`, and
+        # the remap says which original passage each renumbered marker addresses.
+        assert citation_remap(answer) == {"1": 3, "2": 7}

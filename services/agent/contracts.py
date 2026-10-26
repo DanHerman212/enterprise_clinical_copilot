@@ -711,8 +711,27 @@ def validate_agent_success(payload: Any) -> AgentSuccess:
             raise AgentResponseError("Agent produced malformed sources.")
         if not isinstance(source.get("cite"), int) or isinstance(source.get("cite"), bool):
             raise AgentResponseError("Agent produced malformed sources.")
-        if any(not isinstance(source.get(k), str) for k in ("section", "text", "query")):
+        if any(not isinstance(source.get(k), str) for k in ("section", "text")):
             raise AgentResponseError("Agent produced malformed sources.")
+        # Two kinds travel in this one array, numbered together because a marker
+        # addresses the array. A note passage was retrieved by a query and says which;
+        # a published cohort registered from the comparison table was not searched for
+        # at all, so it carries the identifier and the link a reader can open instead.
+        if source.get("kind") == "Literature":
+            if any(not isinstance(source.get(k), str) for k in ("pmid", "url")):
+                raise AgentResponseError("Agent produced malformed sources.")
+        elif not isinstance(source.get("query"), str):
+            raise AgentResponseError("Agent produced malformed sources.")
+
+    # The workflow this turn went through, for a caller that never streamed and for a
+    # turn read back from the store. Optional because the two services deploy from
+    # separate triggers: an agent revision that lands first still answers, and a turn
+    # recorded before the field existed reads as a turn with no steps to show.
+    steps = payload.get("steps")
+    if steps is not None and (
+        not isinstance(steps, list) or not all(isinstance(step, str) for step in steps)
+    ):
+        raise AgentResponseError("Agent produced malformed workflow steps.")
 
     return payload
 

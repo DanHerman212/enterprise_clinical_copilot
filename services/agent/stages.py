@@ -16,9 +16,9 @@ tells the client whether the two agree. Where they do not, the client replaces w
 rendered and says so, and the caller is owed that notice rather than left to notice.
 The measurement is therefore no longer a diagnostic — it was one while the policy was
 "announce nothing that might move" — it is the trigger for the correction. The one
-case where text is still withheld is the ReAct turn's opening chunks, because there
-the text might not be the answer at all: see `PROSE_LOOKAHEAD_CHUNKS` in
-`model_runtime`.
+case where text is withheld is a ReAct turn's deliberation, and all of it is withheld:
+a turn that calls a tool never reaches the caller, whatever it wrote first (see
+`model_runtime.streamed_turn`).
 
 This module exists to keep the progress frames honest. Five rules:
 

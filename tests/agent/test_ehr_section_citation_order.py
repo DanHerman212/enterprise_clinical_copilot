@@ -107,10 +107,19 @@ def test_the_sources_a_reader_clicks_are_in_the_same_order_as_the_sections():
     out = compose_presentation("/ehr", state["messages"][-1].content,
                                state["tool_calls"], None, "summarize")
 
-    assert [source["section"] for source in out["sources"]] == list(SUMMARY_SECTIONS)
+    # The note passages first, in canonical order — the citation channel. The comparison
+    # table's published cohort follows them (2026-10-26, Phase B): the matrix names a
+    # journal, a year and a PMID on screen, and without this the turn held no record of
+    # any of them and the benchmark could not be opened from the turn that showed it.
+    note_sources = [s for s in out["sources"] if s.get("kind") != "Literature"]
+    assert [source["section"] for source in note_sources] == list(SUMMARY_SECTIONS)
     # And the marker numbers run 1..4 against that order, so `^[3]` is the diagnosis.
-    assert [source["cite"] for source in out["sources"]] == [1, 2, 3, 4]
+    assert [source["cite"] for source in note_sources] == [1, 2, 3, 4]
     assert out["sources"][2]["section"] == "discharge_diagnosis"
+    # The benchmark is numbered to continue the same array, so a marker written anywhere
+    # in this turn addresses one list.
+    assert out["sources"][-1]["kind"] == "Literature"
+    assert out["sources"][-1]["cite"] == 5
 
 
 def test_the_diagnosis_passage_is_not_displaced_by_the_instructions():

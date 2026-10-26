@@ -119,6 +119,111 @@ def resolve_source(passages: list[dict], passage_n: int,
             "text": section_text or cited.get("text", "")}
 
 
+#: The badge a published record carries. One word, because a pill is a tag beside a
+#: title rather than a sentence about it.
+_LITERATURE_BADGE = "PubMed"
+
+
+def _surface_components(canvas: dict | None):
+    """Every component a composed surface carries, in the order it draws them.
+
+    The components are not on the envelope: an A2UI surface is a list of protocol
+    messages, and the component tree is the `updateComponents` payload of one of them.
+    Reading `canvas["components"]` found nothing and would have gone on finding nothing,
+    because the envelope is valid without that key.
+    """
+    for message in (canvas or {}).get("messages") or []:
+        if not isinstance(message, dict):
+            continue
+        update = message.get("updateComponents")
+        if not isinstance(update, dict):
+            continue
+        for component in update.get("components") or []:
+            if isinstance(component, dict):
+                yield component
+
+
+def register_benchmark_sources(canvas: dict | None, start: int,
+                              existing_pmids=()) -> tuple[list[dict], list[dict]]:
+    """Give the comparison table's published cohorts a citation identity.
+
+    `ComparativeRiskMatrix` draws curated PubMed cohorts beside this patient's estimate,
+    and it is built OUTSIDE the prose citation pipeline: the rows come from
+    `literature_benchmarks`, selected by the admission's phenotype, not from a passage
+    the answer cites. So the table arrived with a journal, a year and a PMID on screen,
+    and the turn arrived with no record of any of them — the references drawer listed
+    `1..4` (the note sections) and the benchmark, which the whole comparison rests on,
+    could not be opened from the turn that showed it.
+
+    This registers each benchmark row as a source at `start` and onwards, and stamps the
+    row itself with `source_index` / `source_label` so the surface can draw the pill
+    beside it. Two lists are returned because the turn carries two: `sources` is the
+    citation channel (numbered, `cite`), and `references` is the drawer's own rows. They
+    are built together here so a number written in one cannot disagree with the other.
+
+    Called AFTER every flag derived from `sources` has been computed. The cache of note
+    passages is what `grounded_in_record` and `scope_suppressed` ask about — whether the
+    answer rests on THIS patient's record — and a published cohort about somebody else's
+    patients must not be able to answer yes to that question by being appended to the
+    list it is asked of.
+    """
+    sources: list[dict] = []
+    references: list[dict] = []
+    seen = {str(pmid).strip() for pmid in existing_pmids if str(pmid or "").strip()}
+    index = start
+    for component in _surface_components(canvas):
+        if component.get("component") != "ComparativeRiskMatrix":
+            continue
+        for row in component.get("rows") or []:
+            if not isinstance(row, dict):
+                continue
+            pmid = str(row.get("pmid") or "").strip()
+            if not pmid or pmid in seen:
+                continue
+            seen.add(pmid)
+            # The journal and the year together, which is how the table names the row
+            # and how a reader would look it up.
+            citation = str(row.get("source") or "").strip() or f"PMID {pmid}"
+            label = f"{index} · {citation}"
+            url = str(row.get("url") or "").strip() or (
+                f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/")
+            # The cohort and the sentence the rate was read from: what the popover has to
+            # show for the reader to weigh the comparison rather than take it.
+            passage = " — ".join(
+                part for part in (str(row.get("cohort_summary") or "").strip(),
+                                  str(row.get("excerpt") or "").strip())
+                if part
+            )
+            # Stamped on the row so the surface draws the pill from the same number,
+            # rather than resolving a PMID back to an index a second time.
+            row["source_index"] = index
+            row["source_label"] = label
+            sources.append({
+                "cite": index,
+                "kind": "Literature",
+                "badge": _LITERATURE_BADGE,
+                "title": citation,
+                "label": label,
+                "subtitle": f"PMID {pmid} · "
+                            f"{row.get('evidence_tier') or 'Published cohort'}",
+                "section": citation,
+                "text": passage,
+                "pmid": pmid,
+                "url": url,
+            })
+            references.append({
+                "index": index,
+                "source": _LITERATURE_BADGE,
+                "title": citation,
+                "label": label,
+                "excerpt": passage,
+                "pmid": pmid,
+                "url": url,
+            })
+            index += 1
+    return sources, references
+
+
 def resolve_sources(answer: str, citation_map: dict[str, int],
                     rag: dict | None, sections: tuple[str, ...]) -> list[dict]:
     """One resolved source per citation number in the (renumbered) answer.

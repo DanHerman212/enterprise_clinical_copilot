@@ -78,94 +78,67 @@ def build_llm(model: str) -> ChatGoogleGenerativeAI:
     )
 
 
-#: How many opening chunks are held before a model turn is declared an answer.
-#
-# The hold exists because `agent_node` writes two different things through one call:
-# the deliberation that picks a tool, and the answer the reader came for. Which one
-# it is cannot be known until the turn ends, and announcing a routing thought and then
-# withdrawing it is the mutation the streaming policy forbids (`stages.py`). A turn
-# that calls a tool writes the call first, so holding the opening few chunks is enough
-# to tell the two apart, and the latency it costs an answer is a fraction of a
-# sentence.
-#
-# The residual assumption is named rather than hidden: a model that writes a paragraph
-# and *then* calls a tool would have that paragraph announced before the call arrived.
-# `http._prose_settled` measures announced prose against the prose finally served on
-# every streamed turn, so that case is logged where it happens rather than assumed away
-# here. Lowering this number widens that exposure, which is the trade below.
-#
-# Why it is 1 rather than 3 (2026-10-15), and the reason is measured. The client paces
-# the draft to a reading cadence, but everything held here is released as ONE burst and
-# painted at once — so this number sets how much of an answer is never paced at all. On
-# a 593-character answer a three-chunk hold released 426 characters in the first paint:
-# 72% of the text was on screen before the cadence had anything to do. At one chunk the
-# first paint is a single chunk, and the cadence governs the rest.
-#
-# One chunk still keeps routing off the screen, because a turn that calls a tool opens
-# with the call. It does not cover a model that opens with prose and calls the tool
-# later; that is the case `_prose_settled` reports, and an unmasked deliberation would
-# be worse than a first paint a beat larger.
-PROSE_LOOKAHEAD_CHUNKS = 1
-
-
 def has_tool_call(chunk: AIMessageChunk) -> bool:
     """Whether this chunk carries any part of a tool call.
 
     Read from `tool_call_chunks`, which arrives as fragments: a chunk can carry a
     name without arguments, or arguments without a name. Any fragment at all means
     the model is calling a tool, which is all this needs to know.
+
+    Merged chunks answer this too, which is what makes it usable on a settled turn:
+    `AIMessageChunk + AIMessageChunk` concatenates `tool_call_chunks`, so a turn that
+    called at all reads as one that called.
     """
     return bool(getattr(chunk, "tool_call_chunks", None))
 
 
 async def streamed_turn(llm, messages, on_event) -> AIMessage:
-    """One model turn announced as it is written, unless it turns out to be routing.
+    """One model turn, announced once it has turned out to be the answer.
 
     Concatenates as it goes: `AIMessageChunk + AIMessageChunk` is how LangChain
     accumulates a streamed turn, and `AIMessageChunk` subclasses `AIMessage`, so the
     accumulator satisfies every `isinstance(m, AIMessage)` reading the graph already
     does — `route()` and `final_message()` included.
+
+    The prose is held to the END of the turn, and announced then only if the turn called
+    no tool. `agent_node` writes two different things through one call — the deliberation
+    that picks a tool, and the answer the reader came for — and which one a turn is cannot
+    be known while it is being written.
+
+    This used to hold only the OPENING chunk, on the theory that a turn calling a tool
+    writes the call first. It does not. The measured failure on 2026-10-26 was a follow-up
+    after `/ehr` that opened with "I'll check the sections for an inpatient diagnosis",
+    then called a tool four times: each of those paragraphs reached the client, was drawn,
+    and was discarded when the run went back for evidence, so the reader watched the answer
+    appear and vanish four times in one turn. A hold on the opening chunk cannot help with
+    prose that PRECEDES the call.
+
+    What it costs is time-to-first-token on free-text turns: the prose arrives when the turn
+    ends rather than as it is written, and the client's reading cadence (`copilot_reveal.js`)
+    paces whatever arrives either way. What it buys is that no reader is shown a sentence
+    the turn then withdraws. The command path is untouched — `deterministic._format`
+    announces on arrival, because no tool is bound there and a formatting turn cannot be
+    anything but the answer.
     """
-    held: list[str] = []
-    announcing = False
-    routing = False
+    pieces: list[str] = []
     turn: AIMessageChunk | None = None
 
     async for chunk in llm.astream(messages):
         turn = chunk if turn is None else turn + chunk
-        if routing:
-            # A tool call was seen: this turn is deliberation and none of it goes to
-            # the caller. The held prefix is dropped unannounced.
-            continue
-        if has_tool_call(chunk):
-            routing = True
-            held = []
-            continue
         # The chunk's own text, not its repr. Gemini answers in content blocks, and
         # `str(chunk.content)` announced the envelope and not the prose — measured live
         # on `/ehr`, 2026-10-14 (see `model_turn.text_of`).
         piece = text_of(chunk.content)
-        if announcing:
-            if piece:
-                emit(on_event, stages.answer_delta_event(piece))
-            continue
-        held.append(piece)
-        if len(held) >= PROSE_LOOKAHEAD_CHUNKS:
-            announcing = True
-            for piece in held:
-                if piece:
-                    emit(on_event, stages.answer_delta_event(piece))
-            held = []
+        if piece:
+            pieces.append(piece)
 
     if turn is None:
         raise RuntimeError("the model returned no chunks")
 
-    if not routing and not announcing:
-        # Shorter than the lookahead and no tool call: an answer that arrived in fewer
-        # chunks than the hold. It is announced now rather than withheld — the hold is
-        # a gate on ordering, not a reason to suppress a short answer.
-        for piece in held:
-            if piece:
-                emit(on_event, stages.answer_delta_event(piece))
+    # Deliberation is never announced: not its held prefix, not the paragraph it wrote
+    # first. The turn is a routing turn, so none of it is the answer.
+    if not has_tool_call(turn):
+        for piece in pieces:
+            emit(on_event, stages.answer_delta_event(piece))
 
     return turn

@@ -311,6 +311,11 @@ async def ask_route(request: Request) -> JSONResponse:
             want_follow_ups=parsed.get("follow_ups") is True,
             outpatient=parsed.get("hadm_id") in routing.OUTPATIENT_HADM_IDS,
             asked=_asked_questions(parsed),
+            # The workflow this run went through, carried in the answer rather than
+            # only in the frames. A caller that never streamed (this route) has no other
+            # way to learn it, and a stored turn keeps it so a browser refresh does not
+            # take the run's own account with it.
+            steps=log.steps,
         )
     except AgentAnswerUnavailable as exc:
         # The record says which of the three it was, in the code and in the
@@ -594,7 +599,11 @@ async def _stream_chain(
 
         # The model has stopped; the guardrails have not run yet. Say so rather
         # than letting the stream go silent at the point closest to the answer.
-        yield _sse(stages.STAGE_VERIFY, stages.verify_event())
+        verify = stages.verify_event()
+        # Recorded as a step as well as sent, because the payload's `steps` is the list
+        # the reader watched and this frame is part of it — the chain does not emit it.
+        log.note(verify)
+        yield _sse(stages.STAGE_VERIFY, verify)
 
         try:
             payload = await _compose_success(
@@ -602,6 +611,9 @@ async def _stream_chain(
                 want_follow_ups=parsed.get("follow_ups") is True,
                 outpatient=parsed.get("hadm_id") in routing.OUTPATIENT_HADM_IDS,
                 asked=_asked_questions(parsed),
+                # The same labels the frames above carried, in the terminal payload: the
+                # stream is the live view of the run and this is the durable one.
+                steps=log.steps,
             )
         except AgentAnswerUnavailable as exc:
             log.record(

@@ -69,6 +69,7 @@ from services.agent.note_presentation import (  # noqa: F401 — re-exported
     literature_citations,
     narrative_surface,
     note_citations,
+    register_benchmark_sources,
     resolve_source,
     resolve_sources,
 )
@@ -420,15 +421,56 @@ def compose_presentation(question: str, answer: str,
         and not literature_only
     )
 
+    canvas = compose_risk_canvas(
+        predict_payload(tool_calls),
+        rag,
+        cite=first_citation(renumbered),
+        sections=intent,
+        source=sources[0] if sources else None,
+        literature=drawn_literature,
+        labs=labs,
+        medications=command_payload,
+        # The narrative chooses its citations from this turn's evidence: the
+        # articles for a literature turn, the resolved note passages otherwise.
+        narrative=narrative,
+        # The patient's own condition selects the cohort rows, whatever the
+        # question was about (see `turn_phenotype`), and `command` decides whether
+        # this turn is one that carries the table at all (see `_draws_matrix`).
+        phenotype=turn_phenotype(tool_calls),
+        eligible=admission_eligible(tool_calls),
+        # The clinician's own words, when the turn had any: the other half of the
+        # condition-lock, so a question about a condition this patient does not have
+        # is answered with records and no comparison.
+        query=str((literature or {}).get("query") or "") if isinstance(literature, dict) else "",
+        command=command,
+    )
+
+    # The comparison table's published cohorts, registered as citable sources and
+    # numbered after the note passages. Read from the composed canvas rather than from
+    # `literature_benchmarks` directly, because whether the table was DRAWN is the
+    # question — a condition that was retrieved and not compared owes no source — and
+    # the canvas is the only place that decides it.
+    #
+    # Appended here, after every flag above, so nothing about this turn's grounding is
+    # re-read from a list that now counts somebody else's patients.
+    benchmark_sources, benchmark_references = register_benchmark_sources(
+        canvas, start=len(sources) + 1,
+        existing_pmids=[entry.get("pmid") for entry in sources],
+    )
+
     return {
         "answer": renumbered,
         "citation_map": remap,
         "intent_sections": list(intent),
-        "sources": sources,
-        # The published records the answer rests on, passed through whole. Kept
-        # separate from `sources` on purpose: that list is the discharge-note
-        # citation channel — numbered, renumbered, and resolved against retrieved
-        # passages — and an article has no passage to resolve against.
+        # The note passages first, then the cohorts the comparison table draws. The
+        # second group is numbered to continue the first, so a marker written anywhere
+        # in this turn addresses one array.
+        "sources": sources + benchmark_sources,
+        # The published records a search RETURNED, passed through whole. Kept separate
+        # from `sources` on purpose: that list is the citation channel — numbered, and
+        # addressable by a marker — and a returned article is drawn by the canvas rather
+        # than cited. The comparison table's curated cohorts are the exception and are
+        # in `sources`, because the table names them on screen and a reader can open one.
         "literature": drawn_literature,
         # Whether this answer was checked against, and grounded in, the patient's own
         # record. Stated once, here, because the turns that qualify are decided by
@@ -444,28 +486,11 @@ def compose_presentation(question: str, answer: str,
         # construction rather than by two lists agreeing today.
         "scope": scope,
         "scope_suppressed": scope_suppressed,
-        "references": list((narrative or {}).get("citations") or []),
-        "a2ui": compose_risk_canvas(
-            predict_payload(tool_calls),
-            rag,
-            cite=first_citation(renumbered),
-            sections=intent,
-            source=sources[0] if sources else None,
-            literature=drawn_literature,
-            labs=labs,
-            medications=command_payload,
-            # The narrative chooses its citations from this turn's evidence: the
-            # articles for a literature turn, the resolved note passages otherwise.
-            narrative=narrative,
-            # The patient's own condition selects the cohort rows, whatever the
-            # question was about (see `turn_phenotype`), and `command` decides whether
-            # this turn is one that carries the table at all (see `_draws_matrix`).
-            phenotype=turn_phenotype(tool_calls),
-            eligible=admission_eligible(tool_calls),
-            # The clinician's own words, when the turn had any: the other half of the
-            # condition-lock, so a question about a condition this patient does not have
-            # is answered with records and no comparison.
-            query=str((literature or {}).get("query") or "") if isinstance(literature, dict) else "",
-            command=command,
+        # The narrative's own citations, plus the cohorts the comparison table drew. A
+        # note passage is evidence the answer cites; a benchmark is evidence the SURFACE
+        # shows, and both are things a reader can open from the foot of the turn.
+        "references": (
+            list((narrative or {}).get("citations") or []) + benchmark_references
         ),
+        "a2ui": canvas,
     }

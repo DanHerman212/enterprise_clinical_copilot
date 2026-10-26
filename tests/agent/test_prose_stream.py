@@ -288,14 +288,14 @@ def test_the_opt_in_defaults_off_and_has_to_be_a_bool():
     assert raised.value.code == "invalid_request"
 
 
-# --- the free-text turn: what the lookahead is for ----------------------------
+# --- the free-text turn: what the hold is for ---------------------------------
 #
 # `agent_node` writes two different things through one call — the deliberation that
 # picks a tool, and the answer the reader came for — so a chunk cannot be announced
-# when it arrives: it might be either. `graph._streamed_turn` holds the opening
-# chunks until the turn shows which of the two it is. These tests are that rule
-# stated as behaviour, and they run the helper directly rather than through the
-# graph: the node's other work (the stage label, the state it returns) is covered
+# when it arrives: it might be either. `graph._streamed_turn` therefore holds the WHOLE
+# turn and announces it only once the turn has settled as an answer. These tests are
+# that rule stated as behaviour, and they run the helper directly rather than through
+# the graph: the node's other work (the stage label, the state it returns) is covered
 # where it already was.
 
 
@@ -331,7 +331,7 @@ def _streamed(chunks):
     return turn, text
 
 
-def test_an_answer_turn_is_announced_in_full_once_the_lookahead_passes():
+def test_an_answer_turn_is_announced_in_full_once_it_has_settled():
     turn, announced = _streamed([
         _chunk("The patient "), _chunk("was admitted "), _chunk("with sepsis."),
     ])
@@ -352,7 +352,26 @@ def test_a_routing_turn_is_never_announced():
     assert graph._has_tool_call(turn)
 
 
-def test_an_answer_shorter_than_the_lookahead_is_still_announced():
+def test_prose_written_BEFORE_a_tool_call_is_never_announced():
+    """The reported defect: a paragraph on screen, then the run went back for evidence.
+
+    A follow-up after `/ehr` opened with "I'll check the sections for an inpatient
+    diagnosis", called a tool four times, and every paragraph it wrote on the way was
+    drawn and then thrown away — the reader watched the answer appear and vanish four
+    times in one turn. The old one-chunk lookahead could not cover it: the prose came
+    first, so by the time the call arrived the text was already on screen.
+    """
+    turn, announced = _streamed([
+        _chunk("I'll check the sections for "),
+        _chunk("an inpatient diagnosis. "),
+        _chunk("", tool="rag_search_sections"),
+    ])
+
+    assert announced == "", "deliberation reached the caller"
+    assert graph._has_tool_call(turn)
+
+
+def test_an_answer_of_any_length_is_announced():
     """The hold is a gate on ordering, not a reason to swallow a short answer."""
     _, announced = _streamed([_chunk("No evidence was found in the chart.")])
 

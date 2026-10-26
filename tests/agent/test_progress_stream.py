@@ -202,12 +202,14 @@ def test_a_refused_call_announces_nothing():
 
     The calls are distinct on purpose. Identical ones are refused earlier, by the
     repeat rule, which would let this pass without the budget being the thing
-    that stopped them.
+    that stopped them. They are also `get_lab_trends` rather than `rag_search`: the
+    note-reading tools are capped at one call per turn (`graph.ONCE_PER_TURN`), so a
+    hunger for those is stopped by the cap and would leave the budget untested here.
     """
     box = _StubToolbox()
     events = []
     calls = [
-        {"name": "rag_search", "args": {"query": f"q{i}"}, "id": str(i)}
+        {"name": "get_lab_trends", "args": {"analyte": f"a{i}"}, "id": str(i)}
         for i in range(MAX_TOOL_CALLS_PER_TURN + 2)
     ]
 
@@ -217,6 +219,28 @@ def test_a_refused_call_announces_nothing():
     # refused call contributes none of either.
     assert len(events) == MAX_TOOL_CALLS_PER_TURN * 2
     assert len(box.calls) == MAX_TOOL_CALLS_PER_TURN
+
+
+def test_a_spent_tool_is_refused_without_announcing_anything():
+    """The second line of the per-turn cap.
+
+    A spent note-reading tool is not bound, which is what stops the loop; a model can
+    still write a call for a tool that is absent from its request, and this is the
+    refusal for that case. Nothing is announced, because nothing ran (rule 3).
+    """
+    box = _StubToolbox()
+    events = []
+    calls = [
+        {"name": "rag_search", "args": {"query": "first"}, "id": "1"},
+        {"name": "rag_search", "args": {"query": "second"}, "id": "2"},
+    ]
+
+    _, recorded = _run(_execute_tool_calls(box, calls, events.append))
+
+    assert [name for name, _ in box.calls] == ["rag_search"], "the cap did not hold"
+    assert len(recorded) == 2
+    assert recorded[1]["response"]["error"] == "tool_already_spent"
+    assert [e["stage"] for e in events] == [stages.STAGE_TOOL, stages.STAGE_RESULT]
 
 
 def test_no_listener_means_no_stage_work():
@@ -296,7 +320,19 @@ def test_stream_sends_stages_then_one_answer_frame():
         # command. Withheld routing state made "did the command run?" unanswerable
         # from the wire, so the evaluation could not assert it.
         "command", "routed_to",
+        # The workflow the run went through (Phase B, 2026-10-26). The same labels the
+        # frames above carried, in the terminal payload, so a caller that never streamed
+        # and a turn read back from the store both still have the run's own account of
+        # itself.
+        "steps",
     }
+
+    # The steps ARE the frames' labels: the live tracker and the persisted one cannot be
+    # two different lists, so this asserts they are one.
+    assert answer["steps"] == [
+        payload["label"] for _name, payload in frames
+        if payload.get("label")
+    ]
     assert answer["answer"].strip()
 
     # The streamed frame is what the site stores and later replays, so it has to
@@ -305,6 +341,61 @@ def test_stream_sends_stages_then_one_answer_frame():
         "hadm_id": 90000009, "query": "diagnosis",
     }
     assert answer["tool_calls"][0]["derivable"] is True
+
+
+# --- the blocking route -----------------------------------------------------
+
+def test_the_single_response_route_carries_the_same_steps():
+    """A caller that never streamed has no other way to learn the workflow.
+
+    `/ask` has no frames at all, so before Phase B the only account of the run was in
+    the execution log. Persisting it is what lets a browser refresh show
+    `Agent workflow - N steps` on a turn whose frames are long gone.
+    """
+    async def fake_ask(box, question, on_event=None, question_kind=None,
+                       hadm_id=None, topic=None, turns=None, prose_stream=False):
+        on_event(stages.planning_event())
+        on_event(stages.tool_event("rag_search"))
+        on_event(stages.result_event("rag_search", {"returned": 1}))
+        return _state()
+
+    with patch.object(srv, "toolbox", _fake_toolbox), \
+         patch.object(srv, "ask", fake_ask):
+        resp = _client().post("/ask", json={"question": "diagnosis?"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["steps"] == [
+        stages.planning_label(None),
+        stages.TOOL_LABELS["rag_search"],
+        body["steps"][2],
+    ]
+    # A result stage is a step too — it is a line the reader watched arrive.
+    assert body["steps"][2].startswith("Found")
+
+
+def test_a_repeated_stage_is_one_step():
+    """The run coming back to a stage is the loop, not progress.
+
+    The console's tracker drops a label identical to the one on screen, so a restored
+    turn has to drop it the same way or the two lists disagree the first time a turn
+    goes round the loop.
+    """
+    async def fake_ask(box, question, on_event=None, question_kind=None,
+                       hadm_id=None, topic=None, turns=None, prose_stream=False):
+        on_event(stages.tool_event("rag_search"))
+        on_event(stages.tool_event("rag_search"))
+        on_event(stages.tool_event("rag_search_sections"))
+        return _state()
+
+    with patch.object(srv, "toolbox", _fake_toolbox), \
+         patch.object(srv, "ask", fake_ask):
+        body = _client().post("/ask", json={"question": "diagnosis?"}).json()
+
+    assert body["steps"] == [
+        stages.TOOL_LABELS["rag_search"],
+        stages.TOOL_LABELS["rag_search_sections"],
+    ]
 
 
 def test_the_answer_does_not_wait_for_a_keepalive_after_the_chain_finishes():

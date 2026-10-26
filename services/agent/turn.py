@@ -134,6 +134,7 @@ def _response_fields(state: dict) -> dict:
 async def compose_success(
     question: str, state: dict, trace: str, *, want_follow_ups: bool = False,
     outpatient: bool = False, asked: Sequence[str] = (),
+    steps: Sequence[str] = (),
 ) -> dict:
     """Guard the answer, compose the presentation, validate the payload.
 
@@ -341,6 +342,14 @@ async def compose_success(
         # The rows the console's references drawer lists. The same records the inline
         # markers resolve to, so a clicked marker and its drawer row are one record.
         "references": presentation.get("references") or [],
+        # The workflow this turn went through, in the order it went through it. These are
+        # the same labels the live progress stream carries, sent in the answer so a turn
+        # read back from the store can still show them: the SSE frames are gone the moment
+        # the run ends, and a browser refresh used to take the whole account of the run
+        # with it — the drawer's `Agent workflow - N steps` simply disappeared. Named here
+        # rather than re-derived later, because the stages are a record of what happened
+        # and not something a later layer can reconstruct from the answer.
+        "steps": [str(step) for step in steps if str(step or "").strip()],
     }
     try:
         validate_agent_success(payload)
@@ -367,6 +376,12 @@ class StageLog:
     def __init__(self, sink: Callable[[dict], None] | None = None,
                  intent: str | None = None):
         self.stages: list[dict] = []
+        #: The human labels, in order, which is what the console's progress tracker
+        #: draws and what `payload["steps"]` carries. Kept beside `stages` rather than
+        #: derived from it: the record stores the stage NAME (closed vocabulary, cheap to
+        #: query) and the console shows the label (prose, and the thing the reader
+        #: read).
+        self._steps: list[str] = []
         self._sink = sink
         self._started = time.monotonic()
         # What a control declared this turn to be, held here rather than passed to each
@@ -384,8 +399,37 @@ class StageLog:
             "tool": event.get("tool"),
             "ms": self.duration_ms,
         })
+        self._note_label(str(event.get("label") or ""))
         if self._sink is not None:
             self._sink(event)
+
+    def _note_label(self, label: str) -> None:
+        """Add one step, unless it repeats the one before it.
+
+        A consecutive repeat is the run coming back to a stage rather than a new step,
+        and the console's tracker drops it the same way (`stage()` in the page returns
+        early on an identical label) — so a restored turn shows the list the reader
+        watched rather than one long enough to count every loop iteration as progress.
+        """
+        label = label.strip()
+        if label and (not self._steps or self._steps[-1] != label):
+            self._steps.append(label)
+
+    def note(self, event: dict) -> None:
+        """Record a step the route announces on the chain's behalf.
+
+        `verify` is emitted by `http` rather than by the chain — it says the model has
+        stopped and the guardrails have not run yet, which only the route knows — so it
+        never passes through `__call__`. It is still a step the reader watched, and the
+        steps in the payload are the list the reader watched, so it is recorded here
+        WITHOUT being relayed: the route has already sent it.
+        """
+        self._note_label(str(event.get("label") or ""))
+
+    @property
+    def steps(self) -> list[str]:
+        """The ordered labels this run announced, as a fresh list."""
+        return list(self._steps)
 
     @property
     def duration_ms(self) -> int:

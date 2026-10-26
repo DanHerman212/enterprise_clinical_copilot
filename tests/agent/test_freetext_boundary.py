@@ -14,6 +14,7 @@ Offline: a stub toolbox, a stub graph, and the real prompt.
 """
 
 import asyncio
+import re
 import sys
 from pathlib import Path
 
@@ -133,9 +134,20 @@ def test_the_loop_is_bound_with_the_allow_list():
     # The allow-list is now a function of the turn, because one question shape — "why is
     # this a risk driver?" — cannot be answered without the model's own attribution
     # (`_freetext_allowed`). The boundary is unchanged for every other turn.
-    assert "freetext_tools = _tools(" in source
-    assert "allowed=_freetext_allowed(" in source
+    #
+    # It is also computed once and passed by name (`allowed=allowed`), because the bound
+    # set now SHRINKS as a turn spends it: `bound_for` re-binds from what
+    # `_still_bound` leaves, and a second call to `_freetext_allowed` there would
+    # re-derive the standing set instead of the remainder. What this test is for is
+    # unchanged — the allow-list is what is built, and no binding is made without it.
+    assert "allowed = _freetext_allowed(" in source
+    assert "freetext_tools = _tools(toolbox, allowed=allowed)" in source
     assert source.count("bind_tools(freetext_tools") == 2
+    # Every CALL to `_tools` in the graph names an allow-list (the definition itself is
+    # excluded). A call without one would hand the model every tool the server advertises.
+    calls = re.findall(r"(?<!def )_tools\(toolbox[^)]*\)", source)
+    assert calls
+    assert all("allowed=" in call for call in calls), calls
 
     assert graph._freetext_allowed(False, False) == routing.FREETEXT_TOOLS
     # A driver question adds the attribution and NARROWS the standing set: the lab

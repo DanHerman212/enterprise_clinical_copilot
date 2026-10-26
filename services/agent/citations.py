@@ -12,10 +12,13 @@ only layer where the answer, the guardrails, and the retrieved evidence meet:
      claim) to a single marker.
   2. `citation_remap` emits {renumbered: original} so the browser can resolve
      a clicked footnote back to the original passage.
-  3. `intent_sections` maps a question to the note section(s) it clearly
+  3. `dedupe_list_citations` hoists one repeated marker off a list and onto the
+     line that introduces it, because a badge on every bullet of a list drawn
+     from one passage is noise that reads as eleven sources.
+  4. `intent_sections` maps a question to the note section(s) it clearly
      targets, so the canvas shows THAT section regardless of the model's
      numbering.
-  4. `extract_section` pulls a section body out of a (possibly whole-note)
+  5. `extract_section` pulls a section body out of a (possibly whole-note)
      passage, so a citation click shows the cited section, not the whole note.
 
 The alias vocabulary is derived from the canonical `KNOWN_HEADINGS` used by
@@ -196,9 +199,87 @@ def _drop_unknown_markers(answer: str) -> str:
     )
 
 
+#: A markdown list item — a bullet or an ordinal, its indent, and its marker.
+_LIST_ITEM_RE = re.compile(r"^(\s*)(?:[-*+]|\d+[.)])\s+")
+
+#: A citation marker closing a line, with whatever punctuation followed it.
+_TRAILING_MARKER_RE = re.compile(r"\s*\^\[\s*(\d+)\s*\](?P<tail>[.,;:]?)\s*$")
+
+
+def dedupe_list_citations(answer: str) -> str:
+    """Take one repeated marker off a list, and put it where it belongs.
+
+    A list drawn from a single passage arrived with the same badge on every item —
+    ten discharge diagnoses, ten `^[3]`s. The claim the marker supports is the LIST,
+    not each of its items, and eleven identical badges across eleven lines do not read
+    as one source cited eleven times: they read as eleven sources, which is the
+    misreading the whole citation contract exists to prevent. A reader also cannot
+    tell a list where every item genuinely rests on the same passage from one where
+    the model stopped thinking.
+
+    Deterministic rather than asked for in the prompt, because it is a shape and not
+    a judgement: a contiguous block of list items whose last elements are all the
+    SAME marker is a list the model attributed to one passage, and the move is the
+    same every time.
+
+    The marker is hoisted onto the line that introduces the list, before its colon —
+    "The discharge diagnoses recorded are ^[3]:" — and dropped from the items. With
+    no such introducing line it is left on the final item only, so the list is still
+    attributed to something and the reader can still open it.
+
+    Lists whose items cite DIFFERENT passages are untouched: that is a list making a
+    per-item claim, and hoisting one of them would leave the others unattributed.
+    """
+    if not answer or "^[" not in answer:
+        return answer
+
+    lines = answer.split("\n")
+    out = list(lines)
+    index = 0
+    while index < len(lines):
+        if not _LIST_ITEM_RE.match(lines[index]):
+            index += 1
+            continue
+        start = index
+        while index < len(lines) and _LIST_ITEM_RE.match(lines[index]):
+            index += 1
+        block = list(range(start, index))
+        if len(block) < 2:
+            continue
+        marks = {line: _TRAILING_MARKER_RE.search(lines[line]) for line in block}
+        if any(marks[line] is None for line in block):
+            continue
+        if len({marks[line].group(1) for line in block}) != 1:
+            continue
+
+        marker = f"^[{marks[block[0]].group(1)}]"
+        stripped = {}
+        for line in block:
+            mark = marks[line]
+            text = (lines[line][: mark.start()] + mark.group("tail")).rstrip()
+            # An item that was nothing but its marker keeps it: silently emptying a
+            # bullet would change what the list says, which is not this pass's job.
+            if not _LIST_ITEM_RE.sub("", text, count=1).strip():
+                stripped = None
+                break
+            stripped[line] = text
+        if not stripped:
+            continue
+
+        lead_in = start - 1
+        introduces = lead_in >= 0 and lines[lead_in].rstrip().endswith(":")
+        keep_on = None if introduces else block[-1]
+        for line in block:
+            if line != keep_on:
+                out[line] = stripped[line]
+        if introduces and marker not in lines[lead_in]:
+            opening = lines[lead_in].rstrip()
+            out[lead_in] = f"{opening[:-1].rstrip()} {marker}:"
+    return "\n".join(out)
+
+
 def renumber_citations(answer: str) -> str:
     """Renumber ^[n] markers to first-appearance order (1, 2, 3, ...).
-
     The model numbers citations by the tool's array position: a meds-only
     answer cites ^[3] because discharge_medications is the THIRD section in
     rag_search_sections order. In a meds-only turn that reads illogically —
@@ -214,8 +295,11 @@ def renumber_citations(answer: str) -> str:
     Finally, any marker left over that is not a number is dropped rather than
     printed: a `^[section_name]` the model invented is not a citation, and letting
     it through puts raw markup in front of a clinician.
+
+    A repeated marker on a list is hoisted onto the line that introduces it first
+    (see `dedupe_list_citations`), so what is renumbered is what will be read.
     """
-    return _drop_unknown_markers(_renumber_citations(answer)[0])
+    return _drop_unknown_markers(_renumber_citations(dedupe_list_citations(answer))[0])
 
 
 def cited_numbers(answer: str) -> list[int]:
@@ -232,8 +316,13 @@ def citation_remap(answer: str) -> dict[str, int]:
     array index when the model cited passages out of array order. The client
     uses this map to translate a clicked ^[n] back to the original passage.
     Keys are strings for JSON.
+
+    Read off the same text `renumber_citations` renumbered — through the same list
+    deduplication — because a marker this removes from a list is a marker that no
+    longer takes a number, and a remap built from the un-deduped answer would shift
+    every later citation by one.
     """
-    _, old_to_new = _renumber_citations(answer)
+    _, old_to_new = _renumber_citations(dedupe_list_citations(answer))
     return {str(new): old for old, new in old_to_new.items()}
 
 

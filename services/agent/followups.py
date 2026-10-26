@@ -363,6 +363,56 @@ def _rank_abnormal(trends: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # ----------------------------------------------------------------------------- engine
 
 
+#: How the BFF expands a typed `/pubmed <topic>` into a sentence before it reaches the
+#: service. The wording is the caller's, not the clinician's, so it must never appear in a
+#: question the clinician is offered back.
+_LITERATURE_WRAPPER = re.compile(
+    r"^\s*(?:/pubmed|pubmed|search\s+pubmed|search\s+the\s+literature)\b"
+    r"(?:\s+for\s+(?:recent\s+|peer-reviewed\s+)?(?:literature|evidence|articles)?)?"
+    r"(?:\s+on)?\s*[:,-]?\s*",
+    re.IGNORECASE,
+)
+
+#: The admission the request is scoped to, which is a contract field rather than part of
+#: the subject. `graph._asked_about` strips the same suffix from the question it quotes
+#: back to the model; this is the chip's half of that rule.
+_ADMISSION_SUFFIX = re.compile(r"\s*\bFor\s+admission\s+\d+\s*\.?\s*$", re.IGNORECASE)
+
+
+def _literature_topic(state: dict[str, Any], question: str) -> str:
+    """What the literature search was ABOUT, as the clinician would say it.
+
+    The `search_literature` call is the authority when it is in the turn: its `query`
+    argument is what was actually searched, before any of this layer's own bookkeeping.
+    That is the whole point — a chip is a question the reader can click, and the tool
+    already holds the words for it.
+
+    The question is the fallback, and it arrives WRAPPED. The console expands a typed
+    `/pubmed hyperglycemia` into "Search PubMed for recent literature on hyperglycemia.
+    For admission 90000067.", so slotting the question into the chip produced "What else
+    does the published literature report on Search PubMed for recent literature on
+    hyperglycemia. For admission 90000067?" (reported from the live turn, 2026-10-26).
+    Both wrappers are stripped: the command's own sentence, and the admission the request
+    is scoped to.
+    """
+    for call in state.get("tool_calls") or []:
+        if not isinstance(call, dict) or call.get("name") != "search_literature":
+            continue
+        query = str((call.get("args") or {}).get("query") or "").strip()
+        if query:
+            return query.strip(" ?.")[:120]
+    cleaned = _ADMISSION_SUFFIX.sub("", str(question or "")).strip()
+    cleaned = _LITERATURE_WRAPPER.sub("", cleaned).strip()
+    # One wrapper can sit inside another ("Search PubMed for recent literature on ...");
+    # strip until nothing changes rather than guessing at the nesting.
+    while True:
+        again = _LITERATURE_WRAPPER.sub("", cleaned).strip()
+        if again == cleaned:
+            break
+        cleaned = again
+    return cleaned.strip(" ?.")[:120]
+
+
 def _candidates(*, state: dict[str, Any], scope: str | None, question: str,
                 outpatient: bool, literature: bool = False) -> list[str]:
     """Every chip this turn can offer, in priority order, before the cap is applied."""
@@ -380,9 +430,8 @@ def _candidates(*, state: dict[str, Any], scope: str | None, question: str,
         # question is about the published evidence itself, and only when the search
         # actually returned something. `None` means "no articles", which is a turn with
         # nothing to follow up on — never a reason to fall back to the chart.
-        topic = re.sub(r"^\s*(?:/pubmed|pubmed)\s*", "", question or "",
-                       flags=re.I).strip(" ?.")
-        chip = _filled(_LITERATURE, topic=topic[:120])
+        topic = _literature_topic(state, question)
+        chip = _filled(_LITERATURE, topic=topic)
         return [chip] if chip else []
 
     medications_available = bool(plan) and not meds_absent

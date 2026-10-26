@@ -224,6 +224,47 @@ class TestPubmedOwnsOneDomain:
                                  scope="general_evidence", state=state,
                                  literature=True) == []
 
+    def test_the_chip_asks_about_the_search_query_not_the_wrapper_sentence(self):
+        """Reported live: the chip read
+
+          "What else does the published literature report on Search PubMed for recent
+           literature on hyperglycemia. For admission 90000067?"
+
+        The console expands a typed `/pubmed hyperglycemia` into that sentence before the
+        service sees it, and the chip slotted the expansion and the admission id into its
+        template. The search already holds the words, so they come from there.
+        """
+        state = {
+            "tool_calls": [{"name": "search_literature",
+                            "args": {"query": "hyperglycemia"},
+                            "response": {"query": "hyperglycemia", "returned": 3,
+                                         "articles": ARTICLES}}],
+            "replayed_tool_calls": [],
+        }
+
+        chips = followups.suggest(
+            "Search PubMed for recent literature on hyperglycemia. For admission 90000067.",
+            "Three records were retrieved.", scope="general_evidence",
+            state=state, literature=True)
+
+        assert chips == [
+            "What else does the published literature report on hyperglycemia?"]
+
+    def test_the_wrapper_is_stripped_even_with_no_search_in_the_state(self):
+        """The fallback has to stand on its own: a turn replayed from the store has no
+        tool calls, and the question it was asked is still the wrapped one."""
+        chips = followups.suggest(
+            "Search PubMed for recent literature on hyperglycemia. For admission 90000067.",
+            "Three records were retrieved.", scope="general_evidence",
+            state={"tool_calls": [{"name": "search_literature",
+                                   "args": {"query": ""},
+                                   "response": {"query": "", "returned": 3,
+                                                "articles": ARTICLES}}]},
+            literature=True)
+
+        assert chips == [
+            "What else does the published literature report on hyperglycemia?"]
+
     def test_a_chart_turn_still_gets_chart_chips(self):
         """The flag must not leak: `/ehr` is the turn that owns the chart, and its
         chips are still drawn from it."""

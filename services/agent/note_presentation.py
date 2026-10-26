@@ -320,7 +320,7 @@ def reference_rows(sources: list[dict]) -> list[dict]:
         }
         if subtitle:
             row["subtitle"] = subtitle
-        for key in ("pmid", "url", "authors", "journal_citation"):
+        for key in ("pmid", "url", "authors", "journal_citation", "year"):
             value = str(source.get(key) or "").strip()
             if value:
                 row[key] = value
@@ -626,6 +626,8 @@ def literature_sources(articles: list[dict], start: int = 1) -> list[dict]:
             "badge": record["badge"],
             "title": record["title"],
             "authors": record["authors"],
+            "journal": record["journal"],
+            "year": record["year"],
             "label": record["label"],
             "subtitle": record["subtitle"],
             "journal_citation": record["journal_citation"],

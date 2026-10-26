@@ -161,23 +161,24 @@ RULE_MARKERS = (
 
 def test_no_prompt_still_prescribes_a_risk_band_word():
     """The rule that a risk is "above or below the operating threshold" and never
-    "high", "low" or "borderline" used to be stated for the reasoning loop, then
-    for the /risk formatting turn, and now has no prose to live in at all: the
-    widget derives the band from the same number and `/risk` returns no prose (UX
-    ruling 2026-10-13).
+    "high", "low" or "borderline" has no prose to live in at all now: `/risk` was
+    retired on 2026-10-26, the widget derives the band from the same number, and the
+    estimate reaches prose only through `/ehr`, which is governed by
+    `routing.EHR_FORMATTING`.
 
-    Asserted rather than dropped, because the constraint is still load-bearing: the
-    band is a visual the interface derives from the served value, and any prose that
-    invents its own band contradicts it. The day a risk prose turn comes back, the
-    rule has to come back with it, and this test is what notices that it did not.
+    Asserted rather than dropped, because the constraint is still load-bearing: the band
+    is a visual the interface derives from the served value, and any prose that invents
+    its own band contradicts it. The day a risk prose turn comes back, the rule has to
+    come back with it, and this test is what notices that it did not.
     """
     from services.agent import routing
 
-    risk = routing.command_for("risk")
-    assert risk.prose is False
-    assert risk.formatting == ""
+    assert [command.wire for command in routing.COMMANDS if command.wire == "risk"] == []
     for band in ("high", "low", "borderline"):
         assert f'label the risk "{band}"' not in routing.RISK_FORMATTING
+    # The formatting that DOES carry the score states the same rule, so a `/ehr` answer
+    # cannot invent a band either.
+    assert "probability_display" in routing.EHR_FORMATTING
 
 
 @pytest.mark.parametrize("rule,marker", RULE_MARKERS)
@@ -313,8 +314,8 @@ def test_a_risk_driver_question_is_answered_with_the_models_attribution():
     # than the whitespace between them.
     assert "drivers contributed most" in SYSTEM_PROMPT
     assert "in which direction" in SYSTEM_PROMPT
-    # The boundary is restated rather than dropped: /risk owns the number.
-    assert "/risk owns" in SYSTEM_PROMPT
+    # The boundary is restated rather than dropped: the `/ehr` turn owns the number.
+    assert "/ehr" in SYSTEM_PROMPT and "owns the number" in SYSTEM_PROMPT
 
 
 def test_a_number_is_not_distributed_across_the_items_beside_it():

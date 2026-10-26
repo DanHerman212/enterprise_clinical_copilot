@@ -430,16 +430,16 @@ COMMANDS: tuple[Command, ...] = (
         streams_prose=True,
         prose_is_model_output=True,
     ),
-    Command(
-        wire="risk",
-        slash="/risk",
-        tool="predict_readmission",
-        args={"hadm_id": "{hadm_id}"},
-        forbidden=frozenset({"rag_search", "rag_search_sections", "discharge_medications",
-                             "search_literature", "get_lab_trends"}) | PREFLIGHT_TOOLS,
-        # The answer is the surface, and there is no prose at all: see `prose`.
-        prose=False,
-    ),
+    # `/risk` was retired on 2026-10-26, after the charter item that opened with "the
+    # `/risk` chip exists but produces no output when a patient is submitted with a blank
+    # composer". It asked `predict_readmission` for the score and nothing else, and the
+    # `/ehr` turn has carried the same score beside the narrative that explains it since
+    # Phase 1 — so the command was a second control for a number the reader already has,
+    # reachable only by typing it or by pressing Enter on an empty composer.
+    #
+    # The tool did not go with it. It is `/ehr`'s supplementary call, and a driver bar
+    # clicked inside that chart still declares `intent="risk_driver"` to ask why a factor
+    # counts. What is gone is the command, not the estimate.
     Command(
         wire="meds",
         slash="/meds",
@@ -902,24 +902,6 @@ OUTPATIENT_EHR_NOTICE = (
     "inpatient stay. Ask about this visit instead, or run the command on an inpatient "
     "admission."
 )
-
-
-def refuses_readmission_score(command: Command, hadm_id: int | None) -> bool:
-    """Whether this command must decline to score this record.
-
-    `/risk` asks the model for the readmission estimate, and on an outpatient record
-    there is none. Until 2026-10-23 the outpatient rule only dropped
-    `predict_readmission` where it was a SUPPLEMENTARY call (routing.py,
-    `supplementary_arguments`), so `/ehr` and `/pubmed` honoured it while `/risk` —
-    where the estimate is the PRIMARY tool — scored the visit anyway and drew an
-    inpatient risk card over it (TF-1). Measured on 90000051: a 0.2916 estimate, above
-    threshold, for a speech-therapy note.
-
-    A predicate rather than a branch inside the caller because it is a statement about
-    the vocabulary: the same five ids that cannot be compared against a cohort also
-    cannot be given a score.
-    """
-    return command.wire == "risk" and hadm_id in OUTPATIENT_HADM_IDS
 
 
 def comparison_applies(command: Command, hadm_id: int | None,

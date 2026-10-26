@@ -219,44 +219,34 @@ def test_an_outpatient_record_is_not_comparable_against_a_cohort():
     assert admission_phenotypes.is_matrix_eligible(90000023) is True
 
 
-def test_risk_refuses_an_outpatient_record():
-    """TF-1, fixed 2026-10-23: `/risk` on a visit produces no score and no risk card.
+def test_an_outpatient_record_is_never_scored():
+    """TF-1, fixed 2026-10-23 for `/risk` and kept when it was retired (2026-10-26).
 
     Before the gate, the outpatient rule only dropped `predict_readmission` where it was
-    a supplementary call, so `/risk` — where it is the primary tool — scored the visit.
-    90000051 came back at 0.2916, above threshold, for a speech-therapy note.
+    a supplementary call, so the command that ran it as its primary tool scored the
+    visit: 90000051 came back at 0.2916, above threshold, for a speech-therapy note.
+
+    `predict_readmission` is supplementary-only now — `/ehr` is its one caller — so the
+    guarantee is the one `supplementary_arguments` makes, and it is swept over the whole
+    outpatient cohort rather than on one record.
     """
-    risk = routing.command_for("risk")
+    ehr = routing.command_for("summarize")
     broken: dict[int, str] = {}
     for hadm_id in sorted(OUTPATIENT):
-        state = asyncio.run(deterministic.run_command(
-            None, risk, hadm_id, question="What is her readmission risk?",
-            model="unused-the-gate-returns-before-any-model-call"))
-        called = [call["name"] for call in state["tool_calls"]]
-        if called:
-            broken[hadm_id] = f"called {called}"
-            continue
-        out = compose_presentation(
-            "What is her readmission risk?", state["deterministic_answer"],
-            state["tool_calls"], None, "risk",
-        )
-        components = out["a2ui"]["messages"][1]["updateComponents"]["components"]
-        types = {component["component"] for component in components}
-        if "RiskInfluencers" in types:
-            broken[hadm_id] = "drew an inpatient risk card"
-        elif out["verified"] is not False:
-            broken[hadm_id] = f"verified={out['verified']!r}"
-        elif state["deterministic_answer"] != routing.OUTPATIENT_RISK_REFUSAL:
-            broken[hadm_id] = "answered with something other than the refusal"
+        requested = {tool for tool, _args in
+                     routing.supplementary_arguments(ehr, hadm_id)}
+        if "predict_readmission" in requested:
+            broken[hadm_id] = "requested the readmission estimate"
     assert not broken, broken
 
 
-def test_risk_still_reaches_the_model_on_an_inpatient_record():
-    """The control: the gate is about outpatient records and nothing else."""
-    risk = routing.command_for("risk")
+def test_the_estimate_is_still_requested_on_an_inpatient_record():
+    """The control: the rule is about outpatient records and nothing else."""
+    ehr = routing.command_for("summarize")
     for hadm_id in (90000015, 90000023):
-        assert routing.refuses_readmission_score(risk, hadm_id) is False, hadm_id
-    assert routing.refuses_readmission_score(risk, None) is False
+        requested = {tool for tool, _args in
+                     routing.supplementary_arguments(ehr, hadm_id)}
+        assert "predict_readmission" in requested, hadm_id
 
 
 # --- the unserved boundary ---------------------------------------------------

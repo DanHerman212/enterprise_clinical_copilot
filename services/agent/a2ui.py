@@ -358,7 +358,7 @@ def compose_presentation(question: str, answer: str,
     # carries a payload (the estimate it compares against) but its prose is a note
     # synthesis, so an uncited `/ehr` answering is still the thing this flag exists to
     # report.
-    payload_evidenced = bool(command_payload) and command in ("risk", "meds")
+    payload_evidenced = bool(command_payload) and command == "meds"
     # A widget-only turn has no prose to evidence. Flagging "synthesis without
     # citations" against an empty sentence describes an omission that did not happen:
     # the canvas is the answer, and the reader was never shown a claim needing

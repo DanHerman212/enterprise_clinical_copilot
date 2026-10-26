@@ -192,10 +192,10 @@
     },
     {
       "id": "S2-30", "vector": "V1", "hadm_id": 90000054,
-      "question": "/risk",
-      "expect": {"command": "risk", "risk_suppressed": true,
+      "question": "/ehr",
+      "expect": {"command": "summarize", "risk_suppressed": true,
                  "component_absent": "RiskInfluencers"},
-      "why": "The command itself must suppress inpatient readmission risk on a record that has no admission."
+      "why": "The /ehr turn must suppress inpatient readmission risk on a record that has no admission. It was /risk's job until 2026-10-26; the estimate moved onto /ehr with the command."
     }
   ]
 }

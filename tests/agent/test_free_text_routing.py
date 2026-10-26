@@ -23,7 +23,7 @@ import pytest
 
 from services.agent import contracts, http, routing
 
-WIRE = {"/meds": "meds", "/labs": "labs", "/risk": "risk", "/ehr": "summarize",
+WIRE = {"/meds": "meds", "/labs": "labs", "/ehr": "summarize",
         "/pubmed": "literature"}
 
 
@@ -112,15 +112,32 @@ def test_a_mistyped_command_is_refused_before_the_chain_runs():
     body = json.loads(response.body)
     assert body["error"] == "unknown_command"
     # The message has to name the way out, or the caller is told only that they failed.
-    for slash in ("/ehr", "/labs", "/meds", "/risk", "/pubmed"):
+    for slash in ("/ehr", "/labs", "/meds", "/pubmed"):
         assert slash in body["message"]
+
+
+def test_a_retired_command_is_refused_by_name():
+    """`/risk` was a command until 2026-10-26. A caller who still types it is asking for
+    something that no longer exists, and the honest answer names it rather than running a
+    free-text turn over a line that starts with a slash."""
+    response = http._unknown_command({"question": "/risk", "kind": None})
+
+    assert response is not None
+    assert response.status_code == 400
+    body = json.loads(response.body)
+    assert body["error"] == "unknown_command"
+    assert "There is no /risk command" in body["message"]
+    assert "/risk" not in [command.slash for command in routing.COMMANDS]
 
 
 @pytest.mark.parametrize("parsed", [
     {"question": "/ehr", "kind": None},          # a real command, typed
     {"question": "/ehrr", "kind": "summarize"},  # a chip already resolved it
     {"question": "What is the readmission risk?", "kind": None},
-    {"question": "/risk of falls overnight", "kind": None},  # prose that starts with /
+    # A prose line that opened with a live command's name — "/risk of falls overnight" —
+    # used to be exempt because the token named a command. No token does now, so there is
+    # no such case left: a slash the caller typed is a command request, and the only
+    # exemptions are a command that exists and a chip that already resolved one.
 ])
 def test_nothing_else_is_refused_as_an_unknown_command(parsed):
     assert http._unknown_command(parsed) is None

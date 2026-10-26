@@ -41,7 +41,7 @@ NO_SIBLING = "the site repository is not checked out beside this one"
 BODIES = {
     "question": {"question": "Assess risk."},
     "hadm_id": {"question": "Assess risk.", "hadm_id": 90000009},
-    "chip": {"chip": "risk", "hadm_id": 90000009},
+    "chip": {"chip": "meds", "hadm_id": 90000009},
     "turns": {"question": "Assess risk.",
               "turns": [{"question": "q", "answer": "a"}]},
     "stream_prose": {"question": "Assess risk.", "stream_prose": False},
@@ -107,7 +107,7 @@ def test_the_chip_vocabulary_is_the_five_commands_and_nothing_else():
     promise about a prompt: the wording for it lives in this repository, and a
     sixth entry would be a command with no question written for it."""
     assert set(questions.CHIP_QUESTIONS) == {
-        "risk", "meds", "summarize", "literature", "labs"}
+        "meds", "summarize", "literature", "labs"}
 
 
 def test_the_declared_intents_are_the_controls_a_surface_can_draw():

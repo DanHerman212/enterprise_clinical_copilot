@@ -1,71 +1,66 @@
-"""TF-1: `/risk` declines to score a record that was never an admission.
+"""TF-1, kept after the command it was written for was retired: an outpatient record is
+never given a readmission score.
 
-Unit-level companion to the cohort sweep's record-by-record assertion. The predicate is
-tested as a truth table and the command as a shape, so a future refactor that keeps the
-sweep green by accident still has to keep both facts true.
+The rule was enforced by `routing.refuses_readmission_score`, which refused to run
+`/risk` at all on the five outpatient ids. `/risk` was retired on 2026-10-26, and the
+rule survives in the place it now belongs: `supplementary_arguments` drops
+`predict_readmission` from a command's second call on an outpatient record, and no
+command names the predictor as its PRIMARY tool any more.
+
+So this file asserts the guarantee rather than the mechanism it used to have — no
+estimate is requested for an outpatient, whatever command is run — plus the one thing
+the retirement must not break: `/ehr` on an outpatient still runs, because a visit with
+no readmission still has a note to summarise.
 """
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
-from services.agent import deterministic, routing
-from services.agent.a2ui import compose_presentation
+from services.agent import routing
 
-RISK = routing.command_for("risk")
 OUTPATIENT = sorted(routing.OUTPATIENT_HADM_IDS)
+INPATIENT = [90000015, 90000023, 90000106]
+
+
+def test_no_command_asks_for_the_estimate_as_its_primary_call():
+    """The estimate is a supplementary call, so there is no command whose whole answer is
+    a number drawn on an outpatient record. This is what let the refusal predicate go."""
+    assert [command.wire for command in routing.COMMANDS
+            if command.tool == "predict_readmission"] == []
 
 
 @pytest.mark.parametrize("hadm_id", OUTPATIENT)
-def test_the_predicate_holds_for_every_outpatient(hadm_id):
-    assert routing.refuses_readmission_score(RISK, hadm_id) is True
+@pytest.mark.parametrize("wire", ["summarize", "literature"])
+def test_no_estimate_is_requested_for_an_outpatient_record(wire, hadm_id):
+    command = routing.command_for(wire)
+
+    requested = {tool for tool, _args in
+                 routing.supplementary_arguments(command, hadm_id, "heart failure")}
+
+    assert "predict_readmission" not in requested
 
 
-@pytest.mark.parametrize("hadm_id", [90000015, 90000023, 90000106])
-def test_the_predicate_does_not_hold_for_an_inpatient(hadm_id):
-    assert routing.refuses_readmission_score(RISK, hadm_id) is False
+@pytest.mark.parametrize("hadm_id", INPATIENT)
+def test_the_estimate_is_still_requested_for_an_inpatient_record(hadm_id):
+    """The other direction, so the rule above cannot pass by requesting nothing at all."""
+    command = routing.command_for("summarize")
 
+    requested = {tool for tool, _args in
+                 routing.supplementary_arguments(command, hadm_id)}
 
-def test_the_predicate_is_about_the_risk_command_only():
-    """`/ehr` and `/pubmed` handle the same records their own way — no estimate, but a
-    summary still runs. The gate must not turn them into refusals."""
-    for wire in ("summarize", "literature", "meds", "labs"):
-        command = routing.command_for(wire)
-        for hadm_id in OUTPATIENT:
-            assert routing.refuses_readmission_score(command, hadm_id) is False, wire
-
-
-def test_no_admission_is_not_a_refusal():
-    """A `/pubmed` search carries no admission and must still run."""
-    assert routing.refuses_readmission_score(RISK, None) is False
-
-
-@pytest.mark.parametrize("hadm_id", OUTPATIENT)
-def test_the_command_returns_the_refusal_without_calling_a_tool(hadm_id):
-    state = asyncio.run(deterministic.run_command(
-        None, RISK, hadm_id, question="What is her readmission risk?",
-        model="unused-the-gate-returns-before-any-model-call"))
-
-    assert state["tool_calls"] == []
-    assert state["deterministic_answer"] == routing.OUTPATIENT_RISK_REFUSAL
-    assert state["command"] == "risk"
+    assert "predict_readmission" in requested
 
 
 @pytest.mark.parametrize("hadm_id", OUTPATIENT)
-def test_the_refusal_draws_no_risk_card_and_is_not_verified(hadm_id):
-    state = asyncio.run(deterministic.run_command(
-        None, RISK, hadm_id, question="What is her readmission risk?",
-        model="unused-the-gate-returns-before-any-model-call"))
+def test_ehr_still_runs_on_an_outpatient_record(hadm_id):
+    """A visit with no readmission still has a note. Dropping the estimate must not turn
+    the whole command into a refusal — that was the failure TF-6 fixed on the other
+    side."""
+    command = routing.command_for("summarize")
 
-    out = compose_presentation("What is her readmission risk?",
-                               state["deterministic_answer"],
-                               state["tool_calls"], None, "risk")
-    components = out["a2ui"]["messages"][1]["updateComponents"]["components"]
-    types = {component["component"] for component in components}
+    calls = [(command.tool, routing.tool_arguments(command, hadm_id))]
+    calls += routing.supplementary_arguments(command, hadm_id)
 
-    assert "RiskInfluencers" not in types
-    assert out["verified"] is False
-    # A refusal about a visit must not claim the chart either.
-    assert out["scope"] is None
+    assert command.tool == "rag_search_sections"
+    assert [name for name, _args in calls] == ["rag_search_sections"]

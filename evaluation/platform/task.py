@@ -22,9 +22,11 @@ Ask = Callable[..., dict]
 def card_to_text(payload: Any) -> str:
     """Serialise a slash-command card so the trace output is never a dash.
 
-    `/risk` answers with a widget and no prose. Langfuse renders the task's output in
-    the trace table, so returning the raw dict (or an empty string) is what made the
-    dashboard unreadable. Human-readable JSON keeps it inspectable and non-blank.
+    A command turn can carry a surface as well as prose, and a turn that answers only
+    through one — `/risk` was the case until it was retired on 2026-10-26 — has no
+    sentence at all. Langfuse renders the task's output in the trace table, so returning
+    the raw dict (or an empty string) is what made the dashboard unreadable.
+    Human-readable JSON keeps it inspectable and non-blank.
     """
     if payload is None:
         return ""

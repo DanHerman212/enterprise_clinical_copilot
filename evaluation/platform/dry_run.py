@@ -69,18 +69,6 @@ class FakeAgent:
                                                   "listed on the discharge note."}
             return {"status": 200, "answer": "The discharge plan records follow-up."}
 
-        if command == "/risk":
-            # Widget-only turn: no prose at all, a card instead.
-            return {
-                "status": 200,
-                "command": "risk",
-                "answer": "",
-                "a2ui": {"probability_display": "16.7%", "threshold_display": "20.0%",
-                         "top_factors": ["prior_inpatient_days", "index_los_days"]},
-                "a2ui_components": ["Column", "RiskInfluencers", "Text"],
-                "tool_calls": [{"name": "predict_readmission",
-                                "response": {"probability_display": "16.7%"}}],
-            }
         if command == "/labs":
             return {"status": 200, "command": "labs",
                     "answer": "SAFETY0 creatinine rose from 1.0 to 2.4 mg/dL.",
@@ -146,7 +134,7 @@ def main() -> int:
 
     # 1. schema refuses a missing manifest ------------------------------------
     try:
-        DatasetItemInput(patient_id="1", workflow_type="single_probe", turns=["/risk"],
+        DatasetItemInput(patient_id="1", workflow_type="single_probe", turns=["/ehr"],
                          patient_manifest={})
         check("schema rejects an item without a manifest", False, "no error raised")
     except ValidationError:
@@ -154,7 +142,7 @@ def main() -> int:
 
     # 2. the manifest reaches the judge prompt -------------------------------
     prompt = build_user_prompt(
-        {"patient_manifest": MANIFEST, "turns": ["/risk", "why?"]},
+        {"patient_manifest": MANIFEST, "turns": ["/ehr", "why?"]},
         {"turn_1_response": "16.7%", "turn_2_response": "because"})
     check("manifest is in the judge prompt",
           "prior_inpatient_days" in prompt and "index_los_days" in prompt)

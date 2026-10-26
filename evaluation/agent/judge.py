@@ -478,7 +478,18 @@ def _widget_surface(rec: dict) -> dict | None:
         return None
     if (rec.get("answer") or "").strip():
         return None
+    return _surface_payload(rec)
 
+
+def _surface_payload(rec: dict) -> dict | None:
+    """The structured answer a record carries, whether or not prose was owed.
+
+    Split out of `_widget_surface` on 2026-10-26. `/risk` was retired that day and no
+    command is prose-optional any more, which left the extraction reachable only through
+    a gate that cannot open — so it could not be exercised at all. The gate decides
+    WHETHER a turn is graded on its payload; this decides WHAT that payload is, and it is
+    worth testing on its own: `/ehr` draws the same canvas from the same tool call.
+    """
     surface: dict = {}
     for tc in rec.get("tool_calls") or []:
         if tc.get("name") == "predict_readmission":

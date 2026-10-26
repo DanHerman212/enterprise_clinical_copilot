@@ -140,11 +140,18 @@ def test_the_two_prose_sources_are_declared_per_command():
     assert ehr.prose_is_model_output is True
 
 
-def test_the_risk_command_has_no_prose_turn_at_all():
-    """The widget is the whole answer, so no LLM is in this command's loop."""
-    risk = routing.command_for("risk")
-    assert risk.prose is False
-    assert risk.formatting == ""
+def test_no_command_is_a_widget_only_turn_any_more():
+    """`/risk` was the widget-only command: its canvas was the whole answer, so it ran no
+    formatting turn and built no model at all. It was retired on 2026-10-26 after the
+    charter item that found it produced nothing from a blank composer, and every command
+    left writes prose.
+
+    Asserted rather than dropped because the streaming policy is stated in terms of it:
+    a caller asks to be shown prose as it is written, and a command with no prose has
+    nothing to show. The machinery for such a command (`prose=False`,
+    `answer_in_surface`) stays in `deterministic` and `turn` for the day one comes back.
+    """
+    assert [command.wire for command in routing.COMMANDS if not command.prose] == []
 
 
 # --- what a caller that asked for it sees -------------------------------------

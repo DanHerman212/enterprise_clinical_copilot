@@ -75,12 +75,14 @@ def free_text_meds() -> dict:
 
 @pytest.fixture(scope="module")
 def risk_command() -> dict:
-    return _run("/risk", kind="risk", hadm_id=KNOWN_HADM_ID)
+    """The command that reaches the predictor: `/ehr`, since `/risk` was retired on
+    2026-10-26. The estimate is its supplementary call, drawn beside the summary."""
+    return _run("/ehr", kind="summarize", hadm_id=KNOWN_HADM_ID)
 
 
 @pytest.fixture(scope="module")
 def unknown_patient() -> dict:
-    return _run("/risk", kind="risk", hadm_id=UNKNOWN_HADM_ID)
+    return _run("/ehr", kind="summarize", hadm_id=UNKNOWN_HADM_ID)
 
 
 # --- the free-text boundary: a command's work is redirected, never performed ---
@@ -105,9 +107,9 @@ def test_a_free_text_risk_question_enters_the_reasoning_loop(free_text_risk):
         assert final_text(free_text_risk).strip()
         return
     text = final_text(free_text_risk)
-    assert "/risk" in text, "the loop neither looked anything up nor named /risk"
+    assert "/ehr" in text, "the loop neither looked anything up nor named /ehr"
     assert not re.search(r"\d", text), (
-        "a redirect must not carry a figure: the score belongs to /risk"
+        "a redirect must not carry a figure: the score belongs to the /ehr turn"
     )
 
 
@@ -127,9 +129,9 @@ def test_a_free_text_medication_question_enters_the_reasoning_loop(free_text_med
 
 def test_the_risk_command_calls_the_tool(risk_command):
     """The whole point: the number comes from the service, not from memory."""
-    calls = risk_command["tool_calls"]
-    assert calls, "/risk answered without calling any tool"
-    assert calls[0]["name"] == "predict_readmission"
+    calls = [call for call in risk_command["tool_calls"]
+             if call["name"] == "predict_readmission"]
+    assert calls, "the /ehr turn drew an estimate without calling the predictor"
     assert calls[0]["args"]["hadm_id"] == KNOWN_HADM_ID
 
 
@@ -156,9 +158,10 @@ def _risk_widget(state):
 
 
 def test_the_score_reaches_the_user_through_the_surface(risk_command, require_served):
-    """`/risk` returns the widget and no prose at all (UX ruling 2026-10-13).
+    """The number has to be in the surface, and at the surface's own precision.
 
-    The number therefore has to be in the surface, and at the surface's own precision.
+    `/ehr` writes prose as well, so this is no longer the only channel — but it is the
+    channel a reader sees beside the narrative, and it must agree with the served value.
     Asserted against the value the service returned rather than against the fixture,
     because the rule is about the projection: this is the assertion that would have
     caught the projection handing the model a pre-rounded probability, which is how
@@ -166,8 +169,6 @@ def test_the_score_reaches_the_user_through_the_surface(risk_command, require_se
     """
     response = require_served(risk_command)
 
-    assert risk_command["deterministic_answer"] == ""
-    assert risk_command["answer_in_surface"] is True
     assert _risk_widget(risk_command)["probability"] == response["probability"]
 
 
@@ -202,14 +203,14 @@ def test_answer_invents_no_risk_factors(risk_command, require_served):
 def test_unknown_patient_is_reported_not_invented(unknown_patient):
     """Guardrail: never substitute a plausible number for a failed call.
 
-    The refusal is drawn rather than written now. With no prose turn there is no
-    sentence to carry it, so what has to hold is that the canvas explains itself and
-    carries no estimate at all.
+    The call fails with the tool's own error, and what has to hold is that the surface
+    draws no estimate from it — `/ehr` still writes its summary prose, so the canvas is
+    no longer the only channel and the assertion is about what it must NOT carry.
     """
-    calls = unknown_patient["tool_calls"]
-    assert calls, "/risk answered without calling any tool"
+    calls = [call for call in unknown_patient["tool_calls"]
+             if call["name"] == "predict_readmission"]
+    assert calls, "the /ehr turn answered about an unknown admission without calling the tool"
     assert calls[0]["response"].get("error") == "unknown_patient"
-    assert unknown_patient["deterministic_answer"] == ""
 
     from services.agent.a2ui import compose_presentation
 

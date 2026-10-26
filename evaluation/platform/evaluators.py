@@ -38,7 +38,6 @@ def _score(name: str, value: float, comment: str | None = None,
 EXECUTED_COMMAND: dict[str, str] = {
     "ehr": "summarize",
     "pubmed": "literature",
-    "risk": "risk",
     "meds": "meds",
     "labs": "labs",
 }

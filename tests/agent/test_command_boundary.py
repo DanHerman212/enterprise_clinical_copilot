@@ -179,7 +179,7 @@ def test_a_command_that_takes_no_topic_refuses_the_callers_words():
     contract refuses it before this, and this refuses it again for a caller that
     reached the tool layer directly."""
     with pytest.raises(ValueError):
-        routing.tool_arguments(routing.command_for("risk"), 90000023, "a question")
+        routing.tool_arguments(routing.command_for("meds"), 90000023, "a question")
 
 
 def test_a_command_that_needs_an_admission_refuses_to_run_without_one():
@@ -451,15 +451,17 @@ def test_the_outpatient_caveat_forbids_calling_the_record_an_admission():
     assert "Hospital course" in caveat  # redirected to 'Clinical course'
 
 
-def test_a_prose_less_command_never_builds_a_model():
-    """`/risk` has no formatting turn, so it must not construct an LLM either.
+def test_no_command_is_a_widget_only_turn_any_more():
+    """`/risk` was the one command whose answer was its surface and which therefore built
+    no model at all. It was retired on 2026-10-26, so every command left writes prose and
+    every command builds exactly one model turn.
 
-    The point of deleting the turn was to take the model out of the path, not to
-    call it and discard the result.
+    The machinery that served a prose-less command (`prose=False`, `answer_in_surface`)
+    is still in `deterministic` and `turn`: it is a shape a future widget-only command
+    would need, and deleting it would make that command a rewrite rather than an entry in
+    the table. This asserts the table's half of that — nothing is prose-less today.
     """
-    _, _, model = _run_command(routing.command_for("risk"))
-
-    assert model.seen == []
+    assert [command.wire for command in routing.COMMANDS if not command.prose] == []
 
 
 @pytest.mark.parametrize("command", routing.COMMANDS, ids=lambda c: c.wire)
@@ -705,7 +707,7 @@ def test_a_command_and_a_question_together_are_refused_not_resolved():
     repeat of the previous answer to a clinician who had asked something new."""
     with pytest.raises(AgentRequestError) as caught:
         parse_agent_request(
-            {"chip": "risk", "hadm_id": 90000023, "question": "and his meds?"},
+            {"chip": "meds", "hadm_id": 90000023, "question": "and his meds?"},
             max_question_chars=2000,
         )
 
@@ -783,10 +785,10 @@ def test_a_typed_command_is_the_same_intent_as_a_chip():
 
 def test_a_typed_command_that_takes_no_topic_runs_alone():
     parsed = parse_agent_request(
-        {"question": "/risk", "hadm_id": 90000023}, max_question_chars=2000
+        {"question": "/meds", "hadm_id": 90000023}, max_question_chars=2000
     )
 
-    assert parsed["kind"] == "risk"
+    assert parsed["kind"] == "meds"
     assert parsed["topic"] is None
 
 
@@ -806,7 +808,7 @@ def test_a_typed_command_with_text_beside_it_is_still_two_intentions():
     would have been read as free text, which is the quiet way round the refusal."""
     with pytest.raises(AgentRequestError) as caught:
         parse_agent_request(
-            {"question": "/risk and his meds", "hadm_id": 90000023},
+            {"question": "/meds and his risperidone dose", "hadm_id": 90000023},
             max_question_chars=2000,
         )
 
@@ -820,7 +822,7 @@ def test_a_sent_chip_is_not_overridden_by_typed_text():
     opinion."""
     with pytest.raises(AgentRequestError) as caught:
         parse_agent_request(
-            {"chip": "risk", "hadm_id": 90000023, "question": "/risk"},
+            {"chip": "meds", "hadm_id": 90000023, "question": "/labs"},
             max_question_chars=2000,
         )
 

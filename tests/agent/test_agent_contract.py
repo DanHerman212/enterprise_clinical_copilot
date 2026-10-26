@@ -49,10 +49,10 @@ def test_the_request_keeps_the_words_the_reader_used():
 
 def test_a_chip_request_reports_the_chip_wording_as_the_reader_words():
     parsed = parse_agent_request(
-        {"chip": "risk", "hadm_id": 90000015}, max_question_chars=500,
+        {"chip": "meds", "hadm_id": 90000015}, max_question_chars=500,
     )
 
-    assert parsed["own_words"] == "Assess the 30-day readmission risk for this patient."
+    assert parsed["own_words"] == "What medications was this patient discharged on?"
     assert parsed["question"].endswith("For admission 90000015.")
 
 
@@ -112,18 +112,20 @@ def test_the_chip_name_travels_as_the_question_kind():
     )["kind"] is None
 
 
-def test_the_closed_contract_still_accepts_the_three_shapes():
-    """Closing the field set must not narrow what already worked."""
+def test_the_closed_contract_still_accepts_the_shapes_that_exist():
+    """Closing the field set must not narrow what already worked.
+
+    The two shapes are a question, and a chip with an admission. The third — an
+    admission alone — is no longer a shape: it was the retired `/risk` command's
+    default, and it is refused in `test_an_admission_alone_is_a_refusal_...`.
+    """
     assert parse_agent_request(
         {"question": "why?"}, max_question_chars=2000
     ) == {"question": "why?", "own_words": "why?", "kind": None,
           "hadm_id": None, "topic": None, "turns": [], "stream_prose": False,
           "follow_ups": False}
     assert parse_agent_request(
-        {"chip": "risk", "hadm_id": 90000009}, max_question_chars=2000
-    )
-    assert parse_agent_request(
-        {"hadm_id": 90000009}, max_question_chars=2000
+        {"chip": "meds", "hadm_id": 90000009}, max_question_chars=2000
     )
 
 
@@ -203,14 +205,14 @@ def test_turns_must_be_a_list_of_objects():
 
 def test_a_chip_and_admission_compose_what_the_website_used_to_build():
     assert parse_agent_request(
-        {"chip": "risk", "hadm_id": 90000009}, max_question_chars=2000
+        {"chip": "meds", "hadm_id": 90000009}, max_question_chars=2000
     ) == {
         "question": (
-            "Assess the 30-day readmission risk for this patient. "
+            "What medications was this patient discharged on? "
             "For admission 90000009."
         ),
-        "own_words": "Assess the 30-day readmission risk for this patient.",
-        "kind": "risk",
+        "own_words": "What medications was this patient discharged on?",
+        "kind": "meds",
         "hadm_id": 90000009,
         "topic": None,
         "turns": [],
@@ -235,25 +237,19 @@ def test_free_text_with_an_admission_gets_the_same_suffix_the_website_added():
     }
 
 
-def test_an_admission_alone_asks_the_default_question():
-    """A patient selected with no chip and no text is still a question.
+def test_an_admission_alone_is_a_refusal_not_a_default_question():
+    """A patient selected with no chip and no text used to be a question: the default
+    sentence was the risk command's own wording, and it is gone with the command
+    (2026-10-26).
 
-    Deliberately a different phrase from the risk chip plus an admission — the
-    website had both, and both are preserved so moving the strings could not
-    change what the model is asked.
+    What is left is the honest answer — there is nothing to ask — and it is a refusal at
+    the contract, before any tool, any model turn and any credit.
     """
-    assert parse_agent_request(
-        {"hadm_id": 90000009}, max_question_chars=2000
-    ) == {
-        "question": "Assess the 30-day readmission risk for admission 90000009.",
-        "own_words": "Assess the 30-day readmission risk for admission 90000009.",
-        "kind": None,
-        "hadm_id": 90000009,
-        "topic": None,
-        "turns": [],
-        "stream_prose": False,
-        "follow_ups": False,
-    }
+    with pytest.raises(AgentRequestError) as caught:
+        parse_agent_request({"hadm_id": 90000009}, max_question_chars=2000)
+
+    assert caught.value.code == "invalid_request"
+    assert "Send a 'question'" in caught.value.message
 
 
 def test_the_admission_is_not_appended_twice():
@@ -293,7 +289,7 @@ def test_an_invalid_admission_is_refused(hadm_id):
     check it would compose a question about admission 1."""
     with pytest.raises(AgentRequestError) as error:
         parse_agent_request(
-            {"chip": "risk", "hadm_id": hadm_id}, max_question_chars=2000
+            {"chip": "meds", "hadm_id": hadm_id}, max_question_chars=2000
         )
 
     assert error.value.code == "invalid_request"

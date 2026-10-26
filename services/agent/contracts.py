@@ -412,7 +412,7 @@ def parse_agent_request(body: Any, *, max_question_chars: int) -> AgentRequest:
 
         {"question": "..."}                  free text
         {"question": "...", "hadm_id": 123}  free text about one patient
-        {"chip": "risk", "hadm_id": 123}     a starter chip
+        {"chip": "meds", "hadm_id": 123}      a starter chip
         {"chip": "literature", "hadm_id": 123,
          "question": "dual antiplatelet therapy"}
                                              a command that needs a topic

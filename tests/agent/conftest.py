@@ -72,7 +72,15 @@ def require_served():
     """
     def _require(run: dict) -> dict:
         calls = run.get("tool_calls") or []
-        response = calls[0].get("response") if calls else None
+        # The prediction, by name, rather than whichever call ran first: `/ehr` carries
+        # the estimate as a supplementary call beside its section retrieval, and it is
+        # the only command that reaches the predictor at all since `/risk` was retired
+        # (2026-10-26). Reading `calls[0]` measured the retrieval instead.
+        chosen = next((call for call in calls
+                       if call.get("name") == "predict_readmission"), None)
+        if chosen is None and calls:
+            chosen = calls[0]
+        response = chosen.get("response") if chosen else None
         if isinstance(response, dict) and response.get("error") == "unknown_patient":
             pytest.skip(
                 "the fixture's anchor admission is not in the served feature source: "

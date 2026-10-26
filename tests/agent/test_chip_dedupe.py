@@ -124,14 +124,19 @@ def test_a_chip_stored_as_a_composed_question_still_counts_as_asked():
                                asked=asked)
 
 
-def test_the_default_question_is_not_reduced_to_a_fragment():
+def test_a_replayed_question_keeps_its_own_sentence_intact():
     """Only a sentence appended AFTER a finished one is the admission suffix.
 
-    The default question names the admission inside its own sentence, so a looser
-    pattern turned "Assess the 30-day readmission risk for admission 90000015." into
-    "Assess the 30-day readmission risk".
+    The retired default question named the admission inside its own sentence, and a
+    looser pattern turned it into a fragment. The shape it guarded is still reachable —
+    a caller can send any question it likes — so the rule is pinned on a question that
+    ends the same way, rather than on the default that used to be composed here.
     """
-    parsed = parse_agent_request({"hadm_id": 90000015}, max_question_chars=500)
+    parsed = parse_agent_request(
+        {"question": "Assess the 30-day readmission risk for admission 90000015.",
+         "hadm_id": 90000015},
+        max_question_chars=500,
+    )
 
     assert _asked_questions(parsed) == [
         "Assess the 30-day readmission risk for admission 90000015.",

@@ -124,13 +124,18 @@ def _run(question: str, *, kind: str | None = None, hadm_id: int | None = None) 
 
 @pytest.fixture(scope="module")
 def known_patient() -> dict:
-    """One real round trip through Gemini, MCP, and the endpoint."""
-    return _run("/risk", kind="risk", hadm_id=KNOWN_HADM_ID)
+    """One real round trip through Gemini, MCP, and the endpoint.
+
+    Driven as `/ehr`, which is the command that reaches the predictor now that `/risk`
+    is retired: the estimate is its supplementary call, carried beside the summary that
+    explains it.
+    """
+    return _run("/ehr", kind="summarize", hadm_id=KNOWN_HADM_ID)
 
 
 @pytest.fixture(scope="module")
 def unknown_patient() -> dict:
-    return _run("/risk", kind="risk", hadm_id=UNKNOWN_HADM_ID)
+    return _run("/ehr", kind="summarize", hadm_id=UNKNOWN_HADM_ID)
 
 
 def _presentation(state):
@@ -162,19 +167,24 @@ def test_known_good_value(known_patient, require_served):
     assert response["threshold"] == FIXTURE["threshold"]
     assert response["top_factors"], "top_factors must not be empty"
 
-    # The number reaches the user through the surface, not through prose: `/risk`
-    # returns the widget and no prose at all (UX ruling 2026-10-13), so the served
-    # value has to BE the widget's value. Asserted against the served response rather
-    # than the fixture, because the rule is about the projection.
-    assert known_patient["deterministic_answer"] == ""
+    # The number reaches the user through the surface, and the surface is composed from
+    # the same call: the served value has to BE the widget's value. Asserted against the
+    # served response rather than the fixture, because the rule is about the projection.
     widget = _risk_widget(known_patient)
     assert widget["probability"] == response["probability"]
     assert widget["threshold"] == response["threshold"]
 
 
 def test_graceful_error(unknown_patient):
-    """Criterion 2 — structured error, no crash, no invented number."""
-    calls = unknown_patient["tool_calls"]
+    """Criterion 2 — structured error, no crash, no invented number.
+
+    Driven through `graph.ask` rather than the HTTP route, so the request reaches the
+    tool: the route's unserved-admission guard is a different layer and is asserted where
+    it lives. What this criterion is about is that the predictor answers an unknown
+    admission with the documented shape instead of a number.
+    """
+    calls = [call for call in unknown_patient["tool_calls"]
+             if call["name"] == "predict_readmission"]
     assert calls, "agent answered about an unknown admission without calling the tool"
 
     response = calls[0]["response"]
@@ -182,9 +192,7 @@ def test_graceful_error(unknown_patient):
     assert response["error"] == "unknown_patient"
     assert "probability" not in response
 
-    # No prose turn for `/risk`, so the refusal is drawn rather than written: the
-    # canvas has to explain itself and must not carry an estimate.
-    assert unknown_patient["deterministic_answer"] == ""
+    # The canvas has to explain itself and must not carry an estimate.
     presentation = _presentation(unknown_patient)
     types = {
         c["component"]
@@ -202,9 +210,9 @@ def test_routing_went_through_mcp(known_patient):
     that. The command path is held to the standard the loop was held to: one call,
     the right admission, no error.
     """
-    calls = known_patient["tool_calls"]
-    assert calls, "the answer came from the model's own knowledge — no tool call in the trace"
-    assert calls[0]["name"] == "predict_readmission"
+    calls = [call for call in known_patient["tool_calls"]
+             if call["name"] == "predict_readmission"]
+    assert calls, "the answer came from the model's own knowledge — no prediction in the trace"
     assert calls[0]["args"] == {"hadm_id": KNOWN_HADM_ID}
     assert "error" not in calls[0], calls[0]
 

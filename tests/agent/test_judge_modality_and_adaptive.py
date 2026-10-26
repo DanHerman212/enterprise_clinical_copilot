@@ -75,37 +75,46 @@ def _sample(verdict: str = "PASS", **dims) -> dict:
 
 
 def test_prose_optional_is_derived_from_the_agent_contract():
-    """`/risk` is prose-free because routing says so, not because a list says so."""
-    assert judge._prose_optional("risk") is True
-    assert judge._prose_optional("labs") is False
+    """The harness reads the product's own `prose` flag rather than keeping a list, so the
+    two cannot disagree — and after `/risk` was retired (2026-10-26) no command writes no
+    prose, which is what the flag now derives for every one of them.
+
+    Asserted as the derivation rather than as a literal, so a future widget-only command
+    turns this green on its own instead of needing the harness edited in step with the
+    agent.
+    """
+    from services.agent import routing
+
+    assert [command.wire for command in routing.COMMANDS if not command.prose] == []
+    for command in routing.COMMANDS:
+        assert judge._prose_optional(command.wire) is (not command.prose), command.wire
+    assert judge._prose_optional("risk") is False   # retired: unknown is the strict case
     assert judge._prose_optional(None) is False
     assert judge._prose_optional("not-a-command") is False
 
 
-def test_widget_surface_carries_the_display_values():
-    surface = judge._widget_surface(_risk_record())
-    assert surface is not None
+def test_a_surface_turn_with_no_prose_is_graded_as_an_empty_answer():
+    """The widget-modality exception is dormant, and that is the current design.
+
+    `/risk` was the widget-only command; `/ehr` draws the same surface but also writes
+    the narrative that explains it. So a `/ehr` turn whose prose is empty is a turn that
+    failed, not a turn whose modality is a widget — grading it as the latter is how an
+    empty answer would pass.
+    """
+    record = dict(_risk_record(), command_wire="summarize", command_executed="summarize")
+
+    assert judge._widget_surface(record) is None
+
+
+def test_the_surface_values_are_still_readable_from_a_record():
+    """The extractor is kept and exercised, because a widget turn's numbers still have to
+    be readable when the modality does apply: this is the payload `/ehr` draws."""
+    surface = judge._surface_payload(_risk_record())
+
     assert surface["probability_display"] == "16.7%"
     assert surface["threshold_display"] == "21.0%"
     assert surface["top_factors"]
     assert surface["components"] == ["Column", "RiskInfluencers", "Text"]
-
-
-def test_a_widget_turn_that_spoke_is_graded_on_what_it_said():
-    """The exception is for absent prose, not a licence to ignore prose."""
-    assert judge._widget_surface(_risk_record(answer="Risk is 16.7%.")) is None
-
-
-def test_an_empty_prose_command_stays_an_empty_answer():
-    """Responsiveness must still be able to fail: no blanket amnesty for emptiness."""
-    assert judge._widget_surface(_prose_record()) is None
-
-
-def test_prompt_injects_the_surface_and_the_modality_rule():
-    prompt = judge._user_prompt(_risk_record(), [])
-    assert "MODALITY: structured surface" in prompt
-    assert '"probability_display": "16.7%"' in prompt
-    assert "no prose by design" in prompt
 
 
 def test_prompt_for_an_empty_prose_answer_is_unchanged():
@@ -253,9 +262,15 @@ def test_fast_path_rows_still_count_toward_the_gate():
     assert report["verdict"]["pass_rate"] == 1.0
 
 
-def test_widget_prompt_is_valid_json_after_the_surface():
-    """The injected surface is JSON inside a JSON-shaped prompt; it must parse."""
-    prompt = judge._user_prompt(_risk_record(), [])
-    body = prompt.split("clinician sees)\n", 1)[1]
-    surface = json.loads(body.split("\n\nEVIDENCE", 1)[0])
-    assert surface["probability_display"] == "16.7%"
+def test_the_modality_rule_never_fires_for_a_command_that_writes_prose():
+    """The surface branch of the judge prompt is dormant, and this is what dormant means:
+    no command in the table is prose-optional, so a record with a canvas and no prose is
+    graded as the empty answer it is.
+
+    The branch itself is still in `_user_prompt`, with its JSON-shape test retired
+    alongside its only reachable case (2026-10-26, when `/risk` left the vocabulary)."""
+    prompt = judge._user_prompt(dict(_risk_record(), command_wire="summarize",
+                                     command_executed="summarize"), [])
+
+    assert "MODALITY" not in prompt
+    assert "ANSWER:\n\n" in prompt

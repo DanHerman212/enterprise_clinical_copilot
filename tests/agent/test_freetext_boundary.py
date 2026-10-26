@@ -79,9 +79,13 @@ def test_every_registered_tool_is_reachable_from_some_path():
     have drifted apart.
 
     Checked as the union rather than as two literals, so adding a tool to the
-    server forces a decision about which path owns it.
+    server forces a decision about which path owns it. A command OWNS its primary
+    tool and any supplementary call it declares: `/ehr` is what reaches
+    `predict_readmission` now that the command that named it alone was retired.
     """
     command_tools = {command.tool for command in routing.COMMANDS}
+    command_tools |= {spec.tool for command in routing.COMMANDS
+                      for spec in command.supplementary}
 
     # The pre-flight tools are reachable by a third path — the caller's own call,
     # before the model runs — so the union has three terms, and a new tool still has
@@ -91,22 +95,29 @@ def test_every_registered_tool_is_reachable_from_some_path():
 
 
 def test_a_command_tool_is_the_reason_text_tool_is_hidden():
-    """The score is the one tool a typed question cannot reach.
+    """Which tools a typed question cannot reach, and why.
 
-    Phase 01 admitted `discharge_medications` to the loop, so the complement is now a
-    single entry: a risk score is produced by /risk and drawn by its widget, and a
-    model asked for one has every reason to write a plausible number.
+    Phase 01 admitted `discharge_medications` to the loop, so the complement narrowed;
+    after `/risk` was retired the predictor is nobody's primary tool — it is `/ehr`'s
+    supplementary call, so it is still absent from the loop's standing set and a model
+    asked for a score still has no way to invent one. It is bound per turn when a
+    question asks WHY a factor is a driver, which is the one shape that cannot be
+    answered without the model's own attribution.
 
-    `search_literature` is not in the complement even though it is a command's tool,
-    because a question can ask for published evidence and the loop must be able to
-    answer it — but it is not in the standing allow-list either. It is bound per turn
-    by `asks_for_literature`, which `test_the_loop_is_bound_with_the_allow_list` holds.
+    `search_literature` is not in the standing allow-list either; it is bound per turn
+    by `asks_for_literature`.
     """
     tool_of_command = {command.tool for command in routing.COMMANDS}
-    # Never available to the loop, on any turn.
-    assert tool_of_command - routing.FREETEXT_TOOLS - routing.LITERATURE_TOOLS == {
-        "predict_readmission"}
-    # A command's tool that is off by default and bound per turn by the question.
+    supplementary = {spec.tool for command in routing.COMMANDS
+                     for spec in command.supplementary}
+
+    # The predictor is reached only as a supplementary call, and never by default.
+    assert "predict_readmission" in supplementary
+    assert "predict_readmission" not in tool_of_command
+    assert "predict_readmission" not in routing.FREETEXT_TOOLS
+    # Every primary tool of a command is off the standing allow-list, and the only one
+    # that the loop can be granted per turn is the literature search.
+    assert tool_of_command - routing.FREETEXT_TOOLS - routing.LITERATURE_TOOLS == set()
     assert routing.LITERATURE_TOOLS <= tool_of_command - routing.FREETEXT_TOOLS
 
 

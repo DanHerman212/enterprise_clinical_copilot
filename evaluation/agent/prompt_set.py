@@ -31,14 +31,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 # Suite 1 paths: the four commands every inpatient admission is tested across.
 #
-# Deliberately four, not five. Suite 1 is 82 admissions x 4 paths = 328 pairs =
-# 656 turns, and `/pubmed` is a literature command that takes no patient of its
-# own — measured in Suite 2 instead, where its queries are written out.
-CENSUS_PROMPTS = ("ehr", "risk", "meds", "labs")
+# Deliberately four, and the four that exist. `/risk` was the fourth until 2026-10-26,
+# when the command was retired: the estimate is drawn by the `/ehr` turn, beside the
+# narrative that explains it. `/pubmed` takes its place — it is admission-scoped too,
+# because the comparative matrix pins this patient's own estimate above the published
+# cohorts — and it is still measured case-by-case in Suite 2, where the queries are
+# written out and a condition-locked comparison is the thing under test.
+CENSUS_PROMPTS = ("ehr", "pubmed", "meds", "labs")
 
-# Every command the run must be shown to execute at least once. Superset of the
-# census paths; this is what the coverage assertion and the preflight iterate.
-COVERAGE_COMMANDS = CENSUS_PROMPTS + ("pubmed",)
+# Every command the run must be shown to execute at least once. The census list, which
+# is now the whole vocabulary: a command measured in only one suite is a command whose
+# coverage assertion cannot be written once.
+COVERAGE_COMMANDS = CENSUS_PROMPTS
 
 # Kept as the census list so existing callers (collect_http, entrypoint) that count
 # Suite 1 cases keep counting four.
@@ -52,7 +56,6 @@ PROMPT_NAMES = CENSUS_PROMPTS
 # case files keep working — new code should use `ehr`.
 SLASH_COMMANDS = {
     "ehr": "/ehr",
-    "risk": "/risk",
     "meds": "/meds",
     "labs": "/labs",
     "pubmed": "/pubmed",
@@ -67,7 +70,6 @@ PROMPT_ALIASES = {"summarize": "ehr"}
 # surfaces as itself — a command the harness cannot name is a finding, not a pass.
 WIRE_COMMAND = {
     "ehr": "summarize",
-    "risk": "risk",
     "meds": "meds",
     "labs": "labs",
     # Not "pubmed". Observed on the wire 2026-10-18 in Gate 1: the literature command
@@ -86,8 +88,11 @@ PUBMED_QUERY = "total knee arthroplasty readmission risk factors"
 # The tool each command must reach. Asserted in preflight before a batch is allowed
 # to start, so "the command did not run" can never again look like a healthy turn.
 COMMAND_TOOLS = {
-    "ehr": {"rag_search", "rag_search_sections"},
-    "risk": {"predict_readmission"},
+    # `/ehr` is the composite: the summary sections, and the estimate that is drawn
+    # beside them. Both are asserted, because "the command did not run the estimate" is
+    # exactly the failure the census is meant to catch now that no command asks for the
+    # score on its own.
+    "ehr": {"rag_search", "rag_search_sections", "predict_readmission"},
     "meds": {"discharge_medications"},
     "labs": {"get_lab_trends"},
     "pubmed": {"search_literature"},

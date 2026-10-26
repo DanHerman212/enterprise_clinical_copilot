@@ -190,12 +190,12 @@ def test_ask_publishes_the_command_that_ran():
     run?" could not be answered from the response, which is how a run in which `/ehr`
     executed zero times still reported green."""
     with patch.object(srv, "toolbox", _fake_toolbox), \
-         patch.object(srv, "ask", _fake_ask_factory(_state(command="risk"))):
-        resp = _client().post("/ask", json={"question": "/risk", "hadm_id": 90000009})
+         patch.object(srv, "ask", _fake_ask_factory(_state(command="summarize"))):
+        resp = _client().post("/ask", json={"question": "/ehr", "hadm_id": 90000009})
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["command"] == "risk"
+    assert body["command"] == "summarize"
     assert body["routed_to"] is None      # typed, not chosen for the reader
 
 
@@ -455,13 +455,13 @@ def test_a_served_admission_still_reaches_the_chain():
 
     async def counting_ask(box, question, **kwargs):
         hits.append(question)
-        return _state(command="risk")
+        return _state(command="summarize")
 
     for hadm in (90000015, 90000054):
         with patch.object(srv, "toolbox", _fake_toolbox), \
              patch.object(srv, "ask", counting_ask):
             resp = _client().post("/ask",
-                                  json={"question": "/risk", "hadm_id": hadm})
+                                  json={"question": "/ehr", "hadm_id": hadm})
         assert resp.status_code == 200
     assert len(hits) == 2
 

@@ -18,8 +18,12 @@ prompt changes move answers.
 import re
 
 # The starter chips the console offers, and the question each one asks.
+#
+# `risk` was here, and it was also `DEFAULT_TEMPLATE` below: pressing Enter on an empty
+# composer with a patient selected ran the readmission model. Both left on 2026-10-26
+# with the command — `/ehr` carries the estimate beside the narrative that explains it,
+# and a blank composer is not a question.
 CHIP_QUESTIONS = {
-    "risk": "Assess the 30-day readmission risk for this patient.",
     "meds": "What medications was this patient discharged on?",
     "summarize": "Summarize the recent discharge notes for this patient.",
     # The literature chip. The wording says "this condition" and the admission is
@@ -40,12 +44,6 @@ CHIP_QUESTIONS = {
 # Appended when a patient is in scope, so the model never has to ask which
 # admission is meant.
 ADMISSION_TEMPLATE = " For admission {hadm_id}."
-
-# Asked when a patient is selected but no chip was chosen and no text typed.
-# Deliberately NOT the risk chip's wording plus an admission: the two phrases
-# differ, and both are preserved as they were so moving the strings cannot
-# change what the model is asked.
-DEFAULT_TEMPLATE = "Assess the 30-day readmission risk for admission {hadm_id}."
 
 # A command that takes the caller's own words as a tool argument needs a wording
 # that names what was searched. `CHIP_QUESTIONS["literature"]` says "on this
@@ -89,9 +87,7 @@ def own_words(*, chip=None, question=None, hadm_id=None, topic=None) -> str:
         return wording
     if isinstance(question, str) and question.strip():
         return question.strip()
-    if hadm_id is not None:
-        return DEFAULT_TEMPLATE.format(hadm_id=hadm_id)
-    raise ValueError("nothing to ask: no chip, no question, no admission")
+    raise ValueError("nothing to ask: no chip and no question")
 
 
 def compose_question(*, chip=None, question=None, hadm_id=None, topic=None) -> str:
@@ -108,9 +104,7 @@ def compose_question(*, chip=None, question=None, hadm_id=None, topic=None) -> s
     """
     wording = own_words(chip=chip, question=question, hadm_id=hadm_id,
                         topic=topic)
-    # The default is a whole sentence naming the admission, so appending the
-    # admission to it would say it twice.
-    if hadm_id is not None and wording != DEFAULT_TEMPLATE.format(hadm_id=hadm_id):
+    if hadm_id is not None:
         wording += ADMISSION_TEMPLATE.format(hadm_id=hadm_id)
     return wording
 

@@ -112,7 +112,7 @@ _BASELINE_SOURCE = "Enterprise Clinical Copilot"
 
 
 def _draws_matrix(command: str | None, has_literature: bool, phenotype: str,
-                  query: str) -> bool:
+                  query: str, has_estimate: bool = False) -> bool:
     """Whether this turn may carry the comparative cohort table at all.
 
     Reserved to the command whose question it answers. The table exists to qualify a
@@ -140,9 +140,15 @@ def _draws_matrix(command: str | None, has_literature: bool, phenotype: str,
     if wire == "summarize":
         return True
     if wire == "literature":
-        # The condition-lock's other half. Asking about another condition draws the
-        # records and no comparison; asking about this patient's draws both.
-        return bool(has_literature) and phenotype_of_query(query) == phenotype
+        # The condition-lock's other half, and the estimate's half (Phase F.1,
+        # 2026-10-26). A `/pubmed` turn no longer requests the estimate, so there is no
+        # patient figure for a cohort table to qualify — and a table of published rates
+        # under a literature answer, captioned "no readmission estimate was requested for
+        # this turn", is the surface explaining its own irrelevance. The comparison lives
+        # on `/ehr`, which is the turn the estimate belongs to; the records are what this
+        # turn is for.
+        return bool(has_literature) and bool(has_estimate) \
+            and phenotype_of_query(query) == phenotype
     return False
 
 
@@ -330,7 +336,8 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
     # did not ask for it.
     comparison = (
         _comparative_matrix(estimate, phenotype)
-        if _draws_matrix(command, literature_view is not None, phenotype, query) else None
+        if _draws_matrix(command, literature_view is not None, phenotype, query,
+                         has_estimate=estimate is not None) else None
     )
 
     if literature_view is not None:

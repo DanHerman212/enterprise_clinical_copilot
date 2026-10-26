@@ -364,7 +364,7 @@ def _rank_abnormal(trends: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _candidates(*, state: dict[str, Any], scope: str | None, question: str,
-                outpatient: bool) -> list[str]:
+                outpatient: bool, literature: bool = False) -> list[str]:
     """Every chip this turn can offer, in priority order, before the cap is applied."""
     text = _chart_text(state)
     plan = _plan_text(state)
@@ -375,7 +375,7 @@ def _candidates(*, state: dict[str, Any], scope: str | None, question: str,
     risk = _risk(state)
     chips: list[str] = []
 
-    if scope == "literature":
+    if literature or scope == "literature":
         # A literature turn has no chart signals by construction; the only honest next
         # question is about the published evidence itself, and only when the search
         # actually returned something. `None` means "no articles", which is a turn with
@@ -463,15 +463,15 @@ def _candidates(*, state: dict[str, Any], scope: str | None, question: str,
     return chips
 
 
-def _routable(chip: str, scope: str | None) -> bool:
+def _routable(chip: str, scope: str | None, literature: bool = False) -> bool:
     """Whether the free-text loop can answer this chip on the next turn.
 
     The literature predicate is the load-bearing one: it is the same test the loop uses
     to decide whether to bind `search_literature`, so a chart chip that trips it would
-    be answered from PubMed instead of the record. A literature-scope chip is exempt —
-    that is the surface it came from.
+    be answered from PubMed instead of the record. A literature turn's own chip is exempt
+    — that is the surface it came from.
     """
-    if scope == "literature":
+    if literature or scope == "literature":
         return True
     return not routing.asks_for_literature(chip)
 
@@ -513,7 +513,7 @@ def _literature_articles(state: dict[str, Any]) -> int:
 
 
 def _fit(chips: list[str], *, asked: set[str], scope: str | None,
-         taken: list[str]) -> list[str]:
+         taken: list[str], literature: bool = False) -> list[str]:
     """The chips that can be offered, on top of the ones already taken.
 
     Four filters, in the order that makes a rejection explainable: an identical chip
@@ -534,7 +534,7 @@ def _fit(chips: list[str], *, asked: set[str], scope: str | None,
         if len(chip) > _MAX_QUESTION_CHARS:
             logger.info("follow-up chip dropped: %s characters", len(chip))
             continue
-        if not _routable(chip, scope):
+        if not _routable(chip, scope, literature):
             logger.info("follow-up chip dropped: it would route to the literature")
             continue
         seen.add(fingerprint)
@@ -563,6 +563,7 @@ def suggest(
     state: dict[str, Any] | None = None,
     outpatient: bool = False,
     asked: Sequence[str] = (),
+    literature: bool = False,
 ) -> list[str]:
     """Up to `FOLLOW_UP_COUNT` chips for this turn, chosen from the record.
 
@@ -583,20 +584,29 @@ def suggest(
     filled from the chart: a PubMed turn that found nothing is a turn with no follow-up,
     and reusing the replayed `/ehr` calls made it offer the chart chips it had just
     replaced.
+
+    `literature` is that turn, declared by the caller from the search the turn actually
+    ran (Phase F.1, 2026-10-26). It used to be inferred from `scope == "literature"`,
+    which nothing ever passed: the payload's scope values are `patient_chart` and
+    `general_evidence`, so the literature branch never ran, and a `/pubmed` turn whose
+    tool calls included the readmission estimate offered the chart's own risk-driver chip
+    under an answer about published evidence.
     """
     if not str(answer or "").strip():
         return []
 
     state = state or {}
     asks = {_fingerprint(item) for item in (*asked, question) if str(item or "").strip()}
+    on_literature = literature or scope == "literature"
 
-    if scope == "literature":
+    if on_literature:
         if not _literature_articles(state):
             # Nothing was found, so there is nothing to ask next about the evidence.
             return []
         return _fit(_candidates(state=_view(state, replayed=False), scope=scope,
-                                question=question, outpatient=outpatient),
-                    asked=asks, scope=scope, taken=[])
+                                question=question, outpatient=outpatient,
+                                literature=on_literature),
+                    asked=asks, scope=scope, taken=[], literature=on_literature)
 
     # This turn first: what the answer just established is the most useful thing to ask
     # about next. The earlier turns are the fallback, not the starting point.

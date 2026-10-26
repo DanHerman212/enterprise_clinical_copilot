@@ -502,29 +502,34 @@ def test_the_topic_reaches_the_tool_exactly_as_the_caller_wrote_it():
     assert state["command"] == "literature"
 
 
-def test_the_literature_command_drops_only_its_score_when_there_is_no_patient():
-    """`/pubmed` has two shapes, and the second one is the older.
+def test_the_literature_command_runs_one_call_whatever_it_is_handed():
+    """`/pubmed` owns the literature and nothing else (Phase F.1, 2026-10-26).
 
-    Its primary tool searches the literature and takes no admission, so a clinician
-    reading about a condition with no chart open still gets an answer — the same single
-    call the command has always made. What is missing is the comparison, because a
-    comparison needs a patient to compare, and a dropped call is a call that did not
-    happen rather than one that happened with `None` in it.
+    It used to run the readmission estimate beside the search when there was a patient in
+    context, so the turn could pin this patient's figure above the records. The cost was a
+    turn that answered a literature question with a risk paragraph and a driver inventory
+    the clinician never asked for, and a `followups` row offering the chart's own
+    risk-driver chip under an answer about published evidence. Two domains in one turn,
+    and the second one unrequested.
+
+    So the answer is now the same with a patient and without: one search. `/ehr` is the
+    turn that owns the chart and the estimate.
     """
     command = routing.command_for("literature")
 
     assert routing.supplementary_arguments(command, None) == []
-    assert routing.supplementary_arguments(command, 90000023) == [
-        ("predict_readmission", {"hadm_id": 90000023})]
+    assert routing.supplementary_arguments(command, 90000023) == []
+    assert routing.supplementary_arguments(
+        command, 90000023, "total knee arthroplasty readmission") == []
 
 
-def test_only_the_literature_command_may_run_short():
-    """The flag is a shape, not a licence.
+def test_no_command_declares_a_call_it_may_silently_drop():
+    """The flag is a shape, not a licence — and it is unused.
 
-    Stated as the whole set rather than as one assertion about `/pubmed`, because the
-    failure this prevents is the flag spreading: a command that silently drops a call it
-    declared is a command whose answer depends on what the turn was handed, and that is
-    the implicit variation the deterministic path exists to remove.
+    `skipped_without_admission` existed for `/pubmed`'s estimate, the one supplementary
+    call a command could simply not make. That call is gone, so the flag has no users, and
+    the assertion says so rather than leaving a mechanism in place that the next command
+    could pick up to make its answer depend on what the turn was handed.
     """
     flagged = [
         (command.wire, spec.tool)
@@ -533,7 +538,7 @@ def test_only_the_literature_command_may_run_short():
         if spec.skipped_without_admission
     ]
 
-    assert flagged == [("literature", "predict_readmission")]
+    assert flagged == []
 
 
 # --- the medication extraction ----------------------------------------------
@@ -882,29 +887,25 @@ def test_the_requested_analytes_are_what_the_labs_prompt_is_about():
     assert "critical_low" in LABS_FORMATTING and "critical_high" in LABS_FORMATTING
 
 
-# --- the condition-lock has to hold before the call, not after it -------------
+# --- one domain per command ---------------------------------------------------
 
-def test_a_literature_turn_about_another_condition_requests_no_estimate():
-    """The matrix refuses a mismatched comparison; the estimate did not.
+def test_a_literature_turn_never_requests_the_estimate():
+    """The condition lock is gone with the call it guarded (Phase F.1, 2026-10-26).
 
-    `a2ui._draws_matrix` already suppressed the cohort table for `/pubmed congestive
-    heart failure` on an orthopedic admission, but `predict_readmission` still ran and its
-    result still reached the formatter — so the model wrote the risk comparison the
-    surface had just declined to draw (90000015, 2026-10-21). The call is not made when
-    there is no comparison to make.
+    Before it, `/pubmed congestive heart failure` on an orthopedic admission wrote an
+    unrequested risk comparison; the lock stopped that by requesting the estimate only
+    when the query named the patient's own condition. The command then still answered a
+    literature question with a patient's score beside it whenever the subject DID match,
+    which is the same contamination with better manners.
     """
     command = routing.command_for("literature")
 
-    # 90000015 is orthopedic_arthroplasty in the reviewed map.
-    assert routing.supplementary_arguments(
-        command, 90000015, "congestive heart failure") == []
-    # A question that names no condition has no cohort to sit beside either.
-    assert routing.supplementary_arguments(
-        command, 90000015, "what does the literature say about readmission") == []
-    # The patient's own condition keeps the comparison, which is the whole feature.
-    assert routing.supplementary_arguments(
-        command, 90000015, "total knee arthroplasty readmission") == [
-            ("predict_readmission", {"hadm_id": 90000015})]
+    # The query the defect was reported on, a query naming no condition, and a query
+    # naming this patient's own: all three run the search alone.
+    for topic in ("congestive heart failure",
+                  "what does the literature say about readmission",
+                  "total knee arthroplasty readmission"):
+        assert routing.supplementary_arguments(command, 90000015, topic) == [], topic
 
 
 def test_the_condition_lock_leaves_every_other_command_alone():

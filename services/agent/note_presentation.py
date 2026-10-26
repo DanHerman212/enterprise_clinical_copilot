@@ -273,6 +273,61 @@ def register_benchmark_sources(canvas: dict | None, start: int,
     return sources, references
 
 
+def reference_rows(sources: list[dict]) -> list[dict]:
+    """Every published source as the row the references drawer draws.
+
+    One converter, applied to the whole `sources` array, so a turn cannot draw an inline
+    pill `1..K` and then list fewer than `K` rows at the foot of the answer. That is not
+    a hypothetical: `/pubmed` shipped with three numbered pills and an EMPTY references
+    list, because the two came from different builders — `references` was assembled from
+    the narrative's own citation list plus the comparison table's cohorts, and a
+    literature turn's records were in `sources` and in the narrative's citations but the
+    third builder had never been taught about the third kind of source (2026-10-26).
+
+    Whatever a source is — a note passage, a laboratory trajectory, a retrieved article,
+    a curated cohort — it has a title, a line to place it, and a passage. Those three are
+    what a reference row is, so those three are what this reads, and a source that names
+    itself (`cite_title`/`cite_source`) is used as it names itself.
+
+    The `index` is the source's own `cite`, which is the number the marker shows. No
+    second numbering exists to drift.
+    """
+    rows: list[dict] = []
+    for source in sources or []:
+        if not isinstance(source, dict):
+            continue
+        index = source.get("cite")
+        if not isinstance(index, int) or isinstance(index, bool):
+            continue
+        published = source.get("kind") == "Literature"
+        if published:
+            # A published record names itself: the article is the title, the citation
+            # line is what places it, and the identifier is what a reader can open.
+            title = str(source.get("title") or "").strip() or "Published record"
+            subtitle = str(source.get("subtitle") or "").strip()
+            self_named = _LITERATURE_BADGE
+        else:
+            title = str(source.get("cite_title") or "").strip() or _section_label(
+                source.get("section"))
+            subtitle = ""
+            self_named = str(source.get("cite_source") or "").strip() or "Discharge note"
+        row = {
+            "index": index,
+            "source": self_named,
+            "title": title,
+            "label": str(source.get("label") or "").strip() or f"{index} · {title}",
+            "excerpt": str(source.get("text") or ""),
+        }
+        if subtitle:
+            row["subtitle"] = subtitle
+        for key in ("pmid", "url", "authors", "journal_citation"):
+            value = str(source.get(key) or "").strip()
+            if value:
+                row[key] = value
+        rows.append(row)
+    return rows
+
+
 def resolve_sources(answer: str, citation_map: dict[str, int],
                     rag: dict | None, sections: tuple[str, ...],
                     evidence: list[dict] | None = None) -> list[dict]:

@@ -71,6 +71,7 @@ from services.agent.note_presentation import (  # noqa: F401 — re-exported
     literature_sources,
     narrative_surface,
     note_citations,
+    reference_rows,
     register_benchmark_sources,
     resolve_source,
     resolve_sources,
@@ -529,6 +530,14 @@ def compose_presentation(question: str, answer: str,
         canvas, start=len(sources) + 1,
         existing_pmids=[entry.get("pmid") for entry in sources],
     )
+    # One array, one builder (Phase F.1, 2026-10-26). Every source this turn publishes is
+    # converted to its reference row here, in the same order and under the same number, so
+    # `sources` and `references` are two views of one list rather than two lists that
+    # happen to agree. `/pubmed` shipped with three numbered pills and no rows at all
+    # because this used to be assembled from the narrative's citations plus the table's
+    # cohorts, and a literature turn's records were in neither of those two builders.
+    published = sources + benchmark_sources
+    references = reference_rows(published)
 
     return {
         "answer": renumbered,
@@ -538,7 +547,7 @@ def compose_presentation(question: str, answer: str,
         # search returned, then the cohorts the comparison table draws. Each group is
         # numbered to continue the one before it, so a marker written anywhere in this turn
         # addresses one array.
-        "sources": sources + benchmark_sources,
+        "sources": published,
         # The published records a search RETURNED, passed through whole. Kept separate
         # from `sources` because it is the tool's own answer — `None` (no search) and an
         # empty list (searched, found nothing) must not collapse into each other — while
@@ -548,21 +557,14 @@ def compose_presentation(question: str, answer: str,
         # record. Stated once, here, because the turns that qualify are decided by
         # clinical rules and a browser re-deriving them would be a second opinion.
         "verified": verified,
-        # What the turn rested on, and the rows the console's references drawer lists.
-        # Derived here rather than in the browser because this is the layer that saw the
-        # tool calls and resolved the citations; a second derivation downstream would be
-        # a second answer to the same question, and the two would drift.
-        #
-        # `references` is the narrative's own citation list, so the marker a reader
-        # clicks and the row they find at the foot of the turn are the same record by
-        # construction rather than by two lists agreeing today.
+        # What the turn rested on.
         "scope": scope,
         "scope_suppressed": scope_suppressed,
-        # The narrative's own citations, plus the cohorts the comparison table drew. A
-        # note passage is evidence the answer cites; a benchmark is evidence the SURFACE
-        # shows, and both are things a reader can open from the foot of the turn.
-        "references": (
-            list((narrative or {}).get("citations") or []) + benchmark_references
-        ),
+        # The rows the console's references drawer lists — `1..K`, one per source, in
+        # the same order and under the same numbers. Derived here rather than in the
+        # browser because this is the layer that saw the tool calls and resolved the
+        # citations; a second derivation downstream would be a second answer to the same
+        # question, and the two would drift. See `note_presentation.reference_rows`.
+        "references": references,
         "a2ui": canvas,
     }

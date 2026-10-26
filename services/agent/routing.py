@@ -51,7 +51,11 @@ from dataclasses import dataclass, field
 # module and not the chunker, so importing this constant from `chunking` failed the
 # container at startup and the deploy silently served the previous revision.
 from services.agent.admission_context import PREFLIGHT_TOOLS
-from services.agent.admission_phenotypes import bucket_for, phenotype_of_query
+# `admission_phenotypes` is no longer imported here. It was used by the pre-flight
+# condition lock, which existed to stop `/pubmed` requesting an estimate the surface would
+# then decline to compare — and that command no longer requests one at all (Phase F.1,
+# 2026-10-26). What decides the comparison now is `a2ui`/`risk_canvas`, from the chart the
+# turn read; this module answers only "which tools run".
 from services.mcp.retrieval.sections import SUMMARY_SECTIONS
 
 #: What `/ehr` searches for when the sectioned retrieval returns nothing.
@@ -482,27 +486,24 @@ COMMANDS: tuple[Command, ...] = (
         # clinician: there is nothing for the agent to fill it with that would
         # not be a search of the patient's chart in order to invent one.
         topic_arg="query",
-        # ...and the comparison it draws needs the patient (Phase 2, 2026-10-16).
-        # The comparative matrix sets the patient's own estimate against published
-        # cohort rates, so the turn fetches both. The privacy boundary is unchanged
-        # and is the point of the split: `search_literature` is still handed the
-        # clinician's words and nothing else — the admission goes to a second call
-        # inside this process, never to the third party.
+        # And nothing else runs on this command (Phase F.1, 2026-10-26).
         #
-        # The second call is skipped when no patient is in context rather than making
-        # the command require one. This is the only command whose primary tool takes no
-        # admission, and that shape is a documented capability — a clinician reading
-        # about a condition with no chart open — so it stays: with a patient the turn is
-        # a comparison, without one it is the literature search it has always been, and
-        # the surface is required to say which. See `ToolSpec.skipped_without_admission`.
-        supplementary=(
-            ToolSpec("predict_readmission", {"hadm_id": "{hadm_id}"},
-                     skipped_without_admission=True),
-        ),
-        # `predict_readmission` is absent from this set because this command runs it.
-        # Every other command's tool is still refused here.
+        # It used to run `predict_readmission` beside the search, so the turn could pin
+        # this patient's estimate above the records. The comparison was defensible and the
+        # contamination was not: having the estimate in the turn's tool calls made the
+        # `/pubmed` formatter append a risk paragraph and a driver inventory to what the
+        # clinician asked to be a literature answer ("23.0%, driven by prior inpatient
+        # days"), and it made `followups` offer the chart's own risk-driver chip under a
+        # question about published evidence. Two domains, one turn, and the second one
+        # was never asked for.
+        #
+        # `/ehr` owns the chart and the estimate; `/pubmed` owns the literature. A reader
+        # who wants the comparison asks for the briefing.
+        # `forbidden` is therefore the whole rest of the tool surface, which is also what
+        # makes the turn's tool calls exactly one thing.
         forbidden=frozenset({"rag_search", "rag_search_sections",
-                             "discharge_medications", "get_lab_trends"}) | PREFLIGHT_TOOLS,
+                             "discharge_medications", "get_lab_trends",
+                             "predict_readmission"}) | PREFLIGHT_TOOLS,
         formatting=LITERATURE_FORMATTING,
         # The synthesis is the answer, and it cites PMIDs the citation layer resolves
         # after the turn: same swap protocol as `/ehr`.
@@ -904,64 +905,34 @@ OUTPATIENT_EHR_NOTICE = (
 )
 
 
-def comparison_applies(command: Command, hadm_id: int | None,
-                       topic: str | None) -> bool:
-    """Whether the turn has anything to compare this patient against.
-
-    The condition-lock has two halves and this is the half the tools answer. `a2ui`'s
-    `_draws_matrix` already refuses to DRAW the cohort table when a `/pubmed` query is
-    about a condition this patient does not have, but the estimate was still requested
-    and still reached the formatter — so the model wrote the comparison paragraph the
-    surface had just declined to illustrate. Observed on 90000015 (an orthopedic
-    admission): `/pubmed congestive heart failure` produced an unprompted readmission-risk
-    paragraph beside a heart-failure literature list.
-
-    The rule is the surface's rule, applied before the call rather than after it: on a
-    literature command the estimate is requested only when the query's subject resolves to
-    the patient's own phenotype bucket. A query that names no condition, or an admission
-    the reviewed map does not carry, resolves to a mismatch and the estimate is not
-    requested — with no second figure there is nothing honest to compare, and
-    `LITERATURE_FORMATTING` already says to write no comparison then.
-
-    A non-literature command is untouched: `/ehr`'s estimate is the briefing itself.
-    """
-    if command.wire != "literature" or hadm_id is None:
-        return True
-    query = (topic or "").strip()
-    if not query:
-        # No topic never reaches a literature command's tools (`tool_arguments` refuses
-        # it), so this is only the unit-test shape. Keep the declared call there: a rule
-        # that silently drops calls whenever it cannot evaluate them is not a rule.
-        return True
-    bucket = bucket_for(hadm_id)
-    return bool(bucket) and phenotype_of_query(query) == bucket.key
-
-
 def supplementary_arguments(
         command: Command, hadm_id: int | None,
         topic: str | None = None) -> list[tuple[str, dict]]:
     """`(tool, arguments)` for each of this command's supplementary calls.
 
+    Only `/ehr` declares one: the readmission estimate that belongs beside the briefing.
+
     A call flagged `skipped_without_admission` is left out when there is no admission to
-    fill its arguments, which is what lets `/pubmed` answer a patient-less literature
-    search with the one call it has always made. Tested in both directions: the skip must
-    not become the silent default for a command that needs the patient.
+    fill its arguments, which is what lets a command whose primary tool takes no
+    admission answer without one. `/pubmed` used to be that case and no longer declares a
+    supplementary call at all (Phase F.1, 2026-10-26) — see the command's own comment for
+    why a literature turn stopped requesting the estimate.
 
     The readmission estimate is also left out for an OUTPATIENT record: scoring an
     outpatient note answers a question nobody asked, and the number then has to be drawn
     somewhere. See `OUTPATIENT_HADM_IDS`.
 
-    `topic` is the caller's own words for a command that takes them, and it is what
-    `comparison_applies` needs to decide whether a literature turn has a comparison at
-    all. It is None for every command that does not take free text.
+    `topic` is the caller's own words for a command that takes them. It is accepted and
+    unused, because the only rule that ever read it — the pre-flight condition lock — was
+    deleted with the call it guarded, and removing the parameter would churn a signature
+    two callers share for nothing.
     """
-    comparisons = comparison_applies(command, hadm_id, topic)
+    del topic
     return [
         (spec.tool, _templated_arguments(spec.args, hadm_id, command))
         for spec in command.supplementary
         if not (spec.skipped_without_admission and hadm_id is None)
         and not (spec.tool == "predict_readmission" and hadm_id in OUTPATIENT_HADM_IDS)
-        and not (spec.tool == "predict_readmission" and not comparisons)
     ]
 
 

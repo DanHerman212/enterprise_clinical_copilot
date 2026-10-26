@@ -259,6 +259,11 @@ async def compose_success(
             presentation["answer"],
             model=chain.MODEL_ID,
             scope=presentation.get("scope"),
+            # Whether this turn was answered from published records, declared from the
+            # turn's own search rather than inferred from the scope badge — the badge's
+            # values are `patient_chart` and `general_evidence`, and nothing ever passed
+            # the literal `literature` (Phase F.1, 2026-10-26).
+            literature=bool(presentation.get("literature")),
             state=state,
             outpatient=outpatient,
             # Every question already asked in this thread, so a chip the reader has

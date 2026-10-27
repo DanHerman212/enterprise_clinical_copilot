@@ -112,16 +112,23 @@ def _verified(response: dict) -> bool | None:
 def _sources(response: dict) -> list[dict[str, Any]]:
     """The sources the reader can click for this turn, in the numbering they use.
 
-    Kept as `{cite, section, text}` only: the judge needs to know which passage a marker
-    resolves to, and the passage's text is what it checks the sentence against.
+    Kept as `{cite, section, text}`, plus `pmid` when the source carries one: the judge
+    needs to know which passage a marker resolves to, and the passage's text is what it
+    checks the sentence against — while a literature marker resolves to a record whose
+    `pmid` is the identifier the reader opens. `evaluators.structural_check` reads that
+    field for the `PMID` citation-marker assertion, so dropping it here left a correctly
+    formatted `/pubmed` answer with nothing to resolve against (`dev_t1_06`).
     """
     out: list[dict[str, Any]] = []
     for entry in response.get("sources") or []:
         if not isinstance(entry, dict):
             continue
-        out.append({"cite": entry.get("cite"),
-                    "section": entry.get("section"),
-                    "text": entry.get("text")})
+        kept = {"cite": entry.get("cite"),
+                "section": entry.get("section"),
+                "text": entry.get("text")}
+        if entry.get("pmid") is not None:
+            kept["pmid"] = entry.get("pmid")
+        out.append(kept)
     return out
 
 

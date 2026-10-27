@@ -95,3 +95,23 @@ def test_every_marker_must_resolve_not_only_one():
     ok, failures = structural_check(_expectations(), _output(answer, [SOURCE_WITH_PMID]))
     assert not ok
     assert any("addresses no source" in failure for failure in failures), failures
+
+
+def test_the_runner_carries_the_pmid_into_the_envelope():
+    """The assertion can only read what the task captured.
+
+    `_sources` narrows each entry for the judge, and the narrowing is applied before the
+    envelope is built. Without the identifier the live check had nothing to resolve a
+    literature marker against, however correct the answer was — its own unit test passed
+    because that test builds the envelope by hand with `pmid` already present.
+    """
+    from evaluation.platform.task import _sources
+
+    kept = _sources({"sources": [SOURCE_WITH_PMID,
+                                 {"cite": 2, "section": "discharge_diagnosis",
+                                  "text": "CAD", "query": "diagnosis"}]})
+
+    assert kept[0]["pmid"] == "35100001"
+    assert kept[0]["text"] == "DAPT trial"
+    # A note passage carries no identifier, and none is invented for it.
+    assert "pmid" not in kept[1]

@@ -27,6 +27,7 @@ from services.agent import contracts, questions
 # The sibling repository, when it is checked out beside this one.
 SIBLING = Path(__file__).resolve().parents[3] / "danielmherman"
 SITE_VIEWS = SIBLING / "demo" / "views.py"
+SITE_CONVERSATIONS = SIBLING / "demo" / "conversations.py"
 
 HAS_SIBLING = SITE_VIEWS.exists()
 NO_SIBLING = "the site repository is not checked out beside this one"
@@ -151,3 +152,29 @@ def test_every_field_the_site_forwards_is_a_field_this_service_admits():
 
     assert approved - {"conversation_id", "asked"} <= (
         contracts.ACCEPTED_REQUEST_FIELDS)
+
+
+@skipUnless(SITE_CONVERSATIONS.exists(), NO_SIBLING)
+def test_the_site_replay_bounds_are_this_service_s_bounds():
+    """The site windows a replay to what this service accepts, and the window is
+    the site's own literals (`demo/conversations.py:30-32`).
+
+    Nothing links them at runtime, and the failure is asymmetric: the site sending
+    MORE than this service accepts gets a `413 too_many_turns`, so a conversation
+    that has been working stops working at the turn where the two numbers part —
+    for every thread, on every account, with both test suites green.
+
+    Pinned here rather than on the health surface: the bounds are a contract
+    between two repositories that both hold them, and a constant read over HTTP
+    would make the site's test depend on a running deployment. The sibling
+    checkout is the same mechanism the question ceiling and the chip vocabulary
+    already use.
+    """
+    for name, ours in (
+        ("MAX_REPLAYED_TURNS", contracts.MAX_REPLAYED_TURNS),
+        ("MAX_REPLAYED_TOOL_CALLS", contracts.MAX_REPLAYED_TOOL_CALLS),
+        ("MAX_TURN_ANSWER_CHARS", contracts.MAX_TURN_ANSWER_CHARS),
+    ):
+        theirs = ast.literal_eval(_assignment(SITE_CONVERSATIONS, name))
+        assert theirs == ours, (
+            f"{name}: site says {theirs}, this service accepts {ours}")

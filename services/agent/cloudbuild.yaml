@@ -29,6 +29,33 @@ substitutions:
 serviceAccount: 'projects/$PROJECT_ID/serviceAccounts/cicd-deployer@$PROJECT_ID.iam.gserviceaccount.com'
 
 steps:
+  # Gate (F-12.1): the suite runs before the image is built, so a failing test
+  # stops the build with the running service untouched — no revision is created,
+  # nothing to roll back. The install duplicates what the Dockerfile installs;
+  # that cost buys testing the code in the workspace rather than trusting that a
+  # human ran it.
+  #
+  # All three requirement files, because `pytest tests` spans both services and
+  # the evaluation harness, and a test that fails on a missing import in CI is a
+  # gate that lies. `pytest` arrives from services/mcp/requirements.txt, where it
+  # is pinned.
+  #
+  # `tests/agent/test_wire_contract_parity.py` reads the site's replay bounds from
+  # a sibling checkout that Cloud Build does not have, so its cross-repo cases
+  # SKIP here (with that reason printed) rather than pass. The site's own build
+  # asserts the same equalities from the other side.
+  - name: python:3.12-slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        pip install --quiet --no-cache-dir \
+          -r services/agent/requirements.txt \
+          -r services/mcp/requirements.txt \
+          -r evaluation/agent/requirements.txt
+        python -m pytest tests -q
+
   - name: gcr.io/cloud-builders/docker
     args: ["build", "-f", "services/agent/Dockerfile", "-t", "${_IMAGE}", "."]
 
@@ -66,7 +93,25 @@ steps:
           --service-account "agent-sa@$PROJECT_ID.iam.gserviceaccount.com" \
           --set-env-vars "^@^PROJECT_ID=$PROJECT_ID@LOCATION=${_REGION}@MCP_TRANSPORT=http@MCP_URL=$${MCP_URL}@LANGFUSE_HOST=$${LANGFUSE_HOST}" \
           --set-secrets "^@^LANGFUSE_PUBLIC_KEY=langfuse-project-public-key:latest@LANGFUSE_SECRET_KEY=langfuse-project-secret-key:latest" \
-          --min-instances 0 --max-instances 3 --memory 1Gi
+          --min-instances 0 --max-instances 3 --memory 1Gi \
+          --cpu 2 --concurrency 20 --timeout 120
+          # (F-11.1) These three were absent, so the live service carried the
+          # Cloud Run defaults: concurrency 80 and a 300 s request timeout. With
+          # max-instances 3 that is 240 concurrent turns admitted on three
+          # containers and a hung turn occupying a request slot for five minutes,
+          # neither of which anyone chose.
+          #
+          # --timeout 120 sits just above ASK_TIMEOUT_SECONDS (110, enforced at
+          # import in services/mcp/runtime.py). The platform therefore becomes the
+          # thing that recycles a turn that has genuinely wedged, instead of the
+          # turn holding a slot for 190 s longer than it could ever answer.
+          # --concurrency 20 is derived from the 110 s bound and the 100-user
+          # target: 20 slots on each of 3 containers is 60 simultaneous turns,
+          # which is what the deployment can absorb while every turn in flight is
+          # mostly waiting on a Gemini stream. --cpu 2 is what makes 20 concurrent
+          # streams defensible — the turn is I/O bound, but assembling and
+          # streaming 20 answers on one vCPU is where latency would come from.
+          #
           # min-instances 0, restored 2026-09-18 after the demo window closed.
           # Set to 1 for the live end-to-end test: scale-to-zero cost the first
           # call of a session 8.4s of container start, which the user waits
@@ -74,6 +119,39 @@ steps:
           # for about $0.07/hour. The project decision is "minimise billable
           # resources", so the default is zero and a warm instance is something
           # stood up deliberately for a test (as the RAG endpoints are).
+
+  # Post-deploy check (F-12.2). The ruling asked for a curl at a known-cheap
+  # endpoint and a failed build on anything but a 200. That is not available
+  # here: the service is `--no-allow-unauthenticated`, its invokers are
+  # `website-sa` and `ecc-eval-runner`, and `cicd-deployer` holds no
+  # serviceAccountTokenCreator binding on either — so an unauthenticated curl
+  # would receive Cloud Run's own 403 whatever the container did, and a check
+  # written to accept 403 would be theatre.
+  #
+  # What is asserted instead is the one fact the container cannot fake and the
+  # one the deploy can silently get wrong: the service is Ready, and the template
+  # it would serve is running the image this build produced. An actual request
+  # needs roles/run.invoker for cicd-deployer; that widens who may call the agent,
+  # so it is left as a decision rather than taken inside a fix for something else.
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        READY=$$(gcloud run services describe agent --region "${_REGION}" \
+          --format='value(status.conditions[?type="Ready"].status)')
+        IMAGE=$$(gcloud run services describe agent --region "${_REGION}" \
+          --format='value(spec.template.spec.containers[0].image)')
+        echo "ready=$${READY} image=$${IMAGE}"
+        if [ "$${READY}" != "True" ]; then
+          echo "agent is not Ready after deploy" >&2
+          exit 1
+        fi
+        if [ "$${IMAGE}" != "${_IMAGE}" ]; then
+          echo "agent is serving $${IMAGE}, not the image this build produced" >&2
+          exit 1
+        fi
 
 images: ["${_IMAGE}"]
 

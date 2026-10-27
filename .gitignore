@@ -42,6 +42,11 @@ data/agent/*
 !data/agent/demo_fixtures/
 data/agent/demo_fixtures/*
 !data/agent/demo_fixtures/demo_cohort.json
+!data/agent/demo_fixtures/cohort_risk.json
+# Deliberately still ignored below the line above: `rag_*.json` in the same
+# directory are captured note passages (MIMIC-derived) and `predict_*.json` are
+# per-admission payloads generated from them. Only the cohort manifests and the
+# risk scores are public-safe.
 *.csv
 *.parquet
 *.feather

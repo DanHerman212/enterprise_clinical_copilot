@@ -1,6 +1,6 @@
 # Phase 6: Governance, Observability, Reliability & CI/CD Audit
 
-**Status:** `PENDING (Runs After Phase 5)`  
+**Status:** `COMPLETE (verified live 2026-10-27 — agent-00195-nzm)`  
 **Target Layers:** Layer 8 (`08-conversational_governance.md`), Layer 9 (`09-evaluation_and_guardrails.md`), Layer 10 (`10-observability_and_audit.md`), Layer 11 (`11-reliability_and_runtime.md`), & Layer 12 (`12-delivery_ci_cd.md`)  
 **Repositories in Scope:** `enterprise_clinical_copilot` & `danielmherman`  
 **Objective:** Audit end-to-end conversational governance (TTL sweeps, turn ceilings, quota/refund atomicity), guardrail/evaluation integrity, W3C/X-Cloud-Trace-Context propagation and zero-PII structured logging, runtime concurrency/timeout bounds, and CI/CD deployment gates across both repositories.
@@ -285,6 +285,37 @@ request possible; that widens who may call the agent and is left as a decision.
 | `npx eslint static/js` (`danielmherman`) | clean |
 | `python manage.py check --deploy` (`danielmherman`) | runs in the migrate job, unchanged |
 
+### 3.2.1 The gate the Phase added, and what it cost to make it honest
+
+The point of F-12.1 was that no test suite ran before a deploy. Adding one exposed four
+defects in the repository and one in the check I wrote to close F-12.2 — none of them the
+candidate revision's. Recorded because each is a class, not an incident.
+
+| Cloud Build run | Result | Cause | Resolution |
+| :--- | :--- | :--- | :--- |
+| `f6a91ac9` | failed in 45 s | `pip install -r a -r b`: `langgraph` pinned `1.2.10` in the MCP file and `1.2.11` in the agent's — `ResolutionImpossible` | F-13.1: one declaration, in the agent's file (§3.4) |
+| `15812155` | failed at collection | `kfp` imported by `services/mcp/pipelines/components/chunk_notes.py`, declared in no requirements file | `kfp==2.16.1` in the test step only |
+| `312ceca6` | 1469 passed, 8 failed, 26 errors | 26 live-service errors (`test_tier1_cohort_sweep`, `test_tier1`, `test_agent_local`) and 8 failures reading four files under `data/` and `evaluation/agent/results/`, which `.gitignore` excluded wholesale | live marker + `-m "not live"`; ignore rules made pattern-based with five files re-included; `numpy` and `git` added to the step |
+| `a7c13e93` | deploy succeeded, build reported FAILURE | my post-deploy check used `status.conditions[?type="Ready"].status`, which is not valid JMESPath, so it read empty and failed a healthy service (`agent-00194-8zm` was live and serving 100%) | four plain values, no filter |
+| `3e527ee0` | **SUCCESS, all five steps** | — | — |
+
+Final gate evidence from the green build:
+
+```
+Step #0  tests   1461 passed, 11 skipped, 42 deselected in 28.04s
+Step #3  deploy  revision created and promoted
+Step #4  verify  created=agent-00195-nzm ready=agent-00195-nzm
+                 serving=agent-00195-nzm percent=100
+```
+
+**What CI now does not test, stated rather than implied.** The 42 deselected tests are the
+live suites: the cohort sweep, the Tier 1 acceptance suite, and the eight free-text
+boundary tests in `test_agent_local.py`. The last of those is the real loss — `"local"` in
+that filename means the MCP transport, not the model, and all eight drive `ask()` through
+the reasoning loop. Making them hermetic means substituting the chat model the way
+`test_model_bounds.py` already does through `graph._build_llm`; that is a change of its own
+and is the natural first task after Phase 7, which moves that binding.
+
 ### 3.3 Correction to the Step A finding
 F-12.2's premise — that the site's ordering was correct and only the smoke check was
 missing — holds. The Layer 8 investigation is a separate matter and is **not** closed by
@@ -317,9 +348,14 @@ rather than by anyone deciding.
 
 *Executed mitigation:* the test step installs the three files in sequence, MCP before agent,
 so the agent's pins win and the tested environment is the deployed agent's.
-*Raised, not changed:* the drift itself. Two possibilities, and the choice is not mine —
-either the MCP file's `langgraph` line is vestigial (the MCP server is an MCP server; it does
-not import langgraph) and should be deleted, or the two services are meant to run the same
-langgraph and the MCP pin is simply stale. Deleting the line changes the MCP image's
-dependency set; aligning it to `1.2.11` changes the MCP image's runtime. Both are one-line
-changes and neither should ride along on a governance commit.
+*Raised, then ruled (2026-10-27):* the line was deleted from `services/mcp/requirements.txt`,
+on the ground that the MCP server never imports `langgraph` — verified, no module under
+`services/mcp/` references it. The agent's file is now the single declaration. The MCP image
+lost a dependency it could not use, and the mcp-server build after the change succeeded,
+which is the evidence that the removal was safe in an image and not only in a grep.
+
+*Sequencing kept after the fix:* the step still installs the files one at a time, in that
+order. With the drift gone they would resolve in a single command, but the sequencing is now
+what makes the precedence explicit — the agent's file goes last, so the tested environment is
+the deployed agent's by construction rather than by luck of resolution.
+

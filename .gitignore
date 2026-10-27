@@ -30,7 +30,18 @@ gcp-key*.json
 .df-credentials.json
 
 # --- Data (never commit MIMIC-IV or any PHI-derived artifact) --------------
-data/
+# `data/*` rather than `data/`: the directory itself must stay traversable so the
+# public-safe synthetic cohort manifests below can be re-included. A directory
+# exclusion cannot be undone for a file inside it, which is why this is not the
+# single-line form it used to be. Everything except the two named manifests under
+# data/agent/ is still ignored, and every PHI-derived artifact still is.
+data/*
+!data/agent/
+data/agent/*
+!data/agent/demo_cohort.json
+!data/agent/demo_fixtures/
+data/agent/demo_fixtures/*
+!data/agent/demo_fixtures/demo_cohort.json
 *.csv
 *.parquet
 *.feather
@@ -70,7 +81,15 @@ projects/agent-harness/eval/results/*.txt
 evaluation/agent/results/*.log
 evaluation/agent/results/*.jsonl
 evaluation/agent/results/*.txt
-evaluation/agent/results/
+# Same reasoning as `data/` above: the directory stays traversable, its contents
+# are ignored by kind, and only the two census manifests the test suite asserts
+# against are re-included. They carry hadm ids, bands and probabilities — no note
+# text. `hybrid_notes.json` is named further down and stays ignored because the
+# later rule wins.
+evaluation/agent/results/*.json
+evaluation/agent/results/*/
+!evaluation/agent/results/cases_82.json
+!evaluation/agent/results/cases_outpatient.json
 
 # --- Hybrid cohort: real MTSamples note TEXT stays out of git (raw-text rule).
 # The features-only hybrid_cohort.json IS tracked; the notes artifact is not. ---

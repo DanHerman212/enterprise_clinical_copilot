@@ -35,6 +35,15 @@ from services.mcp.tools import (
 )
 from services.mcp.tools.admission_profile import get_admission_profile
 
+# Every test here reads the live feature store and tool surface: it calls
+# `get_admission_profile` for all 87 admissions through real gRPC channels, so it is
+# not a hermetic unit and it cannot run in a build container. It is marked rather
+# than deleted because it is the only thing that proves the cohort tables and the
+# served boundary still agree, and because the marker makes the exclusion visible:
+# `pytest -m "not live"` is what CI runs, and running it without the marker reports
+# a deselection count rather than a silent absence.
+pytestmark = pytest.mark.live
+
 # --- discovery ---------------------------------------------------------------
 
 SERVED = frozenset(served_admissions.SERVED_HADM_IDS)

@@ -1,0 +1,513 @@
+{
+  "kind": "clinical",
+  "source": "trim-icon-498815-a0.readmission.hybrid_features",
+  "built": "2026-10-17T21:18:58.006766+00:00",
+  "n": 82,
+  "prompts": [
+    "risk",
+    "meds",
+    "summarize"
+  ],
+  "cases_expected": 246,
+  "labels_positive": 0,
+  "band_counts": {
+    "unscored": 82
+  },
+  "patients": [
+    {
+      "hadm_id": 90000001,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000002,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000003,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000004,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000005,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000009,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000010,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000011,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000012,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000013,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000014,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000015,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000016,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000017,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000018,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000019,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000020,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000022,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000023,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000024,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000025,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000026,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000027,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000029,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000030,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000031,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000033,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000034,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000035,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000036,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000037,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000041,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000043,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000044,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000045,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000046,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000047,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000048,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000049,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000050,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000052,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000053,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000055,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000056,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000057,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000058,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000059,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000060,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000063,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000064,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000065,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000067,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000068,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000069,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000070,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000071,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000074,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000076,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000077,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000078,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000079,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000081,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000082,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000084,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000086,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000087,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000088,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000090,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000091,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000092,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000094,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000095,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000097,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000099,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000100,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000101,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000102,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000103,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000104,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000105,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000106,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000108,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    }
+  ],
+  "census": "87 served - 5 outpatient = 82 inpatient",
+  "served_n": 87,
+  "outpatient_n": 5
+}

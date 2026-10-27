@@ -49,11 +49,27 @@ steps:
   #
   # `kfp` is here and nowhere else. Three tests import the pipeline components,
   # which `from kfp import dsl` at module scope, so the gate cannot collect them
-  # without it — the second Cloud Build run failed on exactly that. It is NOT
-  # added to any serving requirements file: the agent and MCP images never import
-  # a pipeline component, and a Kubeflow dependency in either would be weight
-  # carried by a process that cannot use it. The pin matches
-  # services/mcp/pipelines/Dockerfile, which is the image that does run them.
+  # without it — the second Cloud Build run failed on exactly that. numpy joins it
+  # for the same reason and from the same file: `recall_k.py` imports it, one test
+  # calls into that module, and neither is present in a serving requirements file.
+  # Neither is added to a serving requirements file: the agent and MCP images never
+  # import a pipeline component, and a Kubeflow dependency in either would be weight
+  # carried by a process that cannot use it. The pins match
+  # services/mcp/pipelines/Dockerfile (`kfp==2.16.1`, `numpy>=1.24`), the image that
+  # does run them.
+  #
+  # git is installed because one test asserts the trace archive is git-ignored by
+  # shelling out to `git check-ignore`. Without it the test fails with
+  # `FileNotFoundError: 'git'`, which reads like a code defect and is not one. The
+  # assertion is worth keeping: it is the only thing that stops a collector run
+  # leaving clinical text untracked but committable.
+  #
+  # `-m "not live"` deselects the tests that call real cloud endpoints. A build
+  # container has no credentials and no project, so they fail with
+  # `403 SERVICE_DISABLED` for `unit-test-project` — 26 errors that say nothing
+  # about the change being deployed. Hermetic builds and live sweeps are different
+  # jobs; the marker is registered in pytest.ini so the exclusion is declared, not
+  # inferred.
   #
   # `tests/agent/test_wire_contract_parity.py` reads the site's replay bounds from
   # a sibling checkout that Cloud Build does not have, so its cross-repo cases
@@ -65,11 +81,13 @@ steps:
       - -c
       - |
         set -euo pipefail
+        apt-get update --quiet
+        apt-get install --yes --no-install-recommends --quiet git
         pip install --quiet --no-cache-dir -r evaluation/agent/requirements.txt
         pip install --quiet --no-cache-dir -r services/mcp/requirements.txt
         pip install --quiet --no-cache-dir -r services/agent/requirements.txt
-        pip install --quiet --no-cache-dir kfp==2.16.1
-        python -m pytest tests -q
+        pip install --quiet --no-cache-dir kfp==2.16.1 numpy==1.26.4
+        python -m pytest tests -m "not live" -q
 
   - name: gcr.io/cloud-builders/docker
     args: ["build", "-f", "services/agent/Dockerfile", "-t", "${_IMAGE}", "."]

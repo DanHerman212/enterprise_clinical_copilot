@@ -1,0 +1,45 @@
+{
+  "kind": "outpatient",
+  "source": "trim-icon-498815-a0.readmission.hybrid_features",
+  "built": "2026-10-17T21:18:58.007347+00:00",
+  "n": 5,
+  "prompts": [],
+  "cases_expected": 0,
+  "labels_positive": 0,
+  "band_counts": {
+    "unscored": 5
+  },
+  "patients": [
+    {
+      "hadm_id": 90000028,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000040,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000051,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000054,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    },
+    {
+      "hadm_id": 90000073,
+      "probability": null,
+      "band": "unscored",
+      "readmission_30d": null
+    }
+  ],
+  "note": "Outpatient encounters. No inpatient readmission risk is computable for these, so they are excluded from the clinical census and evaluated for risk suppression instead."
+}

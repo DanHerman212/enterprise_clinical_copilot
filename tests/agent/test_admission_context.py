@@ -98,8 +98,13 @@ def test_counts_keep_whole_numbers_whole_and_fractions_fractional():
 def test_every_declared_field_is_present_in_the_profile():
     """Callers index the dict; a missing key would be a KeyError at prompt time."""
     declared = {name for name, _label in admission_context._FIELDS}
+    profile = decode_profile(_row())
 
-    assert set(decode_profile(_row())) == declared
+    assert declared <= set(profile)
+    # The one key the renderer does not name: `encounter_type` decides which of the
+    # others may be stated, and is stated as a sentence rather than a field when the
+    # record is a visit. Absent from the row, it is reported as not recorded.
+    assert profile["encounter_type"] == "Not recorded"
 
 
 def test_the_block_names_the_admission_and_states_the_values():

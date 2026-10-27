@@ -15,12 +15,34 @@ no readmission still has a note to summarise.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import pytest
 
-from services.agent.routing import routing
+from services.agent.routing import encounter, routing
 
-OUTPATIENT = sorted(routing.OUTPATIENT_HADM_IDS)
+_REPO = Path(__file__).resolve().parents[2]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+
+from evaluation.outpatient_oracle import OUTPATIENT_HADM_IDS  # noqa: E402
+
+OUTPATIENT = sorted(OUTPATIENT_HADM_IDS)
 INPATIENT = [90000015, 90000023, 90000106]
+
+
+def _classify(hadm_id: int) -> None:
+    """Record the encounter type the way `admission_context.hydrate` does.
+
+    The runtime reads `encounter_type` off the feature row; these tests are about what
+    the command gate does once that fact is known, so they set it directly rather than
+    standing up BigQuery. The column itself is verified against this oracle, for all 87
+    served records, in `tests/evaluation/test_encounter_column.py`.
+    """
+    encounter.set_current(
+        encounter.OUTPATIENT if hadm_id in OUTPATIENT_HADM_IDS else encounter.INPATIENT
+    )
 
 
 def test_no_command_asks_for_the_estimate_as_its_primary_call():
@@ -33,6 +55,7 @@ def test_no_command_asks_for_the_estimate_as_its_primary_call():
 @pytest.mark.parametrize("hadm_id", OUTPATIENT)
 @pytest.mark.parametrize("wire", ["summarize", "literature"])
 def test_no_estimate_is_requested_for_an_outpatient_record(wire, hadm_id):
+    _classify(hadm_id)
     command = routing.command_for(wire)
 
     requested = {tool for tool, _args in
@@ -44,6 +67,7 @@ def test_no_estimate_is_requested_for_an_outpatient_record(wire, hadm_id):
 @pytest.mark.parametrize("hadm_id", INPATIENT)
 def test_the_estimate_is_still_requested_for_an_inpatient_record(hadm_id):
     """The other direction, so the rule above cannot pass by requesting nothing at all."""
+    _classify(hadm_id)
     command = routing.command_for("summarize")
 
     requested = {tool for tool, _args in
@@ -57,6 +81,7 @@ def test_ehr_still_runs_on_an_outpatient_record(hadm_id):
     """A visit with no readmission still has a note. Dropping the estimate must not turn
     the whole command into a refusal — that was the failure TF-6 fixed on the other
     side."""
+    _classify(hadm_id)
     command = routing.command_for("summarize")
 
     calls = [(command.tool, routing.tool_arguments(command, hadm_id))]

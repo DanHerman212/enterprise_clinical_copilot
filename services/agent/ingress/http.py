@@ -24,7 +24,7 @@ from starlette.routing import Route
 
 from services.agent.telemetry import observability as chain
 from services.agent.engine import model as model_turn
-from services.agent.routing import routing
+from services.agent.routing import encounter, routing
 from services.agent.telemetry import stages
 from services.agent.routing import routing as questions
 from services.agent import turn
@@ -313,7 +313,7 @@ async def ask_route(request: Request) -> JSONResponse:
         payload = await _compose_success(
             parsed["question"], state, trace,
             want_follow_ups=parsed.get("follow_ups") is True,
-            outpatient=parsed.get("hadm_id") in routing.OUTPATIENT_HADM_IDS,
+            outpatient=encounter.current_is_outpatient() is True,
             asked=_asked_questions(parsed),
             # The workflow this run went through, carried in the answer rather than
             # only in the frames. A caller that never streamed (this route) has no other
@@ -613,7 +613,7 @@ async def _stream_chain(
             payload = await _compose_success(
                 parsed["question"], state, trace,
                 want_follow_ups=parsed.get("follow_ups") is True,
-                outpatient=parsed.get("hadm_id") in routing.OUTPATIENT_HADM_IDS,
+                outpatient=encounter.current_is_outpatient() is True,
                 asked=_asked_questions(parsed),
                 # The same labels the frames above carried, in the terminal payload: the
                 # stream is the live view of the run and this is the durable one.

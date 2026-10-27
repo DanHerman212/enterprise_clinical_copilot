@@ -4,11 +4,12 @@ Zero LLM. Every assertion here is either a pure function of the cohort tables or
 single read of the feature store; nothing is sent to a model, and no judge is involved.
 
 The cohort is DISCOVERED, not hardcoded. `served_admissions.SERVED_HADM_IDS` is the
-authorization boundary the service refuses against, `routing.OUTPATIENT_HADM_IDS` is the
-declared outpatient set, and `admission_phenotypes.NON_ADMISSION` / `UNRESOLVED` are the
-phenotype map's view of the same facts. A test that carried its own copy of 87 ids would
-agree with whatever the code did, which is the failure mode this file exists to avoid —
-so the partitions are derived and then cross-checked against each other.
+authorization boundary the service refuses against, `evaluation.outpatient_oracle` is the
+cohort builder's outpatient decision kept as an answer key (the product reads
+`encounter_type` from the row), and `admission_phenotypes.NON_ADMISSION` / `UNRESOLVED`
+are the phenotype map's view of the same facts. A test that carried its own copy of 87
+ids would agree with whatever the code did, which is the failure mode this file exists
+to avoid — so the partitions are derived and then cross-checked against each other.
 
 The manifest sweep is the one part that touches the network: `<admission_metadata>` is
 rendered from the feature-store row that scored the patient, and there is no offline copy
@@ -24,7 +25,8 @@ import pytest
 
 from services.agent.routing import admission_context
 from services.agent.presentation import domain as admission_phenotypes
-from services.agent.routing import routing
+from services.agent.routing import encounter, routing
+from evaluation.outpatient_oracle import OUTPATIENT_HADM_IDS
 from services.agent.ingress import contracts as served_admissions
 from services.agent.engine import deterministic
 from services.agent.presentation.a2ui import compose_presentation, compose_risk_canvas, predict_payload
@@ -49,7 +51,7 @@ pytestmark = pytest.mark.live
 # --- discovery ---------------------------------------------------------------
 
 SERVED = frozenset(served_admissions.SERVED_HADM_IDS)
-OUTPATIENT = frozenset(routing.OUTPATIENT_HADM_IDS)
+OUTPATIENT = frozenset(OUTPATIENT_HADM_IDS)
 INPATIENT = SERVED - OUTPATIENT
 #: In the authorization boundary with neither a note nor a feature row. Two of them,
 #: and nothing can be served for either.
@@ -158,7 +160,7 @@ def test_the_unserved_orphans_are_outside_the_boundary():
 
 
 def test_the_outpatient_set_is_declared_in_both_places():
-    """Two modules, one fact. A drift between them would refuse the wrong records."""
+    """The curation decision and the phenotype map must name the same records."""
     assert OUTPATIENT == frozenset(admission_phenotypes.NON_ADMISSION)
 
 
@@ -197,11 +199,13 @@ def test_an_outpatient_record_is_never_paired_with_a_readmission_estimate():
     """
     summarize = routing.command_for("summarize")
     for hadm_id in sorted(OUTPATIENT):
+        encounter.set_current(encounter.OUTPATIENT)
         secondary = [tool for tool, _ in
                      routing.supplementary_arguments(summarize, hadm_id)]
         assert "predict_readmission" not in secondary, hadm_id
 
     # The control: the same command on an inpatient record does carry the estimate.
+    encounter.set_current(encounter.INPATIENT)
     secondary = [tool for tool, _ in
                  routing.supplementary_arguments(summarize, 90000015)]
     assert "predict_readmission" in secondary
@@ -225,8 +229,13 @@ def test_an_outpatient_turn_carries_the_encounter_notice():
 def test_an_outpatient_record_is_not_comparable_against_a_cohort():
     """The comparative table needs a stay; a visit has nothing to compare."""
     for hadm_id in sorted(OUTPATIENT):
+        encounter.set_current(encounter.OUTPATIENT)
         assert admission_phenotypes.is_matrix_eligible(hadm_id) is False, hadm_id
-    # The control: an inpatient admission in a curated bucket is eligible.
+    # The control: an inpatient admission is eligible.
+    encounter.set_current(encounter.INPATIENT)
+    assert admission_phenotypes.is_matrix_eligible(90000023) is True
+    # And an unknown record keeps the behaviour it had before the column existed.
+    encounter.set_current(None)
     assert admission_phenotypes.is_matrix_eligible(90000023) is True
 
 
@@ -244,6 +253,7 @@ def test_an_outpatient_record_is_never_scored():
     ehr = routing.command_for("summarize")
     broken: dict[int, str] = {}
     for hadm_id in sorted(OUTPATIENT):
+        encounter.set_current(encounter.OUTPATIENT)
         requested = {tool for tool, _args in
                      routing.supplementary_arguments(ehr, hadm_id)}
         if "predict_readmission" in requested:
@@ -254,6 +264,7 @@ def test_an_outpatient_record_is_never_scored():
 def test_the_estimate_is_still_requested_on_an_inpatient_record():
     """The control: the rule is about outpatient records and nothing else."""
     ehr = routing.command_for("summarize")
+    encounter.set_current(encounter.INPATIENT)
     for hadm_id in (90000015, 90000023):
         requested = {tool for tool, _args in
                      routing.supplementary_arguments(ehr, hadm_id)}

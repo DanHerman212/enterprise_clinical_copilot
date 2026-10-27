@@ -9,15 +9,15 @@ refusal a fabrication:
                               manifest, which shows an 'Urgent' admission with a
                               7.8-day length of stay."
 
-The agent was right and the manifest was wrong. All three ids are in
-`services.agent.routing.OUTPATIENT_HADM_IDS`; their feature rows nevertheless carry
+The agent was right and the manifest was wrong. All three ids are outpatient records in
+`evaluation.outpatient_oracle`; their feature rows nevertheless carry
 an emergency-department `admission_type`, because the row exists to be scored. A
 manifest decoded only from that row therefore cannot say "this is not an inpatient
 stay", so the judge had no way to know the refusal was correct.
 
-These tests pin the fix: the manifest states the encounter kind from the same
-frozenset the product uses to suppress the risk score, labels `admission_type` as a
-raw model feature, and the judge prompt and rubric are told which one governs.
+These tests pin the fix: the manifest states the encounter kind from the cohort's own
+decision, labels `admission_type` as a raw model feature, and the judge prompt and
+rubric are told which one governs.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ for _path in (_REPO, _REPO / "evaluation" / "agent"):
         sys.path.insert(0, str(_path))
 
 import build_census  # noqa: E402
-from services.agent.routing.routing import OUTPATIENT_HADM_IDS  # noqa: E402
+from evaluation.outpatient_oracle import OUTPATIENT_HADM_IDS  # noqa: E402
 
 #: The three suite-2 cases that failed. Named so the test fails loudly if one of them
 #: ever stops being an outpatient record: the assertion would then be about different
@@ -58,8 +58,8 @@ def test_an_inpatient_record_says_it_is_an_inpatient_stay():
     assert "not applicable" not in statement
 
 
-def test_the_encounter_authority_is_the_products_own_frozenset():
-    """Every id the product suppresses risk for must be described as outpatient."""
+def test_the_encounter_authority_is_the_curation_oracle():
+    """Every id the cohort was built as outpatient must be described as outpatient."""
     for hadm_id in sorted(OUTPATIENT_HADM_IDS):
         assert build_census.encounter_statement(hadm_id) == (
             build_census.OUTPATIENT_ENCOUNTER

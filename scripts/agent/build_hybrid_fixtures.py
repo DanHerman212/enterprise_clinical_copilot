@@ -30,6 +30,14 @@ import tempfile
 from pathlib import Path
 
 HARNESS_ROOT = Path(__file__).resolve().parents[2]
+if str(HARNESS_ROOT) not in sys.path:
+    sys.path.insert(0, str(HARNESS_ROOT))
+
+#: The curation decision, kept in `evaluation/` because the product no longer carries a
+#: set of ids: it reads `encounter_type` off the feature row. A generated seed still has
+#: to know which records were built as visits, or it describes them as stays.
+from evaluation.outpatient_oracle import OUTPATIENT_HADM_IDS  # noqa: E402
+
 COHORT_SOURCE = HARNESS_ROOT / "evaluation" / "agent" / "results" / "hybrid_cohort.json"
 OUT_DIR = HARNESS_ROOT / "data" / "agent" / "demo_fixtures"
 # The cohort list test_cohort_authority.py treats as authoritative. It is
@@ -118,8 +126,14 @@ def _one_hot_label(row: dict, mapping: dict, default: str) -> str:
     return default
 
 
-def _summary(features: dict) -> str:
+def _summary(features: dict, encounter_type: str = "inpatient") -> str:
     sex = "M" if features.get("gender") == 1 else "F"
+    if encounter_type == "outpatient":
+        # A visit has no length of stay and no discharge destination. The feature row
+        # carries both anyway — it exists to be scored — which is how the seed came to
+        # describe a speech-therapy note as a "3-day stay · discharged to rehab".
+        return (f"{int(round(features['age']))}{sex} · outpatient visit · "
+                "no inpatient stay")
     parts = [f"{int(round(features['age']))}{sex}",
              _one_hot_label(features, ADMISSION_TYPES, "elective") + " admission"]
     priors = int(round(features.get("prior_admission_count") or 0))
@@ -216,12 +230,15 @@ def _seed_demo_cohort(cohort: dict) -> None:
     patients = []
     for p in cohort["patients"]:
         f = p["features"]
+        encounter_type = ("outpatient" if int(p["hadm_id"]) in OUTPATIENT_HADM_IDS
+                          else "inpatient")
         patients.append({
             "hadm_id": int(p["hadm_id"]),
+            "encounter_type": encounter_type,
             "display_name": _assign_name(f, int(p["hadm_id"]), used),
             "age": int(round(f["age"])),
             "sex": "M" if f.get("gender") == 1 else "F",
-            "summary": _summary(f),
+            "summary": _summary(f, encounter_type),
             "split_name": "test",
         })
     OUT_DIR.mkdir(parents=True, exist_ok=True)

@@ -33,6 +33,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from services.agent.routing import encounter
+
 _LOG = logging.getLogger(__name__)
 
 #: The MCP tool this calls. It is registered on the server so the pre-flight call
@@ -111,15 +113,40 @@ def _clean(value: Any) -> str:
     return text.replace("<", "(").replace(">", ")")
 
 
+#: Fields that only exist because there was a stay.
+#:
+#: Dropped from the block when the record is an outpatient visit. The distinction is not
+#: cosmetic: `index_los_days` is a real number on an outpatient row (the encoder built the
+#: row as an admission), and stating it is what produced the canary's "length of stay was
+#: 7.9 days" for an encounter that had none. A fact the record does not have is not made
+#: true by the column being populated.
+STAY_ONLY_FIELDS: frozenset[str] = frozenset({
+    "admission_type", "discharge_location", "index_los_days",
+})
+
+#: Said in place of the dropped fields, rather than leaving their absence to be inferred.
+#: A model handed a block with no length of stay will sometimes supply one from the note;
+#: a model told there is no stay does not.
+OUTPATIENT_LINE = (
+    "encounter_type: outpatient encounter — this record is a visit, not an inpatient "
+    "stay, so it has no admission type, no discharge destination and no length of stay"
+)
+
+
 def render(hadm_id: int, profile: dict[str, Any]) -> str:
     """The `<admission_metadata>` block for one admission, or "" if unusable."""
     if not isinstance(profile, dict) or not profile:
         return ""
+    outpatient = encounter.is_outpatient(encounter.classify(profile)) is True
     lines = [
         f'<admission_metadata hadm_id="{int(hadm_id)}" source="feature store row '
         f'scored by the readmission model">'
     ]
+    if outpatient:
+        lines.append(f"- {OUTPATIENT_LINE}")
     for key, label in _FIELDS:
+        if outpatient and key in STAY_ONLY_FIELDS:
+            continue
         value = profile.get(key)
         if value in (None, ""):
             continue
@@ -130,7 +157,15 @@ def render(hadm_id: int, profile: dict[str, Any]) -> str:
 
 
 async def hydrate(box: Any, hadm_id: int | None) -> str:
-    """Fetch and render the profile, or "" when there is nothing to state."""
+    """Fetch and render the profile, and record the turn's encounter type.
+
+    The encounter type is set here, unconditionally, because this is the one place the
+    record's own row is read before anything else runs: the graph, the command gate, the
+    canvas and the response composer all read it back through `encounter` rather than
+    recognising an admission id. Setting None as well as a value is what stops a turn with
+    no profile from inheriting the previous turn's answer.
+    """
+    encounter.set_current(None)
     if not hadm_id or box is None:
         return ""
     try:
@@ -147,4 +182,6 @@ async def hydrate(box: Any, hadm_id: int | None) -> str:
             hadm_id, payload.get("error") if isinstance(payload, dict) else "no payload",
         )
         return ""
-    return render(hadm_id, payload.get("profile") or {})
+    profile = payload.get("profile") or {}
+    encounter.set_current(encounter.classify(profile))
+    return render(hadm_id, profile)

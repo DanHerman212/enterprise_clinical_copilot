@@ -92,6 +92,7 @@ from services.agent.postprocess import citations
 from services.agent.engine.prompts import SYSTEM_PROMPT
 from services.agent.telemetry import observability
 from services.agent.routing import routing
+from services.agent.routing import encounter
 from services.agent.telemetry import stages
 
 logger = logging.getLogger(__name__)
@@ -843,7 +844,7 @@ def _context_block(admission_context: str, hadm_id: int | None = None) -> str:
     2026-10-21).
     """
     parts = [(admission_context or "").strip()]
-    if hadm_id in routing.OUTPATIENT_HADM_IDS:
+    if encounter.current_is_outpatient() is True:
         parts.append("<encounter_notice>\n"
                      f"{routing.OUTPATIENT_ENCOUNTER_NOTICE}\n"
                      "</encounter_notice>")

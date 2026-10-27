@@ -2,6 +2,7 @@
   "patients": [
     {
       "hadm_id": 90000001,
+      "encounter_type": "inpatient",
       "display_name": "Deborah Ferraro",
       "age": 60,
       "sex": "F",
@@ -10,6 +11,7 @@
     },
     {
       "hadm_id": 90000002,
+      "encounter_type": "inpatient",
       "display_name": "Walter Ferraro",
       "age": 70,
       "sex": "M",
@@ -18,6 +20,7 @@
     },
     {
       "hadm_id": 90000003,
+      "encounter_type": "inpatient",
       "display_name": "Eleanor Okafor",
       "age": 82,
       "sex": "F",
@@ -26,6 +29,7 @@
     },
     {
       "hadm_id": 90000004,
+      "encounter_type": "inpatient",
       "display_name": "Dennis Okafor",
       "age": 50,
       "sex": "M",
@@ -34,6 +38,7 @@
     },
     {
       "hadm_id": 90000005,
+      "encounter_type": "inpatient",
       "display_name": "Alan Marchetti",
       "age": 62,
       "sex": "M",
@@ -42,6 +47,7 @@
     },
     {
       "hadm_id": 90000009,
+      "encounter_type": "inpatient",
       "display_name": "Linda Okafor",
       "age": 48,
       "sex": "F",
@@ -50,6 +56,7 @@
     },
     {
       "hadm_id": 90000010,
+      "encounter_type": "inpatient",
       "display_name": "Dennis Castellano",
       "age": 65,
       "sex": "M",
@@ -58,6 +65,7 @@
     },
     {
       "hadm_id": 90000011,
+      "encounter_type": "inpatient",
       "display_name": "Brittany Sokolov",
       "age": 26,
       "sex": "F",
@@ -66,6 +74,7 @@
     },
     {
       "hadm_id": 90000012,
+      "encounter_type": "inpatient",
       "display_name": "Eleanor Ferraro",
       "age": 80,
       "sex": "F",
@@ -74,6 +83,7 @@
     },
     {
       "hadm_id": 90000013,
+      "encounter_type": "inpatient",
       "display_name": "Patricia Lindqvist",
       "age": 60,
       "sex": "F",
@@ -82,6 +92,7 @@
     },
     {
       "hadm_id": 90000014,
+      "encounter_type": "inpatient",
       "display_name": "Cynthia Vasquez",
       "age": 60,
       "sex": "F",
@@ -90,6 +101,7 @@
     },
     {
       "hadm_id": 90000015,
+      "encounter_type": "inpatient",
       "display_name": "Cynthia Petrov",
       "age": 61,
       "sex": "F",
@@ -98,6 +110,7 @@
     },
     {
       "hadm_id": 90000016,
+      "encounter_type": "inpatient",
       "display_name": "Alicia Petrov",
       "age": 25,
       "sex": "F",
@@ -106,6 +119,7 @@
     },
     {
       "hadm_id": 90000017,
+      "encounter_type": "inpatient",
       "display_name": "Deborah Sokolov",
       "age": 47,
       "sex": "F",
@@ -114,6 +128,7 @@
     },
     {
       "hadm_id": 90000018,
+      "encounter_type": "inpatient",
       "display_name": "Patricia Nyland",
       "age": 60,
       "sex": "F",
@@ -122,6 +137,7 @@
     },
     {
       "hadm_id": 90000019,
+      "encounter_type": "inpatient",
       "display_name": "Susan Okafor",
       "age": 51,
       "sex": "F",
@@ -130,6 +146,7 @@
     },
     {
       "hadm_id": 90000020,
+      "encounter_type": "inpatient",
       "display_name": "Chelsea Rasmussen",
       "age": 36,
       "sex": "F",
@@ -138,6 +155,7 @@
     },
     {
       "hadm_id": 90000022,
+      "encounter_type": "inpatient",
       "display_name": "Karen Tran",
       "age": 59,
       "sex": "F",
@@ -146,6 +164,7 @@
     },
     {
       "hadm_id": 90000023,
+      "encounter_type": "inpatient",
       "display_name": "Bruce Hollingsworth",
       "age": 60,
       "sex": "M",
@@ -154,6 +173,7 @@
     },
     {
       "hadm_id": 90000024,
+      "encounter_type": "inpatient",
       "display_name": "Chelsea Barnhart",
       "age": 27,
       "sex": "F",
@@ -162,6 +182,7 @@
     },
     {
       "hadm_id": 90000025,
+      "encounter_type": "inpatient",
       "display_name": "Susan Abernathy",
       "age": 60,
       "sex": "F",
@@ -170,6 +191,7 @@
     },
     {
       "hadm_id": 90000026,
+      "encounter_type": "inpatient",
       "display_name": "Margaret Ashford",
       "age": 69,
       "sex": "F",
@@ -178,6 +200,7 @@
     },
     {
       "hadm_id": 90000027,
+      "encounter_type": "inpatient",
       "display_name": "Joan Whitfield",
       "age": 83,
       "sex": "F",
@@ -186,14 +209,16 @@
     },
     {
       "hadm_id": 90000028,
+      "encounter_type": "outpatient",
       "display_name": "Cynthia Nakamura",
       "age": 67,
       "sex": "F",
-      "summary": "67F \u00b7 elective admission \u00b7 3-day stay \u00b7 discharged to rehab",
+      "summary": "67F \u00b7 outpatient visit \u00b7 no inpatient stay",
       "split_name": "test"
     },
     {
       "hadm_id": 90000029,
+      "encounter_type": "inpatient",
       "display_name": "Ruth Yeager",
       "age": 79,
       "sex": "F",
@@ -202,6 +227,7 @@
     },
     {
       "hadm_id": 90000030,
+      "encounter_type": "inpatient",
       "display_name": "Linda Delgado",
       "age": 60,
       "sex": "F",
@@ -210,6 +236,7 @@
     },
     {
       "hadm_id": 90000031,
+      "encounter_type": "inpatient",
       "display_name": "Deborah Vasquez",
       "age": 60,
       "sex": "F",
@@ -218,6 +245,7 @@
     },
     {
       "hadm_id": 90000033,
+      "encounter_type": "inpatient",
       "display_name": "Megan Prentice",
       "age": 32,
       "sex": "F",
@@ -226,6 +254,7 @@
     },
     {
       "hadm_id": 90000034,
+      "encounter_type": "inpatient",
       "display_name": "Patricia Boyle",
       "age": 66,
       "sex": "F",
@@ -234,6 +263,7 @@
     },
     {
       "hadm_id": 90000035,
+      "encounter_type": "inpatient",
       "display_name": "Eleanor Whitfield",
       "age": 71,
       "sex": "F",
@@ -242,6 +272,7 @@
     },
     {
       "hadm_id": 90000036,
+      "encounter_type": "inpatient",
       "display_name": "Chelsea Sokolov",
       "age": 39,
       "sex": "F",
@@ -250,6 +281,7 @@
     },
     {
       "hadm_id": 90000037,
+      "encounter_type": "inpatient",
       "display_name": "Alan Ramachandran",
       "age": 64,
       "sex": "M",
@@ -258,14 +290,16 @@
     },
     {
       "hadm_id": 90000040,
+      "encounter_type": "outpatient",
       "display_name": "Joan Okafor",
       "age": 73,
       "sex": "F",
-      "summary": "73F \u00b7 elective admission \u00b7 3-day stay \u00b7 discharged to rehab",
+      "summary": "73F \u00b7 outpatient visit \u00b7 no inpatient stay",
       "split_name": "test"
     },
     {
       "hadm_id": 90000041,
+      "encounter_type": "inpatient",
       "display_name": "Deborah Okafor",
       "age": 60,
       "sex": "F",
@@ -274,6 +308,7 @@
     },
     {
       "hadm_id": 90000043,
+      "encounter_type": "inpatient",
       "display_name": "Bruce Lindqvist",
       "age": 52,
       "sex": "M",
@@ -282,6 +317,7 @@
     },
     {
       "hadm_id": 90000044,
+      "encounter_type": "inpatient",
       "display_name": "Randall Whitfield",
       "age": 62,
       "sex": "M",
@@ -290,6 +326,7 @@
     },
     {
       "hadm_id": 90000045,
+      "encounter_type": "inpatient",
       "display_name": "Patricia Sokolov",
       "age": 57,
       "sex": "F",
@@ -298,6 +335,7 @@
     },
     {
       "hadm_id": 90000046,
+      "encounter_type": "inpatient",
       "display_name": "Margaret Nyland",
       "age": 93,
       "sex": "F",
@@ -306,6 +344,7 @@
     },
     {
       "hadm_id": 90000047,
+      "encounter_type": "inpatient",
       "display_name": "Jasmine Vasquez",
       "age": 31,
       "sex": "F",
@@ -314,6 +353,7 @@
     },
     {
       "hadm_id": 90000048,
+      "encounter_type": "inpatient",
       "display_name": "Curtis Cardoso",
       "age": 60,
       "sex": "M",
@@ -322,6 +362,7 @@
     },
     {
       "hadm_id": 90000049,
+      "encounter_type": "inpatient",
       "display_name": "Karen Mensah",
       "age": 60,
       "sex": "F",
@@ -330,6 +371,7 @@
     },
     {
       "hadm_id": 90000050,
+      "encounter_type": "inpatient",
       "display_name": "Marcus Castellano",
       "age": 29,
       "sex": "M",
@@ -338,14 +380,16 @@
     },
     {
       "hadm_id": 90000051,
+      "encounter_type": "outpatient",
       "display_name": "Joan Rasmussen",
       "age": 69,
       "sex": "F",
-      "summary": "69F \u00b7 elective admission \u00b7 1 prior admission \u00b7 3-day stay \u00b7 discharged to home",
+      "summary": "69F \u00b7 outpatient visit \u00b7 no inpatient stay",
       "split_name": "test"
     },
     {
       "hadm_id": 90000052,
+      "encounter_type": "inpatient",
       "display_name": "Dennis Vasquez",
       "age": 60,
       "sex": "M",
@@ -354,6 +398,7 @@
     },
     {
       "hadm_id": 90000053,
+      "encounter_type": "inpatient",
       "display_name": "Alan Ellison",
       "age": 49,
       "sex": "M",
@@ -362,14 +407,16 @@
     },
     {
       "hadm_id": 90000054,
+      "encounter_type": "outpatient",
       "display_name": "Clarence Whitfield",
       "age": 68,
       "sex": "M",
-      "summary": "68M \u00b7 elective admission \u00b7 3-day stay \u00b7 discharged to rehab",
+      "summary": "68M \u00b7 outpatient visit \u00b7 no inpatient stay",
       "split_name": "test"
     },
     {
       "hadm_id": 90000055,
+      "encounter_type": "inpatient",
       "display_name": "Randall Mensah",
       "age": 60,
       "sex": "M",
@@ -378,6 +425,7 @@
     },
     {
       "hadm_id": 90000056,
+      "encounter_type": "inpatient",
       "display_name": "Patricia Abernathy",
       "age": 60,
       "sex": "F",
@@ -386,6 +434,7 @@
     },
     {
       "hadm_id": 90000057,
+      "encounter_type": "inpatient",
       "display_name": "Randall Bellamy",
       "age": 60,
       "sex": "M",
@@ -394,6 +443,7 @@
     },
     {
       "hadm_id": 90000058,
+      "encounter_type": "inpatient",
       "display_name": "Deborah Boyle",
       "age": 53,
       "sex": "F",
@@ -402,6 +452,7 @@
     },
     {
       "hadm_id": 90000059,
+      "encounter_type": "inpatient",
       "display_name": "Dennis Tran",
       "age": 60,
       "sex": "M",
@@ -410,6 +461,7 @@
     },
     {
       "hadm_id": 90000060,
+      "encounter_type": "inpatient",
       "display_name": "Linda Ellison",
       "age": 60,
       "sex": "F",
@@ -418,6 +470,7 @@
     },
     {
       "hadm_id": 90000063,
+      "encounter_type": "inpatient",
       "display_name": "Margaret Ellison",
       "age": 71,
       "sex": "F",
@@ -426,6 +479,7 @@
     },
     {
       "hadm_id": 90000064,
+      "encounter_type": "inpatient",
       "display_name": "Cynthia Abernathy",
       "age": 60,
       "sex": "F",
@@ -434,6 +488,7 @@
     },
     {
       "hadm_id": 90000065,
+      "encounter_type": "inpatient",
       "display_name": "Jasmine Lindqvist",
       "age": 33,
       "sex": "F",
@@ -442,6 +497,7 @@
     },
     {
       "hadm_id": 90000067,
+      "encounter_type": "inpatient",
       "display_name": "Clarence Tran",
       "age": 73,
       "sex": "M",
@@ -450,6 +506,7 @@
     },
     {
       "hadm_id": 90000068,
+      "encounter_type": "inpatient",
       "display_name": "Harold Prentice",
       "age": 77,
       "sex": "M",
@@ -458,6 +515,7 @@
     },
     {
       "hadm_id": 90000069,
+      "encounter_type": "inpatient",
       "display_name": "Brittany Nakamura",
       "age": 41,
       "sex": "F",
@@ -466,6 +524,7 @@
     },
     {
       "hadm_id": 90000070,
+      "encounter_type": "inpatient",
       "display_name": "Margaret Delgado",
       "age": 94,
       "sex": "F",
@@ -474,6 +533,7 @@
     },
     {
       "hadm_id": 90000071,
+      "encounter_type": "inpatient",
       "display_name": "Megan Petrov",
       "age": 36,
       "sex": "F",
@@ -482,14 +542,16 @@
     },
     {
       "hadm_id": 90000073,
+      "encounter_type": "outpatient",
       "display_name": "Ruth Okafor",
       "age": 78,
       "sex": "F",
-      "summary": "78F \u00b7 elective admission \u00b7 4-day stay \u00b7 discharged to rehab",
+      "summary": "78F \u00b7 outpatient visit \u00b7 no inpatient stay",
       "split_name": "test"
     },
     {
       "hadm_id": 90000074,
+      "encounter_type": "inpatient",
       "display_name": "Herbert Cardoso",
       "age": 77,
       "sex": "M",
@@ -498,6 +560,7 @@
     },
     {
       "hadm_id": 90000076,
+      "encounter_type": "inpatient",
       "display_name": "Randall Ramachandran",
       "age": 56,
       "sex": "M",
@@ -506,6 +569,7 @@
     },
     {
       "hadm_id": 90000077,
+      "encounter_type": "inpatient",
       "display_name": "Karen Rasmussen",
       "age": 60,
       "sex": "F",
@@ -514,6 +578,7 @@
     },
     {
       "hadm_id": 90000078,
+      "encounter_type": "inpatient",
       "display_name": "Ashley Yeager",
       "age": 35,
       "sex": "F",
@@ -522,6 +587,7 @@
     },
     {
       "hadm_id": 90000079,
+      "encounter_type": "inpatient",
       "display_name": "Alicia Ibrahim",
       "age": 27,
       "sex": "F",
@@ -530,6 +596,7 @@
     },
     {
       "hadm_id": 90000081,
+      "encounter_type": "inpatient",
       "display_name": "Ashley Sokolov",
       "age": 41,
       "sex": "F",
@@ -538,6 +605,7 @@
     },
     {
       "hadm_id": 90000082,
+      "encounter_type": "inpatient",
       "display_name": "Deborah Petrov",
       "age": 56,
       "sex": "F",
@@ -546,6 +614,7 @@
     },
     {
       "hadm_id": 90000084,
+      "encounter_type": "inpatient",
       "display_name": "Karen Boyle",
       "age": 60,
       "sex": "F",
@@ -554,6 +623,7 @@
     },
     {
       "hadm_id": 90000086,
+      "encounter_type": "inpatient",
       "display_name": "Dennis Lindqvist",
       "age": 67,
       "sex": "M",
@@ -562,6 +632,7 @@
     },
     {
       "hadm_id": 90000087,
+      "encounter_type": "inpatient",
       "display_name": "Barbara Barnhart",
       "age": 68,
       "sex": "F",
@@ -570,6 +641,7 @@
     },
     {
       "hadm_id": 90000088,
+      "encounter_type": "inpatient",
       "display_name": "Margaret Sokolov",
       "age": 78,
       "sex": "F",
@@ -578,6 +650,7 @@
     },
     {
       "hadm_id": 90000090,
+      "encounter_type": "inpatient",
       "display_name": "Gregory Delgado",
       "age": 60,
       "sex": "M",
@@ -586,6 +659,7 @@
     },
     {
       "hadm_id": 90000091,
+      "encounter_type": "inpatient",
       "display_name": "Jordan Sokolov",
       "age": 18,
       "sex": "M",
@@ -594,6 +668,7 @@
     },
     {
       "hadm_id": 90000092,
+      "encounter_type": "inpatient",
       "display_name": "Susan Delgado",
       "age": 60,
       "sex": "F",
@@ -602,6 +677,7 @@
     },
     {
       "hadm_id": 90000094,
+      "encounter_type": "inpatient",
       "display_name": "Deborah Barnhart",
       "age": 66,
       "sex": "F",
@@ -610,6 +686,7 @@
     },
     {
       "hadm_id": 90000095,
+      "encounter_type": "inpatient",
       "display_name": "Curtis Whitfield",
       "age": 45,
       "sex": "M",
@@ -618,6 +695,7 @@
     },
     {
       "hadm_id": 90000097,
+      "encounter_type": "inpatient",
       "display_name": "Gregory Whitfield",
       "age": 56,
       "sex": "M",
@@ -626,6 +704,7 @@
     },
     {
       "hadm_id": 90000099,
+      "encounter_type": "inpatient",
       "display_name": "Cynthia Boyle",
       "age": 60,
       "sex": "F",
@@ -634,6 +713,7 @@
     },
     {
       "hadm_id": 90000100,
+      "encounter_type": "inpatient",
       "display_name": "Susan Castellano",
       "age": 59,
       "sex": "F",
@@ -642,6 +722,7 @@
     },
     {
       "hadm_id": 90000101,
+      "encounter_type": "inpatient",
       "display_name": "Brittany Ibrahim",
       "age": 37,
       "sex": "F",
@@ -650,6 +731,7 @@
     },
     {
       "hadm_id": 90000102,
+      "encounter_type": "inpatient",
       "display_name": "Dennis Kowalski",
       "age": 67,
       "sex": "M",
@@ -658,6 +740,7 @@
     },
     {
       "hadm_id": 90000103,
+      "encounter_type": "inpatient",
       "display_name": "Randall Marchetti",
       "age": 46,
       "sex": "M",
@@ -666,6 +749,7 @@
     },
     {
       "hadm_id": 90000104,
+      "encounter_type": "inpatient",
       "display_name": "Dennis Abernathy",
       "age": 60,
       "sex": "M",
@@ -674,6 +758,7 @@
     },
     {
       "hadm_id": 90000105,
+      "encounter_type": "inpatient",
       "display_name": "Brandon Whitfield",
       "age": 30,
       "sex": "M",
@@ -682,6 +767,7 @@
     },
     {
       "hadm_id": 90000106,
+      "encounter_type": "inpatient",
       "display_name": "Curtis Abernathy",
       "age": 60,
       "sex": "M",
@@ -690,6 +776,7 @@
     },
     {
       "hadm_id": 90000108,
+      "encounter_type": "inpatient",
       "display_name": "Randall Okafor",
       "age": 48,
       "sex": "M",

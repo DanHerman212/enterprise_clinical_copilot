@@ -34,6 +34,7 @@ if str(REPO) not in sys.path:
 
 from services.agent.postprocess import followups
 from services.agent.routing import routing  # noqa: E402
+from evaluation.outpatient_oracle import OUTPATIENT_HADM_IDS  # noqa: E402
 from services.mcp.tools import (  # noqa: E402
     discharge_medications,
     get_lab_trends,
@@ -72,7 +73,7 @@ async def _ehr_state(hadm_id: int) -> dict[str, Any]:
     if not (sections or {}).get("passages"):
         calls.append(_call("rag_search", await rag_search(
             hadm_id, routing.EHR_RECORD_QUERY)))
-    if hadm_id not in routing.OUTPATIENT_HADM_IDS:
+    if hadm_id not in OUTPATIENT_HADM_IDS:
         calls.append(_call("predict_readmission", await predict_readmission(hadm_id)))
     return {"tool_calls": calls, "command": "summarize", "replayed_tool_calls": []}
 
@@ -104,7 +105,7 @@ async def main() -> int:
     print("-" * 118)
     violations: list[str] = []
     for hadm_id in DEV:
-        outpatient = hadm_id in routing.OUTPATIENT_HADM_IDS
+        outpatient = hadm_id in OUTPATIENT_HADM_IDS
         for question, builder in COMMANDS:
             state = await builder(hadm_id)
             chips = followups.suggest(

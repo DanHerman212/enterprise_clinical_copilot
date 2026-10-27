@@ -232,22 +232,23 @@ def test_the_free_text_prompt_is_told_when_the_record_is_an_outpatient_visit():
     appends to it. Live on 2026-10-21, "Summarize the note" on 90000073 — a
     speech-therapy progress note — produced "this admission" and a hospital course.
     """
-    from services.agent.routing.routing import (
-        OUTPATIENT_ENCOUNTER_NOTICE,
-        OUTPATIENT_HADM_IDS,
-    )
+    from services.agent.routing import encounter
+    from services.agent.routing.routing import OUTPATIENT_ENCOUNTER_NOTICE
 
-    outpatient = min(OUTPATIENT_HADM_IDS)
+    outpatient = 90000073  # a speech-therapy progress note, verified as such below
+    encounter.set_current(encounter.OUTPATIENT)
     block = graph._context_block("", outpatient)
     assert OUTPATIENT_ENCOUNTER_NOTICE in block
     assert "<encounter_notice>" in block and "</encounter_notice>" in block
 
     # An inpatient admission is not told anything about outpatient records: a rule
     # stated on every turn is a rule the model learns to skim.
+    encounter.set_current(encounter.INPATIENT)
     assert graph._context_block("", 90000023) == ""
 
     # And it composes with the manifest rather than replacing it: the notice qualifies
     # the record, the manifest states the features, and a turn needs both.
+    encounter.set_current(encounter.OUTPATIENT)
     composed = graph._context_block("<admission_metadata>x</admission_metadata>", outpatient)
     assert composed.index("<admission_metadata>") < composed.index("<encounter_notice>")
     assert composed.startswith("\n\n")

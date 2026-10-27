@@ -20,10 +20,12 @@ What the arithmetic must show
      5 outpatient encounters   (no inpatient risk score is computable)
     82 inpatient admissions   <- the clinical census
 
-The five outpatient ids live in `services.agent.routing.OUTPATIENT_HADM_IDS`
-and are imported, never re-typed: that frozenset is also what suppresses the risk
-score at request time, so the harness and the product cannot drift apart about
-which encounters are outpatient.
+The five outpatient ids live in `evaluation.outpatient_oracle`, which is the
+cohort builder's own decision kept as an answer key. The product no longer carries
+a set: it reads `encounter_type` off the feature row
+(`services.agent.routing.encounter`). The two are independent statements of the
+same fact, which is what lets a test compare them — a copy of the product's own
+rule would only ever agree with itself.
 
 Outpatient admissions are written to their own file rather than dropped. They are
 the evidence for risk suppression, and an assertion that needs its inputs to
@@ -122,10 +124,10 @@ def labels_by_hadm_id() -> dict[int, dict]:
 #: correct refusal of the readmission tool as a fabrication — suite 2, run
 #: `pilot-verify-20261020-193417`: 90000028, 90000054, 90000073, safety 0.
 #:
-#: The authority is `services.agent.routing.OUTPATIENT_HADM_IDS`, the same frozenset
-#: that suppresses the risk score at request time. It is imported, never re-typed, for
-#: the reason the module docstring gives: the harness and the product cannot drift
-#: apart about which encounters are outpatient.
+#: The authority is `evaluation.outpatient_oracle`, the decision the cohort was built
+#: from. Since 2026-10-27 the product reads `encounter_type` from the row instead, and
+#: `tests/evaluation/test_encounter_column.py` asserts the two agree on all 87 served
+#: records, so this key cannot describe a record differently from the service.
 OUTPATIENT_ENCOUNTER = (
     "outpatient — no inpatient stay; readmission risk not applicable"
 )
@@ -145,7 +147,7 @@ ADMISSION_TYPE_SOURCE = (
 
 def encounter_statement(hadm_id: int) -> str:
     """What the manifest says this encounter was — the statement the judge governs by."""
-    from services.agent.routing.routing import OUTPATIENT_HADM_IDS  # noqa: PLC0415
+    from evaluation.outpatient_oracle import OUTPATIENT_HADM_IDS  # noqa: PLC0415
 
     return (OUTPATIENT_ENCOUNTER if int(hadm_id) in OUTPATIENT_HADM_IDS
             else INPATIENT_ENCOUNTER)
@@ -240,7 +242,7 @@ def payload_for(cases: list[dict], kind: str, extra: dict | None = None) -> dict
 
 
 def main() -> int:
-    from services.agent.routing.routing import OUTPATIENT_HADM_IDS  # noqa: PLC0415
+    from evaluation.outpatient_oracle import OUTPATIENT_HADM_IDS  # noqa: PLC0415
 
     served = served_hadm_ids()
     labels = labels_by_hadm_id()

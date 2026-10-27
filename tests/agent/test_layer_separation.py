@@ -107,6 +107,7 @@ AGENT_MODULES = frozenset({
     'presentation/domain.py',
     'routing/__init__.py',
     'routing/admission_context.py',
+    'routing/encounter.py',
     'routing/routing.py',
     'telemetry/__init__.py',
     'telemetry/observability.py',

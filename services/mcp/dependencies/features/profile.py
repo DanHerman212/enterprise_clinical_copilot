@@ -88,10 +88,25 @@ COUNT_FIELDS: tuple[tuple[str, str], ...] = (
 
 #: What the manifest states, in the order a reader wants it.
 FIELD_ORDER: tuple[str, ...] = (
+    "encounter_type",
     "age", "gender", "admission_type", "discharge_location", "insurance", "race",
     "prior_admission_count", "prior_inpatient_days", "recent_ed_visits",
     "index_los_days",
 )
+
+#: `encounter_type` is a plain column rather than a one-hot group, and it leads the
+#: manifest because everything after it is conditional on it: an outpatient visit has no
+#: admission type, no discharge disposition and no length of stay, so a reader who meets
+#: those fields first has been told four things about a stay that did not happen.
+#:
+#: It is a property of the record, not of the model. The encoder does not consume it —
+#: `feature_order()` excludes it, so it never reaches the booster — and it is carried on
+#: the row because the row is the only place the record's own facts live.
+ENCOUNTER_FIELD = "encounter_type"
+ENCOUNTER_LABELS: dict[str, str] = {
+    "inpatient": "inpatient admission",
+    "outpatient": "outpatient encounter (no inpatient stay)",
+}
 
 ABSENT = "Not recorded"
 
@@ -121,12 +136,26 @@ def _decode_count(value: Any) -> str:
     return str(int(number)) if number.is_integer() else f"{number:g}"
 
 
+def _decode_encounter(value: Any) -> str:
+    """The encounter type as the row states it, or `ABSENT`.
+
+    Read verbatim and normalised to lower case: this column is not a level of an
+    encoding, so there is nothing to resolve. A value the vocabulary does not name is
+    reported as not recorded rather than guessed at, for the same reason the one-hot
+    groups are — an absent fact and an inferred one are the same thing to a reader.
+    """
+    text = str(value or "").strip().lower()
+    return ENCOUNTER_LABELS.get(text, ABSENT)
+
+
 def decode_profile(row: dict[str, Any]) -> dict[str, str]:
     """The readable profile of one feature row, keyed by `FIELD_ORDER`."""
     if not row:
         return {}
 
-    profile: dict[str, str] = {}
+    profile: dict[str, str] = {
+        ENCOUNTER_FIELD: _decode_encounter(row.get(ENCOUNTER_FIELD)),
+    }
     for field, label in COUNT_FIELDS:
         profile[field] = _decode_count(row.get(field))
 

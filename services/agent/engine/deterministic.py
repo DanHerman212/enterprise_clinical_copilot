@@ -51,6 +51,7 @@ from typing import Any, Callable
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from services.agent.routing import routing
+from services.agent.routing import encounter
 from services.agent.telemetry import stages
 from services.agent.postprocess import citations
 from services.agent.presentation.domain import humanize
@@ -68,7 +69,6 @@ from services.agent.engine.prompts import SYSTEM_PROMPT
 from services.agent.routing.routing import (
     EHR_RECORD_QUERY,
     OUTPATIENT_ENCOUNTER_NOTICE,
-    OUTPATIENT_HADM_IDS,
     Command,
     supplementary_arguments,
     tool_arguments,
@@ -479,7 +479,7 @@ async def run_command(
     # fourth section from the notes, which is how a speech-therapy progress note came
     # back with a "Readmission risk & trajectory" paragraph (2026-10-17).
     outpatient = (
-        hadm_id in OUTPATIENT_HADM_IDS
+        not encounter.states_inpatient_fields()
         and any(spec.tool == "predict_readmission" for spec in command.supplementary)
     )
     # A summary's passages are ordered canonically as they arrive, so the formatter's
@@ -530,7 +530,9 @@ async def run_command(
     # asks whether the risk estimate was withheld: every command on an outpatient record
     # owes the reader the same statement about what the record is, not only the one that
     # would have drawn a risk card.
-    outpatient_record = hadm_id is not None and hadm_id in OUTPATIENT_HADM_IDS
+    outpatient_record = (
+        hadm_id is not None and encounter.current_is_outpatient() is True
+    )
 
     # `/ehr` on an outpatient record with nothing in it. The record-wide search has now
     # answered the only question that matters — nothing means the absence is real — so

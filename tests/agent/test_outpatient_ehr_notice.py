@@ -17,6 +17,8 @@ record, and a non-empty answer on the state for every exit from a summarize turn
 from __future__ import annotations
 
 import asyncio
+import sys
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -25,12 +27,30 @@ from services.agent.engine import deterministic
 from services.agent.engine import model as model_gateway
 from services.agent.engine import graph
 from services.agent.engine import model as model_turn
-from services.agent.routing import routing
+from services.agent.routing import encounter, routing
 from services.agent.presentation.a2ui import compose_presentation
 from services.agent.engine.deterministic import run_command
 
+_REPO = Path(__file__).resolve().parents[2]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+
+from evaluation.outpatient_oracle import OUTPATIENT_HADM_IDS  # noqa: E402
+
 SUMMARIZE = routing.command_for("summarize")
-OUTPATIENT = sorted(routing.OUTPATIENT_HADM_IDS)
+OUTPATIENT = sorted(OUTPATIENT_HADM_IDS)
+
+
+def _classify(hadm_id: int) -> None:
+    """What the pre-flight records before the command runs.
+
+    These tests enter `run_command` directly, skipping `admission_context.hydrate`, so
+    the encounter type has to be set here — which is the point of the ContextVar being
+    request-scoped: the value the command gate reads is the one the pre-flight wrote.
+    """
+    encounter.set_current(
+        encounter.OUTPATIENT if hadm_id in OUTPATIENT_HADM_IDS else encounter.INPATIENT
+    )
 
 
 class _EmptyToolbox:
@@ -62,6 +82,7 @@ class _RecordingModel:
 def _run(hadm_id: int, *, reply: str = "a summary", model: object | None = None):
     box = _EmptyToolbox()
     used = model or _RecordingModel(reply)
+    _classify(hadm_id)
     with patch.object(model_gateway, "build_llm", lambda name: used):
         state = asyncio.run(run_command(
             box, SUMMARIZE, hadm_id, question="/ehr", model="test-model",
@@ -142,6 +163,7 @@ def test_an_outpatient_formatter_that_says_nothing_uses_the_encounter_wording():
     labs = routing.command_for("labs")
     box = _EmptyToolbox()
     used = _RecordingModel(reply="")
+    _classify(OUTPATIENT[0])
     with patch.object(model_gateway, "build_llm", lambda name: used):
         state = asyncio.run(run_command(
             box, labs, OUTPATIENT[0], question="/labs", model="test-model",
@@ -162,6 +184,7 @@ class _PassageToolbox:
 def test_an_outpatient_record_with_a_note_is_still_summarised():
     """The gate is empty-only: a record that has text keeps the formatting turn."""
     used = _RecordingModel(reply="**Hospital course.** A short visit.")
+    _classify(OUTPATIENT[0])
     with patch.object(model_gateway, "build_llm", lambda name: used):
         state = asyncio.run(run_command(
             _PassageToolbox(), SUMMARIZE, OUTPATIENT[0], question="/ehr",

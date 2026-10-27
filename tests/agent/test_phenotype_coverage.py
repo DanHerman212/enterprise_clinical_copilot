@@ -35,6 +35,20 @@ from services.agent.presentation.domain import (
 from services.agent.presentation.a2ui import compose_presentation, turn_phenotype
 from services.agent.presentation.domain import benchmarks_for_phenotype
 from services.agent.ingress.contracts import SERVED_HADM_IDS
+from services.agent.routing import encounter
+
+
+def _classify(hadm_id: int) -> None:
+    """What the pre-flight records before the turn composes anything.
+
+    `is_matrix_eligible` reads the turn's encounter state, which the pre-flight sets from
+    the record's `encounter_type` column. These tests compose without running a turn, so
+    the value is set here; `NON_ADMISSION` is the map's own record of the same fact and is
+    asserted to agree with it in `test_tier1_cohort_sweep`.
+    """
+    encounter.set_current(
+        encounter.OUTPATIENT if hadm_id in NON_ADMISSION else encounter.INPATIENT
+    )
 
 #: One discharge diagnosis per bucket: the words a note uses for that admission. Written
 #: as a discharge summary writes them, because that is what the classifier is reading.
@@ -76,6 +90,7 @@ def _predict(hadm_id: int) -> dict:
 
 def _ehr_turn(hadm_id: int, diagnosis: str) -> dict:
     """One `/ehr` turn: the note sections it read, and the estimate beside them."""
+    _classify(hadm_id)
     sections = [{"name": "rag_search_sections", "args": {"hadm_id": hadm_id},
                  "response": {"query": "sections", "returned": 1, "passages": [{
                      "id": "p1", "section": "discharge_diagnosis",
@@ -219,6 +234,7 @@ class TestEveryInpatientIsCompared:
         """The one refusal that survives, and the reason it does: there was no stay to be
         readmitted from."""
         for hadm_id in sorted(NON_ADMISSION):
+            _classify(hadm_id)
             assert is_matrix_eligible(hadm_id) is False
             out = _ehr_turn(hadm_id, DIAGNOSIS["neurological_medical"])
             assert _matrix(out) is None, f"{hadm_id} is not an admission"

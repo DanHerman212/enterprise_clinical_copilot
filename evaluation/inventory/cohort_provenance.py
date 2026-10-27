@@ -26,8 +26,8 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from services.agent.presentation import domain as admission_phenotypes
-from services.agent.routing import routing  # noqa: E402
 from services.agent.ingress.contracts import SERVED_HADM_IDS  # noqa: E402
+from evaluation.outpatient_oracle import OUTPATIENT_HADM_IDS  # noqa: E402
 from services.mcp.tools import (  # noqa: E402
     discharge_medications,
     get_lab_trends,
@@ -163,7 +163,7 @@ async def _record(hadm_id: int, gate: asyncio.Semaphore) -> tuple[int, dict[str,
 
     return hadm_id, {
         "hadm_id": hadm_id,
-        "outpatient": hadm_id in routing.OUTPATIENT_HADM_IDS,
+        "outpatient": hadm_id in OUTPATIENT_HADM_IDS,
         "phenotype": bucket.key if bucket else None,
         "profile": _profile_fields(profile),
         "risk": _risk_facts(risk_payload, profile),

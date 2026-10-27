@@ -23,7 +23,7 @@ import pytest
 
 from services.agent.ingress import contracts
 from services.agent.ingress import http
-from services.agent.routing import routing
+from services.agent.routing import encounter, routing
 
 WIRE = {"/meds": "meds", "/labs": "labs", "/ehr": "summarize",
         "/pubmed": "literature"}
@@ -149,7 +149,10 @@ def test_an_outpatient_record_gets_no_readmission_estimate():
     """A speech-therapy progress note has no admission to be readmitted after."""
     summarize = routing.command_for("summarize")
 
+    encounter.set_current(encounter.OUTPATIENT)
     outpatient_calls = routing.supplementary_arguments(summarize, 90000054)
+
+    encounter.set_current(encounter.INPATIENT)
     inpatient_calls = routing.supplementary_arguments(summarize, 90000015)
 
     assert all(name != "predict_readmission" for name, _ in outpatient_calls)

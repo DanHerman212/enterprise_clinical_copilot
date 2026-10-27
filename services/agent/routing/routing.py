@@ -49,6 +49,7 @@ from dataclasses import dataclass, field
 # module and not the chunker, so importing this constant from `chunking` failed the
 # container at startup and the deploy silently served the previous revision.
 from services.agent.routing.admission_context import PREFLIGHT_TOOLS
+from services.agent.routing import encounter
 # `admission_phenotypes` is no longer imported here. It was used by the pre-flight
 # condition lock, which existed to stop `/pubmed` requesting an estimate the surface would
 # then decline to compare — and that command no longer requests one at all (Phase F.1,
@@ -838,17 +839,13 @@ def _templated_arguments(args: dict, hadm_id: int | None,
     return {k: (hadm_id if v == "{hadm_id}" else v) for k, v in args.items()}
 
 
-#: Records in the demo cohort that are outpatient notes, not inpatient stays.
-#:
-#: A 30-day readmission risk and a discharge medication list are clinically
-#: non-applicable to a speech-therapy or rehab progress note: there was no admission to
-#: be readmitted after. The model will still score them, because the feature row exists,
-#: and `/ehr` used to draw "Readmission risk & trajectory" with a 5.7% widget for a
-#: patient whose entire chart is three voice-therapy sessions (2026-10-17).
-#:
-#: Declared here, in the one module that owns the command vocabulary, so the surface and
-#: the eval harness can both read it rather than each carrying a copy.
-OUTPATIENT_HADM_IDS = frozenset({90000028, 90000040, 90000051, 90000054, 90000073})
+#: Records in the demo cohort that are outpatient notes, not inpatient stays are
+#: identified by `routing.encounter`, which reads `encounter_type` off the record's own
+#: feature row. There is no id set here any more: a 30-day readmission risk and a discharge
+#: medication list are non-applicable to a speech-therapy or rehab progress note, and that
+#: is a fact about the encounter, not something to be recognised from an admission number.
+#: `docs/agent_evaluation/00b1-outpatient-signal_measurement_271026.md` records why no
+#: other field could stand in for it.
 
 #: The instruction that tells a prompt the record is an outpatient encounter.
 #:
@@ -859,9 +856,9 @@ OUTPATIENT_HADM_IDS = frozenset({90000028, 90000040, 90000051, 90000054, 9000007
 #: "Summarize the note" wrote it from the free-text path, where nothing had ever told the
 #: loop the record was not a stay (2026-10-21).
 #:
-#: It is a constant here rather than in either caller because the vocabulary that decides
-#: which admissions are outpatient lives here, and a second copy of this instruction would
-#: drift from `OUTPATIENT_HADM_IDS` the first time one of them was edited.
+#: It is a constant here rather than in either caller because the vocabulary a request is
+#: routed by is owned here, and a second copy of this instruction would drift from the
+#: rule that decides when it is appended (`routing.encounter`).
 OUTPATIENT_ENCOUNTER_NOTICE = (
     "OUTPATIENT ENCOUNTER: this record is an outpatient note — a visit, not an inpatient "
     "stay. There was no admission, no hospital course, no discharge and no readmission risk "
@@ -918,7 +915,7 @@ def supplementary_arguments(
 
     The readmission estimate is also left out for an OUTPATIENT record: scoring an
     outpatient note answers a question nobody asked, and the number then has to be drawn
-    somewhere. See `OUTPATIENT_HADM_IDS`.
+    somewhere. See `routing.encounter`.
 
     `topic` is the caller's own words for a command that takes them. It is accepted and
     unused, because the only rule that ever read it — the pre-flight condition lock — was
@@ -930,7 +927,11 @@ def supplementary_arguments(
         (spec.tool, _templated_arguments(spec.args, hadm_id, command))
         for spec in command.supplementary
         if not (spec.skipped_without_admission and hadm_id is None)
-        and not (spec.tool == "predict_readmission" and hadm_id in OUTPATIENT_HADM_IDS)
+        # The estimate describes a stay. On a record that was never one, the call is not
+        # made at all — the encounter type is read from the row the pre-flight already
+        # fetched, so nothing here has to know which admissions those are.
+        and not (spec.tool == "predict_readmission"
+                 and not encounter.states_inpatient_fields())
     ]
 
 

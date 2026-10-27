@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import pytest
 
-from services.agent import followups
+from services.agent.postprocess import followups
 from services.agent import routing
 
 ANSWER = "Discharged home in stable condition."

@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from services.agent.citations import (  # noqa: E402
+from services.agent.postprocess.citations import (  # noqa: E402
     SECTION_ALIASES,
     citation_remap,
     cited_numbers,

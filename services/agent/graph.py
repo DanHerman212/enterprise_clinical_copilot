@@ -56,7 +56,7 @@ from services.agent.model_runtime import (
     streamed_turn as _streamed_turn,  #    `model_runtime.streamed_turn`.
 )
 from services.agent.telemetry.stages import emit as _emit
-from services.agent import citations
+from services.agent.postprocess import citations
 
 from services.agent.mcp_client import MCPToolbox, _clean_schema
 from services.agent.contracts import RecordedToolCall, validate_recorded_tool_call

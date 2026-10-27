@@ -37,7 +37,7 @@ front-end registers, so one surface can use basic AND custom components
 together.
 """
 
-from services.agent.citations import (
+from services.agent.postprocess.citations import (
     citation_remap,
     first_citation,
     intent_sections,

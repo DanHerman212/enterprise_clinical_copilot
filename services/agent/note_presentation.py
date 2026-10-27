@@ -18,7 +18,7 @@ UNAVAILABLE search stay with the canvas, because they are wording for a surface
 that did not get any records.
 """
 
-from services.agent.citations import (
+from services.agent.postprocess.citations import (
     citable_passages,
     cited_numbers,
     extract_section,

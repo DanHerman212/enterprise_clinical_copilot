@@ -35,7 +35,7 @@ from unittest.mock import patch
 import pytest
 from langchain_core.messages import AIMessage
 
-from services.agent import followups
+from services.agent.postprocess import followups
 from services.agent import graph
 from services.agent.mcp_client import MCPToolbox
 

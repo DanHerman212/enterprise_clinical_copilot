@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from services.agent import guardrail as g  # noqa: E402
+from services.agent.postprocess import guardrail as g  # noqa: E402
 from services.agent.feature_labels import display_probability  # noqa: E402
 
 

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 
-from services.agent import citations
+from services.agent.postprocess import citations
 from services.agent import graph
 from services.agent.a2ui import compose_presentation
 from services.agent.note_presentation import resolve_sources

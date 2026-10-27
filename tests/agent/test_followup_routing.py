@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from langchain_core.messages import AIMessage
 
-from services.agent import followups
+from services.agent.postprocess import followups
 from services.agent import graph
 from services.agent import routing
 

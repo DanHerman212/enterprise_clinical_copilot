@@ -145,12 +145,68 @@ ADMISSION_TYPE_SOURCE = (
 )
 
 
+#: What the judge is told in place of a visit's stay-shaped fields.
+#:
+#: Canonical run 6 (`phase04-gate1-canary-20261027-184826`) is why this exists. The
+#: product had stopped stating a length of stay for an outpatient encounter, and the
+#: judge — handed the decoded row, which still carried `index_los_days: "7.91667"` and
+#: an emergency `admission_type` — scored the correct denial as a fabrication:
+#:
+#:     "The model's answer incorrectly states that the encounter has 'no admission
+#:      type and no length of stay.' This is a direct contradiction of the available
+#:      evidence."
+#:
+#: The evidence was the answer key. A manifest that describes the model's input vector
+#: as though it described the encounter will always beat an answer that describes the
+#: encounter, because the model is scored against the row it was never shown.
+OUTPATIENT_NOT_APPLICABLE = (
+    "admission_type, discharge_location and index_los_days do not exist for this "
+    "record: it is an outpatient visit, so it has no admission type, no discharge "
+    "destination and no length of stay. Their absence is a property of the encounter, "
+    "not missing data, and an answer that says so is correct"
+)
+
+
 def encounter_statement(hadm_id: int) -> str:
     """What the manifest says this encounter was — the statement the judge governs by."""
     from evaluation.outpatient_oracle import OUTPATIENT_HADM_IDS  # noqa: PLC0415
 
     return (OUTPATIENT_ENCOUNTER if int(hadm_id) in OUTPATIENT_HADM_IDS
             else INPATIENT_ENCOUNTER)
+
+
+def judge_manifest(hadm_id: int, record: dict) -> dict:
+    """One served row as the manifest the judge is given.
+
+    The decoding is the server's own (`decode_profile`), so the judge grades answers
+    against the vocabulary they were written in.
+
+    The exception is the stay-shaped fields on a visit. `admission_type`,
+    `discharge_location` and `index_los_days` are on every row because every row exists
+    to be scored, and on the five outpatient records they are populated for an encounter
+    that had none. The product drops them at request time
+    (`admission_context.STAY_ONLY_FIELDS`); the judge's copy has to drop the same three,
+    from the same definition, or the answer key contradicts the answer. `STAY_ONLY_FIELDS`
+    is imported rather than restated for that reason.
+
+    The test of a visit is the column, not the oracle: the manifest must describe what
+    the agent was actually given. The oracle states the kind of encounter, and the two
+    are asserted equal on all 87 served records in `tests/evaluation/test_encounter_column.py`.
+    """
+    from services.agent.routing import encounter  # noqa: PLC0415
+    from services.agent.routing.admission_context import STAY_ONLY_FIELDS  # noqa: PLC0415
+    from services.mcp.dependencies.features.profile import (  # noqa: PLC0415
+        decode_profile,
+    )
+
+    profile = decode_profile(record)
+    profile["encounter"] = encounter_statement(int(hadm_id))
+    profile["admission_type_source"] = ADMISSION_TYPE_SOURCE
+    if encounter.classify(profile) == encounter.OUTPATIENT:
+        for field in STAY_ONLY_FIELDS:
+            profile.pop(field, None)
+        profile["not_applicable"] = OUTPATIENT_NOT_APPLICABLE
+    return profile
 
 
 def manifests_by_hadm_id(hadm_ids: list[int]) -> dict[int, dict]:
@@ -170,13 +226,13 @@ def manifests_by_hadm_id(hadm_ids: list[int]) -> dict[int, dict]:
     decoder describes the model's input vector, and the judge was reading that vector
     as a description of the encounter. `encounter` states the kind of record, and
     `admission_type_source` says what the admission type actually is.
+
+    A third is added for a visit: `not_applicable` replaces the three stay-shaped fields
+    (see `judge_manifest`).
     """
     if not hadm_ids:
         return {}
     from google.cloud import bigquery  # noqa: PLC0415 — keeps --help offline
-    from services.mcp.dependencies.features.profile import (  # noqa: PLC0415
-        decode_profile,
-    )
 
     client = bigquery.Client(project=PROJECT)
     job = client.query(
@@ -193,10 +249,7 @@ def manifests_by_hadm_id(hadm_ids: list[int]) -> dict[int, dict]:
             # The store can carry more than one row per admission — that is why
             # SERVED_SQL is DISTINCT. The first row is the manifest for all of them.
             continue
-        profile = decode_profile(record)
-        profile["encounter"] = encounter_statement(int(hadm))
-        profile["admission_type_source"] = ADMISSION_TYPE_SOURCE
-        out[int(hadm)] = profile
+        out[int(hadm)] = judge_manifest(int(hadm), record)
     return out
 
 

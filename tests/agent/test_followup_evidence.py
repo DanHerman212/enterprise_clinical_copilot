@@ -28,10 +28,10 @@ import asyncio
 from langchain_core.messages import ToolMessage
 
 from services.agent.engine import graph
-from services.agent import http
+from services.agent.ingress import http
 from services.agent.telemetry import stages
 from services.agent.presentation.a2ui import compose_presentation
-from services.agent.contracts import RE_DERIVABLE_TOOLS, RESULT_KEPT_TOOLS
+from services.agent.ingress.contracts import RE_DERIVABLE_TOOLS, RESULT_KEPT_TOOLS
 
 LABS = {
     "trends": [

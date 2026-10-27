@@ -28,7 +28,7 @@ from services.agent.routing import routing
 from services.agent.telemetry import stages
 from services.agent.routing import routing as questions
 from services.agent import turn
-from services.agent.contracts import AgentRequestError, parse_agent_request
+from services.agent.ingress.contracts import AgentRequestError, parse_agent_request
 from services.agent.engine.graph import ask, final_message
 from services.agent.engine.mcp_client import MCP_TRANSPORT, toolbox
 from services.agent.telemetry import observability

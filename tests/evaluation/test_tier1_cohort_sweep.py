@@ -25,7 +25,7 @@ import pytest
 from services.agent.routing import admission_context
 from services.agent.presentation import domain as admission_phenotypes
 from services.agent.routing import routing
-from services.agent import served_admissions
+from services.agent.ingress import contracts as served_admissions
 from services.agent.engine import deterministic
 from services.agent.presentation.a2ui import compose_presentation, compose_risk_canvas, predict_payload
 from services.mcp.retrieval.sections import SUMMARY_SECTIONS
@@ -278,7 +278,7 @@ def test_a_synthetic_unknown_id_is_refused_like_an_unserved_orphan():
 @pytest.mark.parametrize("hadm_id", [*sorted(UNSERVED), SYNTHETIC_UNKNOWN])
 def test_the_unserved_refusal_is_an_answer_rather_than_an_exception(hadm_id):
     """A 200 with an abstention envelope, which is what the console can draw."""
-    from services.agent import http
+    from services.agent.ingress import http
 
     payload = asyncio.run(http._unserved_admission(
         {"hadm_id": hadm_id, "question": "What is her risk?"}, "",

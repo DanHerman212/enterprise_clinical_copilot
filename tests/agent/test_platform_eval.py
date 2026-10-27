@@ -356,7 +356,7 @@ def test_turn2_replay_is_accepted_by_the_service_contract():
 
 def test_session_id_is_refused_by_the_service():
     """Documents why the runner never sends one: there is no server-side state."""
-    from services.agent.contracts import AgentRequestError, parse_agent_request
+    from services.agent.ingress.contracts import AgentRequestError, parse_agent_request
 
     with pytest.raises(AgentRequestError):
         parse_agent_request({"question": "hello", "session_id": "abc"},

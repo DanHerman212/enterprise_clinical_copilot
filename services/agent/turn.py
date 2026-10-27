@@ -31,7 +31,7 @@ from services.agent.engine import model as model_turn
 from services.agent.telemetry import observability
 from services.agent.routing import routing
 from services.agent.presentation.a2ui import compose_presentation
-from services.agent.contracts import (
+from services.agent.ingress.contracts import (
     RE_DERIVABLE_TOOLS,
     AgentResponseError,
     validate_agent_success,
@@ -39,7 +39,7 @@ from services.agent.contracts import (
 from services.agent.engine.graph import final_message, final_text
 from services.agent.postprocess.guardrail import guard_answer
 from services.agent.engine.mcp_client import MCP_TRANSPORT
-from services.agent.served_admissions import is_served
+from services.agent.ingress.contracts import is_served
 
 logger = logging.getLogger(__name__)
 

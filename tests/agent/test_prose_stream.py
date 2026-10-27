@@ -28,10 +28,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from langchain_core.messages import AIMessage, AIMessageChunk  # noqa: E402
 
 from services.agent.engine import graph
-from services.agent import http
+from services.agent.ingress import http
 from services.agent.routing import routing
 from services.agent.telemetry import stages  # noqa: E402
-from services.agent.contracts import AgentRequestError, parse_agent_request  # noqa: E402
+from services.agent.ingress.contracts import AgentRequestError, parse_agent_request  # noqa: E402
 from services.agent.engine.model import text_of  # noqa: E402
 from services.agent.engine.deterministic import run_command  # noqa: E402
 
@@ -257,7 +257,7 @@ def test_the_settled_verdict_is_logged_with_both_texts(caplog):
     now, so a warning would fire on the normal case and stop meaning anything. What is
     worth watching is how often the visible one happens.
     """
-    with caplog.at_level("INFO", logger="services.agent.http"):
+    with caplog.at_level("INFO", logger="services.agent.ingress.http"):
         http._prose_settled(
             ["The score is 0.14"],
             {"answer": "The score is 0.33", "guardrail_flags": ["risk_number"]},

@@ -22,7 +22,7 @@ from unittest import skipUnless
 
 import pytest
 
-from services.agent import contracts
+from services.agent.ingress import contracts
 from services.agent.routing import routing as questions
 
 # The sibling repository, when it is checked out beside this one.
@@ -130,7 +130,7 @@ def test_the_declared_intents_are_the_controls_a_surface_can_draw():
 
 @skipUnless(HAS_SIBLING, NO_SIBLING)
 def test_the_site_question_ceiling_is_this_service_s_ceiling():
-    from services.agent.http import MAX_QUESTION_CHARS
+    from services.agent.ingress.http import MAX_QUESTION_CHARS
 
     assert ast.literal_eval(_assignment(SITE_VIEWS, "MAX_QUESTION_CHARS")) == (
         MAX_QUESTION_CHARS)

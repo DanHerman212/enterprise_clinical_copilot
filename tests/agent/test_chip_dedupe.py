@@ -20,9 +20,9 @@ excludes the chip when it is given them.
 
 from __future__ import annotations
 
-from services.agent.contracts import parse_agent_request
+from services.agent.ingress.contracts import parse_agent_request
 from services.agent.postprocess.followups import _fingerprint, suggest
-from services.agent.http import _asked_questions
+from services.agent.ingress.http import _asked_questions
 
 CHIP = "What is the dosing and taper schedule for oxycodone SR at discharge?"
 

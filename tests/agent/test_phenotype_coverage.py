@@ -34,7 +34,7 @@ from services.agent.presentation.domain import (
 )
 from services.agent.presentation.a2ui import compose_presentation, turn_phenotype
 from services.agent.presentation.domain import benchmarks_for_phenotype
-from services.agent.served_admissions import SERVED_HADM_IDS
+from services.agent.ingress.contracts import SERVED_HADM_IDS
 
 #: One discharge diagnosis per bucket: the words a note uses for that admission. Written
 #: as a discharge summary writes them, because that is what the classifier is reading.

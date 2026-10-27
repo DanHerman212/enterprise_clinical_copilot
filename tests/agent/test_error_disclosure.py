@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 from starlette.testclient import TestClient  # noqa: E402
 
-from services.agent import http as srv  # noqa: E402
+from services.agent.ingress import http as srv  # noqa: E402
 
 # The tools package re-exports the tool coroutines under the same names as the
 # submodules, so import the MODULES explicitly for patching.
@@ -84,7 +84,7 @@ def test_ask_logs_the_forwarded_cloud_trace_id(caplog):
 
     with patch.object(srv, "toolbox", _fake_toolbox), \
          patch.object(srv, "ask", boom), \
-         caplog.at_level("ERROR", logger="services.agent.http"):
+         caplog.at_level("ERROR", logger="services.agent.ingress.http"):
         _client().post(
             "/ask", json={"question": "risk for 90000009?"},
             headers={"X-Cloud-Trace-Context": "105445aa7843bc8bf206b12000100000/1;o=1"},

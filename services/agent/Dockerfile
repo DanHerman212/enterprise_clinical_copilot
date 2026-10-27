@@ -37,5 +37,5 @@ USER 1000
 
 EXPOSE 8080
 
-# No --port: Cloud Run injects PORT and services/agent/http.py reads it.
-CMD ["python", "-m", "services.agent.http"]
+# No --port: Cloud Run injects PORT and services/agent/ingress/http.py reads it.
+CMD ["python", "-m", "services.agent.ingress.http"]

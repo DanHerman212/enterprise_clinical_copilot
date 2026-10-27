@@ -26,8 +26,8 @@ sys.path.insert(0, str(_REPO / "evaluation" / "agent"))
 from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 from starlette.testclient import TestClient  # noqa: E402
 
-from services.agent import contracts  # noqa: E402
-from services.agent import http as srv  # noqa: E402
+from services.agent.ingress import contracts  # noqa: E402
+from services.agent.ingress import http as srv  # noqa: E402
 from services.agent.telemetry import stages  # noqa: E402
 
 import collect_http  # noqa: E402
@@ -403,7 +403,7 @@ def test_the_served_set_is_exactly_the_census():
     """
     import json
 
-    from services.agent.served_admissions import SERVED_HADM_IDS
+    from services.agent.ingress.contracts import SERVED_HADM_IDS
 
     results = _REPO / "evaluation" / "agent" / "results"
     ids: set[int] = set()
@@ -596,7 +596,7 @@ def test_every_admission_the_site_offers_is_one_this_agent_will_answer():
 
     import pytest
 
-    from services.agent.served_admissions import SERVED_HADM_IDS
+    from services.agent.ingress.contracts import SERVED_HADM_IDS
 
     if not SITE_SEED.is_file():
         pytest.skip(f"site repository not checked out ({SITE_SEED})")

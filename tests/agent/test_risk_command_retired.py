@@ -22,7 +22,7 @@ import pytest  # noqa: E402
 from starlette.testclient import TestClient  # noqa: E402
 
 from services.agent.engine import graph
-from services.agent import http as srv
+from services.agent.ingress import http as srv
 from services.agent.routing import routing as questions
 from services.agent.routing import routing  # noqa: E402
 

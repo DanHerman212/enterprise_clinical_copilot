@@ -21,8 +21,8 @@ import types
 
 import pytest
 
-from services.agent import contracts
-from services.agent import http
+from services.agent.ingress import contracts
+from services.agent.ingress import http
 from services.agent.routing import routing
 
 WIRE = {"/meds": "meds", "/labs": "labs", "/ehr": "summarize",

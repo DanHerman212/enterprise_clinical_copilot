@@ -144,7 +144,7 @@ def test_the_check_can_actually_fail():
     """
     in_image = _image_python_files()
 
-    assert "services/agent/http.py" in in_image
+    assert "services/agent/ingress/http.py" in in_image
     assert "services/mcp/retrieval/sections.py" in in_image
     assert "services/mcp/retrieval/chunking.py" not in in_image
     assert "services/mcp/eval_report.py" not in in_image

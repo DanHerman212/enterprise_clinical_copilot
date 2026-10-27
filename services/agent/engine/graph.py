@@ -59,7 +59,7 @@ from services.agent.telemetry.stages import emit as _emit
 from services.agent.postprocess import citations
 
 from services.agent.engine.mcp_client import MCPToolbox, _clean_schema
-from services.agent.contracts import RecordedToolCall, validate_recorded_tool_call
+from services.agent.ingress.contracts import RecordedToolCall, validate_recorded_tool_call
 from services.agent.engine.prompts import SYSTEM_PROMPT
 from services.agent.telemetry import observability
 from services.agent.routing import routing

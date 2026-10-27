@@ -21,7 +21,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from services.agent.engine import graph
-from services.agent.contracts import AgentRequestError, parse_agent_request
+from services.agent.ingress.contracts import AgentRequestError, parse_agent_request
 
 PREDICTION = {
     "name": "predict_readmission",

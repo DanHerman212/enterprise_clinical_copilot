@@ -21,7 +21,7 @@ from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 from starlette.testclient import TestClient  # noqa: E402
 
 from services.agent.telemetry import observability as chain
-from services.agent import http as srv
+from services.agent.ingress import http as srv
 from services.agent.telemetry import stages  # noqa: E402
 
 

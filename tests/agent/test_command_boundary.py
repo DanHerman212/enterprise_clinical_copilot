@@ -37,8 +37,8 @@ from services.agent.engine.deterministic import (  # noqa: E402
     parse_medications,
     run_command,
 )
-from services.agent.contracts import parse_agent_request  # noqa: E402
-from services.agent.contracts import AgentRequestError  # noqa: E402
+from services.agent.ingress.contracts import parse_agent_request  # noqa: E402
+from services.agent.ingress.contracts import AgentRequestError  # noqa: E402
 from services.mcp.tools import __all__ as REGISTERED_TOOLS  # noqa: E402
 
 

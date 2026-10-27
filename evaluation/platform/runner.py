@@ -76,7 +76,7 @@ def build_body(*, question: str, hadm_id: int, run_tag: str,
 
 def validate_body(body: dict[str, Any]) -> None:
     """Refuse a body the service would refuse, before it costs a request."""
-    from services.agent.contracts import parse_agent_request
+    from services.agent.ingress.contracts import parse_agent_request
 
     parse_agent_request(body, max_question_chars=4000)
 

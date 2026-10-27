@@ -27,7 +27,7 @@ if str(REPO) not in sys.path:
 
 from services.agent.presentation import domain as admission_phenotypes
 from services.agent.routing import routing  # noqa: E402
-from services.agent.served_admissions import SERVED_HADM_IDS  # noqa: E402
+from services.agent.ingress.contracts import SERVED_HADM_IDS  # noqa: E402
 from services.mcp.tools import (  # noqa: E402
     discharge_medications,
     get_lab_trends,

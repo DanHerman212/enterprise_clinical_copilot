@@ -58,7 +58,7 @@ from prompt_set import (  # noqa: E402
     follow_up_for,
     question_for,
 )
-from services.agent.contracts import (  # noqa: E402
+from services.agent.ingress.contracts import (  # noqa: E402
     MAX_REPLAYED_TOOL_CALLS,
     MAX_TOOL_NAME_CHARS,
     MAX_TURN_ANSWER_CHARS,

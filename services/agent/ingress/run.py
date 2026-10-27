@@ -1,8 +1,8 @@
 """Ask the agent a question, over stdio or the deployed service.
 
-    .venv/bin/python -m services.agent.run "What is the readmission risk for admission 20924467?"
-    .venv/bin/python -m services.agent.run --trace "Is admission 1 high risk?"
-    .venv/bin/python -m services.agent.run --transport http --url https://mcp-server-...run.app
+    .venv/bin/python -m services.agent.ingress.run "What is the readmission risk for admission 20924467?"
+    .venv/bin/python -m services.agent.ingress.run --trace "Is admission 1 high risk?"
+    .venv/bin/python -m services.agent.ingress.run --transport http --url https://mcp-server-...run.app
 
 Run from services.
 """

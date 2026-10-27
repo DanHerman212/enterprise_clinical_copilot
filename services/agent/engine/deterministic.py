@@ -53,7 +53,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from services.agent.routing import routing
 from services.agent.telemetry import stages
 from services.agent.postprocess import citations
-from services.agent.contracts import RecordedToolCall
+from services.agent.ingress.contracts import RecordedToolCall
 from services.agent.presentation.domain import humanize
 from services.agent.engine.model import text_of
 from services.agent.engine.prompts import SYSTEM_PROMPT

@@ -40,16 +40,20 @@ steps:
   # gate that lies. `pytest` arrives from services/mcp/requirements.txt, where it
   # is pinned.
   #
-  # Installed in three separate runs, in this order, on purpose. The files cannot
-  # be resolved together: services/mcp/requirements.txt pins langgraph==1.2.10 for
-  # the harness's local convenience while services/agent/requirements.txt pins
-  # 1.2.11, so one `pip install -r a -r b` is a hard ResolutionImpossible — the
-  # first version of this step failed exactly there. No image ever sees both
-  # files, so there is no single environment to reproduce; what this reproduces is
-  # the agent's, because that is the process the suite is mostly about. The MCP
-  # file goes first so the agent's pins win. The drift itself is a finding, not
-  # something to paper over: see
-  # docs/code_comprehension/06-governance_observability_and_ci.md §3.3.
+  # Installed in separate runs, in this order, on purpose: each file is resolved
+  # on its own, so one file's pin cannot make another's unresolvable, and the
+  # agent's file goes last so the tested environment is the deployed agent's.
+  # (They were genuinely unresolvable until 2026-10-27 — the MCP file carried a
+  # second langgraph pin, F-13.1. That pin is gone; the sequencing stays, because
+  # it is what makes the order of precedence explicit rather than incidental.)
+  #
+  # `kfp` is here and nowhere else. Three tests import the pipeline components,
+  # which `from kfp import dsl` at module scope, so the gate cannot collect them
+  # without it — the second Cloud Build run failed on exactly that. It is NOT
+  # added to any serving requirements file: the agent and MCP images never import
+  # a pipeline component, and a Kubeflow dependency in either would be weight
+  # carried by a process that cannot use it. The pin matches
+  # services/mcp/pipelines/Dockerfile, which is the image that does run them.
   #
   # `tests/agent/test_wire_contract_parity.py` reads the site's replay bounds from
   # a sibling checkout that Cloud Build does not have, so its cross-repo cases
@@ -64,6 +68,7 @@ steps:
         pip install --quiet --no-cache-dir -r evaluation/agent/requirements.txt
         pip install --quiet --no-cache-dir -r services/mcp/requirements.txt
         pip install --quiet --no-cache-dir -r services/agent/requirements.txt
+        pip install --quiet --no-cache-dir kfp==2.16.1
         python -m pytest tests -q
 
   - name: gcr.io/cloud-builders/docker

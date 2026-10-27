@@ -77,3 +77,56 @@ def test_the_layer4_runtime_does_not_import_the_training_package_either():
         module for module, _ in _imports(runtime)
         if module == TRAINING_ROOT or module.startswith(TRAINING_ROOT + ".")
     ]
+
+
+# --- the Phase 7 manifest ---------------------------------------------------
+#
+# Pinned as an exact frozenset of relative paths rather than a count: a count says
+# something changed, the set says what. The tree is 26 files — 7 `__init__.py`,
+# `turn.py`, and 18 subpackage modules — with no compatibility shims at the root.
+AGENT_MODULES = frozenset({
+    '__init__.py',
+    'turn.py',
+    'engine/__init__.py',
+    'engine/deterministic.py',
+    'engine/graph.py',
+    'engine/mcp_client.py',
+    'engine/model.py',
+    'engine/prompts.py',
+    'ingress/__init__.py',
+    'ingress/contracts.py',
+    'ingress/http.py',
+    'ingress/run.py',
+    'postprocess/__init__.py',
+    'postprocess/citations.py',
+    'postprocess/followups.py',
+    'postprocess/guardrail.py',
+    'presentation/__init__.py',
+    'presentation/a2ui.py',
+    'presentation/canvas.py',
+    'presentation/domain.py',
+    'routing/__init__.py',
+    'routing/admission_context.py',
+    'routing/routing.py',
+    'telemetry/__init__.py',
+    'telemetry/observability.py',
+    'telemetry/stages.py',
+})
+
+
+def test_agent_module_manifest_is_exact():
+    """Every file under services/agent/ is one this tree names, and no more.
+
+    The failure this prevents is a half-finished move: a shim left at the root so
+    one import keeps working, or a module that was renamed and copied instead of
+    moved. Both leave the layout describing something other than the code.
+    """
+    root = pathlib.Path(SERVICES, "agent")
+    actual = frozenset(
+        str(path.relative_to(root)).replace("\\", "/")
+        for path in root.rglob("*.py")
+        if '__pycache__' not in str(path)
+    )
+
+    assert actual - AGENT_MODULES == set(), "unexpected files under services/agent/"
+    assert AGENT_MODULES - actual == set(), "modules named by the tree are missing"

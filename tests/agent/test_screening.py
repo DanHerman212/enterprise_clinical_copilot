@@ -118,7 +118,7 @@ def test_a_refusal_records_which_category_refused_it(caplog):
                        hadm_id=None, topic=None, turns=None, prose_stream=False):
         return state
 
-    with caplog.at_level("INFO", logger="services.agent.chain"):
+    with caplog.at_level("INFO", logger="services.agent.telemetry.observability"):
         with patch.object(srv, "toolbox", _fake_toolbox), \
              patch.object(srv, "ask", fake_ask):
             response = _client().post("/ask", json={"question": "a blocked request"})
@@ -151,7 +151,7 @@ def test_an_ordinary_answer_records_no_filtering(caplog):
                        hadm_id=None, topic=None, turns=None, prose_stream=False):
         return state
 
-    with caplog.at_level("INFO", logger="services.agent.chain"):
+    with caplog.at_level("INFO", logger="services.agent.telemetry.observability"):
         with patch.object(srv, "toolbox", _fake_toolbox), \
              patch.object(srv, "ask", fake_ask):
             response = _client().post("/ask", json={"question": "notes?"})

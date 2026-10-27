@@ -24,7 +24,8 @@ from unittest.mock import patch
 
 from langchain_core.messages import AIMessage
 
-from services.agent import graph, stages
+from services.agent import graph
+from services.agent.telemetry import stages
 
 HADM_ID = 90000015
 

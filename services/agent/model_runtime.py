@@ -23,9 +23,9 @@ name they replace.
 from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-from services.agent import stages
+from services.agent.telemetry import stages
 from services.agent.model_turn import text_of
-from services.agent.stages import emit
+from services.agent.telemetry.stages import emit
 from services.mcp.config import (
     GEMINI_LOCATION,
     GEMINI_MAX_OUTPUT_TOKENS,

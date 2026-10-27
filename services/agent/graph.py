@@ -43,7 +43,7 @@ from langgraph.graph import END, START, StateGraph
 
 from services.agent.model_turn import text_of
 
-from services.agent.chain import MODEL_ID
+from services.agent.telemetry.observability import MODEL_ID
 # Layer 4 lives in `model_runtime`; these names stay bound here because eleven
 # tests patch `graph._build_llm` to substitute a fake model, `deterministic.py`
 # imports `_build_llm` from here at call time, and `test_model_bounds` reads
@@ -55,15 +55,15 @@ from services.agent.model_runtime import (
     has_tool_call as _has_tool_call,  # noqa: F401 — re-exported; used in
     streamed_turn as _streamed_turn,  #    `model_runtime.streamed_turn`.
 )
-from services.agent.stages import emit as _emit
+from services.agent.telemetry.stages import emit as _emit
 from services.agent import citations
 
 from services.agent.mcp_client import MCPToolbox, _clean_schema
 from services.agent.contracts import RecordedToolCall, validate_recorded_tool_call
 from services.agent.prompts import SYSTEM_PROMPT
-from services.agent import observability
+from services.agent.telemetry import observability
 from services.agent import routing
-from services.agent import stages
+from services.agent.telemetry import stages
 from services.agent.deterministic import run_command
 
 logger = logging.getLogger(__name__)

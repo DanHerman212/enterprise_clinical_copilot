@@ -35,7 +35,7 @@ from starlette.testclient import TestClient  # noqa: E402
 from services.agent import graph  # noqa: E402
 from services.agent import http as srv  # noqa: E402
 
-RECORD_LOGGER = "services.agent.chain"
+RECORD_LOGGER = "services.agent.telemetry.observability"
 
 
 class _EmptyToolbox:

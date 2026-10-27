@@ -12,7 +12,9 @@ carries.
 
 from __future__ import annotations
 
-from services.agent import graph, prompts, routing
+from services.agent import graph
+from services.agent import prompts
+from services.agent import routing
 from services.agent.guardrail import normalise_factor_values
 
 NON_LAB_DRIVER = ("Why does prior inpatient days increase this patient's readmission "

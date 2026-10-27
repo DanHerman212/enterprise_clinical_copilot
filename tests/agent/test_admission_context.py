@@ -23,7 +23,8 @@ from unittest.mock import patch
 import pytest
 from langchain_core.messages import AIMessage
 
-from services.agent import admission_context, graph
+from services.agent import admission_context
+from services.agent import graph
 from services.mcp.dependencies.features.profile import decode_profile
 
 

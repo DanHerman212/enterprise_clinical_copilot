@@ -51,7 +51,7 @@ from typing import Any, Callable
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from services.agent import routing
-from services.agent import stages
+from services.agent.telemetry import stages
 from services.agent import citations
 from services.agent.contracts import RecordedToolCall
 from services.agent.feature_labels import humanize

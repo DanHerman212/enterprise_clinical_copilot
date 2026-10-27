@@ -24,7 +24,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from langchain_core.messages import AIMessage  # noqa: E402
 
-from services.agent import graph, routing  # noqa: E402
+from services.agent import graph
+from services.agent import routing  # noqa: E402
 from services.agent.admission_context import PREFLIGHT_TOOLS  # noqa: E402
 from services.agent.mcp_client import (  # noqa: E402
     MCPToolbox,

@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 from starlette.testclient import TestClient  # noqa: E402
 
-from services.agent import chain  # noqa: E402
+from services.agent.telemetry import observability as chain  # noqa: E402
 from services.agent import http as srv  # noqa: E402
 from services.agent import model_turn  # noqa: E402
 from services.mcp import config  # noqa: E402
@@ -127,7 +127,7 @@ def test_the_served_model_is_read_rather_than_assumed():
 def test_a_successful_execution_records_what_it_cost(caplog):
     state = _answering_state(usage=_usage(input_tokens=1200, output_tokens=90,
                                           thinking=300, cached=1024))
-    with caplog.at_level("INFO", logger="services.agent.chain"):
+    with caplog.at_level("INFO", logger="services.agent.telemetry.observability"):
         with patch.object(srv, "toolbox", _fake_toolbox), \
              patch.object(srv, "ask", _replying(state)):
             response = _client().post("/ask", json={"question": "notes?"})
@@ -148,7 +148,7 @@ def test_a_failed_execution_records_what_it_cost_too(caplog):
     state["messages"][-1] = _turn(text="", usage=_usage(input_tokens=700,
                                                         thinking=700),
                                   finish="MAX_TOKENS")
-    with caplog.at_level("INFO", logger="services.agent.chain"):
+    with caplog.at_level("INFO", logger="services.agent.telemetry.observability"):
         with patch.object(srv, "toolbox", _fake_toolbox), \
              patch.object(srv, "ask", _replying(state)):
             response = _client().post("/ask", json={"question": "notes?"})
@@ -163,7 +163,7 @@ def test_a_failed_execution_records_what_it_cost_too(caplog):
 def test_an_unknown_usage_is_recorded_as_null(caplog):
     state = _answering_state()
     state["messages"][-1] = AIMessage(content="The note describes pneumonia. ^[1]")
-    with caplog.at_level("INFO", logger="services.agent.chain"):
+    with caplog.at_level("INFO", logger="services.agent.telemetry.observability"):
         with patch.object(srv, "toolbox", _fake_toolbox), \
              patch.object(srv, "ask", _replying(state)):
             _client().post("/ask", json={"question": "notes?"})

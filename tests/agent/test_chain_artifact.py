@@ -20,7 +20,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 from starlette.testclient import TestClient  # noqa: E402
 
-from services.agent import chain, http as srv, stages  # noqa: E402
+from services.agent.telemetry import observability as chain
+from services.agent import http as srv
+from services.agent.telemetry import stages  # noqa: E402
 
 
 @asynccontextmanager
@@ -372,7 +374,7 @@ def test_an_unexpanded_substitution_is_not_an_identity():
 # --- the record -------------------------------------------------------------
 
 def test_the_record_carries_the_identity_and_the_steps(caplog):
-    with caplog.at_level("INFO", logger="services.agent.chain"):
+    with caplog.at_level("INFO", logger="services.agent.telemetry.observability"):
         record = chain.record_execution(
             trace="abc123",
             question="What do the notes say?",
@@ -412,7 +414,7 @@ def test_the_record_carries_the_identity_and_the_steps(caplog):
 def test_a_failed_execution_still_records_what_it_had(caplog):
     """A record that only exists for answers that worked cannot explain the
     ones that did not."""
-    with caplog.at_level("INFO", logger="services.agent.chain"):
+    with caplog.at_level("INFO", logger="services.agent.telemetry.observability"):
         record = chain.record_execution(
             trace="-",
             question="Why?",
@@ -437,7 +439,7 @@ def test_the_record_carries_no_question_or_answer_text(caplog):
     not a side effect of adding a log line."""
     secret = "What medications was admission 90000009 discharged on?"
 
-    with caplog.at_level("INFO", logger="services.agent.chain"):
+    with caplog.at_level("INFO", logger="services.agent.telemetry.observability"):
         chain.record_execution(
             trace="-", question=secret, stages=[], duration_ms=1, outcome="ok",
         )
@@ -459,7 +461,7 @@ def test_a_blocking_execution_records_once(caplog):
 
     with patch.object(srv, "toolbox", _fake_toolbox), \
          patch.object(srv, "ask", fake_ask), \
-         caplog.at_level("INFO", logger="services.agent.chain"):
+         caplog.at_level("INFO", logger="services.agent.telemetry.observability"):
         resp = _client().post("/ask", json={"question": "diagnosis?"})
 
     assert resp.status_code == 200
@@ -479,7 +481,7 @@ def test_a_failed_blocking_execution_still_records_once(caplog):
 
     with patch.object(srv, "toolbox", _fake_toolbox), \
          patch.object(srv, "ask", boom), \
-         caplog.at_level("INFO", logger="services.agent.chain"):
+         caplog.at_level("INFO", logger="services.agent.telemetry.observability"):
         resp = _client().post("/ask", json={"question": "diagnosis?"})
 
     assert resp.status_code == 502
@@ -498,7 +500,7 @@ def test_a_streamed_execution_records_once(caplog):
 
     with patch.object(srv, "toolbox", _fake_toolbox), \
          patch.object(srv, "ask", fake_ask), \
-         caplog.at_level("INFO", logger="services.agent.chain"):
+         caplog.at_level("INFO", logger="services.agent.telemetry.observability"):
         resp = _client().post("/ask/stream", json={"question": "diagnosis?"})
 
     assert resp.status_code == 200
@@ -516,7 +518,7 @@ def test_a_failed_streamed_execution_still_records_once(caplog):
 
     with patch.object(srv, "toolbox", _fake_toolbox), \
          patch.object(srv, "ask", boom), \
-         caplog.at_level("INFO", logger="services.agent.chain"):
+         caplog.at_level("INFO", logger="services.agent.telemetry.observability"):
         resp = _client().post("/ask/stream", json={"question": "diagnosis?"})
 
     assert resp.status_code == 200
@@ -527,7 +529,7 @@ def test_a_failed_streamed_execution_still_records_once(caplog):
 
 def test_a_rejected_request_is_not_an_execution(caplog):
     """Nothing ran, so there is nothing to record: the chain never started."""
-    with caplog.at_level("INFO", logger="services.agent.chain"):
+    with caplog.at_level("INFO", logger="services.agent.telemetry.observability"):
         resp = _client().post("/ask", json={"chip": "bogus", "hadm_id": 7})
 
     assert resp.status_code == 400

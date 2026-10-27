@@ -174,7 +174,7 @@ def test_a_truncation_reaches_the_caller_as_a_truncation():
 
 
 def test_the_finish_reason_is_recorded_on_a_failure(caplog):
-    with caplog.at_level("INFO", logger="services.agent.chain"):
+    with caplog.at_level("INFO", logger="services.agent.telemetry.observability"):
         with patch.object(srv, "toolbox", _fake_toolbox), \
              patch.object(srv, "ask", _replying(_turn(finish_reason="SAFETY"))):
             _client().post("/ask", json={"question": "a blocked request"})

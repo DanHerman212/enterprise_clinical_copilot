@@ -25,7 +25,8 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from services.agent import admission_phenotypes, routing  # noqa: E402
+from services.agent import admission_phenotypes
+from services.agent import routing  # noqa: E402
 from services.agent.served_admissions import SERVED_HADM_IDS  # noqa: E402
 from services.mcp.tools import (  # noqa: E402
     discharge_medications,

@@ -28,7 +28,7 @@ from starlette.testclient import TestClient  # noqa: E402
 
 from services.agent import contracts  # noqa: E402
 from services.agent import http as srv  # noqa: E402
-from services.agent import stages  # noqa: E402
+from services.agent.telemetry import stages  # noqa: E402
 
 import collect_http  # noqa: E402
 import prompt_set  # noqa: E402

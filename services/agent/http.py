@@ -22,12 +22,16 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
-from services.agent import chain, model_turn, routing, stages
-from services.agent import questions, turn
+from services.agent.telemetry import observability as chain
+from services.agent import model_turn
+from services.agent import routing
+from services.agent.telemetry import stages
+from services.agent import questions
+from services.agent import turn
 from services.agent.contracts import AgentRequestError, parse_agent_request
 from services.agent.graph import ask, final_message
 from services.agent.mcp_client import MCP_TRANSPORT, toolbox
-from services.agent import observability
+from services.agent.telemetry import observability
 from services.agent.turn import (
     AgentAnswerUnavailable,
     StageLog as _StageLog,

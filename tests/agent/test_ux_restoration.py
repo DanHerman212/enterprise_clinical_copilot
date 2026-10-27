@@ -18,10 +18,11 @@ from __future__ import annotations
 
 import pytest
 
-from services.agent import deterministic, routing
+from services.agent import deterministic
+from services.agent import routing
 from services.agent.a2ui import compose_presentation
 from services.agent.prompts import SYSTEM_PROMPT
-from services.agent.stages import RESULT_LABELS, RESULT_NOUNS, TOOL_LABELS
+from services.agent.telemetry.stages import RESULT_LABELS, RESULT_NOUNS, TOOL_LABELS
 
 
 def _by_id(canvas):

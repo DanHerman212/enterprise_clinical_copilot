@@ -21,7 +21,9 @@ import types
 
 import pytest
 
-from services.agent import contracts, http, routing
+from services.agent import contracts
+from services.agent import http
+from services.agent import routing
 
 WIRE = {"/meds": "meds", "/labs": "labs", "/ehr": "summarize",
         "/pubmed": "literature"}
@@ -205,7 +207,7 @@ def _fake_span(monkeypatch, trace_id="aaaa1111"):
     import contextlib
     import types
 
-    from services.agent import observability
+    from services.agent.telemetry import observability
 
     seen: dict = {}
 

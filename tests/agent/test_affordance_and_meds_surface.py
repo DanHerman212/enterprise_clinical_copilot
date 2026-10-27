@@ -19,7 +19,8 @@ if str(_REPO) not in sys.path:
 
 import pytest  # noqa: E402
 
-from services.agent import contracts, routing  # noqa: E402
+from services.agent import contracts
+from services.agent import routing  # noqa: E402
 from services.agent.guardrail import _passage_sections  # noqa: E402
 
 

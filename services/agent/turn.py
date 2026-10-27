@@ -24,8 +24,12 @@ import logging
 import time
 from collections.abc import Callable, Sequence
 
-from services.agent import admission_context, chain, followups, model_turn
-from services.agent import observability, routing
+from services.agent import admission_context
+from services.agent.telemetry import observability as chain
+from services.agent import followups
+from services.agent import model_turn
+from services.agent.telemetry import observability
+from services.agent import routing
 from services.agent.a2ui import compose_presentation
 from services.agent.contracts import (
     RE_DERIVABLE_TOOLS,

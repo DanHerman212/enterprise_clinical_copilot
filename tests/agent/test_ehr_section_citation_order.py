@@ -20,7 +20,9 @@ from unittest.mock import patch
 
 import pytest
 
-from services.agent import deterministic, graph, routing
+from services.agent import deterministic
+from services.agent import graph
+from services.agent import routing
 from services.agent.a2ui import compose_presentation
 from services.agent.deterministic import run_command
 from services.mcp.retrieval.sections import SUMMARY_SECTIONS

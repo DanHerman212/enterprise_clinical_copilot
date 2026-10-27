@@ -16,7 +16,8 @@ if str(_REPO) not in sys.path:
 
 import pytest  # noqa: E402
 
-from services.agent import a2ui, citations  # noqa: E402
+from services.agent import a2ui
+from services.agent import citations  # noqa: E402
 
 
 @pytest.mark.parametrize("question,expected", [

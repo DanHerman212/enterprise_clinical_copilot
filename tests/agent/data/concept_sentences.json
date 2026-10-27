@@ -1,0 +1,67 @@
+{
+  "_comment": [
+    "Labeled sentences for concept tagging. Each case gives a sentence, the",
+    "concept under test, and the expected outcome:",
+    "  affirmed    - mention found, counts as positive risk signal",
+    "  historical  - mention found, historical flag set, still positive",
+    "  negated     - mention found but negated: must NOT count",
+    "  hypothetical- mention found but conditional/instructional: must NOT count",
+    "  family      - mention found but about a relative: must NOT count",
+    "  none        - no mention of this concept may be found at all",
+    "This file is the quality bar. The tagger implementation (medspaCy rules",
+    "today, possibly a model later) is swappable; these labels are not.",
+    "Sentences are modeled on real MIMIC phrasing seen during the A1 probe."
+  ],
+  "cases": [
+    {"text": "Patient has been noncompliant with his home medications.", "concept": "non_adherence", "expect": "affirmed"},
+    {"text": "She ran out of medications last week and has not refilled them.", "concept": "non_adherence", "expect": "affirmed"},
+    {"text": "He admits he stopped taking his furosemide two weeks ago.", "concept": "non_adherence", "expect": "affirmed"},
+    {"text": "Medication noncompliance likely contributed to this admission.", "concept": "non_adherence", "expect": "affirmed"},
+    {"text": "Patient is compliant with all medications.", "concept": "non_adherence", "expect": "none"},
+    {"text": "Call your doctor if you miss a dose.", "concept": "non_adherence", "expect": "hypothetical"},
+    {"text": "Do not stop taking this medication unless instructed.", "concept": "non_adherence", "expect": "none"},
+
+    {"text": "He missed several appointments with his cardiologist prior to admission.", "concept": "missed_followup", "expect": "affirmed"},
+    {"text": "Patient was lost to follow up after his last discharge.", "concept": "missed_followup", "expect": "affirmed"},
+    {"text": "He does not have a PCP and has not seen a doctor in years.", "concept": "missed_followup", "expect": "affirmed"},
+    {"text": "Patient was a no-show for two scheduled clinic visits.", "concept": "missed_followup", "expect": "affirmed"},
+    {"text": "Follow-up appointment scheduled with PCP in one week.", "concept": "missed_followup", "expect": "none"},
+
+    {"text": "He left against medical advice before workup was complete.", "concept": "ama", "expect": "affirmed"},
+    {"text": "Patient eloped from the emergency department overnight.", "concept": "ama", "expect": "affirmed"},
+    {"text": "Prior discharge was against medical advice.", "concept": "ama", "expect": "historical"},
+    {"text": "If you choose to leave against medical advice, risks were explained.", "concept": "ama", "expect": "hypothetical"},
+
+    {"text": "+heroin use, ETOH abuse.", "concept": "substance_use", "expect": "affirmed"},
+    {"text": "Long history of alcohol abuse with prior withdrawal seizures.", "concept": "substance_use", "expect": "historical"},
+    {"text": "Remote history of IV drug use.", "concept": "substance_use", "expect": "historical"},
+    {"text": "Patient denies alcohol use.", "concept": "substance_use", "expect": "negated"},
+    {"text": "Denies IV drug use or other substance abuse.", "concept": "substance_use", "expect": "negated"},
+    {"text": "Active polysubstance abuse including cocaine.", "concept": "substance_use", "expect": "affirmed"},
+    {"text": "Family history of alcoholism in her father.", "concept": "substance_use", "expect": "family"},
+    {"text": "Reports 6 drinks per day for the past decade.", "concept": "substance_use", "expect": "affirmed"},
+
+    {"text": "She lives alone and has no caregiver at home.", "concept": "functional_decline", "expect": "affirmed"},
+    {"text": "Patient is homeless and has been living on the street.", "concept": "functional_decline", "expect": "affirmed"},
+    {"text": "He requires assistance with all activities of daily living.", "concept": "functional_decline", "expect": "affirmed"},
+    {"text": "Admitted after recurrent falls at home.", "concept": "functional_decline", "expect": "affirmed"},
+    {"text": "Noted to be deconditioned after prolonged hospitalization.", "concept": "functional_decline", "expect": "affirmed"},
+    {"text": "No falls were reported this year.", "concept": "functional_decline", "expect": "none"},
+    {"text": "She lives with her husband, who manages her medications.", "concept": "functional_decline", "expect": "none"},
+
+    {"text": "Discharged on a complex medication regimen with 14 daily medications.", "concept": "polypharmacy", "expect": "affirmed"},
+    {"text": "Polypharmacy noted; medication reconciliation performed.", "concept": "polypharmacy", "expect": "affirmed"},
+
+    {"text": "Family meeting held to discuss goals of care.", "concept": "goals_of_care", "expect": "affirmed"},
+    {"text": "Transitioned to comfort measures only.", "concept": "goals_of_care", "expect": "affirmed"},
+    {"text": "Patient enrolled in home hospice.", "concept": "goals_of_care", "expect": "affirmed"},
+    {"text": "Palliative care was consulted for symptom management.", "concept": "goals_of_care", "expect": "affirmed"},
+    {"text": "If his condition worsens, hospice may be considered.", "concept": "goals_of_care", "expect": "hypothetical"},
+
+    {"text": "I am concerned about his ability to manage at home.", "concept": "hedging", "expect": "affirmed"},
+    {"text": "His home situation is tenuous.", "concept": "hedging", "expect": "affirmed"},
+    {"text": "Prognosis is guarded.", "concept": "hedging", "expect": "affirmed"},
+    {"text": "He remains at high risk of readmission despite optimization.", "concept": "hedging", "expect": "affirmed"},
+    {"text": "Patient was discharged in good condition.", "concept": "hedging", "expect": "none"}
+  ]
+}

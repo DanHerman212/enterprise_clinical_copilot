@@ -31,7 +31,7 @@ from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 from starlette.testclient import TestClient  # noqa: E402
 
 from services.agent import http as srv  # noqa: E402
-from services.agent import stages  # noqa: E402
+from services.agent.telemetry import stages  # noqa: E402
 from services.agent.graph import MAX_TOOL_CALLS_PER_TURN, _execute_tool_calls  # noqa: E402
 
 

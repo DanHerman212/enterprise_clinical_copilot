@@ -29,7 +29,7 @@ sys.path.insert(0, str(_REPO))
 sys.path.insert(0, str(_REPO / "evaluation" / "agent"))
 
 import judge  # noqa: E402
-from services.agent import observability  # noqa: E402
+from services.agent.telemetry import observability  # noqa: E402
 
 
 # --- 1. trace input/output ---------------------------------------------------

@@ -18,7 +18,7 @@ import logging
 
 import pytest
 
-from services.agent import observability
+from services.agent.telemetry import observability
 
 KEYS = {
     "LANGFUSE_HOST": "https://observability.example.invalid",
@@ -148,7 +148,7 @@ def test_flush_failure_does_not_propagate(with_keys, monkeypatch):
 
 def test_the_off_state_is_silent(no_keys, caplog):
     """Dev runs, fixture mode and CI all run unconfigured. That is normal."""
-    with caplog.at_level(logging.WARNING, logger="services.agent.observability"):
+    with caplog.at_level(logging.WARNING, logger="services.agent.telemetry.observability"):
         observability.handler()
         observability.trace_id()
         observability.flush()

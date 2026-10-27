@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 
 from services.agent import graph
-from services.agent.a2ui import compose_presentation
+from services.agent.presentation.a2ui import compose_presentation
 
 ARTICLE = {
     "pmid": "29950074",

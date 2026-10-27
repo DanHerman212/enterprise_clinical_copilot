@@ -217,7 +217,7 @@ def test_a_lab_turn_draws_the_card_and_a_caption_that_describes_it():
     served with "No 30-day readmission risk estimate was requested for this question" —
     true, and useless to a reader who asked what a value did.
     """
-    from services.agent.a2ui import compose_presentation
+    from services.agent.presentation.a2ui import compose_presentation
 
     out = compose_presentation(
         "What did her hemoglobin do during this admission?",
@@ -237,7 +237,7 @@ def test_a_lab_card_is_evidence_enough_to_keep_the_scope():
     """A drill-down reads the patient's chart, so the badge is right — but the rule that
     withholds a chart scope with no NOTE citation must not fire, or every lab turn drops its
     pill and raises a safety swap over an answer nothing was removed from."""
-    from services.agent.a2ui import compose_presentation
+    from services.agent.presentation.a2ui import compose_presentation
 
     out = compose_presentation(
         "What did her hemoglobin do during this admission?",
@@ -253,7 +253,7 @@ def test_a_lab_card_is_evidence_enough_to_keep_the_scope():
 def test_a_failed_lab_call_draws_no_card():
     """A course with no values in it is not a shorter answer, it is a wrong one. The turn
     still says what happened; the card is simply not drawn."""
-    from services.agent.a2ui import compose_presentation
+    from services.agent.presentation.a2ui import compose_presentation
 
     out = compose_presentation(
         "What did her hemoglobin do during this admission?",

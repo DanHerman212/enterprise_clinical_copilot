@@ -16,16 +16,16 @@ because what may be cited is a rule about the evidence, and this module is a
 consumer of it.
 """
 
-from services.agent.a2ui_envelope import (
+from services.agent.presentation import (
     A2UI_VERSION,
     AUDIENCE,
     CATALOG_ID,
     SURFACE_ID,
 )
-from services.agent.admission_phenotypes import GENERAL_INPATIENT, phenotype_of_query
-from services.agent.feature_labels import display_probability, humanize
-from services.agent.literature_benchmarks import benchmarks_for_phenotype
-from services.agent.note_presentation import _usable_articles
+from services.agent.presentation.domain import GENERAL_INPATIENT, phenotype_of_query
+from services.agent.presentation.domain import display_probability, humanize
+from services.agent.presentation.domain import benchmarks_for_phenotype
+from services.agent.presentation.domain import _usable_articles
 
 def _band(probability: float, threshold: float) -> str:
     """low = below threshold · borderline = threshold to threshold + 0.08."""

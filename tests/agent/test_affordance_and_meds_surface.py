@@ -77,7 +77,7 @@ MEDS_CALL = {
 
 def test_a_free_text_medication_answer_resolves_citations_from_its_passages():
     """The passages are the evidence, so the source card can point at them."""
-    from services.agent import a2ui
+    from services.agent.presentation import a2ui
 
     merged = a2ui.rag_payload([MEDS_CALL])
     assert merged["passages"][0]["id"] == "n_discharge_medications_1"
@@ -106,7 +106,7 @@ def test_a_meds_command_answer_resolves_its_own_marker():
     and the marker addressed nothing. Including `discharge_medications` in the payload
     is what closes it — one passage, one source card, for the command and for free text.
     """
-    from services.agent import a2ui
+    from services.agent.presentation import a2ui
 
     presentation = a2ui.compose_presentation(
         "/meds",

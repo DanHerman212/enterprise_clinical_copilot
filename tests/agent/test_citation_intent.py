@@ -16,7 +16,7 @@ if str(_REPO) not in sys.path:
 
 import pytest  # noqa: E402
 
-from services.agent import a2ui
+from services.agent.presentation import a2ui
 from services.agent.postprocess import citations  # noqa: E402
 
 

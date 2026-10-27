@@ -23,11 +23,11 @@ import asyncio
 import pytest
 
 from services.agent import admission_context
-from services.agent import admission_phenotypes
+from services.agent.presentation import domain as admission_phenotypes
 from services.agent import routing
 from services.agent import served_admissions
 from services.agent import deterministic
-from services.agent.a2ui import compose_presentation, compose_risk_canvas, predict_payload
+from services.agent.presentation.a2ui import compose_presentation, compose_risk_canvas, predict_payload
 from services.mcp.retrieval.sections import SUMMARY_SECTIONS
 from services.mcp.tools import (
     discharge_medications,

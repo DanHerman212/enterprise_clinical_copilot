@@ -22,8 +22,8 @@ import json
 
 from services.agent.postprocess import citations
 from services.agent import graph
-from services.agent.a2ui import compose_presentation
-from services.agent.note_presentation import resolve_sources
+from services.agent.presentation.a2ui import compose_presentation
+from services.agent.presentation.a2ui import resolve_sources
 
 #: The panel as the lab tool returns it: one entry per analyte, with the series, the
 #: reference interval and the anchors the generator reproduced.

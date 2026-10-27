@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from services.agent.postprocess import followups
 from services.agent import routing
-from services.agent.a2ui import compose_presentation
+from services.agent.presentation.a2ui import compose_presentation
 
 SECTIONS = {
     "query": "sections",

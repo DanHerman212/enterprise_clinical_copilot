@@ -23,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from services.agent.a2ui import compose_presentation  # noqa: E402
+from services.agent.presentation.a2ui import compose_presentation  # noqa: E402
 
 BENCHMARK_PMID = "34793857"
 #: What the table calls the row: the journal and the year. This stays the pill's label.
@@ -177,7 +177,7 @@ def test_the_benchmark_is_registered_once_however_the_surface_repeats_it():
     depend on that staying true: a second number for one PMID would put two pills on the
     same record and shift every source after it.
     """
-    from services.agent.note_presentation import register_benchmark_sources
+    from services.agent.presentation.a2ui import register_benchmark_sources
 
     row = {
         "pmid": BENCHMARK_PMID,
@@ -208,7 +208,7 @@ def test_every_curated_benchmark_can_be_cited_as_a_paper():
     journal line when absent, so a missing one degrades silently: the drawer would show a
     naked journal line again, for that cohort only, and nothing would fail.
     """
-    from services.agent.literature_benchmarks import BENCHMARKS, benchmarks_for_phenotype
+    from services.agent.presentation.domain import BENCHMARKS, benchmarks_for_phenotype
 
     assert BENCHMARKS, "the curated corpus is empty"
     for pmid, benchmark in BENCHMARKS.items():

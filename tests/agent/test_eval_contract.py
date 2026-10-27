@@ -342,7 +342,7 @@ def test_an_outpatient_record_gets_no_readmission_widget():
     """`/risk` on an outpatient progress note drew a full 30-day inpatient estimate —
     probability, band and driver bars — for a stay that never happened. `/ehr` never had
     the defect because it never predicted there; the explicit command did."""
-    from services.agent import a2ui
+    from services.agent.presentation import a2ui
 
     predict = {
         "probability": 0.0567, "threshold": 0.11, "decision": 0,

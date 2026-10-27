@@ -81,7 +81,7 @@ def _candidate_files(parts: list[str]) -> set[str]:
 def _resolutions(module: str) -> tuple[str, set[str]] | None:
     """The importable prefix of `module`, and the files it could be.
 
-    `from services.agent.a2ui import CitedNarrative` names a symbol at the end, not
+    `from services.agent.presentation.a2ui import CitedNarrative` names a symbol at the end, not
     a module, so the prefix is trimmed until it resolves. A name that resolves to
     nothing at all is a standard-library or third-party import, or a symbol this
     check has no business judging, and is reported as None rather than as missing.

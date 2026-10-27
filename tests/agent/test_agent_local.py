@@ -159,7 +159,7 @@ def _risk_widget(state):
     these assert on what the surface actually carries rather than on a restatement of
     it written here.
     """
-    from services.agent.a2ui import compose_presentation
+    from services.agent.presentation.a2ui import compose_presentation
 
     question = next(
         (m.content for m in state["messages"] if getattr(m, "type", "") == "human"), "")
@@ -202,7 +202,7 @@ def test_answer_invents_no_risk_factors(risk_command, require_served):
     """
     response = require_served(risk_command)
 
-    from services.agent.feature_labels import label_for
+    from services.agent.presentation.domain import label_for
 
     reported = {label_for(str(factor["feature"])) for factor in response["top_factors"]}
     shown = {factor["label"] for factor in _risk_widget(risk_command)["factors"]}
@@ -223,7 +223,7 @@ def test_unknown_patient_is_reported_not_invented(unknown_patient):
     assert calls, "the /ehr turn answered about an unknown admission without calling the tool"
     assert calls[0]["response"].get("error") == "unknown_patient"
 
-    from services.agent.a2ui import compose_presentation
+    from services.agent.presentation.a2ui import compose_presentation
 
     question = next(
         (m.content for m in unknown_patient["messages"]

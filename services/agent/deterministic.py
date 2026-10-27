@@ -54,7 +54,7 @@ from services.agent import routing
 from services.agent.telemetry import stages
 from services.agent.postprocess import citations
 from services.agent.contracts import RecordedToolCall
-from services.agent.feature_labels import humanize
+from services.agent.presentation.domain import humanize
 from services.agent.model_turn import text_of
 from services.agent.prompts import SYSTEM_PROMPT
 from services.agent.routing import (

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import pytest
 
-from services.agent.admission_phenotypes import (
+from services.agent.presentation.domain import (
     ADMISSION_PHENOTYPE,
     BUCKETS,
     GENERAL_INPATIENT,
@@ -32,8 +32,8 @@ from services.agent.admission_phenotypes import (
     is_matrix_eligible,
     resolve_phenotype,
 )
-from services.agent.a2ui import compose_presentation, turn_phenotype
-from services.agent.literature_benchmarks import benchmarks_for_phenotype
+from services.agent.presentation.a2ui import compose_presentation, turn_phenotype
+from services.agent.presentation.domain import benchmarks_for_phenotype
 from services.agent.served_admissions import SERVED_HADM_IDS
 
 #: One discharge diagnosis per bucket: the words a note uses for that admission. Written

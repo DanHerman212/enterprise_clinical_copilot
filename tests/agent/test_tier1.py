@@ -151,7 +151,7 @@ def unknown_patient() -> dict:
 
 def _presentation(state):
     """The browser contract for a state, composed the way the payload path composes it."""
-    from services.agent.a2ui import compose_presentation
+    from services.agent.presentation.a2ui import compose_presentation
 
     question = next(
         (m.content for m in state["messages"] if getattr(m, "type", "") == "human"), "")

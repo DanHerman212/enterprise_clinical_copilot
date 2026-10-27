@@ -35,8 +35,8 @@ sys.path.insert(0, str(HARNESS))
 sys.path.insert(0, str(HERE))
 
 from services.mcp.config import JUDGE_LOCATION, JUDGE_MODEL, PROJECT  # noqa: E402
-from services.agent.admission_phenotypes import ADMISSION_PHENOTYPE  # noqa: E402
-from services.agent.literature_benchmarks import benchmarks_for_phenotype  # noqa: E402
+from services.agent.presentation.domain import ADMISSION_PHENOTYPE  # noqa: E402
+from services.agent.presentation.domain import benchmarks_for_phenotype  # noqa: E402
 
 TRACES = RESULTS / "traces.jsonl"
 RUBRIC = (HERE / "rubric.md").read_text()

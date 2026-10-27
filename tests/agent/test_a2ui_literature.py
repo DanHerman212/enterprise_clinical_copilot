@@ -6,14 +6,8 @@ regression half matters as much as the new half: the risk canvas must look exact
 as it did before when no search ran.
 """
 
-from services.agent.a2ui import (
-    _narrative,
-    _usable_articles,
-    compose_presentation,
-    compose_risk_canvas,
-    literature_citations,
-    literature_payload,
-)
+from services.agent.presentation.a2ui import _narrative, compose_presentation, compose_risk_canvas, literature_citations, literature_payload
+from services.agent.presentation.domain import _usable_articles
 
 ARTICLE = {
     "pmid": "31234567",

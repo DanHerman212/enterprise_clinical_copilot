@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 
-from services.agent.a2ui import compose_presentation
+from services.agent.presentation.a2ui import compose_presentation
 from services.agent.graph import _render_tool_result
 
 #: Turn 1's `/ehr` on 90000015, as it is stored on the turn and replayed on Turn 2.

@@ -18,7 +18,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from services.agent.a2ui import (  # noqa: E402
+from services.agent.presentation.a2ui import (  # noqa: E402
     AUDIENCE,
     CATALOG_ID,
     SURFACE_ID,

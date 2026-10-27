@@ -9,17 +9,17 @@
 
 ## 1. Executive Objective (Why This Phase Exists)
 
-Over Phases 1–6, `services/agent/` grew to **26 flat Python files** (`turn.py`, `__init__.py`, and 24 modules). To avoid editing test imports during earlier phases, helper fragments were split into micro-files (`a2ui_envelope.py`, `questions.py`, `served_admissions.py`), private aliases were re-exported across modules (`graph._build_llm`, `http._compose_success`), and circular dependencies were worked around with function-local imports (`deterministic.py` importing `_build_llm`, `_emit`, and `_execute_tool_calls` from `graph.py` at call time).
+Over Phases 1–6, `services/agent/` grew to **28 flat Python files** (`turn.py`, `__init__.py`, and 26 modules). To avoid editing test imports during earlier phases, helper fragments were split into micro-files (`a2ui_envelope.py`, `questions.py`, `served_admissions.py`), private aliases were re-exported across modules (`graph._build_llm`, `http._compose_success`), and circular dependencies were worked around with function-local imports (`deterministic.py` importing `_build_llm`, `_emit`, and `_execute_tool_calls` from `graph.py` at call time).
 
 **The Goal of Phase 7 is Code Comprehension and Zero Bloat—NOT Test-Shim Preservation:**
-1. **Consolidate 26 Flat Files into 15 Cohesive Modules across 6 Domain Subpackages** (`ingress/`, `routing/`, `engine/`, `postprocess/`, `presentation/`, `telemetry/`) with `turn.py` as the sole root orchestrator spine.
+1. **Consolidate 28 Flat Files into 18 Cohesive Modules across 6 Domain Subpackages** (`ingress/`, `routing/`, `engine/`, `postprocess/`, `presentation/`, `telemetry/`) with `turn.py` as the sole root orchestrator spine.
 2. **Zero Root Compatibility Shims:** Do **not** leave 24 stub `.py` files at the root of `services/agent/` to avoid updating imports. Update `tests/`, `evaluation/`, `Dockerfile`, and `danielmherman/demo/` to import from the canonical subpackage locations.
 3. **Eliminate Circular & Function-Local Late Imports:** Break the `graph.py` $\leftrightarrow$ `deterministic.py` cycle so no module in `services/agent/` uses function-local imports to dodge a circular dependency.
 4. **Lock the Architecture with AST Governance Tests:** Extend `tests/agent/test_layer_separation.py` to enforce the exact 15-module manifest, the one-way subpackage import DAG, and zero stale `.pyc` / `.DS_Store` artifacts.
 
 ---
 
-## 2. Target 6-Subpackage Architecture (15 Canonical Modules)
+## 2. Target 6-Subpackage Architecture (18 Canonical Modules)
 
 Every file in `services/agent/` must map to this exact target tree. **No other `.py` files (other than `__init__.py` and `turn.py`) may exist at the root of `services/agent/`.**
 
@@ -63,7 +63,7 @@ services/agent/
 
 ## 3. Mandatory Module Consolidations & Cleanups
 
-### 3.1 Consolidations (24 Domain Files $\rightarrow$ 14 Subpackage Modules)
+### 3.1 Consolidations (14 Domain Files into 6 Subpackage Modules; 12 More Move 1:1)
 1. **`ingress/contracts.py` $\leftarrow$ `contracts.py` + `served_admissions.py`:**
    * Fold `SERVED_HADM_IDS` and `is_served()` into `ingress/contracts.py`. Cohort membership is an ingress contract rule; a separate 40-line file is unnecessary indirection.
 2. **`routing/routing.py` $\leftarrow$ `routing.py` + `questions.py`:**
@@ -321,7 +321,52 @@ Highest-density rewrites, for ordering the work:
 ## 6. Step B — Execution Record (Locked Until Step A Approval)
 
 ### 6.1 Executed Changes
-* Pending Step A approval.
+
+**The layout.** 28 flat files became 26: `__init__.py`, `turn.py`, 18 canonical modules
+across 6 subpackages, and 7 package `__init__.py` files. No compatibility shims exist at
+the root — `test_agent_module_manifest_is_exact` pins the exact path set, so a shim left
+behind names itself rather than hiding in a count.
+
+| Subpackage | Modules | Absorbed |
+| :--- | :--- | :--- |
+| `telemetry/` | `observability`, `stages` | `chain` → `observability` |
+| `postprocess/` | `citations`, `guardrail`, `followups` | — |
+| `presentation/` | `a2ui`, `canvas`, `domain` | `note_presentation` → `a2ui`; `admission_phenotypes` + `literature_benchmarks` → `domain` |
+| `routing/` | `routing`, `admission_context` | `questions` → `routing` |
+| `engine/` | `deterministic`, `graph`, `model`, `prompts`, `mcp_client` | `model_turn` → `model` |
+| `ingress/` | `contracts`, `http`, `run` | `served_admissions` → `contracts` |
+
+**The cycle is gone.** `_execute_tool_calls`, its five helpers, the turn-budget constants,
+`_presented_prediction` (with `_is_number` and `_presented_factor`), `RecordedToolCall` and
+`validate_recorded_tool_call` — 17 definitions — moved into `engine/mcp_client.py`. Both
+`graph.py` and `deterministic.py` import them at module scope; the three function-local
+imports are deleted, and no function-local `services.agent` import remains anywhere in the
+package.
+
+**Three things the plan did not anticipate**, each found by a failing gate rather than by
+reading:
+
+1. **`a2ui` ↔ `canvas` was still circular after the approved constant move.** `canvas.py`
+   needed `_usable_articles` from the note-presentation code, which §3.1.4 folds into
+   `a2ui`. Moving the four envelope constants was necessary and not sufficient: the helper
+   and its `_LITERATURE_FIELDS` tuple went to `presentation/domain.py`, the one module both
+   already import.
+2. **`AgentResponseError` lived in `ingress/contracts.py`** and the validator raises it, so
+   moving the validator alone would have dragged an ingress import into the engine. It now
+   lives in `shared/errors.py` beside `ContractError`; `contracts.py` re-exports it, so the
+   wire contract's surface is unchanged and `engine` imports `ingress` nowhere.
+3. **`_build_llm` was two bindings of one function.** Tests patched `graph._build_llm`
+   while the command path bound its own copy from `model_runtime`, so a patch reached one
+   caller and the other called the live Vertex API — 34 tests failed with
+   `GoogleModelNotFoundError: 'test-model'`. Both callers now call
+   `model_gateway.build_llm(...)` (aliased, because a parameter named `model` shadows the
+   module) and the suite patches `services.agent.engine.model.build_llm`, the canonical
+   Layer 4 gateway.
+
+**Guards added to `tests/agent/test_layer_separation.py`:** the exact manifest, the one-way
+DAG (including zero function-local `services.agent` imports), and a patch-binding check that
+imports each target module and asks whether the attribute is actually bound — the only way
+to catch a patch that substitutes nothing.
 
 ### 6.2 Verification Gates
 | Gate | Result |

@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 from langchain_core.messages import AIMessage
 
-import services.agent.mcp_client as mc
+import services.agent.engine.mcp_client as mc
 import services.mcp.server as ms
 from services.mcp.runtime import (
     Timeouts,
@@ -17,14 +17,14 @@ from services.mcp.runtime import (
     resolve_project_id,
     timeout_chain,
 )
-from services.agent.graph import (
+from services.agent.engine.graph import (
     BUDGET_EXHAUSTED_ANSWER,
     MAX_TOOL_CALLS_PER_TURN,
     RECURSION_LIMIT,
     _budget_exhausted_turn,
     _execute_tool_calls,
 )
-from services.agent.mcp_client import MCPToolbox
+from services.agent.engine.mcp_client import MCPToolbox
 
 
 def _run(coro):

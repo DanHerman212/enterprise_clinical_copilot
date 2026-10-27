@@ -21,9 +21,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 from starlette.testclient import TestClient  # noqa: E402
 
-from services.agent import graph  # noqa: E402
+from services.agent.engine import graph  # noqa: E402
 from services.agent import http as srv  # noqa: E402
-from services.agent import model_turn  # noqa: E402
+from services.agent.engine import model as model_turn  # noqa: E402
 from services.mcp.config import GEMINI_SAFETY_THRESHOLDS  # noqa: E402
 
 # The four categories a request can configure. The CSAM and personal-data filters

@@ -41,7 +41,7 @@ from langchain_core.messages import (
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, StateGraph
 
-from services.agent.model_turn import text_of
+from services.agent.engine.model import text_of
 
 from services.agent.telemetry.observability import MODEL_ID
 # Layer 4 lives in `model_runtime`; these names stay bound here because eleven
@@ -49,7 +49,7 @@ from services.agent.telemetry.observability import MODEL_ID
 # imports `_build_llm` from here at call time, and `test_model_bounds` reads
 # `graph.MODEL_TIMEOUT_SECONDS`. Because the call sites below resolve them as
 # globals of THIS module, patching them here still intercepts.
-from services.agent.model_runtime import (
+from services.agent.engine.model import (
     MODEL_TIMEOUT_SECONDS,  # noqa: F401 — read by test_model_bounds
     build_llm as _build_llm,
     has_tool_call as _has_tool_call,  # noqa: F401 — re-exported; used in
@@ -58,13 +58,13 @@ from services.agent.model_runtime import (
 from services.agent.telemetry.stages import emit as _emit
 from services.agent.postprocess import citations
 
-from services.agent.mcp_client import MCPToolbox, _clean_schema
+from services.agent.engine.mcp_client import MCPToolbox, _clean_schema
 from services.agent.contracts import RecordedToolCall, validate_recorded_tool_call
-from services.agent.prompts import SYSTEM_PROMPT
+from services.agent.engine.prompts import SYSTEM_PROMPT
 from services.agent.telemetry import observability
 from services.agent.routing import routing
 from services.agent.telemetry import stages
-from services.agent.deterministic import run_command
+from services.agent.engine.deterministic import run_command
 
 logger = logging.getLogger(__name__)
 
@@ -975,7 +975,7 @@ def build_graph(
         # this turn only when the question asked for the model's reasoning (see
         # `_freetext_allowed`). Projected rather than raw: the model reads the score as
         # the interface writes it and never holds a float it could paste.
-        from services.agent.deterministic import _presented_prediction  # noqa: PLC0415
+        from services.agent.engine.deterministic import _presented_prediction  # noqa: PLC0415
 
         messages, recorded = await _execute_tool_calls(
             toolbox, calls, on_event, guard=guard,

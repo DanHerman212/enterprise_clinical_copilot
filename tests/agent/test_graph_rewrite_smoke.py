@@ -8,13 +8,13 @@ import sys
 
 sys.path.insert(0, ".")
 
-from services.agent.graph import (
+from services.agent.engine.graph import (
     _MCPTool,
     _build_llm,
     _tools,
     final_text,
 )
-from services.agent.mcp_client import MCPToolbox
+from services.agent.engine.mcp_client import MCPToolbox
 
 
 class FakeTool:

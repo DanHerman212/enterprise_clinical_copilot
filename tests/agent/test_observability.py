@@ -279,7 +279,7 @@ def test_a_traced_tool_call_records_both_ends(with_keys, monkeypatch):
     passed neither the arguments nor the result, so a census dump showed that
     `rag_search` ran and not what was searched for or what came back.
     """
-    from services.agent import graph
+    from services.agent.engine import graph
 
     client = _RecordingClient()
     monkeypatch.setattr("langfuse.get_client", lambda: client)

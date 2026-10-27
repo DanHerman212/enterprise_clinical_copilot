@@ -19,7 +19,7 @@ from unittest.mock import patch
 
 from langchain_core.messages import AIMessage
 
-from services.agent import graph
+from services.agent.engine import graph
 
 
 class _ToolHungryModel:
@@ -81,7 +81,7 @@ def _box():
     dataclass, so anything else fails before a single turn runs. Stubbing the
     instance keeps the double honest about the type without opening a transport.
     """
-    from services.agent.mcp_client import MCPToolbox
+    from services.agent.engine.mcp_client import MCPToolbox
 
     box = MCPToolbox(session=None)
     box._tools = {"search_literature": _FakeTool()}

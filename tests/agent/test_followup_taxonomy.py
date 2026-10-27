@@ -36,8 +36,8 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from services.agent.postprocess import followups
-from services.agent import graph
-from services.agent.mcp_client import MCPToolbox
+from services.agent.engine import graph
+from services.agent.engine.mcp_client import MCPToolbox
 
 ANSWER = "Discharged home in stable condition."
 

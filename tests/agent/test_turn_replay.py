@@ -23,7 +23,7 @@ import pytest
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from services.agent import graph
+from services.agent.engine import graph
 from services.agent.contracts import (
     MAX_REPLAYED_TURNS,
     AgentRequestError,

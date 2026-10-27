@@ -1,7 +1,7 @@
 import asyncio
 from types import SimpleNamespace
 
-from services.agent.mcp_client import MCPToolbox
+from services.agent.engine.mcp_client import MCPToolbox
 
 
 class FakeSession:

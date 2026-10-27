@@ -20,11 +20,11 @@ from unittest.mock import patch
 
 import pytest
 
-from services.agent import deterministic
-from services.agent import graph
+from services.agent.engine import deterministic
+from services.agent.engine import graph
 from services.agent.routing import routing
 from services.agent.presentation.a2ui import compose_presentation
-from services.agent.deterministic import run_command
+from services.agent.engine.deterministic import run_command
 from services.mcp.retrieval.sections import SUMMARY_SECTIONS
 
 SUMMARIZE = routing.command_for("summarize")
@@ -193,7 +193,7 @@ def test_each_passage_carries_the_number_its_marker_must_use():
     summary it put `^[3]` on the instructions and `^[4]` on the diagnosis, both of which
     begin with "discharge". The rendered view now states the number.
     """
-    from services.agent.graph import _render_tool_result  # noqa: PLC0415
+    from services.agent.engine.graph import _render_tool_result  # noqa: PLC0415
 
     rendered = _render_tool_result({"passages": [{"section": "a"}, {"section": "b"},
                                                  {"section": "c"}]})

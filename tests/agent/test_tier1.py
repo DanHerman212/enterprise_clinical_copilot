@@ -37,8 +37,8 @@ from jsonschema import validate
 HARNESS_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(HARNESS_ROOT))
 
-from services.agent.graph import ask, final_text  # noqa: E402
-from services.agent.mcp_client import toolbox  # noqa: E402
+from services.agent.engine.graph import ask, final_text  # noqa: E402
+from services.agent.engine.mcp_client import toolbox  # noqa: E402
 
 # This file gates the DEPLOYED service: `ask` drives the graph into the real MCP
 # toolbox (`MCP_TRANSPORT=http MCP_URL=https://…`), so every test here needs a live

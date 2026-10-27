@@ -107,7 +107,7 @@ def test_both_routes_take_the_id_from_the_span():
     """The wiring, asserted where it lives: both root spans hand their id over."""
     from pathlib import Path
 
-    from services.agent import graph
+    from services.agent.engine import graph
 
     source = Path(graph.__file__).read_text(encoding="utf-8")
     assert source.count("observability.span_trace_id(root_span)") == 2, (
@@ -125,7 +125,7 @@ def test_a_command_turn_reports_the_prose_it_actually_produced():
     """
     from langchain_core.messages import AIMessage
 
-    from services.agent.graph import command_trace_output
+    from services.agent.engine.graph import command_trace_output
 
     prose = {"messages": [AIMessage(content="**Clinical course.** The patient …")],
              "command": "summarize"}

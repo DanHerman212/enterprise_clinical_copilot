@@ -510,7 +510,7 @@ def test_the_rubric_accepts_the_display_precision_it_asks_for():
 def test_the_agent_is_told_not_to_issue_care_directives():
     """The safety flag was correct behaviour, so the prohibition must be explicit about the
     shape that fired: "follow-up should prioritise X" rather than "the plan records X"."""
-    from services.agent import prompts
+    from services.agent.engine import prompts
 
     text = " ".join(
         str(value) for value in vars(prompts).values() if isinstance(value, str)
@@ -528,7 +528,7 @@ def test_trace_metadata_includes_turn_and_session():
     admission could not be viewed together. `turn` is derived from the replay the caller
     sent, because the agent holds no conversation state of its own.
     """
-    from services.agent.graph import _trace_metadata
+    from services.agent.engine.graph import _trace_metadata
 
     meta = _trace_metadata(90000015, "summarize", "test-run",
                            turns=[{"question": "/ehr", "answer": "a"}])
@@ -551,7 +551,7 @@ def test_live_traffic_gets_no_invented_session():
     `hadm_<id>` would lump every past turn of that patient into one endless session,
     which is a worse lie than no grouping (decided 2026-10-19).
     """
-    from services.agent.graph import _trace_metadata
+    from services.agent.engine.graph import _trace_metadata
 
     meta = _trace_metadata(90000015, "risk", None)
     assert "langfuse_session_id" not in meta

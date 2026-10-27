@@ -24,7 +24,7 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from services.agent.routing import admission_context
-from services.agent import graph
+from services.agent.engine import graph
 from services.mcp.dependencies.features.profile import decode_profile
 
 
@@ -191,7 +191,7 @@ class _FakeTool:
 
 
 def _ask(model, question, manifest, **kwargs):
-    from services.agent.mcp_client import MCPToolbox
+    from services.agent.engine.mcp_client import MCPToolbox
 
     box = MCPToolbox(session=None)
     box._tools = {"rag_search": _FakeTool()}

@@ -109,7 +109,7 @@ def test_the_declaration_is_on_the_trace_and_on_the_execution_record():
     """The artifact is the point: the trace of the failing turn could not say whether
     the declaration had arrived, so the one fact the routing turned on was unanswerable
     after the fact."""
-    from services.agent import graph
+    from services.agent.engine import graph
     from services.agent import turn
 
     meta = graph._trace_metadata(90000015, None, None, None, "follow_up")

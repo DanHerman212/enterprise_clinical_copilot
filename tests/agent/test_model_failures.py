@@ -32,7 +32,7 @@ from langchain_core.messages import AIMessage  # noqa: E402
 from langchain_google_genai.chat_models import GoogleRateLimitError  # noqa: E402
 from starlette.testclient import TestClient  # noqa: E402
 
-from services.agent import graph  # noqa: E402
+from services.agent.engine import graph  # noqa: E402
 from services.agent import http as srv  # noqa: E402
 
 RECORD_LOGGER = "services.agent.telemetry.observability"

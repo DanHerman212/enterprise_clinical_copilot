@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from services.agent import graph  # noqa: E402
+from services.agent.engine import graph  # noqa: E402
 from services.mcp.config import (  # noqa: E402
     GEMINI_MAX_OUTPUT_TOKENS,
     GEMINI_REASONING_EFFORT,

@@ -34,7 +34,7 @@ import pytest
 HARNESS_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(HARNESS_ROOT))
 
-from services.agent.graph import ask, final_text  # noqa: E402
+from services.agent.engine.graph import ask, final_text  # noqa: E402
 
 # "Local" in this filename means the MCP transport, not the model: every test here
 # drives `ask` through the real reasoning loop, so it needs a project with the Agent
@@ -46,7 +46,7 @@ from services.agent.graph import ask, final_text  # noqa: E402
 # hermetic means substituting the chat model the way `test_model_bounds.py` already
 # does through `graph._build_llm` — a change of its own, not a CI fix.
 pytestmark = pytest.mark.live
-from services.agent.mcp_client import toolbox  # noqa: E402
+from services.agent.engine.mcp_client import toolbox  # noqa: E402
 
 FIXTURE = json.loads((Path(__file__).resolve().parent / "fixtures" / "expected.json").read_text())
 # The anchor is declared by the fixture rather than repeated here, so re-anchoring

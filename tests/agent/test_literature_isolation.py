@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 
-from services.agent import graph
+from services.agent.engine import graph
 from services.agent.presentation.a2ui import compose_presentation
 
 ARTICLE = {

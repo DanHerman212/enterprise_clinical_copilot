@@ -24,7 +24,7 @@ from unittest.mock import patch
 
 from langchain_core.messages import AIMessage
 
-from services.agent import graph
+from services.agent.engine import graph
 from services.agent.telemetry import stages
 
 HADM_ID = 90000015
@@ -94,7 +94,7 @@ class _Bound:
 
 def _box(*names: str):
     """A real `MCPToolbox` with the named tools advertised and its transport stubbed."""
-    from services.agent.mcp_client import MCPToolbox
+    from services.agent.engine.mcp_client import MCPToolbox
 
     box = MCPToolbox(session=None)
     box._tools = {name: _FakeTool() for name in names}

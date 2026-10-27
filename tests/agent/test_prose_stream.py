@@ -27,13 +27,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from langchain_core.messages import AIMessage, AIMessageChunk  # noqa: E402
 
-from services.agent import graph
+from services.agent.engine import graph
 from services.agent import http
 from services.agent.routing import routing
 from services.agent.telemetry import stages  # noqa: E402
 from services.agent.contracts import AgentRequestError, parse_agent_request  # noqa: E402
-from services.agent.model_turn import text_of  # noqa: E402
-from services.agent.deterministic import run_command  # noqa: E402
+from services.agent.engine.model import text_of  # noqa: E402
+from services.agent.engine.deterministic import run_command  # noqa: E402
 
 PREDICTION = {
     "hadm_id": 90000015,

@@ -133,7 +133,7 @@ def test_the_advertised_schema_declares_the_one_bound():
     """
     import asyncio
 
-    from services.agent.mcp_client import _clean_schema
+    from services.agent.engine.mcp_client import _clean_schema
     from services.mcp.server import server
     from services.mcp.tools.retrieval import TOP_K_MAX, TOP_K_MIN
 

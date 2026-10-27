@@ -6,7 +6,7 @@ from unittest.mock import patch
 from langchain_core.messages import AIMessage
 
 from services.agent.postprocess import followups
-from services.agent import graph
+from services.agent.engine import graph
 from services.agent.routing import routing
 
 #: A series in the shape `get_lab_trends` returns, stored on the replayed turn.
@@ -66,7 +66,7 @@ class _Toolbox:
 
 
 def _box():
-    from services.agent.mcp_client import MCPToolbox
+    from services.agent.engine.mcp_client import MCPToolbox
 
     box = MCPToolbox(session=None)
     box._tools = {"rag_search": _Toolbox()}

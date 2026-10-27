@@ -66,11 +66,11 @@ def test_no_shipped_module_imports_the_training_package():
 def test_the_layer4_runtime_does_not_import_the_training_package_either():
     """The model client is the one place that could plausibly be tempted to.
 
-    `model_runtime.py` reads the model name from `services.mcp.config`, which the
+    `engine/model.py` reads the model name from `services.mcp.config`, which the
     deployment stamps; a change that reached for the training registry instead
     would be the same mistake in the file most likely to make it.
     """
-    runtime = pathlib.Path(SERVICES, "agent", "model_runtime.py")
+    runtime = pathlib.Path(SERVICES, "agent", "engine", "model.py")
 
     assert runtime.is_file()
     assert not [

@@ -31,7 +31,7 @@ sys.path.insert(0, str(HARNESS_ROOT))
 # the server's config fails closed without PROJECT_ID, and the session dies at
 # import — which is what this file reported as "MCP stdio session failed" for as
 # long as the skip has been hiding it (2026-10-12).
-from services.agent.mcp_client import _mcp_child_environment, _unwrap  # noqa: E402
+from services.agent.engine.mcp_client import _mcp_child_environment, _unwrap  # noqa: E402
 
 FIXTURE_PATH = HARNESS_ROOT / "tests" / "agent" / "fixtures" / "expected.json"
 

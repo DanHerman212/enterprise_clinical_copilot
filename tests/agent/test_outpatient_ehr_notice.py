@@ -21,12 +21,12 @@ from unittest.mock import patch
 
 import pytest
 
-from services.agent import deterministic
-from services.agent import graph
-from services.agent import model_turn
+from services.agent.engine import deterministic
+from services.agent.engine import graph
+from services.agent.engine import model as model_turn
 from services.agent.routing import routing
 from services.agent.presentation.a2ui import compose_presentation
-from services.agent.deterministic import run_command
+from services.agent.engine.deterministic import run_command
 
 SUMMARIZE = routing.command_for("summarize")
 OUTPATIENT = sorted(routing.OUTPATIENT_HADM_IDS)

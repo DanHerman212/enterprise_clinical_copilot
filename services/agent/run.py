@@ -12,8 +12,8 @@ import asyncio
 import json
 import sys
 
-from services.agent.graph import ask, final_text
-from services.agent.mcp_client import MCP_TRANSPORT, MCP_URL, toolbox
+from services.agent.engine.graph import ask, final_text
+from services.agent.engine.mcp_client import MCP_TRANSPORT, MCP_URL, toolbox
 from services.mcp.config import GEMINI_MODEL
 
 DEFAULT_QUESTION = "What is the readmission risk for admission 90000015?"

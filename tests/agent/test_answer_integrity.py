@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa: E402
 
-from services.agent import graph as gr  # noqa: E402
+from services.agent.engine import graph as gr  # noqa: E402
 
 
 # --- final_text (ECC-12) ------------------------------------------------------

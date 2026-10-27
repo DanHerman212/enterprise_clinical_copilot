@@ -24,10 +24,10 @@ import re
 
 import pytest
 
-from services.agent import graph
-from services.agent.graph import _execute_tool_calls
-from services.agent.mcp_client import MCPToolbox
-from services.agent.prompts import SYSTEM_PROMPT
+from services.agent.engine import graph
+from services.agent.engine.graph import _execute_tool_calls
+from services.agent.engine.mcp_client import MCPToolbox
+from services.agent.engine.prompts import SYSTEM_PROMPT
 
 
 def _toolbox() -> MCPToolbox:

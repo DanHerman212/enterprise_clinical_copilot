@@ -20,7 +20,7 @@ from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 from starlette.testclient import TestClient  # noqa: E402
 
 from services.agent import http as srv  # noqa: E402
-from services.agent import model_turn  # noqa: E402
+from services.agent.engine import model as model_turn  # noqa: E402
 
 
 def _turn(text="", **metadata):

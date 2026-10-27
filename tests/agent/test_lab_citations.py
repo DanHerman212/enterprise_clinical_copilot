@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 
 from services.agent.postprocess import citations
-from services.agent import graph
+from services.agent.engine import graph
 from services.agent.presentation.a2ui import compose_presentation
 from services.agent.presentation.a2ui import resolve_sources
 

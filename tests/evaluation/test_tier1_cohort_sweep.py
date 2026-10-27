@@ -26,7 +26,7 @@ from services.agent.routing import admission_context
 from services.agent.presentation import domain as admission_phenotypes
 from services.agent.routing import routing
 from services.agent import served_admissions
-from services.agent import deterministic
+from services.agent.engine import deterministic
 from services.agent.presentation.a2ui import compose_presentation, compose_risk_canvas, predict_payload
 from services.mcp.retrieval.sections import SUMMARY_SECTIONS
 from services.mcp.tools import (
@@ -213,7 +213,7 @@ def test_an_outpatient_turn_carries_the_encounter_notice():
     The defect this prevents is textual: 90000073 had "this admission" written about a
     speech-therapy visit from both routes. One notice, both paths.
     """
-    from services.agent import deterministic
+    from services.agent.engine import deterministic
 
     with_notice = deterministic._formatter_input([], True, "Summarise the note.")
     without = deterministic._formatter_input([], False, "Summarise the note.")

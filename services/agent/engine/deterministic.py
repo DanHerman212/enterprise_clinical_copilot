@@ -55,8 +55,8 @@ from services.agent.telemetry import stages
 from services.agent.postprocess import citations
 from services.agent.contracts import RecordedToolCall
 from services.agent.presentation.domain import humanize
-from services.agent.model_turn import text_of
-from services.agent.prompts import SYSTEM_PROMPT
+from services.agent.engine.model import text_of
+from services.agent.engine.prompts import SYSTEM_PROMPT
 from services.agent.routing.routing import (
     EHR_RECORD_QUERY,
     OUTPATIENT_ENCOUNTER_NOTICE,
@@ -543,7 +543,7 @@ async def run_command(
     """
     # Imported here rather than at module scope: `graph` imports this module for
     # the command branch, so a module-level import would be circular.
-    from services.agent.graph import _build_llm, _emit, _execute_tool_calls
+    from services.agent.engine.graph import _build_llm, _emit, _execute_tool_calls
 
     arguments = tool_arguments(command, hadm_id, topic)
     _emit(on_event, stages.planning_event(command.wire))
@@ -730,7 +730,7 @@ async def run_command(
         # empty answer wrote the turn's trace row as a dash — the one record an audit
         # opens first (TF-6, 2026-10-23). The wording is the same one the envelope
         # would have served, so the answer itself is unchanged.
-        from services.agent import model_turn  # noqa: PLC0415 — used on this exit only
+        from services.agent.engine import model as model_turn  # noqa: PLC0415 — used on this exit only
 
         state["deterministic_answer"] = (
             model_turn.OUTPATIENT_SILENT_TURN_SENTENCE if outpatient_record

@@ -28,9 +28,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from langchain_core.messages import SystemMessage  # noqa: E402
 
-from services.agent import graph  # noqa: E402
+from services.agent.engine import graph  # noqa: E402
 from services.agent.routing import routing  # noqa: E402
-from services.agent.deterministic import (  # noqa: E402
+from services.agent.engine.deterministic import (  # noqa: E402
     _NO_READMISSION,
     _presented_prediction,
     medication_narrative,
@@ -857,7 +857,7 @@ def test_the_formatter_is_told_the_question_that_was_asked():
     all it had been shown. The router is gone; what reaches here is `/labs`, which the
     caller typed, and it still goes into the formatter's input first.
     """
-    from services.agent.deterministic import _formatter_input
+    from services.agent.engine.deterministic import _formatter_input
 
     labs = routing.command_for("labs")
     asked = "What were her hemoglobin and sodium trends?"

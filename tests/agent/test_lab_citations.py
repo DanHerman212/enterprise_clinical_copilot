@@ -197,6 +197,23 @@ class TestThePanelIsReadOnce:
         assert "discharge_medications" not in graph._still_bound(
             allowed, {"tool_calls": [], "replayed_tool_calls": [meds]})
 
+    def test_the_estimate_is_asked_for_once_because_it_is_a_fact_about_the_admission(self):
+        """`predict_readmission` scores one row, so the answer cannot depend on how the
+        question was phrased.
+
+        A Turn 2 follow-up that could bind it again would re-run the model and re-draw the
+        driver bars under an answer meant to reuse the estimate it already has — the
+        re-rendering the guard exists to stop. The tool is removed from the bound set
+        rather than refused, because a refusal is something the model can retry.
+        """
+        predict = {"name": "predict_readmission", "args": {"hadm_id": 90000108}}
+        allowed = frozenset({"predict_readmission"})
+
+        assert "predict_readmission" not in graph._still_bound(
+            allowed, {"tool_calls": [predict], "replayed_tool_calls": []})
+        assert "predict_readmission" not in graph._still_bound(
+            allowed, {"tool_calls": [], "replayed_tool_calls": [predict]})
+
     def test_the_bounds_do_not_touch_a_tool_that_takes_a_new_question(self):
         """The regression guard for the other direction: the transcript rule is about
         FIXED results, and a tool that answers the question it was asked stays available.

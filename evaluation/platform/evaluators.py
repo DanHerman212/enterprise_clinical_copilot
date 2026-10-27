@@ -48,6 +48,36 @@ def _executed_command(wire: str) -> str:
     return EXECUTED_COMMAND.get(wire, wire)
 
 
+#: Strings that are never an answer, only the machinery showing through.
+#:
+#: Each one has a single cause, and all three were seen live before they were listed:
+#:
+#: * ``evidence_found`` — the relevance verdict served as text. The model is asked to
+#:   decline by returning that object, and `read_evidence_reply` is supposed to unwrap
+#:   it. A raw object means that reader did not run on this path, and what a clinician
+#:   then reads is JSON.
+#: * ``For admission 900`` — a composed question the service writes for itself. It
+#:   reaching the answer means the prompt was answered instead of the clinician's
+#:   question, and the answer is about the template rather than the patient.
+#: * ``Search PubMed for`` — a tool instruction quoted back. The literature turn is
+#:   meant to synthesise the records, not narrate that it is about to go and fetch
+#:   them.
+#:
+#: Matched case-sensitively and as plain substrings: these are exact artefacts, not
+#: vocabulary, and a case-insensitive match would flag a correct answer that discusses
+#: whether evidence was found.
+ARTEFACT_TOKENS: tuple[str, ...] = (
+    "evidence_found", "For admission 900", "Search PubMed for",
+)
+
+
+def _artefact_failures(output: dict[str, Any]) -> list[str]:
+    """Any machinery string served as an answer, on any turn of the thread."""
+    text = _thread_text(output)
+    return [f"artefact: {token!r} served in the answer"
+            for token in ARTEFACT_TOKENS if token in text]
+
+
 def structural_check(item_input: dict[str, Any],
                      output: dict[str, Any]) -> tuple[bool, list[str]]:
     """Deterministic assertions over the envelope. No model involved."""
@@ -97,6 +127,7 @@ def structural_check(item_input: dict[str, Any],
         )
 
     failures.extend(_dev_suite_failures(expectations, output))
+    failures.extend(_artefact_failures(output))
     return (not failures), failures
 
 

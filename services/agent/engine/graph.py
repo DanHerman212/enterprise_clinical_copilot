@@ -167,6 +167,11 @@ RECURSION_LIMIT = 25
 #: recorded search answered the old one.
 ONCE_PER_TRANSCRIPT: frozenset[str] = frozenset({
     "rag_search_sections", "get_lab_trends", "discharge_medications",
+    # A Turn 2 follow-up that re-asks the score would re-run the model and re-draw the
+    # driver bars under an answer that is supposed to reuse the estimate it already
+    # has. `_transcript_carries_attribution` reads the same replay for the narrative
+    # path; this closes the binding path, so the tool is absent rather than refused.
+    "predict_readmission",
 })
 
 #: Tools whose transcript allowance depends on WHAT was fetched rather than that it was.

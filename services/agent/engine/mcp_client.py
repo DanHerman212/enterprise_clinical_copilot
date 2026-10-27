@@ -402,6 +402,13 @@ MAX_TOOL_CALLS_PER_TURN = 5
 
 ONCE_PER_TURN: frozenset[str] = frozenset({
     "rag_search", "rag_search_sections", "get_lab_trends", "discharge_medications",
+    # The estimate is a fact about the admission, not about the request, so a second
+    # call in the same turn can only return what the first one returned. It is here
+    # because `/ehr` already runs it as its supplementary call: a free-text turn that
+    # could bind it a second time would spend a call of the five on a score already in
+    # the transcript, and re-render the driver bars beside an answer that did not ask
+    # for them.
+    "predict_readmission",
 })
 
 

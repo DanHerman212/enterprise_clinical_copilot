@@ -40,6 +40,17 @@ steps:
   # gate that lies. `pytest` arrives from services/mcp/requirements.txt, where it
   # is pinned.
   #
+  # Installed in three separate runs, in this order, on purpose. The files cannot
+  # be resolved together: services/mcp/requirements.txt pins langgraph==1.2.10 for
+  # the harness's local convenience while services/agent/requirements.txt pins
+  # 1.2.11, so one `pip install -r a -r b` is a hard ResolutionImpossible — the
+  # first version of this step failed exactly there. No image ever sees both
+  # files, so there is no single environment to reproduce; what this reproduces is
+  # the agent's, because that is the process the suite is mostly about. The MCP
+  # file goes first so the agent's pins win. The drift itself is a finding, not
+  # something to paper over: see
+  # docs/code_comprehension/06-governance_observability_and_ci.md §3.3.
+  #
   # `tests/agent/test_wire_contract_parity.py` reads the site's replay bounds from
   # a sibling checkout that Cloud Build does not have, so its cross-repo cases
   # SKIP here (with that reason printed) rather than pass. The site's own build
@@ -50,10 +61,9 @@ steps:
       - -c
       - |
         set -euo pipefail
-        pip install --quiet --no-cache-dir \
-          -r services/agent/requirements.txt \
-          -r services/mcp/requirements.txt \
-          -r evaluation/agent/requirements.txt
+        pip install --quiet --no-cache-dir -r evaluation/agent/requirements.txt
+        pip install --quiet --no-cache-dir -r services/mcp/requirements.txt
+        pip install --quiet --no-cache-dir -r services/agent/requirements.txt
         python -m pytest tests -q
 
   - name: gcr.io/cloud-builders/docker

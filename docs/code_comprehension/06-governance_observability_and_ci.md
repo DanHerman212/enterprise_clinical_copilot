@@ -286,7 +286,6 @@ request possible; that widens who may call the agent and is left as a decision.
 | `python manage.py check --deploy` (`danielmherman`) | runs in the migrate job, unchanged |
 
 ### 3.3 Correction to the Step A finding
-
 F-12.2's premise — that the site's ordering was correct and only the smoke check was
 missing — holds. The Layer 8 investigation is a separate matter and is **not** closed by
 these changes: `demo_conversation` was found empty twelve hours after a turn had been
@@ -298,3 +297,29 @@ test's mechanism: `Conversation.patient` is `on_delete=CASCADE`, and every deplo
 `seed_demo_patients --prune`, so refreshing the cohort deletes the conversations of any
 patient the artifact no longer carries — no expiry, no sweep, no log line. That is a policy
 question and is raised rather than changed.
+
+### 3.4 New finding — the two requirement files disagree (FOUND BY THE NEW GATE)
+
+**F-13.1 — `langgraph` is pinned twice, at two versions (LOW, discovered during Step B).**
+`services/agent/requirements.txt` pins `langgraph==1.2.11`; `services/mcp/requirements.txt`
+pins `1.2.10` and carries it under a comment describing the file as "local development
+dependencies for the whole harness (MCP server + agent)". The pins are therefore
+irreconcilable in one environment: the first version of the F-12.1 test step failed with
+`ResolutionImpossible: Cannot install langgraph==1.2.10 and langgraph==1.2.11` before a
+single test ran. The local venv resolves to `1.2.11`, because that is the last file anyone
+installed from — so the 1,513-test gate above runs against the agent's pin, and the
+`1.2.11`-shaped suite has never run against an environment built from the MCP file.
+
+Nothing has broken, because no image installs both files: the agent image installs
+`services/agent/requirements.txt` and the MCP image installs `services/mcp/requirements.txt`.
+The cost is that "the harness passes" means one particular file won, chosen by install order
+rather than by anyone deciding.
+
+*Executed mitigation:* the test step installs the three files in sequence, MCP before agent,
+so the agent's pins win and the tested environment is the deployed agent's.
+*Raised, not changed:* the drift itself. Two possibilities, and the choice is not mine —
+either the MCP file's `langgraph` line is vestigial (the MCP server is an MCP server; it does
+not import langgraph) and should be deleted, or the two services are meant to run the same
+langgraph and the MCP pin is simply stale. Deleting the line changes the MCP image's
+dependency set; aligning it to `1.2.11` changes the MCP image's runtime. Both are one-line
+changes and neither should ride along on a governance commit.

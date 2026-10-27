@@ -29,7 +29,7 @@ flowchart LR
   end
 
   subgraph engine["engine — the run"]
-    graph["graph.py"]
+    flow["graph.py"]
     deterministic["deterministic.py"]
     prompts["prompts.py"]
     model["model.py"]
@@ -53,14 +53,14 @@ flowchart LR
     stages["stages.py"]
   end
 
-  http --> turn --> graph --> guard --> a2ui --> out["the answer"]
+  http --> turn --> flow --> guard --> a2ui --> answer["the answer"]
   contracts -.-> http
-  route -.-> graph
+  route -.-> flow
   admctx -.-> turn
-  prompts -.-> graph
-  deterministic -.-> graph
-  model -.-> graph
-  mcp <--> graph
+  prompts -.-> flow
+  deterministic -.-> flow
+  model -.-> flow
+  mcp <--> flow
   mcp <--> tools["MCP server"]
   cites -.-> guard
   cites -.-> a2ui

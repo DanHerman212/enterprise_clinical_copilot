@@ -33,6 +33,14 @@ COPY services/mcp/__init__.py services/mcp/config.py services/mcp/runtime.py \
      services/mcp/contracts.py ./services/mcp/
 COPY services/mcp/retrieval/__init__.py services/mcp/retrieval/sections.py ./services/mcp/retrieval/
 
+# `shared.errors` carries AgentResponseError, which the tool-execution seam in
+# engine/mcp_client.py raises when a recorded tool call does not validate. It moved
+# there in Phase 7 — it used to be defined in ingress/contracts.py, which the engine
+# is no longer allowed to import — so the image has to ship the package. Without this
+# COPY the container starts and dies on the import, which is what Cloud Run reports
+# as "failed to start and listen on the port".
+COPY shared/ ./shared/
+
 USER 1000
 
 EXPOSE 8080

@@ -61,7 +61,7 @@ from services.agent.engine.mcp_client import (  # noqa: F401 — re-exported
     validate_recorded_tool_call,
     _is_number,
     _presented_factor,
-    _presented_prediction,
+    _presented_for_model,
     _execute_tool_calls,
 )
 
@@ -432,7 +432,8 @@ def _outbound_patient_identifier(
 def _freetext_allowed(risk_driver_question: bool,
                       wants_literature: bool,
                       lab_driver_question: bool = False,
-                      declared_follow_up: bool = False) -> frozenset[str]:
+                      declared_follow_up: bool = False,
+                      risk_score_question: bool = False) -> frozenset[str]:
     """The tools the reasoning loop may call on this turn.
 
     `routing.FREETEXT_TOOLS` is the standing boundary: a command's tool is absent rather
@@ -442,6 +443,14 @@ def _freetext_allowed(risk_driver_question: bool,
     * `predict_readmission`, on a question asking WHY a factor is a readmission risk
       driver — the attribution and its direction live in the model, and an answer without
       them describes the values and stops (a6e4ca01, 2026-10-21).
+    * `predict_readmission` again, on a question that asks for the ESTIMATE itself
+      (`routing.asks_for_risk_score`). This crossing is newer than the first and exists
+      because of a measured deflection: `dev_t5_03` on a cold-start thread asked for the
+      30-day score and was answered "… are provided by the /ehr command". Telling a
+      clinician to type a command the assistant can run is not a boundary, it is a dead
+      end. The projection in `mcp_client._presented_for_model` already gives the model
+      `probability_display` and `threshold_display` and no float, so the answer states
+      the number the widget prints rather than a re-derived one.
     * `search_literature`, on a question that asks for published evidence
       (`routing.asks_for_literature`). Bound unconditionally before 2026-10-22, which put
       an empty `LiteratureList` over chart follow-ups and discarded their note citations.
@@ -466,17 +475,18 @@ def _freetext_allowed(risk_driver_question: bool,
     The series documents nothing such a question asked, so it is withheld unless the
     driver IS an analyte (`routing.asks_about_a_lab_analyte`).
 
-    What is NOT relaxed: the rule that no risk SCORE is produced in free text. The
-    projection in `tool_node` shows the model display strings and driver names with
-    directions, never a bare float, and the /risk command remains the thing that draws
-    the score.
+    What is NOT relaxed: the model never sees a raw float. The projection in
+    `mcp_client._presented_for_model` shows the score and the threshold as the display
+    strings the widget prints, and withholds `probability`, `threshold` and `base_value`
+    entirely — a number the model is holding is a number it can paste. Free text may now
+    state the estimate (2026-10-27, `dev_t5_03`); it still cannot compute one.
     """
     allowed = set(routing.FREETEXT_TOOLS)
     if wants_literature and not declared_follow_up:
         allowed |= routing.LITERATURE_TOOLS
+    if (risk_driver_question or risk_score_question) and not declared_follow_up:
+        allowed.add("predict_readmission")
     if risk_driver_question:
-        if not declared_follow_up:
-            allowed.add("predict_readmission")
         if not lab_driver_question:
             allowed.discard("get_lab_trends")
     return frozenset(allowed)
@@ -603,6 +613,7 @@ def build_graph(
     wants_literature: bool = False,
     lab_driver_question: bool = False,
     follow_up_declared: bool = False,
+    risk_score_question: bool = False,
 ):
     """Compile the graph. `on_event` receives progress stages; None disables them.
 
@@ -637,7 +648,8 @@ def build_graph(
     # "has the model spoken" is true before this run has done anything and would never
     # force anything on the questions that need it most.
     allowed = _freetext_allowed(risk_driver_question, wants_literature,
-                               lab_driver_question, follow_up_declared)
+                               lab_driver_question, follow_up_declared,
+                               risk_score_question)
     freetext_tools = _tools(toolbox, allowed=allowed)
     chat_model = model_gateway.build_llm(model)
     llm = chat_model.bind_tools(freetext_tools)
@@ -714,14 +726,14 @@ def build_graph(
     async def tool_node(state: AgentState) -> dict:
         last = state["messages"][-1]
         calls = last.tool_calls if isinstance(last, AIMessage) else []
-        # `_presented_prediction` only touches a prediction result, and there is one on
-        # this turn only when the question asked for the model's reasoning (see
-        # `_freetext_allowed`). Projected rather than raw: the model reads the score as
-        # the interface writes it and never holds a float it could paste.
+        # `_presented_for_model` rewrites the estimate into the strings the widget
+        # prints, and annotates a lab series with the excursion it was already ranked
+        # by. Projected rather than raw: the model never holds a float it could paste,
+        # and never ranks values it was told not to compare.
 
         messages, recorded = await _execute_tool_calls(
             toolbox, calls, on_event, guard=guard,
-            project=_presented_prediction,
+            project=_presented_for_model,
             # Everything this turn has already spent, so the budget is a budget for the
             # turn rather than for one iteration of the loop around it.
             already_called=list(state.get("tool_calls") or []),
@@ -1036,6 +1048,10 @@ async def ask(
         # the free-text tool set (see `_freetext_allowed`). A clicked driver bar declares
         # that it is one, so the control decides instead of its label.
         risk_driver_question=routing.wants_risk_driver(question, intent),
+        # And whether it asks for the estimate itself — "what is his readmission risk
+        # score, and is it above threshold". The same tool, a different reason, and the
+        # one that stops a cold-start thread being told to go and type a command.
+        risk_score_question=routing.asks_for_risk_score(question),
         # The declaration on its own, kept separate from the question it also implies:
         # `route` uses it to end a replay turn that already holds the attribution, and
         # a question that merely reads like a driver question was never scored.

@@ -63,6 +63,10 @@ from services.agent.engine.mcp_client import (
     MCPToolbox,
     RecordedToolCall,
     _execute_tool_calls,
+    _presented_for_model,
+    # Re-exported for the tests that assert the estimate's projection directly. The
+    # module no longer calls it — it calls the dispatcher — but the seam it names is
+    # still the one those tests stand on.
     _presented_prediction,
 )
 from services.agent.engine.prompts import SYSTEM_PROMPT
@@ -497,7 +501,7 @@ async def run_command(
         if isinstance(call.get("response"), dict)
     )
     tool_messages, recorded = await _execute_tool_calls(
-        toolbox, calls, on_event, project=_presented_prediction,
+        toolbox, calls, on_event, project=_presented_for_model,
         # This path opens `command.<wire>` around the whole turn, so its tool spans
         # have a parent to nest under. The reasoning loop does not, and spanning there
         # produced a separate root trace per tool.
@@ -519,7 +523,7 @@ async def run_command(
             "id": f"{command.wire}-record",
         }]
         extra_messages, extra_recorded = await _execute_tool_calls(
-            toolbox, fallback, on_event, project=_presented_prediction, traced=True,
+            toolbox, fallback, on_event, project=_presented_for_model, traced=True,
             order=order,
             cite_offset=cite_offset + _passage_count(recorded),
         )

@@ -101,10 +101,11 @@ def test_the_prompt_names_the_tools_the_reasoning_loop_can_call():
 
     # `predict_readmission` is the one command tool the loop may reach, and only on a
     # turn whose question asks for the model's own reasoning about a driver
-    # (`routing.asks_why_risk_driver`). Naming it without that condition would be the
-    # invitation the rule below forbids, so the condition is asserted with the name.
+    # (`routing.asks_why_risk_driver`), or for the estimate itself
+    # (`routing.asks_for_risk_score`). Naming it without those conditions would be the
+    # invitation the rule below forbids, so they are asserted with the name.
     assert "`predict_readmission`" in SYSTEM_PROMPT
-    assert "exactly one kind of question" in SYSTEM_PROMPT
+    assert "two kinds of question" in SYSTEM_PROMPT
 
     # `search_literature` is the second conditional one: a command's tool that is bound
     # only when the question asks for published evidence (`routing.asks_for_literature`).
@@ -306,17 +307,53 @@ def test_an_empty_sectioned_search_is_not_an_empty_record():
 def test_a_risk_driver_question_is_answered_with_the_models_attribution():
     """a6e4ca01: "what explains creatinine as a readmission risk driver?" got the labs only.
 
-    The chart says what the value did; only the model says why it counts. Both halves are
-    required, and the score itself still belongs to /risk.
+    The chart says what the value did; only the model says why it counts. The estimate
+    is a second, separate reason the same tool is bound (`dev_t5_03` asked for the score
+    and was told to run a command), and the prompt states both.
     """
-    assert "predict_readmission` is in front of you on exactly one kind of question" \
+    assert "`predict_readmission` is in front of you on two kinds of question" \
         in SYSTEM_PROMPT
-    # Wrapped across two lines in the prompt, so the two halves are asserted rather
-    # than the whitespace between them.
+    # Wrapped across lines in the prompt, so the halves are asserted rather than the
+    # whitespace between them — the rule is that the drivers and their direction are
+    # both named, not that they are named in one line.
     assert "drivers contributed most" in SYSTEM_PROMPT
-    assert "in which direction" in SYSTEM_PROMPT
-    # The boundary is restated rather than dropped: the `/ehr` turn owns the number.
-    assert "/ehr" in SYSTEM_PROMPT and "owns the number" in SYSTEM_PROMPT
+    assert "which drivers led" in SYSTEM_PROMPT
+    assert "direction" in SYSTEM_PROMPT
+    # The second condition, and the thing it replaced: a question asking for the score
+    # is answered with the score rather than redirected to a command.
+    assert "predict_readmission` is in front of you" in SYSTEM_PROMPT
+    assert "probability_display" in SYSTEM_PROMPT
+    assert "never redirected" in SYSTEM_PROMPT
+    # Never a float: the projection gives the model the display strings and no number.
+    assert "threshold_display" in SYSTEM_PROMPT
+
+
+def test_the_prompt_rules_that_gate_two_showed_were_missing():
+    """Three rules the full dev suite showed were absent from the prompt.
+
+    * `dev_t5_01` named one anticoagulant where the record carried two: a class question
+      must enumerate every matching drug and say which was continued.
+    * `dev_t1_05` opened a `/labs` answer with "all laboratory values remained within
+      their reference ranges" and then listed a creatinine that had nearly doubled. A
+      blanket reassurance followed by changes is a contradiction.
+    * `dev_t3_03` answered "which was worst" from a tie the `flag` cannot break, so the
+      ranking is the computed `excursion` rather than a comparison of digits.
+    """
+    assert "enumerate EVERY matching" in SYSTEM_PROMPT
+    assert "given inpatient and stopped or held" in SYSTEM_PROMPT
+    assert "Never open a lab answer with a blanket" in SYSTEM_PROMPT
+    assert "excursion" in SYSTEM_PROMPT
+    assert "cites each analyte's series" in SYSTEM_PROMPT
+
+
+def test_the_lab_command_prompt_carries_the_same_three_rules():
+    """`/labs` is a formatting turn, so the rules live in its own prompt as well."""
+    from services.agent.routing import routing
+
+    assert "Never open with \"all laboratory values remained within their reference ranges\"" \
+        in routing.LABS_FORMATTING
+    assert "`excursion`" in routing.LABS_FORMATTING
+    assert "cites each one's series" in routing.LABS_FORMATTING
 
 
 def test_a_number_is_not_distributed_across_the_items_beside_it():

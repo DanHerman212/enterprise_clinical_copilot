@@ -276,6 +276,21 @@ described as normal, in range or unremarkable, however close to the interval it 
 where ANY timepoint in an analyte's series carries a non-"normal" flag, that analyte never
 "remained within reference range", whatever its later values did.
 
+Every timepoint also carries `excursion`: how far outside the reference interval the value
+sits, measured in reference-range widths, with `0.0` inside. When the question asks WHICH
+value was worst, that field is the ranking — compare `excursion` values rather than the
+values or the interval bounds, which you must not compare yourself. Where two excursions
+are close, say so instead of naming a winner the numbers do not support.
+
+Never open with "all laboratory values remained within their reference ranges" when an
+analyte moved materially inside its interval. If nothing is flagged abnormal, say that no
+value crossed its reference limit, and then name the movements that did happen with their
+size: a creatinine that nearly doubled is a finding even though it never left its range,
+and a reassurance followed by a list of changes is a contradiction in two sentences.
+
+A sentence that covers several analytes cites each one's series (`^[1], ^[2]`); one marker
+under a claim about "all laboratory values" does not support it.
+
 The trajectories were generated from this admission's own recorded features. They were NOT read
 from a laboratory record. Say so once, plainly, in the course of the answer — the card carries
 the same statement, and a reader who assumes these are measured results has been misled by
@@ -772,6 +787,50 @@ def wants_risk_driver(question: str, intent: str | None = None) -> bool:
     answer about the chart when the question was about the model's reasoning.
     """
     return intent == "risk_driver" or asks_why_risk_driver(question)
+
+
+#: The words a question uses when it wants the ESTIMATE, or where the estimate sits
+#: against its threshold. Kept separate from `_RISK_DRIVER_WORDS` because the two answer
+#: different questions: a driver question wants the attribution, and a score question
+#: wants the number and the comparison.
+_RISK_SUBJECTS = frozenset({"risk", "readmission", "probability"})
+_RISK_SCORE_WORDS = frozenset({"score", "scores", "probability", "percent",
+                               "percentage", "threshold"})
+_RISK_SCORE_COMPARISONS = frozenset({"above", "below", "exceeds", "exceed"})
+
+
+def asks_for_risk_score(question: str) -> bool:
+    """Whether this question asks for the readmission estimate, or for its verdict.
+
+    This is the second condition under which `predict_readmission` crosses into free
+    text (`graph._freetext_allowed`), and it exists because of a measured deflection.
+
+    On Gate 2 (`pilot-verify-20261027-190255`) `dev_t5_03` asked "What is his 30-day
+    readmission risk score and is it above threshold?" on a thread that had never run
+    `/ehr`. The tool was not bound, so the answer named the command that owns the
+    score and stopped: "… are provided by the /ehr command." The user was told to go
+    and type something the assistant could have run itself. A clinician asking for a
+    number should get the number.
+
+    A driver question is excluded even though it names the score: `asks_why_risk_driver`
+    is the other crossing, and it has its own reason for binding the same tool. Two
+    predicates admitting the same call for different reasons would make the binding
+    unauditable.
+
+    A false positive costs one bound tool on a turn that turns out to want prose; a
+    false negative is the deflection above.
+    """
+    tokens = (question or "").lower().translate(_PUNCTUATION).split()
+    if not tokens:
+        return False
+    if asks_why_risk_driver(question):
+        return False
+    if not any(token in _RISK_SUBJECTS for token in tokens):
+        return False
+    if any(token in _RISK_SCORE_WORDS for token in tokens):
+        return True
+    return ("risk" in tokens
+            and any(token in _RISK_SCORE_COMPARISONS for token in tokens))
 
 
 #: How a question names one of the analytes the lab series carries.

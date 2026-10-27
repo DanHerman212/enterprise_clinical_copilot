@@ -11,6 +11,7 @@ Two rules from the spec are enforced here rather than trusted to a model:
 
 from __future__ import annotations
 
+import re
 from typing import Any, Callable
 
 from langfuse import Evaluation
@@ -191,10 +192,67 @@ def _dev_suite_failures(expectations: dict[str, Any],
             failures.append(f"must_not_disclose: {token!r} present in the answer")
 
     marker = expectations.get("citation_marker")
-    if marker and f"{marker}:" not in _thread_text(output):
-        failures.append(f"citation_marker: no {marker}: marker in the answer")
+    if marker:
+        failures.extend(_citation_marker_failures(str(marker), output))
 
     return failures
+
+
+#: An inline citation marker as the reader sees it: `^[3]`.
+_INLINE_MARKER = re.compile(r"\^\[(\d+)\]")
+
+
+def _citation_marker_failures(marker: str, output: dict[str, Any]) -> list[str]:
+    """Whether the thread carries a *resolvable* citation of the named kind.
+
+    The original check searched the prose for the literal `"PMID:"`. That stopped
+    describing the product when Phase F moved PMIDs into the published `sources`
+    channel: a literature turn writes numbered pills (`^[1]`, `^[3]`) and the PMID
+    lives on the source the pill addresses, which is what the reader opens. Searching
+    the prose then failed `dev_t1_06` on a correctly formatted `/pubmed` answer (Gate 2,
+    `pilot-verify-20261027-190255`).
+
+    A citation is satisfied either way the reader can resolve it:
+
+    * the literal `PMID:` is in the prose, or
+    * the answer carries inline `^[n]` markers and every index resolves to a source on
+      that turn — with at least one of those sources carrying a PMID (in its `pmid`
+      field, or in a label that names the marker).
+
+    Every marker must resolve, not merely one: a marker pointing past the end of the
+    array is a citation the reader cannot open, and that is the defect this check is
+    for.
+    """
+    if f"{marker}:" in _thread_text(output):
+        return []
+
+    answers = output.get("turn_responses")
+    per_turn_sources = output.get("turn_sources") or []
+    if not isinstance(answers, list):
+        answers = [str(output.get("turn_1_response") or "")]
+
+    resolved_any = False
+    for index, answer in enumerate(answers):
+        cited = [int(match) for match in _INLINE_MARKER.findall(str(answer or ""))]
+        if not cited:
+            continue
+        sources = per_turn_sources[index] if index < len(per_turn_sources) else []
+        sources = sources if isinstance(sources, list) else []
+        if any(number < 1 or number > len(sources) for number in cited):
+            return [f"citation_marker: {marker} marker addresses no source on "
+                    f"turn {index + 1}"]
+        for number in cited:
+            source = sources[number - 1]
+            if not isinstance(source, dict):
+                continue
+            identifier = str(source.get("pmid") or "").strip()
+            label = str(source.get("label") or "") + str(source.get("source") or "")
+            if identifier or marker.lower() in label.lower():
+                resolved_any = True
+
+    if resolved_any:
+        return []
+    return [f"citation_marker: no {marker} citation resolvable from the answer"]
 
 
 def make_assertions_evaluator() -> Callable[..., list[Evaluation]]:

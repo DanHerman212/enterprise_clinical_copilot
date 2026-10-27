@@ -659,7 +659,6 @@ def _presented_prediction(name: str, payload: Any) -> Any:
     if name != "predict_readmission" or not isinstance(payload, dict):
         return payload
     projected = dict(payload)
-
     # The two numbers a clinician can quote, in the form the interface writes them.
     for field, display in (("probability", "probability_display"),
                            ("threshold", "threshold_display")):
@@ -676,6 +675,83 @@ def _presented_prediction(name: str, payload: Any) -> Any:
     if isinstance(factors, list):
         projected["top_factors"] = [_presented_factor(factor) for factor in factors]
     return projected
+
+
+def _excursion(low: Any, high: Any, value: Any) -> float | None:
+    """How far outside a reference interval a value sits, in range-widths.
+
+    Zero inside the interval, positive outside, and normalised by the interval's own
+    width — a plain distance ranks a wide interval above a narrow one however abnormal
+    the reading is. `followups._excursion` is the same rule for the chip text; this is
+    the copy the model reads, and the two are the same number because they are the same
+    definition rather than because they agree.
+    """
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in (low, high, value)):
+        return None
+    width = max(float(high) - float(low), 1e-9)
+    if value > high:
+        return round((float(value) - float(high)) / width, 3)
+    if value < low:
+        return round((float(low) - float(value)) / width, 3)
+    return 0.0
+
+
+def _presented_labs(payload: Any) -> Any:
+    """Lab trends as the model may see them: every timepoint annotated with `excursion`.
+
+    Why this is computed here rather than by the model. `dev_t3_03` asked which value was
+    "furthest outside its reference range"; haemoglobin was `low`, and so were the red
+    cells and the RDW, so the per-timepoint `flag` could not rank them and the model
+    picked one. The prompt forbids re-deriving the ranking from the digits — correctly,
+    because a digit the model is holding is a digit it can misread — so the ranking has
+    to be computed before the model sees the panel. This is that computation.
+
+    Applied to the model's copy only. The recorded call keeps what the tool returned, so
+    the execution record and the caller's payload still say exactly what the series said.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    trends = payload.get("trends")
+    if not isinstance(trends, list):
+        return payload
+    presented = dict(payload)
+    rows = []
+    for trend in trends:
+        if not isinstance(trend, dict):
+            rows.append(trend)
+            continue
+        row = dict(trend)
+        low, high = trend.get("reference_low"), trend.get("reference_high")
+        points = []
+        peak = 0.0
+        for point in trend.get("series") or []:
+            if not isinstance(point, dict):
+                points.append(point)
+                continue
+            excursion = _excursion(low, high, point.get("value"))
+            annotated = dict(point)
+            if excursion is not None:
+                annotated["excursion"] = excursion
+                peak = max(peak, excursion)
+            points.append(annotated)
+        row["series"] = points
+        row["excursion_max"] = round(peak, 3)
+        rows.append(row)
+    presented["trends"] = rows
+    return presented
+
+
+def _presented_for_model(name: str, payload: Any) -> Any:
+    """The tool result in the form the MODEL reads. Never the form the caller records.
+
+    Two tools need a translation the model must not perform itself: the estimate, whose
+    floats are replaced by the display strings the widget prints, and the lab series,
+    whose ranking is computed rather than inferred. Everything else passes through
+    untouched.
+    """
+    if name == "get_lab_trends":
+        return _presented_labs(payload)
+    return _presented_prediction(name, payload)
 
 
 

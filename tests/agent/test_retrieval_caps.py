@@ -25,6 +25,8 @@ from unittest.mock import patch
 from langchain_core.messages import AIMessage
 
 from services.agent.engine import graph
+from services.agent.engine import model as model_gateway
+from services.agent.engine import model
 from services.agent.telemetry import stages
 
 HADM_ID = 90000015
@@ -129,7 +131,7 @@ def _run(*tools, replayed=None, wants=("rag_search_sections", "rag_search")):
     async def replay(toolbox, turns, **_kwargs):
         return [], list(replayed or [])
 
-    with patch.object(graph, "_build_llm", lambda name: model), \
+    with patch.object(model_gateway, "build_llm", lambda name: model), \
             patch.object(graph, "replay_messages", replay):
         state = asyncio.run(graph.ask(
             box, "what was the inpatient diagnosis?", hadm_id=HADM_ID, model="test",

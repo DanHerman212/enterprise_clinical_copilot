@@ -20,6 +20,8 @@ from unittest.mock import patch
 from langchain_core.messages import AIMessage
 
 from services.agent.engine import graph
+from services.agent.engine import model as model_gateway
+from services.agent.engine import model
 
 
 class _ToolHungryModel:
@@ -94,7 +96,7 @@ def _box():
 
 
 def _run(model):
-    with patch.object(graph, "_build_llm", lambda name: model):
+    with patch.object(model_gateway, "build_llm", lambda name: model):
         return asyncio.run(
             graph.ask(_box(), "What does the note say?", hadm_id=90000015, model="test")
         )

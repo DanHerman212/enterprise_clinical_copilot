@@ -1,6 +1,13 @@
 """Validated request contract for the private agent HTTP service."""
 from __future__ import annotations
 
+from services.agent.engine.mcp_client import (  # noqa: F401
+    RecordedToolCall,
+    validate_recorded_tool_call,
+)
+
+from shared.errors import AgentResponseError  # noqa: F401 — re-exported
+
 import re
 from typing import Any, NotRequired, TypedDict
 
@@ -51,12 +58,6 @@ class AgentToolCall(TypedDict):
     args: dict[str, Any]
     response: dict[str, Any]
     derivable: bool
-
-
-class RecordedToolCall(TypedDict):
-    name: str
-    args: dict[str, Any]
-    response: dict[str, Any]
 
 
 class ResolvedSource(TypedDict):
@@ -156,12 +157,6 @@ class AgentRequestError(ValueError):
         self.code = code
         self.message = message
         self.status_code = status_code
-
-
-class AgentResponseError(ValueError):
-    """The agent produced a payload outside its HTTP success contract."""
-
-
 # The complete set of fields this request accepts. Closed deliberately: an
 # unknown field used to be ignored, so a caller that sent `history` received a
 # confident answer that had silently dropped it — a capability gap wearing the
@@ -736,18 +731,6 @@ def validate_agent_success(payload: Any) -> AgentSuccess:
 
     return payload
 
-
-def validate_recorded_tool_call(payload: Any) -> RecordedToolCall:
-    """Validate the internal trace record before it enters agent state."""
-    if not isinstance(payload, dict):
-        raise AgentResponseError("Recorded tool call is malformed.")
-    if not isinstance(payload.get("name"), str):
-        raise AgentResponseError("Recorded tool call name is invalid.")
-    if not isinstance(payload.get("args"), dict):
-        raise AgentResponseError("Recorded tool call arguments are invalid.")
-    if not isinstance(payload.get("response"), dict):
-        raise AgentResponseError("Recorded tool call response is invalid.")
-    return payload
 
 # ===========================================================================
 # Consolidated from `served_admissions.py` (Phase 7).

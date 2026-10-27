@@ -6,7 +6,9 @@ from unittest.mock import patch
 from langchain_core.messages import AIMessage
 
 from services.agent.postprocess import followups
+from services.agent.engine import model as model_gateway
 from services.agent.engine import graph
+from services.agent.engine import model
 from services.agent.routing import routing
 
 #: A series in the shape `get_lab_trends` returns, stored on the replayed turn.
@@ -79,7 +81,7 @@ def _box():
 
 
 def _run(model, **kwargs):
-    with patch.object(graph, "_build_llm", lambda name: model):
+    with patch.object(model_gateway, "build_llm", lambda name: model):
         return asyncio.run(
             graph.ask(_box(), THE_CHIP, hadm_id=90000015, model="test", **kwargs)
         )

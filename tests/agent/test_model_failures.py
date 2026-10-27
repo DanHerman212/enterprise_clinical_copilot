@@ -33,6 +33,8 @@ from langchain_google_genai.chat_models import GoogleRateLimitError  # noqa: E40
 from starlette.testclient import TestClient  # noqa: E402
 
 from services.agent.engine import graph  # noqa: E402
+from services.agent.engine import model as model_gateway
+from services.agent.engine import model
 from services.agent.ingress import http as srv  # noqa: E402
 
 RECORD_LOGGER = "services.agent.telemetry.observability"
@@ -116,7 +118,7 @@ def _client():
 
 def _with(model, **patches):
     """Patch the model and the toolbox, and whatever else a test needs."""
-    stack = [patch.object(graph, "_build_llm", lambda name: model),
+    stack = [patch.object(model_gateway, "build_llm", lambda name: model),
              patch.object(srv, "toolbox", _fake_toolbox)]
     stack += [patch.object(srv, name, value) for name, value in patches.items()]
     return stack

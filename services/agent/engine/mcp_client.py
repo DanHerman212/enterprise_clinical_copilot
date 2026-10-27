@@ -1,5 +1,7 @@
 """Hand-rolled MCP -> Gemini tool adapter.
 
+from __future__ import annotations
+
 Why hand-rolled rather than `langchain-mcp-adapters` (probed 2026-07-30, v0.3.1):
 that package declares `mcp>=1.24.0` with **no upper bound**, so pip installs it
 happily next to our `mcp==2.0.0` — then it fails at import, because
@@ -24,7 +26,6 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 import httpx2
 from google.genai import types
@@ -32,6 +33,21 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 from services.agent.routing.admission_context import PREFLIGHT_TOOLS
+import logging
+import re
+
+from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.tools import BaseTool
+
+from services.agent.postprocess import citations
+from services.agent.presentation.domain import humanize
+from services.agent.telemetry import observability, stages
+from services.agent.telemetry.stages import emit as _emit
+from shared.errors import AgentResponseError
+from typing import Any, Callable, TypedDict
+
+logger = logging.getLogger(__name__)
+
 from services.mcp.contracts import ToolContractError, validate_tool_result
 from services.mcp.runtime import timeout_chain
 
@@ -364,3 +380,443 @@ async def toolbox(transport: str | None = None, url: str | None = None):
             yield box
     else:
         raise ValueError(f"Unknown MCP transport {chosen!r}; expected 'stdio' or 'http'")
+
+
+# ===========================================================================
+# The tool-execution seam, moved down from `graph.py`, `deterministic.py`
+# and `ingress/contracts.py` (Phase 7).
+#
+# The executor produces `RecordedToolCall`s and both the reasoning loop and
+# the command path drive it, so it cannot live in either of them: that was
+# the `graph` <-> `deterministic` cycle. The record type and its validator
+# come with it, which is also what stops the engine importing ingress.
+# ===========================================================================
+
+MAX_PASSAGE_CHARS = 4000
+
+
+
+MAX_TOOL_CALLS_PER_TURN = 5
+
+
+
+ONCE_PER_TURN: frozenset[str] = frozenset({
+    "rag_search", "rag_search_sections", "get_lab_trends", "discharge_medications",
+})
+
+
+
+_DELIMITER_RE = re.compile(r"<\s*/?\s*tool_result", re.IGNORECASE)
+
+
+
+class _MCPTool(BaseTool):
+    """One MCP tool, exposed to the model as a LangChain tool.
+
+    `_arun` calls through to `MCPToolbox.call`, which returns a plain dict
+    (already normalised / JSON-safe, and errors are structured `{"error": ...}`
+    payloads — never exceptions). Returning the dict as the tool's content
+    keeps that error contract intact for the agent's prompts.py guardrails.
+    """
+
+    name: str
+    description: str
+    box: MCPToolbox
+
+    def _run(self, **kwargs: Any) -> Any:
+        raise NotImplementedError("MCP tools are async-only")
+
+    async def _arun(self, **kwargs: Any) -> Any:
+        return await self.box.call(self.name, dict(kwargs))
+
+
+
+def _escape_delimiter(text: str) -> str:
+    """Neutralise the wrapper's delimiter inside the text the wrapper carries."""
+    if _DELIMITER_RE.search(text):
+        logger.warning(
+            "tool result carries the wrapper's own delimiter; escaping it "
+            "rather than letting it close the block"
+        )
+    return _DELIMITER_RE.sub(lambda match: "&lt;" + match.group(0)[1:], text)
+
+
+
+def _call_key(name: str, arguments: dict[str, Any]) -> str:
+    """A stable identity for one call, so a repeat can be recognised.
+
+    Sorted keys rather than the dict itself: two calls carrying the same arguments in a
+    different order are the same call, and comparing them as written would let a model
+    defeat the check by reordering its own JSON.
+    """
+    return f"{name}:{json.dumps(arguments, sort_keys=True, default=str)}"
+
+
+
+def _passage_total(payload: Any) -> int:
+    """How many citation numbers a payload consumes.
+
+    One definition, in `citations`, because two layers count and they must agree: this one
+    advances the running number the model is shown, and `citations.citable_passages`
+    builds the array a marker resolves against.
+    """
+    return citations.passage_total(payload)
+
+
+
+def _render_passage(passage: dict[str, Any]) -> dict[str, Any]:
+    """Return the passage as the model will see it, or refuse it visibly."""
+    text = passage.get("text")
+    if not isinstance(text, str) or len(text) <= MAX_PASSAGE_CHARS:
+        return passage
+    logger.warning(
+        "refusing passage %s: %d characters, over the %d-character ceiling",
+        passage.get("id"), len(text), MAX_PASSAGE_CHARS,
+    )
+    return {**passage, "text": (
+        f"[refused: {len(text)} characters, over the "
+        f"{MAX_PASSAGE_CHARS}-character ceiling for one passage]"
+    )}
+
+
+
+def _render_tool_result(payload: Any, *, offset: int = 0) -> str:
+    """Render a tool result as the body the wrapper hands the model.
+
+    The projection is built here rather than applied to the payload itself: the
+    same payload is what the execution record, the caller and the browser's
+    citation lookup use, and those should carry what the tool actually returned.
+    A refused passage keeps its slot, with the refusal in place of its text, so
+    the positions every citation refers to do not shift.
+
+    `offset` is how many citable units the model has already been shown in this
+    conversation. Citation numbers are global across tool results and across the
+    replayed turns, because that is the array the citation layer resolves against
+    (`citations.citable_passages` concatenates the same units in the same order).
+    Restarting at 1 per result meant `^[1]` named the first passage of whichever result
+    the reader happened to look at (TF-10, 2026-10-23).
+    """
+    if isinstance(payload, str):
+        return _escape_delimiter(payload)
+    rendered = payload
+    if isinstance(payload, dict):
+        passages = payload.get("passages")
+        if isinstance(passages, list):
+            # Each passage carries the number its citation marker must use. The model was
+            # previously handed an unlabelled array and had to count positions to emit
+            # `^[n]`, and on a four-section summary it counted wrong: `^[3]` went to the
+            # discharge instructions and `^[4]` to the discharge diagnosis, both of which
+            # begin with "discharge" (TF-7, measured 2026-10-23). The number is now given
+            # rather than inferred, and the positions the citation layer resolves against
+            # are the same numbers.
+            rendered = dict(payload, passages=[
+                ({**(_render_passage(passage) if isinstance(passage, dict) else {}),
+                  "cite": offset + index})
+                if isinstance(passage, dict) else passage
+                for index, passage in enumerate(passages, start=1)
+            ])
+        else:
+            # A laboratory panel is the second kind of citable evidence (Phase E,
+            # 2026-10-26). Without a number the trajectory was not something the model
+            # could cite, and a question about an analyte therefore had no citable answer
+            # in front of it: the loop searched the note for a citable passage and
+            # appended a second paragraph drawn from it. One analyte, one number.
+            trends = payload.get("trends")
+            if isinstance(trends, list):
+                rendered = dict(payload, trends=[
+                    ({**trend, "cite": offset + index} if isinstance(trend, dict)
+                     else trend)
+                    for index, trend in enumerate(trends, start=1)
+                ])
+    return _escape_delimiter(json.dumps(rendered, ensure_ascii=False))
+
+
+
+def _tools(toolbox: MCPToolbox,
+           allowed: frozenset[str] | None = None) -> list[BaseTool]:
+    """Build one LangChain tool per MCP tool, sharing the toolbox.
+
+    Each MCP `input_schema` is declared to the model as the tool's
+    `args_schema` (Gemini-safe subset), so `bind_tools` advertises the real
+    parameter names and types instead of leaving the model to guess them from
+    prose (ECC-10) — which is also what made the old kwargs-flatten heuristic
+    necessary.
+
+    `allowed` is the free-text boundary (UX Phase 1B): the reasoning loop is
+    handed only these, so a tool that belongs to a command is not merely refused,
+    it is absent. `None` means every tool the server advertises.
+    """
+    return [
+        _MCPTool(
+            name=name,
+            description=(tool.description or "").strip(),
+            args_schema=_clean_schema(tool.input_schema),
+            box=toolbox,
+        )
+        for name, tool in toolbox._tools.items()
+        if allowed is None or name in allowed
+    ]
+
+
+
+class RecordedToolCall(TypedDict):
+    name: str
+    args: dict[str, Any]
+    response: dict[str, Any]
+
+
+
+def validate_recorded_tool_call(payload: Any) -> RecordedToolCall:
+    """Validate the internal trace record before it enters agent state."""
+    if not isinstance(payload, dict):
+        raise AgentResponseError("Recorded tool call is malformed.")
+    if not isinstance(payload.get("name"), str):
+        raise AgentResponseError("Recorded tool call name is invalid.")
+    if not isinstance(payload.get("args"), dict):
+        raise AgentResponseError("Recorded tool call arguments are invalid.")
+    if not isinstance(payload.get("response"), dict):
+        raise AgentResponseError("Recorded tool call response is invalid.")
+    return payload
+
+
+
+def _is_number(value: Any) -> bool:
+    """A real number, rather than a bool wearing one's type."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+
+def _presented_factor(factor: Any) -> Any:
+    """One risk driver, named and directed, with no magnitude to quote.
+
+    Rebuilt field by field rather than copied and edited, because the field that has to
+    go is the one a `{**factor}` spread would keep. The magnitude is not withheld for
+    want of a use — the widget draws it as a bar length — but because it is not this
+    turn's to state.
+    """
+    if not isinstance(factor, dict):
+        return factor
+    return {
+        "feature": humanize(str(factor.get("feature", ""))),
+        **({"direction": factor["direction"]}
+           if isinstance(factor.get("direction"), str) else {}),
+    }
+
+
+
+def _presented_prediction(name: str, payload: Any) -> Any:
+    """The prediction result as the interface shows it, for the model to read.
+
+    The model has never seen a feature key, and the keys are not words a clinician
+    reads: the widget draws "red cell distribution width (RDW)" where the result says
+    `rdw_max`. The mapping already exists (`feature_labels.py`) and the interface uses
+    it, so the substitution is made here rather than requested from the model — a
+    translation the model performs is a translation the model can invent, and the prose
+    and the bars have to name a factor the same way.
+
+    `humanize`, not `label_for`. Both read the same curated map, so they agree on every
+    feature it names; they part only in the fallback, where `label_for` hands back the raw
+    key and `humanize` title-cases it. The widget draws `humanize`, so the prose has to be
+    shown `humanize` too — otherwise a feature the map has not caught yet reads as
+    "Rdw Max" on its bar and `rdw_max` in the sentence describing it. One factor, one name,
+    whichever name the map happens to know.
+
+    The numbers are STATED, not handed over. This projection used to pass the served
+    floats through and ask the prompt to render them in the right form; the prompt asked
+    three times and the leak survived all three, because a float the model is holding is
+    a float it can paste. So the copy the model reads carries `probability_display` and
+    `threshold_display` — the score and the threshold written the way the widget prints
+    them — and carries no `probability`, `threshold` or `base_value` at all.
+
+    Withheld rather than rounded. A display string is the same number written as the
+    reader will see it written, which is a different thing from a rounded float the
+    model then has to print a digit of: this projection used to pre-round, and given
+    0.33 the model wrote "33.0%" beside a widget drawing 33.2%, which is why the
+    rounding was removed in the first place. Given "33.2%" there is no digit to lose.
+
+    The drivers keep their names and their direction and lose their magnitudes. The
+    narrative says which factors led and what they mean; the widget draws how much. A
+    raw contribution was quotable too, and a number the guardrail does not recognise as
+    the score is stripped and shown as a safety swap — so withholding it also removes a
+    way for a good answer to be visibly withdrawn from a reader mid-sentence.
+
+    `EHR_FORMATTING` names both display strings, and the guardrail still checks the prose
+    against the SERVED value, because it reads the recorded call and not this copy. It
+    accepts the display strings: one decimal of a percentage is exactly half a unit in
+    its own last place, which is the tolerance `verify_risk_numbers` allows.
+
+    Applied to the model's copy only. The recorded call keeps what the service
+    returned, so the execution record and the caller's payload still say what the
+    tool said.
+    """
+    if name != "predict_readmission" or not isinstance(payload, dict):
+        return payload
+    projected = dict(payload)
+
+    # The two numbers a clinician can quote, in the form the interface writes them.
+    for field, display in (("probability", "probability_display"),
+                           ("threshold", "threshold_display")):
+        value = payload.get(field)
+        if _is_number(value):
+            projected[display] = f"{float(value) * 100:.1f}%"
+
+    # ...and the floats they were derived from, removed rather than described as
+    # unquotable. A prompt rule is a request; a key that is not there is not.
+    for field in ("probability", "threshold", "base_value"):
+        projected.pop(field, None)
+
+    factors = payload.get("top_factors")
+    if isinstance(factors, list):
+        projected["top_factors"] = [_presented_factor(factor) for factor in factors]
+    return projected
+
+
+
+async def _execute_tool_calls(
+    toolbox: MCPToolbox, calls: list[dict],
+    on_event: Callable[[dict[str, Any]], None] | None = None,
+    project: Callable[[str, Any], Any] | None = None,
+    guard: Callable[[str, dict], dict | None] | None = None,
+    already_called: list[dict] | None = None,
+    traced: bool = False,
+    order: Callable[[str, dict], dict] | None = None,
+    cite_offset: int = 0,
+    used_up: frozenset[str] = frozenset(),
+) -> tuple[list[BaseMessage], list[RecordedToolCall]]:
+    """Run one turn's tool calls, refusing those beyond the per-turn budget.
+
+    `project` rewrites what the MODEL is shown for a call, and nothing else: the
+    recorded call, the execution record, the caller's payload and the browser's
+    citation lookup all carry what the tool actually returned. It exists so a
+    deterministic command can hand the formatting turn the same field names the
+    interface draws with, without that substitution becoming a lie about what the
+    tool said.
+
+    `guard` may refuse a call before it is dispatched, returning the error payload
+    the model should see instead. A refused call announces nothing: the stages
+    describe work that happened, and this is work that did not.
+
+    `already_called` is the calls THIS TURN has already made whose results are in the
+    transcript, and passing it is what makes the budget a per-turn budget. The reasoning
+    loop invokes this once per iteration with the calls of a single model turn, so the
+    `index` below is 0 every time — and an index-based budget therefore never tripped. A
+    turn made eight calls against a budget of five, looped until the graph's recursion
+    limit, and settled as an EMPTY ANSWER rather than a failure (observed live 2026-10-16,
+    twice, on a lab question).
+
+    `used_up` is the second line of the `ONCE_PER_TURN` cap. Not binding a spent tool is
+    the first, and it is the one that holds; this catches the case the budget comments
+    already name — a model that emits a call for a tool that is absent from its request.
+    Such a call is refused rather than run, and announces no stage (rule 3).
+    """
+    messages: list[BaseMessage] = []
+    recorded: list[RecordedToolCall] = []
+    prior = list(already_called or [])
+    numbered = cite_offset
+    done = {_call_key(str(call.get("name")), dict(call.get("args") or {}))
+            for call in prior}
+    # Grows as the round executes, for the tools capped at one call: a single model turn
+    # can ask for the same tool twice, and the cap is a property of the turn rather than
+    # of one iteration of the loop around it.
+    spent = set(used_up)
+    for index, call in enumerate(calls):
+        arguments = dict(call.get("args") or {})
+        key = _call_key(str(call.get("name")), arguments)
+        spent_count = len(prior) + index
+        # Whether this call was turned away rather than run. A refusal must not consume a
+        # capped tool's allowance: the model gets one honest call, not that call minus the
+        # attempts nothing was ever dispatched for.
+        refused = True
+        if call["name"] in spent:
+            payload: dict[str, Any] = {
+                "error": "tool_already_spent",
+                "message": (
+                    f"{call['name']} has already been used for this question and will "
+                    "not run again. Its result is above: answer from it, and say what it "
+                    "does and does not cover."
+                ),
+            }
+        elif spent_count >= MAX_TOOL_CALLS_PER_TURN:
+            # The message says what to DO, not only what was refused. A refusal a model
+            # cannot act on is read as a transient failure and retried, which is the loop
+            # this line exists to end.
+            payload = {
+                "error": "tool_call_limit",
+                "message": (
+                    f"This turn has already made {spent_count} tool calls and its budget is "
+                    f"{MAX_TOOL_CALLS_PER_TURN}. Answer from the results you have, or say "
+                    "plainly what you could not determine."
+                ),
+            }
+        elif key in done:
+            # A repeat is a loop, not diligence. The result is already above this call in
+            # the transcript, so returning it again gives the model nothing new to read.
+            payload = {
+                "error": "repeated_tool_call",
+                "message": (
+                    f"{call['name']} has already been called in this turn with these "
+                    "exact arguments, and its result is above. Use that result, or call "
+                    "with different arguments — do not call it again unchanged."
+                ),
+            }
+        else:
+            payload = guard(call["name"], arguments) if guard is not None else None
+            if payload is None:
+                refused = False
+                # Emitted HERE, one line above the call it describes: the stage is
+                # derived from an execution that is about to happen, not from a
+                # script of what should happen. A refused call (the branches
+                # above) announces nothing, because nothing was called.
+                _emit(on_event, stages.tool_event(call["name"]))
+                # Spanned ONLY when the caller has an outer span open — the command
+                # path, which opens `command.<wire>` around the whole turn. In the
+                # reasoning loop the trace belongs to LangChain's callback handler and
+                # a span opened here does not inherit it: Langfuse gave each tool its
+                # own root and the list filled with `tool.rag_search` traces sharing
+                # one timestamp. Observed live 2026-10-17.
+                if traced:
+                    # The span carries the arguments as its input and the payload as
+                    # its output. A tool span with neither is a row saying a tool ran,
+                    # which is the one thing the reader already knew from the name.
+                    with observability.observation(
+                        f"tool.{call['name']}", input=arguments,
+                    ) as tool_span:
+                        payload = await toolbox.call(call["name"], arguments)
+                        observability.record_span_output(
+                            tool_span, payload,
+                            is_error=bool(
+                                isinstance(payload, dict) and payload.get("error")
+                            ),
+                        )
+                else:
+                    payload = await toolbox.call(call["name"], arguments)
+                # What came back, in the call's own terms. Emitted here because this
+                # is where the payload exists, and only for a call that actually
+                # ran: a refused call announces nothing, result included (rule 3).
+                _emit(on_event, stages.result_event(call["name"], payload))
+        done.add(key)
+        if not refused and call["name"] in ONCE_PER_TURN:
+            spent.add(call["name"])
+        # `order` rewrites the payload BEFORE the model is shown it and before it is
+        # recorded, so one order governs both. Doing it afterwards reordered the
+        # citation layer while the formatter kept reading retrieval order, and the
+        # markers stayed crossed in the other direction (TF-7, measured 2026-10-23).
+        if order is not None and isinstance(payload, dict):
+            payload = order(call["name"], payload)
+        recorded.append(validate_recorded_tool_call({
+            "name": call["name"], "args": arguments, "response": payload,
+        }))
+        shown = project(call["name"], payload) if project is not None else payload
+        body = _render_tool_result(shown, offset=numbered)
+        numbered += _passage_total(shown)
+        messages.append(
+            ToolMessage(
+                content=(
+                    f'<tool_result name="{call["name"]}">\n{body}\n</tool_result>'
+                ),
+                tool_call_id=call.get("id", ""),
+                name=call["name"],
+            )
+        )
+    return messages, recorded
+

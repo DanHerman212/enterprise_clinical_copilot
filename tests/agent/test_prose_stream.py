@@ -28,6 +28,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from langchain_core.messages import AIMessage, AIMessageChunk  # noqa: E402
 
 from services.agent.engine import graph
+from services.agent.engine import model as model_gateway
+from services.agent.engine import model
 from services.agent.ingress import http
 from services.agent.routing import routing
 from services.agent.telemetry import stages  # noqa: E402
@@ -103,7 +105,7 @@ def _run(wire, *, prose_stream, payload=PREDICTION, pieces=RISK_PIECES):
     model = _RecordingModel(pieces)
     command = routing.command_for(wire)
     topic = "a clinical topic" if command.topic_arg else None
-    with patch.object(graph, "_build_llm", lambda name: model):
+    with patch.object(model_gateway, "build_llm", lambda name: model):
         state = asyncio.run(run_command(
             box, command, 90000064, topic=topic, question="a command",
             model="test-model", on_event=events.append, prose_stream=prose_stream,

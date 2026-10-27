@@ -53,9 +53,17 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from services.agent.routing import routing
 from services.agent.telemetry import stages
 from services.agent.postprocess import citations
-from services.agent.ingress.contracts import RecordedToolCall
 from services.agent.presentation.domain import humanize
 from services.agent.engine.model import text_of
+from services.agent.engine import model as model_gateway
+from services.agent.engine import model as model_turn
+from services.agent.telemetry.stages import emit as _emit
+from services.agent.engine.mcp_client import (
+    MCPToolbox,
+    RecordedToolCall,
+    _execute_tool_calls,
+    _presented_prediction,
+)
 from services.agent.engine.prompts import SYSTEM_PROMPT
 from services.agent.routing.routing import (
     EHR_RECORD_QUERY,
@@ -176,95 +184,6 @@ def _dose_supported(dosage: str, source: str) -> bool:
     if match:
         return _normalise(match.group(0)) in source
     return dosage in source
-
-
-def _presented_prediction(name: str, payload: Any) -> Any:
-    """The prediction result as the interface shows it, for the model to read.
-
-    The model has never seen a feature key, and the keys are not words a clinician
-    reads: the widget draws "red cell distribution width (RDW)" where the result says
-    `rdw_max`. The mapping already exists (`feature_labels.py`) and the interface uses
-    it, so the substitution is made here rather than requested from the model — a
-    translation the model performs is a translation the model can invent, and the prose
-    and the bars have to name a factor the same way.
-
-    `humanize`, not `label_for`. Both read the same curated map, so they agree on every
-    feature it names; they part only in the fallback, where `label_for` hands back the raw
-    key and `humanize` title-cases it. The widget draws `humanize`, so the prose has to be
-    shown `humanize` too — otherwise a feature the map has not caught yet reads as
-    "Rdw Max" on its bar and `rdw_max` in the sentence describing it. One factor, one name,
-    whichever name the map happens to know.
-
-    The numbers are STATED, not handed over. This projection used to pass the served
-    floats through and ask the prompt to render them in the right form; the prompt asked
-    three times and the leak survived all three, because a float the model is holding is
-    a float it can paste. So the copy the model reads carries `probability_display` and
-    `threshold_display` — the score and the threshold written the way the widget prints
-    them — and carries no `probability`, `threshold` or `base_value` at all.
-
-    Withheld rather than rounded. A display string is the same number written as the
-    reader will see it written, which is a different thing from a rounded float the
-    model then has to print a digit of: this projection used to pre-round, and given
-    0.33 the model wrote "33.0%" beside a widget drawing 33.2%, which is why the
-    rounding was removed in the first place. Given "33.2%" there is no digit to lose.
-
-    The drivers keep their names and their direction and lose their magnitudes. The
-    narrative says which factors led and what they mean; the widget draws how much. A
-    raw contribution was quotable too, and a number the guardrail does not recognise as
-    the score is stripped and shown as a safety swap — so withholding it also removes a
-    way for a good answer to be visibly withdrawn from a reader mid-sentence.
-
-    `EHR_FORMATTING` names both display strings, and the guardrail still checks the prose
-    against the SERVED value, because it reads the recorded call and not this copy. It
-    accepts the display strings: one decimal of a percentage is exactly half a unit in
-    its own last place, which is the tolerance `verify_risk_numbers` allows.
-
-    Applied to the model's copy only. The recorded call keeps what the service
-    returned, so the execution record and the caller's payload still say what the
-    tool said.
-    """
-    if name != "predict_readmission" or not isinstance(payload, dict):
-        return payload
-    projected = dict(payload)
-
-    # The two numbers a clinician can quote, in the form the interface writes them.
-    for field, display in (("probability", "probability_display"),
-                           ("threshold", "threshold_display")):
-        value = payload.get(field)
-        if _is_number(value):
-            projected[display] = f"{float(value) * 100:.1f}%"
-
-    # ...and the floats they were derived from, removed rather than described as
-    # unquotable. A prompt rule is a request; a key that is not there is not.
-    for field in ("probability", "threshold", "base_value"):
-        projected.pop(field, None)
-
-    factors = payload.get("top_factors")
-    if isinstance(factors, list):
-        projected["top_factors"] = [_presented_factor(factor) for factor in factors]
-    return projected
-
-
-def _is_number(value: Any) -> bool:
-    """A real number, rather than a bool wearing one's type."""
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
-
-
-def _presented_factor(factor: Any) -> Any:
-    """One risk driver, named and directed, with no magnitude to quote.
-
-    Rebuilt field by field rather than copied and edited, because the field that has to
-    go is the one a `{**factor}` spread would keep. The magnitude is not withheld for
-    want of a use — the widget draws it as a bar length — but because it is not this
-    turn's to state.
-    """
-    if not isinstance(factor, dict):
-        return factor
-    return {
-        "feature": humanize(str(factor.get("feature", ""))),
-        **({"direction": factor["direction"]}
-           if isinstance(factor.get("direction"), str) else {}),
-    }
 
 
 def _extract_json_object(text: str) -> dict[str, Any] | None:
@@ -541,9 +460,6 @@ async def run_command(
     (`routing.Command.streams_prose`), and it defaults off: a caller that does not
     ask receives exactly the frames it received before streaming existed.
     """
-    # Imported here rather than at module scope: `graph` imports this module for
-    # the command branch, so a module-level import would be circular.
-    from services.agent.engine.graph import _build_llm, _emit, _execute_tool_calls
 
     arguments = tool_arguments(command, hadm_id, topic)
     _emit(on_event, stages.planning_event(command.wire))
@@ -676,7 +592,7 @@ async def run_command(
             "answer_in_surface": True,
         }
 
-    llm = _build_llm(model)  # no bind_tools: a formatting turn cannot call anything
+    llm = model_gateway.build_llm(model)  # no bind_tools: a formatting turn cannot call anything
     config = {"callbacks": list(callbacks)} if callbacks else {}
     if trace_metadata:
         config["metadata"] = dict(trace_metadata)
@@ -730,7 +646,6 @@ async def run_command(
         # empty answer wrote the turn's trace row as a dash — the one record an audit
         # opens first (TF-6, 2026-10-23). The wording is the same one the envelope
         # would have served, so the answer itself is unchanged.
-        from services.agent.engine import model as model_turn  # noqa: PLC0415 — used on this exit only
 
         state["deterministic_answer"] = (
             model_turn.OUTPATIENT_SILENT_TURN_SENTENCE if outpatient_record

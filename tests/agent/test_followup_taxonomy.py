@@ -36,7 +36,9 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from services.agent.postprocess import followups
+from services.agent.engine import model as model_gateway
 from services.agent.engine import graph
+from services.agent.engine import model
 from services.agent.engine.mcp_client import MCPToolbox
 
 ANSWER = "Discharged home in stable condition."
@@ -304,7 +306,7 @@ def _replay(case: _Case) -> list[dict[str, Any]]:
 
 
 def _run(case: _Case, model: _Model, **kwargs) -> dict:
-    with patch.object(graph, "_build_llm", lambda name: model):
+    with patch.object(model_gateway, "build_llm", lambda name: model):
         return asyncio.run(graph.ask(_box(), case.chip, hadm_id=90000015,
                                      model="test", **kwargs))
 

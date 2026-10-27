@@ -22,6 +22,7 @@ from unittest.mock import patch
 import pytest
 
 from services.agent.engine import deterministic
+from services.agent.engine import model as model_gateway
 from services.agent.engine import graph
 from services.agent.engine import model as model_turn
 from services.agent.routing import routing
@@ -61,7 +62,7 @@ class _RecordingModel:
 def _run(hadm_id: int, *, reply: str = "a summary", model: object | None = None):
     box = _EmptyToolbox()
     used = model or _RecordingModel(reply)
-    with patch.object(graph, "_build_llm", lambda name: used):
+    with patch.object(model_gateway, "build_llm", lambda name: used):
         state = asyncio.run(run_command(
             box, SUMMARIZE, hadm_id, question="/ehr", model="test-model",
         ))
@@ -141,7 +142,7 @@ def test_an_outpatient_formatter_that_says_nothing_uses_the_encounter_wording():
     labs = routing.command_for("labs")
     box = _EmptyToolbox()
     used = _RecordingModel(reply="")
-    with patch.object(graph, "_build_llm", lambda name: used):
+    with patch.object(model_gateway, "build_llm", lambda name: used):
         state = asyncio.run(run_command(
             box, labs, OUTPATIENT[0], question="/labs", model="test-model",
         ))
@@ -161,7 +162,7 @@ class _PassageToolbox:
 def test_an_outpatient_record_with_a_note_is_still_summarised():
     """The gate is empty-only: a record that has text keeps the formatting turn."""
     used = _RecordingModel(reply="**Hospital course.** A short visit.")
-    with patch.object(graph, "_build_llm", lambda name: used):
+    with patch.object(model_gateway, "build_llm", lambda name: used):
         state = asyncio.run(run_command(
             _PassageToolbox(), SUMMARIZE, OUTPATIENT[0], question="/ehr",
             model="test-model",

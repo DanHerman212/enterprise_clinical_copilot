@@ -24,7 +24,9 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from services.agent.routing import admission_context
+from services.agent.engine import model as model_gateway
 from services.agent.engine import graph
+from services.agent.engine import model
 from services.mcp.dependencies.features.profile import decode_profile
 
 
@@ -200,7 +202,7 @@ def _ask(model, question, manifest, **kwargs):
         return {"hadm_id": arguments["hadm_id"], "passages": []}
 
     box.call = call
-    with patch.object(graph, "_build_llm", lambda name: model):
+    with patch.object(model_gateway, "build_llm", lambda name: model):
         return asyncio.run(graph.ask(
             box, question, hadm_id=90000058, model="test",
             admission_context=manifest, **kwargs,

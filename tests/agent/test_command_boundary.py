@@ -29,6 +29,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from langchain_core.messages import SystemMessage  # noqa: E402
 
 from services.agent.engine import graph  # noqa: E402
+from services.agent.engine import model as model_gateway
+from services.agent.engine import model
 from services.agent.routing import routing  # noqa: E402
 from services.agent.engine.deterministic import (  # noqa: E402
     _NO_READMISSION,
@@ -100,7 +102,7 @@ def _run_command(command, hadm_id=90000023, *, payload=None, reply=None,
     box = _RecordingToolbox(payload)
     if model is None:
         model = _NoToolsModel(reply) if reply is not None else _NoToolsModel()
-    with patch.object(graph, "_build_llm", lambda name: model):
+    with patch.object(model_gateway, "build_llm", lambda name: model):
         state = asyncio.run(run_command(
             box, command, hadm_id, topic=_topic_for(command),
             question=question, model="test-model",
@@ -477,7 +479,7 @@ def test_a_command_reports_each_tool_before_the_review_stage(command):
     seen = []
     box = _RecordingToolbox()
     model = _NoToolsModel()
-    with patch.object(graph, "_build_llm", lambda name: model):
+    with patch.object(model_gateway, "build_llm", lambda name: model):
         asyncio.run(run_command(
             box, command, 90000023, topic=_topic_for(command),
             question="a command", model="test-model",

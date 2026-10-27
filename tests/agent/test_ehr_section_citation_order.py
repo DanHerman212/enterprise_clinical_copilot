@@ -21,7 +21,9 @@ from unittest.mock import patch
 import pytest
 
 from services.agent.engine import deterministic
+from services.agent.engine import model as model_gateway
 from services.agent.engine import graph
+from services.agent.engine import model
 from services.agent.routing import routing
 from services.agent.presentation.a2ui import compose_presentation
 from services.agent.engine.deterministic import run_command
@@ -88,7 +90,7 @@ class _Model:
 def _run(hadm_id: int = 90000015, *, cabinet=None, reply: str = ANSWER):
     box = cabinet or _SectionToolbox()
     model = _Model(reply)
-    with patch.object(graph, "_build_llm", lambda name: model):
+    with patch.object(model_gateway, "build_llm", lambda name: model):
         state = asyncio.run(run_command(
             box, SUMMARIZE, hadm_id, question="/ehr", model="test-model",
         ))
@@ -168,7 +170,7 @@ def test_the_ordering_is_scoped_to_the_summary_command():
     labs = routing.command_for("labs")
     cabinet = _SectionToolbox(passages=(("sodium", "136"), ("potassium", "4.1")))
     model = _Model(reply="Sodium 136, potassium 4.1.")
-    with patch.object(graph, "_build_llm", lambda name: model):
+    with patch.object(model_gateway, "build_llm", lambda name: model):
         state = asyncio.run(run_command(
             cabinet, labs, 90000015, question="/labs", model="test-model",
         ))

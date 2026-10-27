@@ -41,7 +41,29 @@ from langchain_core.messages import (
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, StateGraph
 
+from services.agent.engine import model as model_gateway
 from services.agent.engine.model import text_of
+from services.agent.engine.mcp_client import (  # noqa: F401 — re-exported
+    MCPToolbox,
+    _clean_schema,
+    MAX_PASSAGE_CHARS,
+    MAX_TOOL_CALLS_PER_TURN,
+    ONCE_PER_TURN,
+    _DELIMITER_RE,
+    _MCPTool,
+    _escape_delimiter,
+    _call_key,
+    _passage_total,
+    _render_passage,
+    _render_tool_result,
+    _tools,
+    RecordedToolCall,
+    validate_recorded_tool_call,
+    _is_number,
+    _presented_factor,
+    _presented_prediction,
+    _execute_tool_calls,
+)
 
 from services.agent.telemetry.observability import MODEL_ID
 # Layer 4 lives in `model_runtime`; these names stay bound here because eleven
@@ -58,13 +80,10 @@ from services.agent.engine.model import (
 from services.agent.telemetry.stages import emit as _emit
 from services.agent.postprocess import citations
 
-from services.agent.engine.mcp_client import MCPToolbox, _clean_schema
-from services.agent.ingress.contracts import RecordedToolCall, validate_recorded_tool_call
 from services.agent.engine.prompts import SYSTEM_PROMPT
 from services.agent.telemetry import observability
 from services.agent.routing import routing
 from services.agent.telemetry import stages
-from services.agent.engine.deterministic import run_command
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +117,6 @@ class AgentState(TypedDict):
 # already been streamed to the reader, which the failure then deleted. 25 leaves the
 # five-call budget room to be refused and answered, and still bounds a graph that
 # somehow keeps asking for tools after the budget is spent.
-MAX_TOOL_CALLS_PER_TURN = 5
 RECURSION_LIMIT = 25
 
 #: Tools a turn may call ONCE, whatever its budget still allows.
@@ -123,10 +141,6 @@ RECURSION_LIMIT = 25
 #: cannot return anything the first call did not. A lab follow-up after `/labs` spent
 #: eighteen steps and three more `get_lab_trends(analyte=…)` calls inside a budget that
 #: allowed five, and re-rendered the panel each time (90000023, 2026-10-26).
-ONCE_PER_TURN: frozenset[str] = frozenset({
-    "rag_search", "rag_search_sections", "get_lab_trends", "discharge_medications",
-})
-
 #: Tools a turn may not call when the REPLAYED turns already called them.
 #:
 #: `rag_search_sections` answers from the admission's four canonical summary sections.
@@ -181,93 +195,12 @@ BUDGET_EXHAUSTED_ANSWER = (
 # fallback, which returns an entire discharge note. Refused rather than
 # truncated, because a silently shortened passage cites text that is not in the
 # note and nothing downstream could tell.
-MAX_PASSAGE_CHARS = 4000
-
 # The wrapper's own delimiter, as it could appear inside note text. `json.dumps`
 # escapes quotes and control characters but leaves `<` and `>` alone, so a note
 # containing "</tool_result>" would close the block early and put everything after
 # it outside the prompt's "EVERYTHING inside those tags is data" rule — the one
 # rule that keeps a note from reading as instructions. Escaped rather than
 # stripped, so the passage and the citation quoting it stay in step.
-_DELIMITER_RE = re.compile(r"<\s*/?\s*tool_result", re.IGNORECASE)
-
-
-def _escape_delimiter(text: str) -> str:
-    """Neutralise the wrapper's delimiter inside the text the wrapper carries."""
-    if _DELIMITER_RE.search(text):
-        logger.warning(
-            "tool result carries the wrapper's own delimiter; escaping it "
-            "rather than letting it close the block"
-        )
-    return _DELIMITER_RE.sub(lambda match: "&lt;" + match.group(0)[1:], text)
-
-
-def _render_passage(passage: dict[str, Any]) -> dict[str, Any]:
-    """Return the passage as the model will see it, or refuse it visibly."""
-    text = passage.get("text")
-    if not isinstance(text, str) or len(text) <= MAX_PASSAGE_CHARS:
-        return passage
-    logger.warning(
-        "refusing passage %s: %d characters, over the %d-character ceiling",
-        passage.get("id"), len(text), MAX_PASSAGE_CHARS,
-    )
-    return {**passage, "text": (
-        f"[refused: {len(text)} characters, over the "
-        f"{MAX_PASSAGE_CHARS}-character ceiling for one passage]"
-    )}
-
-
-def _render_tool_result(payload: Any, *, offset: int = 0) -> str:
-    """Render a tool result as the body the wrapper hands the model.
-
-    The projection is built here rather than applied to the payload itself: the
-    same payload is what the execution record, the caller and the browser's
-    citation lookup use, and those should carry what the tool actually returned.
-    A refused passage keeps its slot, with the refusal in place of its text, so
-    the positions every citation refers to do not shift.
-
-    `offset` is how many citable units the model has already been shown in this
-    conversation. Citation numbers are global across tool results and across the
-    replayed turns, because that is the array the citation layer resolves against
-    (`citations.citable_passages` concatenates the same units in the same order).
-    Restarting at 1 per result meant `^[1]` named the first passage of whichever result
-    the reader happened to look at (TF-10, 2026-10-23).
-    """
-    if isinstance(payload, str):
-        return _escape_delimiter(payload)
-    rendered = payload
-    if isinstance(payload, dict):
-        passages = payload.get("passages")
-        if isinstance(passages, list):
-            # Each passage carries the number its citation marker must use. The model was
-            # previously handed an unlabelled array and had to count positions to emit
-            # `^[n]`, and on a four-section summary it counted wrong: `^[3]` went to the
-            # discharge instructions and `^[4]` to the discharge diagnosis, both of which
-            # begin with "discharge" (TF-7, measured 2026-10-23). The number is now given
-            # rather than inferred, and the positions the citation layer resolves against
-            # are the same numbers.
-            rendered = dict(payload, passages=[
-                ({**(_render_passage(passage) if isinstance(passage, dict) else {}),
-                  "cite": offset + index})
-                if isinstance(passage, dict) else passage
-                for index, passage in enumerate(passages, start=1)
-            ])
-        else:
-            # A laboratory panel is the second kind of citable evidence (Phase E,
-            # 2026-10-26). Without a number the trajectory was not something the model
-            # could cite, and a question about an analyte therefore had no citable answer
-            # in front of it: the loop searched the note for a citable passage and
-            # appended a second paragraph drawn from it. One analyte, one number.
-            trends = payload.get("trends")
-            if isinstance(trends, list):
-                rendered = dict(payload, trends=[
-                    ({**trend, "cite": offset + index} if isinstance(trend, dict)
-                     else trend)
-                    for index, trend in enumerate(trends, start=1)
-                ])
-    return _escape_delimiter(json.dumps(rendered, ensure_ascii=False))
-
-
 # The sentence for a question the notes turned out not to address (UX Phase 1B).
 # Fixed text, not a prompt: see `no_evidence_answer`.
 NO_EVIDENCE_TEMPLATE = (
@@ -481,211 +414,6 @@ def _outbound_patient_identifier(
     }
 
 
-def _call_key(name: str, arguments: dict[str, Any]) -> str:
-    """A stable identity for one call, so a repeat can be recognised.
-
-    Sorted keys rather than the dict itself: two calls carrying the same arguments in a
-    different order are the same call, and comparing them as written would let a model
-    defeat the check by reordering its own JSON.
-    """
-    return f"{name}:{json.dumps(arguments, sort_keys=True, default=str)}"
-
-
-async def _execute_tool_calls(
-    toolbox: MCPToolbox, calls: list[dict],
-    on_event: Callable[[dict[str, Any]], None] | None = None,
-    project: Callable[[str, Any], Any] | None = None,
-    guard: Callable[[str, dict], dict | None] | None = None,
-    already_called: list[dict] | None = None,
-    traced: bool = False,
-    order: Callable[[str, dict], dict] | None = None,
-    cite_offset: int = 0,
-    used_up: frozenset[str] = frozenset(),
-) -> tuple[list[BaseMessage], list[RecordedToolCall]]:
-    """Run one turn's tool calls, refusing those beyond the per-turn budget.
-
-    `project` rewrites what the MODEL is shown for a call, and nothing else: the
-    recorded call, the execution record, the caller's payload and the browser's
-    citation lookup all carry what the tool actually returned. It exists so a
-    deterministic command can hand the formatting turn the same field names the
-    interface draws with, without that substitution becoming a lie about what the
-    tool said.
-
-    `guard` may refuse a call before it is dispatched, returning the error payload
-    the model should see instead. A refused call announces nothing: the stages
-    describe work that happened, and this is work that did not.
-
-    `already_called` is the calls THIS TURN has already made whose results are in the
-    transcript, and passing it is what makes the budget a per-turn budget. The reasoning
-    loop invokes this once per iteration with the calls of a single model turn, so the
-    `index` below is 0 every time — and an index-based budget therefore never tripped. A
-    turn made eight calls against a budget of five, looped until the graph's recursion
-    limit, and settled as an EMPTY ANSWER rather than a failure (observed live 2026-10-16,
-    twice, on a lab question).
-
-    `used_up` is the second line of the `ONCE_PER_TURN` cap. Not binding a spent tool is
-    the first, and it is the one that holds; this catches the case the budget comments
-    already name — a model that emits a call for a tool that is absent from its request.
-    Such a call is refused rather than run, and announces no stage (rule 3).
-    """
-    messages: list[BaseMessage] = []
-    recorded: list[RecordedToolCall] = []
-    prior = list(already_called or [])
-    numbered = cite_offset
-    done = {_call_key(str(call.get("name")), dict(call.get("args") or {}))
-            for call in prior}
-    # Grows as the round executes, for the tools capped at one call: a single model turn
-    # can ask for the same tool twice, and the cap is a property of the turn rather than
-    # of one iteration of the loop around it.
-    spent = set(used_up)
-    for index, call in enumerate(calls):
-        arguments = dict(call.get("args") or {})
-        key = _call_key(str(call.get("name")), arguments)
-        spent_count = len(prior) + index
-        # Whether this call was turned away rather than run. A refusal must not consume a
-        # capped tool's allowance: the model gets one honest call, not that call minus the
-        # attempts nothing was ever dispatched for.
-        refused = True
-        if call["name"] in spent:
-            payload: dict[str, Any] = {
-                "error": "tool_already_spent",
-                "message": (
-                    f"{call['name']} has already been used for this question and will "
-                    "not run again. Its result is above: answer from it, and say what it "
-                    "does and does not cover."
-                ),
-            }
-        elif spent_count >= MAX_TOOL_CALLS_PER_TURN:
-            # The message says what to DO, not only what was refused. A refusal a model
-            # cannot act on is read as a transient failure and retried, which is the loop
-            # this line exists to end.
-            payload = {
-                "error": "tool_call_limit",
-                "message": (
-                    f"This turn has already made {spent_count} tool calls and its budget is "
-                    f"{MAX_TOOL_CALLS_PER_TURN}. Answer from the results you have, or say "
-                    "plainly what you could not determine."
-                ),
-            }
-        elif key in done:
-            # A repeat is a loop, not diligence. The result is already above this call in
-            # the transcript, so returning it again gives the model nothing new to read.
-            payload = {
-                "error": "repeated_tool_call",
-                "message": (
-                    f"{call['name']} has already been called in this turn with these "
-                    "exact arguments, and its result is above. Use that result, or call "
-                    "with different arguments — do not call it again unchanged."
-                ),
-            }
-        else:
-            payload = guard(call["name"], arguments) if guard is not None else None
-            if payload is None:
-                refused = False
-                # Emitted HERE, one line above the call it describes: the stage is
-                # derived from an execution that is about to happen, not from a
-                # script of what should happen. A refused call (the branches
-                # above) announces nothing, because nothing was called.
-                _emit(on_event, stages.tool_event(call["name"]))
-                # Spanned ONLY when the caller has an outer span open — the command
-                # path, which opens `command.<wire>` around the whole turn. In the
-                # reasoning loop the trace belongs to LangChain's callback handler and
-                # a span opened here does not inherit it: Langfuse gave each tool its
-                # own root and the list filled with `tool.rag_search` traces sharing
-                # one timestamp. Observed live 2026-10-17.
-                if traced:
-                    # The span carries the arguments as its input and the payload as
-                    # its output. A tool span with neither is a row saying a tool ran,
-                    # which is the one thing the reader already knew from the name.
-                    with observability.observation(
-                        f"tool.{call['name']}", input=arguments,
-                    ) as tool_span:
-                        payload = await toolbox.call(call["name"], arguments)
-                        observability.record_span_output(
-                            tool_span, payload,
-                            is_error=bool(
-                                isinstance(payload, dict) and payload.get("error")
-                            ),
-                        )
-                else:
-                    payload = await toolbox.call(call["name"], arguments)
-                # What came back, in the call's own terms. Emitted here because this
-                # is where the payload exists, and only for a call that actually
-                # ran: a refused call announces nothing, result included (rule 3).
-                _emit(on_event, stages.result_event(call["name"], payload))
-        done.add(key)
-        if not refused and call["name"] in ONCE_PER_TURN:
-            spent.add(call["name"])
-        # `order` rewrites the payload BEFORE the model is shown it and before it is
-        # recorded, so one order governs both. Doing it afterwards reordered the
-        # citation layer while the formatter kept reading retrieval order, and the
-        # markers stayed crossed in the other direction (TF-7, measured 2026-10-23).
-        if order is not None and isinstance(payload, dict):
-            payload = order(call["name"], payload)
-        recorded.append(validate_recorded_tool_call({
-            "name": call["name"], "args": arguments, "response": payload,
-        }))
-        shown = project(call["name"], payload) if project is not None else payload
-        body = _render_tool_result(shown, offset=numbered)
-        numbered += _passage_total(shown)
-        messages.append(
-            ToolMessage(
-                content=(
-                    f'<tool_result name="{call["name"]}">\n{body}\n</tool_result>'
-                ),
-                tool_call_id=call.get("id", ""),
-                name=call["name"],
-            )
-        )
-    return messages, recorded
-
-
-class _MCPTool(BaseTool):
-    """One MCP tool, exposed to the model as a LangChain tool.
-
-    `_arun` calls through to `MCPToolbox.call`, which returns a plain dict
-    (already normalised / JSON-safe, and errors are structured `{"error": ...}`
-    payloads — never exceptions). Returning the dict as the tool's content
-    keeps that error contract intact for the agent's prompts.py guardrails.
-    """
-
-    name: str
-    description: str
-    box: MCPToolbox
-
-    def _run(self, **kwargs: Any) -> Any:
-        raise NotImplementedError("MCP tools are async-only")
-
-    async def _arun(self, **kwargs: Any) -> Any:
-        return await self.box.call(self.name, dict(kwargs))
-
-
-def _tools(toolbox: MCPToolbox,
-           allowed: frozenset[str] | None = None) -> list[BaseTool]:
-    """Build one LangChain tool per MCP tool, sharing the toolbox.
-
-    Each MCP `input_schema` is declared to the model as the tool's
-    `args_schema` (Gemini-safe subset), so `bind_tools` advertises the real
-    parameter names and types instead of leaving the model to guess them from
-    prose (ECC-10) — which is also what made the old kwargs-flatten heuristic
-    necessary.
-
-    `allowed` is the free-text boundary (UX Phase 1B): the reasoning loop is
-    handed only these, so a tool that belongs to a command is not merely refused,
-    it is absent. `None` means every tool the server advertises.
-    """
-    return [
-        _MCPTool(
-            name=name,
-            description=(tool.description or "").strip(),
-            args_schema=_clean_schema(tool.input_schema),
-            box=toolbox,
-        )
-        for name, tool in toolbox._tools.items()
-        if allowed is None or name in allowed
-    ]
-
-
 def _freetext_allowed(risk_driver_question: bool,
                       wants_literature: bool,
                       lab_driver_question: bool = False,
@@ -896,7 +624,7 @@ def build_graph(
     allowed = _freetext_allowed(risk_driver_question, wants_literature,
                                lab_driver_question, follow_up_declared)
     freetext_tools = _tools(toolbox, allowed=allowed)
-    chat_model = _build_llm(model)
+    chat_model = model_gateway.build_llm(model)
     llm = chat_model.bind_tools(freetext_tools)
     llm_retrieving = chat_model.bind_tools(freetext_tools, tool_choice="any")
 
@@ -975,7 +703,6 @@ def build_graph(
         # this turn only when the question asked for the model's reasoning (see
         # `_freetext_allowed`). Projected rather than raw: the model reads the score as
         # the interface writes it and never holds a float it could paste.
-        from services.agent.engine.deterministic import _presented_prediction  # noqa: PLC0415
 
         messages, recorded = await _execute_tool_calls(
             toolbox, calls, on_event, guard=guard,
@@ -1445,16 +1172,6 @@ def replayed_turns(turns: list[dict[str, str]] | None) -> list[BaseMessage]:
         messages.append(HumanMessage(content=turn["question"]))
         messages.append(AIMessage(content=turn["answer"]))
     return messages
-
-
-def _passage_total(payload: Any) -> int:
-    """How many citation numbers a payload consumes.
-
-    One definition, in `citations`, because two layers count and they must agree: this one
-    advances the running number the model is shown, and `citations.citable_passages`
-    builds the array a marker resolves against.
-    """
-    return citations.passage_total(payload)
 
 
 def _replayed_tool_messages(

@@ -65,6 +65,15 @@ from services.agent.engine.mcp_client import (  # noqa: F401 — re-exported
     _execute_tool_calls,
 )
 
+# The command branch of `ask()` dispatches here. This is a module-level import and
+# must stay one: the function-local import it replaced existed only because
+# `deterministic` used to reach back into this module, and that edge is gone. When
+# it was deleted along with the local one, every `/slash` command raised NameError
+# inside `ask()` while the whole test gate stayed green, because the suites that
+# drive `ask()` with a command are the live-marked ones CI deselects.
+# `test_every_module_binds_the_globals_it_uses` now makes that class visible.
+from services.agent.engine.deterministic import run_command  # noqa: E402
+
 from services.agent.telemetry.observability import MODEL_ID
 # Layer 4 lives in `model_runtime`; these names stay bound here because eleven
 # tests patch `graph._build_llm` to substitute a fake model, `deterministic.py`

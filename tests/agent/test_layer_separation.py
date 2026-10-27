@@ -243,3 +243,59 @@ def test_no_patch_target_names_a_module_that_no_longer_binds_it():
                 broken.append(f"{path.name}:{node.lineno} patches {module}.{attr.value}")
 
     assert broken == [], "patch targets that would silently substitute nothing"
+
+
+# --- every module binds the globals it uses ---------------------------------
+
+def _bound_names(tree):
+    """Names bound anywhere in the module: imports, defs, assignments, params."""
+    import builtins
+
+    bound = set(dir(builtins))
+    bound.add("__file__")
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                bound.add((alias.asname or alias.name).split(".")[0])
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bound.add(node.name)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            bound.add(node.id)
+        elif isinstance(node, ast.arg):
+            bound.add(node.arg)
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            bound.update(node.names)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            bound.add(node.name)
+        elif isinstance(node, ast.comprehension):
+            for inner in ast.walk(node.target):
+                if isinstance(inner, ast.Name):
+                    bound.add(inner.id)
+    return bound
+
+
+def test_every_module_binds_the_globals_it_uses():
+    """No module may reference a global it never binds.
+
+    This is the guard for the one defect the whole Phase 7 gate could not see.
+    A module-level `from ... import run_command` was deleted together with the
+    function-local import it had replaced, so `graph.ask()` raised `NameError` on
+    every `/slash` command — and 1,474 tests passed, because the suites that drive
+    `ask()` with a command are live-marked and CI deselects them. A NameError on a
+    path no hermetic test walks is invisible until a patient presses the button;
+    an unbound global is visible to `ast` on every module at once.
+    """
+    root = pathlib.Path(SERVICES, "agent")
+    unbound = {}
+    for path in sorted(root.rglob("*.py")):
+        if "__pycache__" in str(path):
+            continue
+        tree = ast.parse(path.read_text())
+        bound = _bound_names(tree)
+        missing = sorted({node.id for node in ast.walk(tree)
+                          if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+                          and node.id not in bound})
+        if missing:
+            unbound[str(path.relative_to(root))] = missing
+
+    assert unbound == {}, "modules reference globals they never bind"

@@ -161,27 +161,44 @@ steps:
   # would receive Cloud Run's own 403 whatever the container did, and a check
   # written to accept 403 would be theatre.
   #
-  # What is asserted instead is the one fact the container cannot fake and the
-  # one the deploy can silently get wrong: the service is Ready, and the template
-  # it would serve is running the image this build produced. An actual request
-  # needs roles/run.invoker for cicd-deployer; that widens who may call the agent,
-  # so it is left as a decision rather than taken inside a fix for something else.
+  # What is asserted instead is the set of facts the container cannot fake and the
+  # deploy can silently get wrong: the newest revision is the ready one, it holds
+  # all of the traffic, and it runs the image this build produced. An actual
+  # request needs roles/run.invoker for cicd-deployer; that widens who may call the
+  # agent, so it is left as a decision rather than taken inside a fix for something
+  # else.
+  #
+  # No JMESPath filters. The first version of this step used
+  # `status.conditions[?type="Ready"].status`, which is not valid JMESPath (filters
+  # compare with `==` and quote with backticks), so it returned the empty string and
+  # failed a deploy that had succeeded — a check that fails on a healthy service is
+  # worse than no check, because the next person turns it off. Four plain values and
+  # a comparison have nothing to get wrong.
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: bash
     args:
       - -c
       - |
         set -euo pipefail
-        READY=$$(gcloud run services describe agent --region "${_REGION}" \
-          --format='value(status.conditions[?type="Ready"].status)')
+        read -r CREATED READY SERVING PERCENT <<< "$$(gcloud run services describe agent \
+          --region "${_REGION}" --format='value(status.latestCreatedRevisionName,status.latestReadyRevisionName,status.traffic[0].revisionName,status.traffic[0].percent)')"
         IMAGE=$$(gcloud run services describe agent --region "${_REGION}" \
           --format='value(spec.template.spec.containers[0].image)')
-        echo "ready=$${READY} image=$${IMAGE}"
-        if [ "$${READY}" != "True" ]; then
-          echo "agent is not Ready after deploy" >&2
+        echo "created=$${CREATED} ready=$${READY} serving=$${SERVING} percent=$${PERCENT}"
+        echo "image=$${IMAGE}"
+        if [[ "$${CREATED}" != "$${READY}" ]]; then
+          echo "the newest revision ($${CREATED}) is not the ready one ($${READY})" >&2
           exit 1
         fi
-        if [ "$${IMAGE}" != "${_IMAGE}" ]; then
+        if [[ "$${SERVING}" != "$${READY}" ]]; then
+          echo "traffic is on $${SERVING}, not on the new revision $${READY}" >&2
+          exit 1
+        fi
+        if [[ "$${PERCENT}" != "100" ]]; then
+          echo "only $${PERCENT}% of traffic is on $${READY}" >&2
+          exit 1
+        fi
+        if [[ "$${IMAGE}" != "${_IMAGE}" ]]; then
           echo "agent is serving $${IMAGE}, not the image this build produced" >&2
           exit 1
         fi

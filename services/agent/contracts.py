@@ -3,8 +3,8 @@
 import re
 from typing import Any, NotRequired, TypedDict
 
-from services.agent import routing
-from services.agent.questions import UnknownChip, compose_question, own_words
+from services.agent.routing import routing
+from services.agent.routing.routing import UnknownChip, compose_question, own_words
 
 
 class AgentRequest(TypedDict):

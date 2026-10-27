@@ -19,7 +19,7 @@ from __future__ import annotations
 import pytest
 
 from services.agent import deterministic
-from services.agent import routing
+from services.agent.routing import routing
 from services.agent.presentation.a2ui import compose_presentation
 from services.agent.prompts import SYSTEM_PROMPT
 from services.agent.telemetry.stages import RESULT_LABELS, RESULT_NOUNS, TOOL_LABELS

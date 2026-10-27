@@ -479,7 +479,7 @@ def test_a_discharge_disposition_question_must_retrieve():
     failures on 2026-10-18. The fix is a note-required veto, not a phrase removal — an
     earlier attempt removed "discharged to" and broke the genuine manifest case.
     """
-    from services.agent.routing import asks_for_administrative_detail
+    from services.agent.routing.routing import asks_for_administrative_detail
 
     assert not asks_for_administrative_detail(
         "What was the discharge disposition and follow-up plan?")

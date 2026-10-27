@@ -33,7 +33,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from services.agent.postprocess import followups
-from services.agent import routing  # noqa: E402
+from services.agent.routing import routing  # noqa: E402
 from services.mcp.tools import (  # noqa: E402
     discharge_medications,
     get_lab_trends,

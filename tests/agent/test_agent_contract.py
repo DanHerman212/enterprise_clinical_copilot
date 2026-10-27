@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from services.agent.admission_context import PREFLIGHT_TOOLS
+from services.agent.routing.admission_context import PREFLIGHT_TOOLS
 from services.agent.contracts import (
     RE_DERIVABLE_TOOLS,
     RESULT_KEPT_TOOLS,

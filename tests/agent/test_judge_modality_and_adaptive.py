@@ -83,7 +83,7 @@ def test_prose_optional_is_derived_from_the_agent_contract():
     turns this green on its own instead of needing the harness edited in step with the
     agent.
     """
-    from services.agent import routing
+    from services.agent.routing import routing
 
     assert [command.wire for command in routing.COMMANDS if not command.prose] == []
     for command in routing.COMMANDS:

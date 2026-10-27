@@ -24,7 +24,7 @@ import pytest
 from services.agent import deterministic
 from services.agent import graph
 from services.agent import model_turn
-from services.agent import routing
+from services.agent.routing import routing
 from services.agent.presentation.a2ui import compose_presentation
 from services.agent.deterministic import run_command
 

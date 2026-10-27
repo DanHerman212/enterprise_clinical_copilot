@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import pytest
 
-from services.agent import routing
+from services.agent.routing import routing
 
 OUTPATIENT = sorted(routing.OUTPATIENT_HADM_IDS)
 INPATIENT = [90000015, 90000023, 90000106]

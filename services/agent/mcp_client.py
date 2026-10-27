@@ -31,7 +31,7 @@ from google.genai import types
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
-from services.agent.admission_context import PREFLIGHT_TOOLS
+from services.agent.routing.admission_context import PREFLIGHT_TOOLS
 from services.mcp.contracts import ToolContractError, validate_tool_result
 from services.mcp.runtime import timeout_chain
 

@@ -23,7 +23,7 @@ from unittest import skipUnless
 import pytest
 
 from services.agent import contracts
-from services.agent import questions
+from services.agent.routing import routing as questions
 
 # The sibling repository, when it is checked out beside this one.
 SIBLING = Path(__file__).resolve().parents[3] / "danielmherman"

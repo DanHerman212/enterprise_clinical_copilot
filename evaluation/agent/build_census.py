@@ -145,7 +145,7 @@ ADMISSION_TYPE_SOURCE = (
 
 def encounter_statement(hadm_id: int) -> str:
     """What the manifest says this encounter was — the statement the judge governs by."""
-    from services.agent.routing import OUTPATIENT_HADM_IDS  # noqa: PLC0415
+    from services.agent.routing.routing import OUTPATIENT_HADM_IDS  # noqa: PLC0415
 
     return (OUTPATIENT_ENCOUNTER if int(hadm_id) in OUTPATIENT_HADM_IDS
             else INPATIENT_ENCOUNTER)
@@ -240,7 +240,7 @@ def payload_for(cases: list[dict], kind: str, extra: dict | None = None) -> dict
 
 
 def main() -> int:
-    from services.agent.routing import OUTPATIENT_HADM_IDS  # noqa: PLC0415
+    from services.agent.routing.routing import OUTPATIENT_HADM_IDS  # noqa: PLC0415
 
     served = served_hadm_ids()
     labels = labels_by_hadm_id()

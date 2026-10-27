@@ -92,7 +92,7 @@ def test_the_prompt_names_the_tools_the_reasoning_loop_can_call():
     same reason: which names are tools is no longer a guess, it is the complement
     of the allow-list.
     """
-    from services.agent import routing
+    from services.agent.routing import routing
 
     for name in sorted(routing.FREETEXT_TOOLS):
         assert f"`{name}`" in SYSTEM_PROMPT, (
@@ -171,7 +171,7 @@ def test_no_prompt_still_prescribes_a_risk_band_word():
     its own band contradicts it. The day a risk prose turn comes back, the rule has to
     come back with it, and this test is what notices that it did not.
     """
-    from services.agent import routing
+    from services.agent.routing import routing
 
     assert [command.wire for command in routing.COMMANDS if command.wire == "risk"] == []
     for band in ("high", "low", "borderline"):
@@ -232,7 +232,7 @@ def test_the_free_text_prompt_is_told_when_the_record_is_an_outpatient_visit():
     appends to it. Live on 2026-10-21, "Summarize the note" on 90000073 — a
     speech-therapy progress note — produced "this admission" and a hospital course.
     """
-    from services.agent.routing import (
+    from services.agent.routing.routing import (
         OUTPATIENT_ENCOUNTER_NOTICE,
         OUTPATIENT_HADM_IDS,
     )

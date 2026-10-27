@@ -24,9 +24,9 @@ from starlette.routing import Route
 
 from services.agent.telemetry import observability as chain
 from services.agent import model_turn
-from services.agent import routing
+from services.agent.routing import routing
 from services.agent.telemetry import stages
-from services.agent import questions
+from services.agent.routing import routing as questions
 from services.agent import turn
 from services.agent.contracts import AgentRequestError, parse_agent_request
 from services.agent.graph import ask, final_message

@@ -22,9 +22,9 @@ import asyncio
 
 import pytest
 
-from services.agent import admission_context
+from services.agent.routing import admission_context
 from services.agent.presentation import domain as admission_phenotypes
-from services.agent import routing
+from services.agent.routing import routing
 from services.agent import served_admissions
 from services.agent import deterministic
 from services.agent.presentation.a2ui import compose_presentation, compose_risk_canvas, predict_payload

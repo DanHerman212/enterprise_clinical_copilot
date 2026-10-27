@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from langchain_core.messages import SystemMessage  # noqa: E402
 
 from services.agent import graph  # noqa: E402
-from services.agent import routing  # noqa: E402
+from services.agent.routing import routing  # noqa: E402
 from services.agent.deterministic import (  # noqa: E402
     _NO_READMISSION,
     _presented_prediction,
@@ -875,7 +875,7 @@ def test_the_formatter_is_told_the_question_that_was_asked():
 
 def test_the_requested_analytes_are_what_the_labs_prompt_is_about():
     """Passing the question in is only half the fix: the prompt has to use it."""
-    from services.agent.routing import LABS_FORMATTING
+    from services.agent.routing.routing import LABS_FORMATTING
 
     assert "Read the question at the top of this input" in LABS_FORMATTING
     assert "those analytes are the answer" in LABS_FORMATTING

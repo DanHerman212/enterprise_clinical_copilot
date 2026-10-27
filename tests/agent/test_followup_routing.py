@@ -7,7 +7,7 @@ from langchain_core.messages import AIMessage
 
 from services.agent.postprocess import followups
 from services.agent import graph
-from services.agent import routing
+from services.agent.routing import routing
 
 #: A series in the shape `get_lab_trends` returns, stored on the replayed turn.
 LABS = {

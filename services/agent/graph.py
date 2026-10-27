@@ -62,7 +62,7 @@ from services.agent.mcp_client import MCPToolbox, _clean_schema
 from services.agent.contracts import RecordedToolCall, validate_recorded_tool_call
 from services.agent.prompts import SYSTEM_PROMPT
 from services.agent.telemetry import observability
-from services.agent import routing
+from services.agent.routing import routing
 from services.agent.telemetry import stages
 from services.agent.deterministic import run_command
 

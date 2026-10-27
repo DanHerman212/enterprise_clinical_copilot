@@ -23,7 +23,7 @@ import pytest
 
 from services.agent import contracts
 from services.agent import http
-from services.agent import routing
+from services.agent.routing import routing
 
 WIRE = {"/meds": "meds", "/labs": "labs", "/ehr": "summarize",
         "/pubmed": "literature"}

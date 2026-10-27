@@ -441,7 +441,7 @@ def _evidence_for(rec: dict) -> list[dict]:
 def _prose_optional(wire: str | None) -> bool:
     """True when the agent's own contract says this command emits no prose.
 
-    Read from `services.agent.routing` rather than kept as a list here: the harness has
+    Read from `services.agent.routing.routing` rather than kept as a list here: the harness has
     to grade what the product ships, and a hardcoded set would start disagreeing with
     the agent the first time a command's `prose` flag changed — silently, and in the
     direction of penalising the agent for obeying its own specification. `/risk` is the
@@ -453,7 +453,7 @@ def _prose_optional(wire: str | None) -> bool:
     if not wire:
         return False
     try:
-        from services.agent import routing  # noqa: PLC0415 — keeps this import light
+        from services.agent.routing import routing  # noqa: PLC0415 — keeps this import light
 
         return not routing.command_for(wire).prose
     except Exception:  # noqa: BLE001 — an unknown wire is not prose-optional

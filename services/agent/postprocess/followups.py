@@ -47,7 +47,7 @@ import re
 from collections.abc import Sequence
 from typing import Any
 
-from services.agent import routing
+from services.agent.routing import routing
 from services.agent.presentation.domain import humanize
 
 logger = logging.getLogger(__name__)

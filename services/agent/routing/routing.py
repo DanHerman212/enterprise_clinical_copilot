@@ -38,9 +38,7 @@ the patient's chart so it can invent search terms — is the implicit retrieval
 step this phase removes. `topic_arg` names the tool argument those words fill. A
 command without it refuses free text rather than ignoring it, because text that
 arrives beside a command is either the command's own input or a second intention,
-and the two are told apart here rather than by whichever layer saw it last.
-"""
-
+and the two are told apart here rather than by whichever layer saw it last."""
 from __future__ import annotations
 
 import re
@@ -50,7 +48,7 @@ from dataclasses import dataclass, field
 # The section vocabulary, not the chunker. The agent's image ships the vocabulary
 # module and not the chunker, so importing this constant from `chunking` failed the
 # container at startup and the deploy silently served the previous revision.
-from services.agent.admission_context import PREFLIGHT_TOOLS
+from services.agent.routing.admission_context import PREFLIGHT_TOOLS
 # `admission_phenotypes` is no longer imported here. It was used by the pre-flight
 # condition lock, which existed to stop `/pubmed` requesting an estimate the surface would
 # then decline to compare — and that command no longer requests one at all (Phase F.1,
@@ -958,3 +956,143 @@ def tool_arguments(command: Command, hadm_id: int | None,
         raise MissingTopic(command)
     arguments[command.topic_arg] = topic.strip()
     return arguments
+
+
+# ===========================================================================
+# Consolidated from `questions.py` (Phase 7).
+#
+# The question wording: the second half of the prompt.
+#
+# The model receives two texts — the system prompt in `prompts.py`, and the
+# question. The question's wording used to be written in the *website* repository
+# (`demo/fixtures.py`) and composed there before the call, which meant the chain
+# artifact lived in two repositories: a change to half the prompt could ship
+# without touching the chain, its revision, or its review.
+#
+# It lives here now. The website sends intent — a chip name and a patient, or free
+# text and a patient — and the agent owns the words.
+#
+# Every string below is the one the website used to build, so the model sees
+# exactly what it saw before. The change is where the wording lives, not what it
+# says; anything else would be a prompt change smuggled in as a refactor, and
+# prompt changes move answers.
+# ===========================================================================
+
+import re
+
+# The starter chips the console offers, and the question each one asks.
+#
+# `risk` was here, and it was also `DEFAULT_TEMPLATE` below: pressing Enter on an empty
+# composer with a patient selected ran the readmission model. Both left on 2026-10-26
+# with the command — `/ehr` carries the estimate beside the narrative that explains it,
+# and a blank composer is not a question.
+CHIP_QUESTIONS = {
+    "meds": "What medications was this patient discharged on?",
+    "summarize": "Summarize the recent discharge notes for this patient.",
+    # The literature chip. The wording says "this condition" and the admission is
+    # appended below, so the model knows which patient to reduce to search terms
+    # while the tool call itself carries none — `search_literature` takes no hadm_id,
+    # which is what stops note text reaching a third party. See
+    # docs/literature-tool-plan.md.
+    "literature": "Search PubMed for recent literature on this condition.",
+    # The lab-trajectory chip (Phase 4B). It exists because the free-text route was the
+    # unreliable one: a question about what a measurement did could reach the reasoning
+    # loop and settle empty, and a deterministic route has to be the better answer, not
+    # the fallback. The wording asks about the course rather than naming an analyte,
+    # because the command draws the panel — a clinician who wants one analyte can click
+    # the driver bar for it, which is the drill-down that produced the request.
+    "labs": "Describe the laboratory trajectories for this patient's admission.",
+}
+
+# Appended when a patient is in scope, so the model never has to ask which
+# admission is meant.
+ADMISSION_TEMPLATE = " For admission {hadm_id}."
+
+# A command that takes the caller's own words as a tool argument needs a wording
+# that names what was searched. `CHIP_QUESTIONS["literature"]` says "on this
+# condition", which describes a retrieval step the command does not take: the
+# topic is the clinician's, and the agent does not read the chart to invent one.
+TOPIC_QUESTIONS = {
+    "literature": "Search PubMed for recent literature on {topic}.",
+}
+
+
+class UnknownChip(ValueError):
+    """The caller asked for a chip this chain does not define."""
+
+    def __init__(self, chip: str):
+        super().__init__(f"Unknown chip: {chip!r}")
+        self.chip = chip
+
+
+def own_words(*, chip=None, question=None, hadm_id=None, topic=None) -> str:
+    """The question in the caller's own words, without the admission appended.
+
+    Separate from `compose_question` because two different readers want two
+    different things from the same intent. The model is asked the composed
+    question, admission and all; the follow-up selector has to recognise the
+    question the reader just asked, and it recognises it by the words the reader
+    used. Comparing a chip against the composed text never matches — the chip
+    carries no `For admission 90000015.` — so a clicked chip was offered back
+    (measured in the production UI, `agent-00175-ttr`, 2026-10-24).
+
+    Raises exactly what `compose_question` raises, for the same reasons.
+    """
+    if chip is not None:
+        wording = CHIP_QUESTIONS.get(chip)
+        if wording is None:
+            raise UnknownChip(chip)
+        template = TOPIC_QUESTIONS.get(chip)
+        if template is not None:
+            if not (topic or "").strip():
+                raise ValueError(f"{chip} was asked with no topic")
+            wording = template.format(topic=topic.strip())
+        return wording
+    if isinstance(question, str) and question.strip():
+        return question.strip()
+    raise ValueError("nothing to ask: no chip and no question")
+
+
+def compose_question(*, chip=None, question=None, hadm_id=None, topic=None) -> str:
+    """Build the question the model is asked, from the caller's intent.
+
+    Mirrors exactly what the website used to compose, including the default that
+    applies when only a patient is given. Raises `UnknownChip` for a chip that is
+    not in the table, and `ValueError` when there is nothing to ask.
+
+    `topic` is the caller's own words for a command that takes them, and it is
+    separate from `question` because the two are not interchangeable: a question
+    is what the model is asked, a topic is what the tool is called with, and a
+    command may have the second without the first.
+    """
+    wording = own_words(chip=chip, question=question, hadm_id=hadm_id,
+                        topic=topic)
+    if hadm_id is not None:
+        wording += ADMISSION_TEMPLATE.format(hadm_id=hadm_id)
+    return wording
+
+
+#: The admission sentence `compose_question` appends, at the end of a question. It
+#: always follows a finished sentence — the composed question ends in a full stop before
+#: it — so the period is part of the anchor. Without it, the default question's own
+#: "for admission 90000015." was eaten and a whole sentence became a fragment.
+_ADMISSION_SUFFIX = re.compile(r"(?<=[.?!])\s+For admission \d+\.\s*$", re.IGNORECASE)
+
+
+def words_of(question: str) -> str:
+    """A question reduced back to the words the reader used, whoever wrote it down.
+
+    The site stores the COMPOSED question on the turn — that is what the agent was
+    asked, and it is what a follow-up has to be replayed against — so every replayed
+    turn carries the admission sentence the current turn's `own_words` does not.
+    Fingerprinting the two against a chip therefore matched on the turn the chip was
+    clicked and matched nothing afterwards, which is how a chip rehydrated on Turn 3
+    (measured in the production UI, `agent-00176-ngw`, 2026-10-24): Turn 1 excluded
+    it, Turn 2's stored question carried `For admission 90000015.` and did not.
+
+    Text that never carried the suffix comes back unchanged, so this is safe to apply
+    to every replayed question rather than only the ones this deployment composed.
+    """
+    text = " ".join(str(question or "").split())
+    stripped = _ADMISSION_SUFFIX.sub("", text).strip()
+    return stripped or text

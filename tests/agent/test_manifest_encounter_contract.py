@@ -31,7 +31,7 @@ for _path in (_REPO, _REPO / "evaluation" / "agent"):
         sys.path.insert(0, str(_path))
 
 import build_census  # noqa: E402
-from services.agent.routing import OUTPATIENT_HADM_IDS  # noqa: E402
+from services.agent.routing.routing import OUTPATIENT_HADM_IDS  # noqa: E402
 
 #: The three suite-2 cases that failed. Named so the test fails loudly if one of them
 #: ever stops being an outpatient record: the assertion would then be about different

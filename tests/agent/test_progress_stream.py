@@ -567,7 +567,7 @@ def test_a_failed_call_says_so_rather_than_reporting_zero():
 def test_every_chip_has_a_planning_label():
     """The planning label cannot drift behind the chip set, the way the tool
     labels cannot drift behind the tool set."""
-    from services.agent.questions import CHIP_QUESTIONS
+    from services.agent.routing.routing import CHIP_QUESTIONS
 
     missing = [c for c in CHIP_QUESTIONS if c not in stages.QUESTION_KIND_LABELS]
     assert not missing, f"chips with no planning label: {missing}"

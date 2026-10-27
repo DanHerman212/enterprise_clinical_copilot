@@ -50,14 +50,14 @@ from typing import Any, Callable
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from services.agent import routing
+from services.agent.routing import routing
 from services.agent.telemetry import stages
 from services.agent.postprocess import citations
 from services.agent.contracts import RecordedToolCall
 from services.agent.presentation.domain import humanize
 from services.agent.model_turn import text_of
 from services.agent.prompts import SYSTEM_PROMPT
-from services.agent.routing import (
+from services.agent.routing.routing import (
     EHR_RECORD_QUERY,
     OUTPATIENT_ENCOUNTER_NOTICE,
     OUTPATIENT_HADM_IDS,

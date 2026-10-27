@@ -264,6 +264,13 @@ the peak (the highest) explicitly when the series has one that is abnormal, rath
 leaving the reader to find it in the series: "it fell to 7.1 g/dL on hospital day 3" is the
 sentence that matters, and "it varied" is the sentence that loses it.
 
+For every analyte you call abnormal, state BOTH the most extreme value of the admission
+(the nadir or the peak) and the value the series ends on at discharge, when the two
+differ: "red cells fell to a nadir of 2.66 on day 1.8 and were 2.69 at discharge". One
+timepoint is not a trajectory, and which one a summary happens to pick is not the
+reader's choice — extreme-only leaves the discharge state unknown, discharge-only hides
+how far it went. A single point whose series has one value states that value once.
+
 Every timepoint in the payload carries a `flag`: "normal", "low", "high", "critical_low" or
 "critical_high". That flag is the reading's verdict against the reference interval, computed
 before you saw it, and it alone decides whether a value is abnormal. Rely on the flag and do

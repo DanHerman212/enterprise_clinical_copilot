@@ -346,6 +346,30 @@ def test_the_prompt_rules_that_gate_two_showed_were_missing():
     assert "cites each analyte's series" in SYSTEM_PROMPT
 
 
+def test_the_prompt_pins_medication_names_sections_and_both_timepoints():
+    """Three rules the full Gate 2 run showed were absent.
+
+    * `dev_t3_01`: the answer glossed brand names with generics the record does not
+      contain ("Coumadin (warfarin)"), which is a clinical claim the evidence lacks.
+    * `dev_t4_02`: a fact from `brief_hospital_course` was attributed in prose to
+      `discharge_instructions`, and a turn that had said the medication section was
+      unreadable later produced a drug without reconciling the two.
+    * `dev_t4_01`: the lab summary named an abnormal extreme but not the discharge value,
+      so the reader could not see where the series ended.
+    """
+    assert "Never add a parenthetical generic or brand-name" in SYSTEM_PROMPT
+    # Wrapped across lines in the prompt, so the halves are asserted.
+    assert "name the section the cited" in SYSTEM_PROMPT
+    assert "passage actually is" in SYSTEM_PROMPT
+    assert "`discharge_medications` section was absent" in SYSTEM_PROMPT
+    assert "state both the extreme value of the admission" in SYSTEM_PROMPT
+
+    from services.agent.routing import routing
+
+    assert "BOTH the most extreme value" in routing.LABS_FORMATTING
+    assert "value the series ends on at discharge" in routing.LABS_FORMATTING
+
+
 def test_the_lab_command_prompt_carries_the_same_three_rules():
     """`/labs` is a formatting turn, so the rules live in its own prompt as well."""
     from services.agent.routing import routing

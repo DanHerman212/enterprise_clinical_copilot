@@ -66,6 +66,18 @@ def test_the_encounter_authority_is_the_curation_oracle():
         )
 
 
+def test_the_manifest_rules_credit_every_field_not_only_length_of_stay():
+    """`dev_t5_01`: turn 1 answered the discharge location from the manifest and the
+    judge scored it an omission, because the preamble named only length of stay and
+    prior-inpatient-days as things to check against the manifest."""
+    from evaluation.platform.judge_call import MANIFEST_RULES
+
+    assert "Every field in it is" in MANIFEST_RULES
+    assert "discharge_location" in MANIFEST_RULES
+    assert "do not score it as an omission" in MANIFEST_RULES
+    assert "verbatim" in MANIFEST_RULES
+
+
 def test_admission_type_is_labelled_as_a_raw_ml_feature():
     source = build_census.ADMISSION_TYPE_SOURCE
     assert "raw tabular ML feature" in source

@@ -21,9 +21,15 @@ RUBRIC = (HARNESS / "rubric.md").read_text()
 
 
 MANIFEST_RULES = (
-    "PATIENT MANIFEST (pre-flight context the assistant was given). Check a stated "
-    "length of stay or prior-inpatient-days value against this, not against the "
-    "discharge note.\n"
+    "PATIENT MANIFEST (pre-flight context the assistant was given). Every field in it is "
+    "authoritative: `encounter`, `discharge_location`, `admission_type`, `age`, "
+    "`gender`, `index_los_days`, `prior_inpatient_days` and the rest were handed to the "
+    "assistant before it ran a single tool. An answer that states any of them from the "
+    "admission metadata has answered that part of the question — do not score it as an "
+    "omission, and do not require the wording to match the manifest string verbatim "
+    "(\"home with home health services\" answers a manifest `discharge_location` of "
+    "\"Home with home health\"). Check a stated length of stay or prior-inpatient-days "
+    "value against these figures, not against the discharge note.\n"
     "  * `encounter` states what kind of record this is, and it is authoritative. A "
     "record marked outpatient has no inpatient stay, so no inpatient readmission risk "
     "applies to it; an answer that says so is correct and must not be scored as "

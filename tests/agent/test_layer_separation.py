@@ -130,3 +130,116 @@ def test_agent_module_manifest_is_exact():
 
     assert actual - AGENT_MODULES == set(), "unexpected files under services/agent/"
     assert AGENT_MODULES - actual == set(), "modules named by the tree are missing"
+
+
+# --- the one-way subpackage DAG ---------------------------------------------
+
+LEAF_PACKAGES = {"postprocess", "presentation", "telemetry", "routing"}
+
+
+def _agent_imports(node):
+    """Module names under services.agent that this node imports."""
+    names = []
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.ImportFrom) and sub.module:
+            if sub.module.startswith("services.agent"):
+                names.append(sub.module)
+        elif isinstance(sub, ast.Import):
+            names.extend(a.name for a in sub.names if a.name.startswith("services.agent"))
+    return names
+
+
+def _package_of(path):
+    parts = path.parts
+    index = parts.index("agent")
+    return parts[index + 1] if index + 1 < len(parts) - 1 else "root"
+
+
+def test_subpackage_import_dag_is_acyclic():
+    """The six subpackages only ever import downwards, and nothing late-imports.
+
+    Two properties, because they fail for the same reason and cannot be fixed
+    independently: a cycle shows up first as a function-local import, which is how
+    `deterministic` used to reach back into `graph`. A guard that allowed the local
+    import would let the next cycle in through the same door.
+    """
+    root = pathlib.Path(SERVICES, "agent")
+    violations, late = [], []
+
+    for path in sorted(root.rglob("*.py")):
+        if "__pycache__" in str(path):
+            continue
+        source = path.read_text()
+        tree = ast.parse(source)
+        package = _package_of(path)
+
+        for module in _agent_imports(tree):
+            target = module.split("services.agent.")[-1].split(".")[0]
+            if package in LEAF_PACKAGES and target in {"ingress", "engine"}:
+                violations.append(f"{path.relative_to(root)}: {package} imports {target}")
+            if package == "engine" and target == "ingress":
+                violations.append(f"{path.relative_to(root)}: engine imports ingress")
+
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for module in _agent_imports(node):
+                    late.append(f"{path.relative_to(root)}:{node.lineno} in {node.name}()")
+
+    assert violations == [], "the subpackage DAG is not one-way"
+    assert late == [], "function-local services.agent imports hide a cycle"
+
+
+# --- every patch still lands on something -----------------------------------
+
+def _module_aliases(tree):
+    """alias -> dotted module path, for aliases that name a real module."""
+    aliases = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                if a.asname:
+                    aliases[a.asname] = a.name
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            for a in node.names:
+                aliases[a.asname or a.name] = f"{node.module}.{a.name}"
+    return aliases
+
+
+def test_no_patch_target_names_a_module_that_no_longer_binds_it():
+    """A patch naming an attribute that is no longer bound passes silently.
+
+    That is the failure this phase kept producing: `graph._build_llm` stayed a valid
+    name on the module while the call site had moved to another binding, so the
+    suite substituted nothing and called the real model. Importing the module is the
+    only way to ask the question the patch will ask.
+    """
+    import importlib.util
+
+    broken = []
+    for path in sorted(pathlib.Path("tests").rglob("*.py")):
+        tree = ast.parse(path.read_text())
+        aliases = _module_aliases(tree)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not node.args:
+                continue
+            func = node.func
+            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+            if name not in {"object", "setattr"}:
+                continue
+            owner, attr = node.args[0], node.args[1] if len(node.args) > 1 else None
+            if not isinstance(owner, ast.Name) or not isinstance(attr, ast.Constant):
+                continue
+            module = aliases.get(owner.id)
+            if module is None or not isinstance(attr.value, str):
+                continue
+            try:
+                spec = importlib.util.find_spec(module)
+            except (ImportError, ValueError):
+                continue
+            if spec is None:
+                continue
+            loaded = importlib.import_module(module)
+            if not hasattr(loaded, attr.value):
+                broken.append(f"{path.name}:{node.lineno} patches {module}.{attr.value}")
+
+    assert broken == [], "patch targets that would silently substitute nothing"

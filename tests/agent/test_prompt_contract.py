@@ -358,6 +358,12 @@ def test_the_prompt_pins_medication_names_sections_and_both_timepoints():
       so the reader could not see where the series ended.
     """
     assert "Never add a parenthetical generic or brand-name" in SYSTEM_PROMPT
+    # `dev_t4_02` in the four-scenario retest: the synthesis wrote "proximal and distal
+    # LAD" where the passage said "mid LAD and the distal LAD". The rule covers what a
+    # finding is and where it is, not only what it is called.
+    assert "Copy anatomical locations" in SYSTEM_PROMPT
+    assert "is not" in SYSTEM_PROMPT  # the substitution examples
+    assert "Paraphrasing spatial or anatomical detail" in SYSTEM_PROMPT
     # Wrapped across lines in the prompt, so the halves are asserted.
     assert "name the section the cited" in SYSTEM_PROMPT
     assert "passage actually is" in SYSTEM_PROMPT

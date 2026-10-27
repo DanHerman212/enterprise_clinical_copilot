@@ -536,12 +536,53 @@ def test_trace_metadata_includes_turn_and_session():
     assert meta["turn"] == 2
     assert meta["langfuse_session_id"] == "test-run:hadm_90000015"
     assert meta["langfuse_tags"] == [
-        "turn:2", "hadm:90000015", "command:summarize", "run:test-run",
+        "turn:2", "hadm:90000015", "command:summarize", "rev:local", "run:test-run",
     ]
 
     first = _trace_metadata(90000015, None, "test-run")
     assert first["turn"] == 1
     assert "command:summarize" not in first["langfuse_tags"]
+
+
+def test_every_trace_carries_the_deployment_that_produced_it():
+    """A trace without a revision is not a versioned artifact.
+
+    The trace kept `hadm:`, `run:` and `intent:` and not the build. A run's answers
+    could be dated but not attributed, and `--expect-revision` samples `/health` once
+    before the run — so a deploy landing mid-run split one run across two revisions
+    with nothing marking the boundary. The revision is `CODE_REVISION`, else Cloud
+    Run's `K_REVISION`, else `local`; this asserts the value is carried, not which
+    one it is.
+    """
+    from services.agent.engine import graph
+    from services.agent.telemetry import observability
+
+    original = observability.CODE_REVISION
+    try:
+        observability.CODE_REVISION = "agent-00206-xlm"
+        meta = graph._trace_metadata(90000015, "summarize", "test-run")
+    finally:
+        observability.CODE_REVISION = original
+
+    assert meta["code_revision"] == "agent-00206-xlm"
+    assert "rev:agent-00206-xlm" in meta["langfuse_tags"]
+
+
+def test_a_refused_turn_carries_the_revision_too():
+    """A refusal is a trace; without the tag the one class of turn the layer was
+    built to make visible would be the one class that could not be attributed."""
+    from services.agent import turn
+    from services.agent.telemetry import observability
+
+    original = observability.CODE_REVISION
+    try:
+        observability.CODE_REVISION = "agent-00206-xlm"
+        meta = turn.refusal_trace_metadata({"run_tag": "r", "hadm_id": 90000015})
+    finally:
+        observability.CODE_REVISION = original
+
+    assert meta["code_revision"] == "agent-00206-xlm"
+    assert "rev:agent-00206-xlm" in meta["langfuse_tags"]
 
 
 def test_live_traffic_gets_no_invented_session():

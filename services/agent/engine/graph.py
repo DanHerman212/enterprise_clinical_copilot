@@ -891,6 +891,15 @@ def _trace_metadata(
     request had declared — and that was the one fact the trace did not keep. The tag is
     written only when a declaration arrived, so `intent:follow_up` is a filter and an
     untagged trace means no control spoke.
+
+    `rev:` is the deployment that produced the trace, and it is not optional. Without
+    it a trace could be dated but not attributed: a run's answers could not be tied to
+    the build that generated them, and a deploy landing mid-run split one run across two
+    revisions with nothing marking the boundary. `--expect-revision` samples `/health`
+    once before a run starts and proves only what was serving then. The value comes from
+    `observability.CODE_REVISION` — `CODE_REVISION` when the deploy supplies the commit,
+    otherwise Cloud Run's `K_REVISION`, otherwise the literal `local`, which is an honest
+    label rather than an invented one.
     """
     tags: list[str] = []
     meta: dict[str, object] = {}
@@ -912,6 +921,9 @@ def _trace_metadata(
     if question_kind:
         tags.append(f"command:{question_kind}")
         meta["command"] = str(question_kind)
+    if observability.CODE_REVISION:
+        tags.append(f"rev:{observability.CODE_REVISION}")
+        meta["code_revision"] = str(observability.CODE_REVISION)
     if intent:
         tags.append(f"intent:{intent}")
         meta["intent"] = str(intent)

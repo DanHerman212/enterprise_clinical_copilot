@@ -66,10 +66,15 @@ def refusal_trace_metadata(parsed: dict) -> dict:
     tags = [f"run:{run_tag}", "turn:1"] if run_tag else ["turn:1"]
     if hadm is not None:
         tags.insert(1, f"hadm:{hadm}")
+    # A refusal is still a trace, so it carries the deployment too — otherwise the one
+    # class of turn the observability layer was built to make visible would be the one
+    # class that could not be attributed to a build.
+    tags.append(f"rev:{observability.CODE_REVISION}")
     return {
         "langfuse_session_id": (f"{run_tag}:hadm_{hadm}" if run_tag and hadm else None),
         "langfuse_tags": tags,
         "hadm_id": hadm,
+        "code_revision": str(observability.CODE_REVISION),
         "outcome": "refused",
     }
 

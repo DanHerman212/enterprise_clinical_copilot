@@ -7,11 +7,12 @@ which reads illogically to a user and mis-identifies the supporting passage.
 The fixes are deterministic and live HERE, in the agent, because this is the
 only layer where the answer, the guardrails, and the retrieved evidence meet:
 
-  1. `renumber_citations` rewrites markers to first-appearance order and
-     collapses stacked citations (the model dumping every passage onto one
-     claim) to a single marker.
-  2. `citation_remap` emits {renumbered: original} so the browser can resolve
-     a clicked footnote back to the original passage.
+  1. `renumber_citations` keeps every marker's canonical number and expands a
+     citation cluster to one single-number marker per source, so a claim that
+     rests on six passages carries six pills rather than the first one only.
+  2. `citation_remap` emits {marker: passage}; the map is the identity now that
+     numbers are preserved, and it is still published so the browser keeps one
+     resolution path.
   3. `dedupe_list_citations` hoists one repeated marker off a list and onto the
      line that introduces it, because a badge on every bullet of a list drawn
      from one passage is noise that reads as eleven sources.
@@ -125,45 +126,62 @@ def _expand_citations(inner: str) -> list[int]:
     return [int(x.strip()) for x in inner.split(",") if x.strip()]
 
 
-def _renumber_citations(answer: str) -> tuple[str, dict[int, int]]:
-    """Renumber ^[n] markers to first-appearance order.
+#: What may sit between two markers and still leave them ONE citation cluster: nothing,
+#: horizontal whitespace, and the separator a model writes between adjacent citations
+#: (`^[3], ^[4]`). A newline or a full stop ends the cluster.
+_CLUSTER_GAP_RE = re.compile(r"[ \t]*[,;]?[ \t]*")
 
-    Returns (renumbered_answer, old_to_new) where old_to_new maps the model's
-    original citation number (the tool's array position) to its renumbered
-    number (first-appearance order, 1-based).
+
+def _renumber_citations(answer: str) -> tuple[str, dict[int, int]]:
+    """Expand each citation cluster to one single-number marker per source.
+
+    The NUMBERS are not rewritten. A marker's number is the position of its unit in the
+    array the conversation handed the model (`citable_passages`), and that is the number
+    every other layer resolves against: `citation_map`, `sources`, the guardrail and the
+    browser. Reassigning them to first-appearance order broke that agreement — on Gate 3
+    (`00e`) `holdout_t1_03` cited sodium first and the reassignment moved it to `^[1]`,
+    displacing four of nine markers one position onto the wrong analyte.
+
+    The SHAPE is rewritten. A cluster — `^[4, 5, 6]`, `^[3], ^[4]`, `^[3] ^[4]` —
+    becomes one marker per number, in order of appearance within the cluster and
+    deduplicated: `^[4] ^[5] ^[6]`. The client's marker regex reads a single number
+    (`static/js/a2ui_clinical_components.js`, `MARKER`), so a comma-separated marker was
+    unrenderable there, and this function used to solve that by keeping only the first
+    number of a cluster — silently dropping every other source from the page. Expanding
+    keeps them all and gives the client pills it can draw.
+
+    Returns (expanded_answer, {n: n}). The map is the identity, and is still returned so
+    `citation_remap` and its callers keep one contract.
     """
     if not answer:
         return answer, {}
     markers = list(_CITATION_RE.finditer(answer))
     if not markers:
         return answer, {}
-    # Group markers separated only by whitespace into one cluster.
+    # Group markers separated only by whitespace or a citation separator.
     clusters: list[list[re.Match]] = [[markers[0]]]
     for m in markers[1:]:
         gap = answer[clusters[-1][-1].end():m.start()]
-        if gap.strip():
-            clusters.append([m])
-        else:
+        if _CLUSTER_GAP_RE.fullmatch(gap):
             clusters[-1].append(m)
-    # Renumber by first appearance, cluster by cluster.
-    old_to_new: dict[int, int] = {}
-    nxt = 1
-    for cl in clusters:
-        for m in cl:
-            for num in _expand_citations(m.group(1)):
-                if num not in old_to_new:
-                    old_to_new[num] = nxt
-                    nxt += 1
-    # Rebuild: one marker per cluster, carrying the cluster's first number.
+        else:
+            clusters.append([m])
+    # Rebuild: one marker per distinct number, numbers untouched.
+    numbers: dict[int, int] = {}
     out: list[str] = []
     last = 0
     for cl in clusters:
         out.append(answer[last:cl[0].start()])
-        first = _expand_citations(cl[0].group(1))[0]
-        out.append(f"^[{old_to_new[first]}]")
+        seen: list[int] = []
+        for m in cl:
+            for num in _expand_citations(m.group(1)):
+                if num not in seen:
+                    seen.append(num)
+                    numbers[num] = num
+        out.append(" ".join(f"^[{num}]" for num in seen))
         last = cl[-1].end()
     out.append(answer[last:])
-    return "".join(out), old_to_new
+    return "".join(out), numbers
 
 
 #: Any `^[...]` marker at all, valid or not. Used to find the ones that are not
@@ -202,9 +220,11 @@ def sanitize_citation_range(answer: str, source_total: int) -> str:
 
     A multi-number marker keeps its valid numbers and loses the rest, so `^[1, 9]` on a
     three-unit thread becomes `^[1]` rather than disappearing: the supported half of the
-    claim still points at its evidence. A marker with no valid number left is removed
-    whole, together with the space before it, so the sentence closes up around the
-    punctuation it had.
+    the claim still points at its evidence. The kept numbers are emitted as one
+    single-number marker each (`^[1] ^[2] ^[9]`), because that is the only shape the
+    browser's marker regex can turn into a control. A marker with no valid number left
+    is removed whole, together with the space before it, so the sentence closes up
+    around the punctuation it had.
 
     PMID badges are left alone — they address a literature record, not a passage, and
     this function knows nothing about how many of those the turn returned.
@@ -227,11 +247,15 @@ def sanitize_citation_range(answer: str, source_total: int) -> str:
             return match.group(0)
         numbers = _expand_citations(inner)
         valid = [n for n in numbers if 1 <= n <= limit]
-        if not valid:
+        seen: list[int] = []
+        for n in valid:
+            if n not in seen:
+                seen.append(n)
+        if not seen:
             return ""
-        if len(valid) == len(numbers):
+        if len(seen) == 1 and len(numbers) == 1:
             return match.group(0)
-        return f"{lead}^[{', '.join(str(n) for n in valid)}]"
+        return f"{lead}" + " ".join(f"^[{n}]" for n in seen)
 
     return _SPACED_MARKER_RE.sub(_rebuild, answer)
 
@@ -335,25 +359,28 @@ def dedupe_list_citations(answer: str) -> str:
 
 
 def renumber_citations(answer: str) -> str:
-    """Renumber ^[n] markers to first-appearance order (1, 2, 3, ...).
-    The model numbers citations by the tool's array position: a meds-only
-    answer cites ^[3] because discharge_medications is the THIRD section in
-    rag_search_sections order. In a meds-only turn that reads illogically —
-    the first (and only) citation should be ^[1]. Renumber deterministically
-    so citations always start at 1 in order of appearance; the canvas's
-    section-intent resolution keeps the passage mapping correct regardless.
+    """Expand every citation marker to one single-number marker per source.
 
-    Also collapses STACKED citations (^[1]^[2]^[3]... with only whitespace
-    between them — the model dumping every returned passage onto one claim) to
-    a single marker, since a row of citations on one claim has no per-claim
-    granularity to preserve.
+    The numbers are preserved. A marker's number is the position of its unit in
+    the array the conversation handed the model, and `sources`, `citation_map`
+    and the browser all resolve against exactly that; reassigning them to
+    first-appearance order made the reader's number mean something other than
+    the number the model wrote (`holdout_t1_03`, Gate 3 `00e`: a sodium marker
+    written first displaced four of nine analytes onto their neighbours).
+
+    What changes is the shape. A contiguous run of markers — `^[4, 5, 6]`,
+    `^[3], ^[4]`, `^[1]^[2]^[3]` — becomes one marker per number, in order and
+    deduplicated: `^[4] ^[5] ^[6]`. The browser's marker regex matches a single
+    number, so a comma-separated marker drew nothing at all; the previous
+    behaviour of keeping only the first number made the page render but dropped
+    every other source the claim rested on.
 
     Finally, any marker left over that is not a number is dropped rather than
     printed: a `^[section_name]` the model invented is not a citation, and letting
     it through puts raw markup in front of a clinician.
 
     A repeated marker on a list is hoisted onto the line that introduces it first
-    (see `dedupe_list_citations`), so what is renumbered is what will be read.
+    (see `dedupe_list_citations`), so what is expanded is what will be read.
     """
     return _drop_unknown_markers(_renumber_citations(dedupe_list_citations(answer))[0])
 

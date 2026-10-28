@@ -413,14 +413,20 @@ class TestPresentationContract:
         # finished. Removed in Phase 5B; the browser draws the draft itself.
         assert set(narrative) == {"id", "component", "text", "citations"}
 
-    def test_compose_presentation_renumbers_out_of_order_citations(self):
+    def test_compose_presentation_keeps_out_of_order_citations_as_written(self):
+        """The prose keeps the numbers the conversation handed the model.
+
+        These used to be rewritten to first-appearance order, which put the page in a
+        numbering that `sources` and the guardrail did not use. The markers now survive
+        verbatim and the map is the identity.
+        """
         out = compose_presentation(
             "Summarize the recent discharge notes for this patient.",
             "A^[2] and B^[1]",
             [{"name": "rag_search", "response": GOOD_RAG}],
         )
-        assert out["answer"] == "A^[1] and B^[2]"
-        assert out["citation_map"] == {"1": 2, "2": 1}
+        assert out["answer"] == "A^[2] and B^[1]"
+        assert out["citation_map"] == {"2": 2, "1": 1}
         assert out["intent_sections"] == []
 
     def test_a_chart_turn_without_a_resolved_citation_keeps_no_scope(self):
@@ -639,16 +645,21 @@ class TestResolvedSources:
          "text": "Discharge Medications: Celebrex 200 mg daily.", "score": 0.1},
     ]}
 
-    def test_one_entry_per_citation_keyed_by_renumbered_cite(self):
+    def test_one_entry_per_citation_keyed_by_its_own_number(self):
+        """Each marker resolves to the passage at its own position.
+
+        `A^[2]` names the second passage and `B^[1]` the first. The sources array is
+        ordered by number, so entry 0 is passage 1 and entry 1 is passage 2 — no remap
+        is needed now that the prose keeps its numbering.
+        """
         out = compose_presentation(
             "Summarize the recent discharge notes.",
             "A^[2] and B^[1]",
             [{"name": "rag_search", "response": self.THREE}],
         )
         assert [s["cite"] for s in out["sources"]] == [1, 2]
-        # Renumbered ^[1] was the model's ^[2] -> the diagnosis passage.
-        assert out["sources"][0]["section"] == "discharge_diagnosis"
-        assert out["sources"][1]["section"] == "brief_hospital_course"
+        assert out["sources"][0]["section"] == "brief_hospital_course"
+        assert out["sources"][1]["section"] == "discharge_diagnosis"
         assert all(s["query"] == "discharge notes" for s in out["sources"])
 
     def test_single_citation_resolves_by_section_intent(self):

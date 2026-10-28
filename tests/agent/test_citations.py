@@ -86,18 +86,17 @@ class TestLiteratureCitations:
         assert citation_remap(answer) == {"1": 1}
 
     def test_a_pmid_badge_does_not_disturb_note_numbering(self):
-        """The note citation keeps its own sequence; the badge is not in it.
+        """The note citation keeps its own number; the badge is not in the sequence.
 
-        The `^[3]` here belongs to a note passage the model numbered third, so it
-        renumbers to `^[1]` on its own terms. If the badge were being counted, the
-        numbering would come out differently — which is the point of asserting the
-        exact string rather than just "the badge survived".
+        The `^[3]` here belongs to a note passage the model numbered third. It stays
+        `^[3]`, because a marker's number is the position of its unit in the array the
+        conversation handed the model and every resolver works from that. If the badge
+        were being counted, the map would report a second citation.
         """
         answer = "Published work^[PMID: 99] and the note^[3]."
 
-        assert renumber_citations(answer) == (
-            "Published work^[PMID: 99] and the note^[1]."
-        )
+        assert renumber_citations(answer) == answer
+        assert citation_remap(answer) == {"3": 3}
 
     def test_a_bare_pmid_number_would_be_mistaken_for_a_note_citation(self):
         """Why the prefix is load-bearing rather than decorative.
@@ -139,35 +138,62 @@ class TestFirstCitation:
 
 
 class TestRenumberCitations:
-    def test_meds_only_answer_renumbers_to_first(self):
-        """A meds-only answer cites ^[3] (discharge_medications is the 3rd
-        section in rag_search_sections order) — it must read as ^[1]."""
-        assert renumber_citations(
-            "The patient was discharged on the following medications^[3]:"
-        ) == "The patient was discharged on the following medications^[1]:"
+    def test_a_marker_keeps_the_number_the_conversation_gave_it(self):
+        """A meds-only answer cites `^[3]` and keeps `^[3]`.
 
-    def test_renumbers_by_order_of_first_appearance(self):
+        The number is the position of the section in the array the model was shown.
+        Renumbering it to `^[1]` made the page read more naturally and made the number
+        disagree with `sources`, `citation_map` and the guardrail, which is the trade
+        Gate 3 (`00e`) rejected.
+        """
+        answer = "The patient was discharged on the following medications^[3]:"
+
+        assert renumber_citations(answer) == answer
+        assert citation_remap(answer) == {"3": 3}
+
+    def test_out_of_order_markers_are_not_reordered(self):
         assert renumber_citations("A^[2] and B^[1] and C^[3]") == (
-            "A^[1] and B^[2] and C^[3]")
+            "A^[2] and B^[1] and C^[3]")
 
     def test_no_markers_is_unchanged(self):
         assert renumber_citations("no citations here") == "no citations here"
 
-    def test_stacked_citations_collapse_to_one_marker(self):
+    def test_stacked_citations_expand_to_one_marker_each(self):
         assert renumber_citations(
             "discharged on pain medication ^[1]^[2]^[3]^[4]^[5]."
-        ) == "discharged on pain medication ^[1]."
+        ) == "discharged on pain medication ^[1] ^[2] ^[3] ^[4] ^[5]."
         assert renumber_citations(
             "discharged on pain medication ^[1] ^[2] ^[3]."
-        ) == "discharged on pain medication ^[1]."
+        ) == "discharged on pain medication ^[1] ^[2] ^[3]."
+
+    def test_a_multi_number_marker_expands_rather_than_losing_its_tail(self):
+        """`^[4, 5, 6]` became `^[4]`, dropping two of the three sources.
+
+        The browser's marker regex reads one number, so a comma-separated marker drew
+        nothing; the old fix kept the first number and deleted the rest from the page.
+        """
+        assert renumber_citations("six labs ^[4, 5, 6].") == (
+            "six labs ^[4] ^[5] ^[6].")
+
+    def test_a_comma_between_adjacent_markers_is_absorbed(self):
+        assert renumber_citations("oncology ^[3], ^[4] and age ^[3].") == (
+            "oncology ^[3] ^[4] and age ^[3].")
+
+    def test_a_number_repeated_inside_one_cluster_is_emitted_once(self):
+        assert renumber_citations("dup ^[2] ^[2].") == "dup ^[2]."
+        assert renumber_citations("doi ^[2, 2, 3].") == "doi ^[2] ^[3]."
+
+    def test_a_range_is_expanded_to_its_members(self):
+        assert renumber_citations("course ^[1-3].") == "course ^[1] ^[2] ^[3]."
+
+    def test_a_paragraph_break_ends_a_cluster(self):
+        assert renumber_citations("A ^[1]\n\nB ^[2]") == "A ^[1]\n\nB ^[2]"
 
 
 class TestCitationRemap:
-    def test_maps_renumbered_numbers_back_to_original_passages(self):
-        # 'A^[2] and B^[1] and C^[3]' renumbers to 1,2,3 in appearance order,
-        # so the map must translate back to the original positions (2,1,3).
+    def test_the_map_is_the_identity_now_that_numbers_are_preserved(self):
         assert citation_remap("A^[2] and B^[1] and C^[3]") == {
-            "1": 2, "2": 1, "3": 3}
+            "2": 2, "1": 1, "3": 3}
 
     def test_no_markers_is_an_empty_map(self):
         assert citation_remap("no citations here") == {}
@@ -316,11 +342,11 @@ class TestListCitationDeduplication:
 
         assert dedupe_list_citations(answer) == answer
 
-    def test_the_hoisted_marker_is_then_renumbered_and_remapped(self):
-        """The seam the passes share: dedupe first, then renumber, then remap.
+    def test_the_hoisted_marker_is_then_expanded_and_remapped(self):
+        """The seam the passes share: dedupe first, then expand, then remap.
 
-        A marker taken off the list is a marker that no longer takes a number, so a remap
-        built from the un-deduped answer would shift every later citation by one.
+        A marker taken off the list is a marker that no longer takes a pill, so a remap
+        built from the un-deduped answer would carry a number nothing cites.
         """
         answer = (
             "The findings are:\n"
@@ -329,8 +355,8 @@ class TestListCitationDeduplication:
             "The impression follows ^[7]."
         )
 
-        renumbered = renumber_citations(answer).splitlines()
-        assert renumbered[0] == "The findings are ^[1]:"
-        # `^[7]` is the second distinct passage the answer cites, so it becomes `2`, and
-        # the remap says which original passage each renumbered marker addresses.
-        assert citation_remap(answer) == {"1": 3, "2": 7}
+        expanded = renumber_citations(answer).splitlines()
+        assert expanded[0] == "The findings are ^[3]:"
+        assert expanded[-1] == "The impression follows ^[7]."
+        # Numbers are preserved, so the map is the identity over the markers that survive.
+        assert citation_remap(answer) == {"3": 3, "7": 7}

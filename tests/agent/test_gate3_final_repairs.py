@@ -149,12 +149,19 @@ def test_a_valid_marker_is_left_exactly_as_it_was():
 
 
 def test_a_partly_valid_marker_keeps_its_valid_numbers():
-    """The supported half of the claim still points at its evidence."""
+    """The supported half of the claim still points at its evidence.
+
+    Kept numbers are emitted one marker each: the browser's marker regex reads a
+    single number, so `^[1, 2, 3]` would draw nothing at all.
+    """
     assert sanitize_citation_range("Values rose ^[1, 9].", source_total=3) == (
         "Values rose ^[1]."
     )
     assert sanitize_citation_range("Values rose ^[1-9].", source_total=3) == (
-        "Values rose ^[1, 2, 3]."
+        "Values rose ^[1] ^[2] ^[3]."
+    )
+    assert sanitize_citation_range("Values rose ^[1, 2].", source_total=3) == (
+        "Values rose ^[1] ^[2]."
     )
 
 

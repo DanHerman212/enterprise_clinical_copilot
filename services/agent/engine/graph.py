@@ -801,15 +801,16 @@ def build_graph(
             # binding it is the first line; this refuses the call a model can still write
             # for a tool that is missing from its request.
             used_up=allowed - _still_bound(allowed, state),
-            # Numbering continues from the passages the replayed turns already showed
-            # and from the calls this turn has made so far.
-            cite_offset=(_passage_total({"passages": [
-                passage
-                for call in (state.get("replayed_tool_calls") or [])
-                for passage in ((call.get("response") or {}).get("passages") or [])
-            ]})
-                + sum(_passage_total(call.get("response"))
-                      for call in state.get("tool_calls") or [])),
+            # Numbering continues from every citable unit the conversation has shown:
+            # the replayed turns' note passages AND their laboratory panels, then the
+            # calls this turn has already made. `_citable_unit_total` is the same sum
+            # `replay_messages` advances by, so the transcript the model reads and the
+            # numbers its next tool result carries cannot disagree. Counting only
+            # `passages` here skipped a replayed `/labs` turn's nine analytes, and a
+            # follow-up's first passage was then stamped `^[1]` beside a panel that
+            # already held `^[1]`..`^[9]` — `holdout_t4_02` cited the chemotherapy
+            # regimen to `^[1]`, which the reader resolves to RDW.
+            cite_offset=_citable_unit_total(state),
         )
         return {"messages": messages, "tool_calls": recorded}
 

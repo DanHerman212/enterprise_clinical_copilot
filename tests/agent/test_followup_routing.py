@@ -123,21 +123,20 @@ class TestADeclaredFollowUpIsAnsweredInOnePass:
 
         assert model.turns == [None, "any"]
 
-    def test_an_undeclared_lab_comparison_is_answered_from_the_series(self):
-        """The chip is a laboratory comparison, and its panel is in the transcript.
+    def test_a_lab_follow_up_keeps_the_ordinary_free_text_toolset(self):
+        """An undeclared question about the panel is not special-cased.
 
-        Different rule, same reason: the evidence for a ranking or comparison of
-        laboratory values IS the series, so the turn is given the series and nothing
-        else. On Gate 2 `dev_t3_03` asked the same shape of question on a thread that had
-        run `/labs`, was left with a note search as its only tool, and answered with a
-        hemoglobin of 10.8 and a sodium of 132 against the 10.0 and 136 it had reported
-        from the series one turn earlier. One pass, from the panel.
+        The evidence set is the standing free-text boundary plus whatever the question
+        earns: a lab follow-up is a question about the chart like any other, and the
+        series in the transcript is reachable through the ordinary path. Withdrawing a
+        note search on a guess about the wording was tried and removed — the guess cost
+        more answers than it saved.
         """
         model = _AnswersInProse()
 
         _run(model, turns=LAB_TURN)
 
-        assert model.turns == [None]
+        assert model.turns == [None, "any"]
 
     def test_a_declaration_with_no_transcript_does_not_exempt_anything(self):
         """A first turn cannot be a follow-up — there is nothing for it to have been

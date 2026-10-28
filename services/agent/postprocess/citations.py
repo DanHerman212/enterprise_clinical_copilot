@@ -138,9 +138,9 @@ def _renumber_citations(answer: str) -> tuple[str, dict[int, int]]:
     The NUMBERS are not rewritten. A marker's number is the position of its unit in the
     array the conversation handed the model (`citable_passages`), and that is the number
     every other layer resolves against: `citation_map`, `sources`, the guardrail and the
-    browser. Reassigning them to first-appearance order broke that agreement — on Gate 3
-    (`00e`) `holdout_t1_03` cited sodium first and the reassignment moved it to `^[1]`,
-    displacing four of nine markers one position onto the wrong analyte.
+    browser. Reassigning them to first-appearance order broke that agreement — an answer
+    that names its abnormal value first and the rest of the panel afterwards had every
+    marker displaced by one analyte.
 
     The SHAPE is rewritten. A cluster — `^[4, 5, 6]`, `^[3], ^[4]`, `^[3] ^[4]` —
     becomes one marker per number, in order of appearance within the cluster and
@@ -209,8 +209,8 @@ def sanitize_citation_range(answer: str, source_total: int) -> str:
     Numbering is 1-based and bounded: a thread that was shown `source_total` citable
     units has numbers `1..source_total` and nothing else. A marker outside that range is
     not a citation in any sense — it is a number the model wrote, and it reaches the
-    reader as a footnote that opens nothing. On Gate 3 (`00d2`) a synthesis turn whose
-    previous `/meds` turn had retrieved no passages wrote "the discharge medications
+    reader as a footnote that opens nothing. A synthesis turn whose previous `/meds`
+    turn had retrieved no passages once wrote "the discharge medications
     section is empty ^[0]": zero is not a passage position at all, and the sentence was
     doubly wrong about the record (see the prompt rule on empty versus not-retrieved).
 
@@ -365,8 +365,8 @@ def renumber_citations(answer: str) -> str:
     the array the conversation handed the model, and `sources`, `citation_map`
     and the browser all resolve against exactly that; reassigning them to
     first-appearance order made the reader's number mean something other than
-    the number the model wrote (`holdout_t1_03`, Gate 3 `00e`: a sodium marker
-    written first displaced four of nine analytes onto their neighbours).
+    the number the model wrote — a marker written first was renumbered to `^[1]`
+    and the panel after it slid one place onto its neighbours.
 
     What changes is the shape. A contiguous run of markers — `^[4, 5, 6]`,
     `^[3], ^[4]`, `^[1]^[2]^[3]` — becomes one marker per number, in order and

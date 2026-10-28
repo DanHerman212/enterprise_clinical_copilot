@@ -84,35 +84,9 @@ def test_an_empty_record_still_offers_nothing():
 def test_the_prompt_forbids_calling_a_fluctuating_series_flat():
     prompt = " ".join(SYSTEM_PROMPT.split())
 
-    assert '"remained at"' in prompt
-    assert "EVERY measurement in between" in prompt
+    assert "Do not describe a value as holding a level across timepoints" in prompt
+    assert "every measurement in between carries that exact value" in prompt
     assert "is a trajectory, not a set of endpoints" in prompt
-
-
-# --- 3. a pronoun after a panel is a question about the panel ---------------------
-
-@pytest.mark.parametrize("question", [
-    "which one worried you most?",
-    "which stood out?",
-    "what was the most concerning value?",
-    "which one was worst?",
-])
-def test_a_pronoun_superlative_after_labs_is_a_lab_question(question):
-    assert routing.asks_about_lab_ranking(question, prior_labs=True) is True
-
-
-@pytest.mark.parametrize("question", [
-    "which one worried you most?",
-    "what was the most concerning value?",
-])
-def test_the_same_question_without_a_panel_is_not_routed_to_the_panel(question):
-    """No previous panel means "which one" has no referent, and the note is the record."""
-    assert routing.asks_about_lab_ranking(question, prior_labs=False) is False
-
-
-def test_the_concern_vocabulary_alone_still_needs_a_lab_subject():
-    assert routing.asks_about_lab_ranking("which lab was most concerning?") is True
-    assert routing.asks_about_lab_ranking("is the medication regimen concerning?") is False
 
 
 # --- 4. one index on a passage, and it is the global one --------------------------

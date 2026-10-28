@@ -1,12 +1,8 @@
 """Structured laboratory authority, citation modality binding, and judge quota policy.
 
-Three defect classes from Gate 2 (`pilot-verify-20261027-215139`, `00c6`), each pinned
-here so the coupling cannot drift apart again:
+Two defect classes from Gate 2, each pinned here so the coupling cannot drift apart again:
 
-  - `dev_t3_03` answered "which lab was worst at discharge?" from laboratory numbers
-    inside a note passage, contradicting the series it had reported one turn earlier. The
-    turn is now given the series and nothing else (`_freetext_allowed`).
-  - `dev_t4_02` attached a laboratory-trend citation index to a narrative claim about
+  - a laboratory-trend citation index was attached to a narrative claim about
     transfusion, because `^[4]` and `^[6]` look alike and nothing said what kind of
     evidence each number pointed at. Every numbered source now carries `cite_modality`.
   - the judge exhausted its regional quota. Its endpoint and backoff are asserted here
@@ -19,86 +15,9 @@ import asyncio
 import json
 import re
 
-import pytest
-
-from services.agent.engine import graph
 from services.agent.engine.mcp_client import _render_tool_result
 from services.agent.engine.prompts import SYSTEM_PROMPT
 from services.agent.routing import routing
-
-
-# --- 1. ranking a laboratory value is a question about the series --------------------
-
-@pytest.mark.parametrize("question", [
-    "which lab was worst at discharge?",
-    "Which lab value was most abnormal at discharge?",
-    "what was the highest creatinine?",
-    "rank the analytes by how far out of range they were",
-    "compare the hemoglobin and the sodium",
-    "what was the nadir for red blood cells",
-    "which laboratory result was furthest outside its reference range",
-])
-def test_a_ranking_question_about_labs_is_recognised(question):
-    assert routing.asks_about_lab_ranking(question) is True
-
-
-@pytest.mark.parametrize("question", [
-    "Was there any concern about a blood clot in her leg?",
-    "What is his 30-day readmission risk score?",
-    "Which medication was prescribed at the highest dose?",
-    "Summarize the hospital course.",
-    "Is the sodium within its reference range?",
-    "What was she discharged on?",
-    "",
-])
-def test_other_questions_are_not_lab_ranking_questions(question):
-    """No ranking word, no laboratory subject, or neither — and the answer is no.
-
-    The medication question is the important negative: it carries "highest" and is not a
-    laboratory question. A false positive there withdraws the note search that answers it.
-    """
-    assert routing.asks_about_lab_ranking(question) is False
-
-
-def test_a_ranking_turn_is_given_the_series_and_nothing_else():
-    """The set is REPLACED, not narrowed: only `get_lab_trends` is bound.
-
-    A note search stays out because it returns prose that mentions laboratory numbers
-    incidentally, which is how `dev_t3_03` came back with a hemoglobin of 10.8 against the
-    10.0 it had already reported. Whether the panel still has to be fetched is
-    `_still_bound`'s question, so the same set is asked for either way.
-    """
-    assert graph._freetext_allowed(
-        False, False, False, False, False,
-        lab_ranking_question=True, lab_panel_in_transcript=False,
-    ) == frozenset({"get_lab_trends"})
-
-    assert graph._freetext_allowed(
-        False, False, False, False, False,
-        lab_ranking_question=True, lab_panel_in_transcript=True,
-    ) == frozenset({"get_lab_trends"})
-
-
-def test_a_ranking_turn_yields_no_tools_once_the_replay_holds_the_panel():
-    """`_still_bound` is what withdraws the tool, and `route` is what ends the turn.
-
-    The replay allowance is the existing mechanism (`ONCE_PER_TRANSCRIPT` plus
-    `FULL_FETCH_UNFILTERED`), so a full panel in the transcript leaves this turn with
-    nothing to call. The graph must then not demand a retrieval: the demand text names
-    `rag_search`, which is the search that produced the contradicting figures.
-    """
-    allowed = graph._freetext_allowed(
-        False, False, False, False, False,
-        lab_ranking_question=True, lab_panel_in_transcript=True,
-    )
-    replayed = [{"name": "get_lab_trends", "args": {"hadm_id": 90000015},
-                 "response": {"trends": []}}]
-
-    assert graph._still_bound(allowed, {"tool_calls": [],
-                                        "replayed_tool_calls": replayed}) == frozenset()
-
-    source = open(graph.__file__, encoding="utf-8").read()
-    assert "if lab_ranking_question and lab_panel_in_transcript:" in source
 
 
 # --- 2. every numbered source says what kind of evidence it is -----------------------

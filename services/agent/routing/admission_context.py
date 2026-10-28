@@ -76,9 +76,9 @@ def _display(value: Any) -> str:
 
     That was the wrong layer to fix it. The manifest is verified ground truth that the
     judge holds the answer against, so a manifest that states "24.7" for a row holding
-    24.6667 is a manifest that disagrees with the dataset — and on Gate 3 (`00d`)
-    `holdout_t5_02` was scored a fidelity failure for printing "24.7" while the expected
-    value was 24.6667. Whispering the record is not the same as writing it well: the
+    24.6667 is a manifest that disagrees with the dataset — an answer repeating it is
+    then scored as a fidelity failure against the expected full figure.
+    Whispering the record is not the same as writing it well: the
     prompt asks the model to reproduce these values character-for-character and to use
     them descriptively, and it cannot do the first if this layer has already shortened
     the number.

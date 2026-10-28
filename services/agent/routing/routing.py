@@ -811,12 +811,11 @@ def asks_for_risk_score(question: str) -> bool:
     This is the second condition under which `predict_readmission` crosses into free
     text (`graph._freetext_allowed`), and it exists because of a measured deflection.
 
-    On Gate 2 (`pilot-verify-20261027-190255`) `dev_t5_03` asked "What is his 30-day
-    readmission risk score and is it above threshold?" on a thread that had never run
-    `/ehr`. The tool was not bound, so the answer named the command that owns the
-    score and stopped: "… are provided by the /ehr command." The user was told to go
-    and type something the assistant could have run itself. A clinician asking for a
-    number should get the number.
+    Asked for the estimate on a thread that had never run `/ehr`, the tool was not
+    bound, so the answer named the command that owns the score and stopped: "… are
+    provided by the /ehr command." The reader was told to go and type something the
+    assistant could have run itself. A clinician asking for a number should get the
+    number.
 
     A driver question is excluded even though it names the score: `asks_why_risk_driver`
     is the other crossing, and it has its own reason for binding the same tool. Two
@@ -890,106 +889,6 @@ def asks_about_a_lab_analyte(question: str) -> bool:
     is withheld, and a note search still answers what the record says.
     """
     return bool(_LAB_ANALYTE.search(question or ""))
-
-
-#: The words a question uses when it wants a laboratory value RANKED, COMPARED or placed
-#: against its reference interval — "which lab was worst at discharge", "most abnormal",
-#: the peak, the nadir, "highest creatinine".
-#:
-#: Single tokens rather than phrases: "most abnormal" and "furthest out of range" are two
-#: words each and a phrase list would have to enumerate every modifier that can precede
-#: the adjective. The adjective is the cue.
-_LAB_RANKING_WORDS = frozenset({
-    "worst", "worse", "abnormal", "abnormalities", "deranged", "extreme", "extremes",
-    "highest", "lowest", "peak", "peaks", "nadir", "nadirs", "maximum", "minimum",
-    "rank", "ranked", "ranking", "rankings", "compare", "compares", "comparison",
-    "furthest", "farthest", "biggest", "largest", "smallest",
-    # How a clinician asks the same question without naming the panel: the concern it
-    # caused. `dev_t3_03`'s "which lab was worst" and `holdout_t3_02`'s "which one
-    # worried you most" are one question, and only the first was recognised.
-    "worried", "worry", "worries", "worrying", "worrisome", "concerning", "concern",
-    "concerns", "concerned", "critical", "critically", "severe", "severely",
-    "stood", "stand", "stands", "outlier", "outliers",
-})
-
-#: The words that make a question a SUPERLATIVE about a set already in the conversation,
-#: rather than a new lookup. Paired with a pronoun, they are how a follow-up asks "of
-#: those, which" — "which one worried you most", "which stood out", "what was the most
-#: abnormal".
-_LAB_SUPERLATIVES = frozenset({
-    "most", "worst", "biggest", "highest", "lowest", "furthest", "farthest",
-    "ranked", "ranking",
-})
-
-#: How a clinician says "of the values in front of me, which is the troubling one" without
-#: naming a superlative: the concern, or the fact that one stood out.
-_LAB_CONCERN_WORDS = frozenset({
-    "worried", "worry", "worries", "worrying", "worrisome",
-    "concerning", "concern", "concerns", "concerned",
-    "stood", "stand", "stands", "notable", "striking",
-})
-
-#: The pronouns that make a question about a set rather than about a thing. Paired with a
-#: concern word and a panel in the previous turn, they are a question about that panel.
-_SET_PRONOUNS = frozenset({"which", "what"})
-
-#: The nouns that stand in for a named analyte when the question speaks about the panel
-#: rather than one value. "Which lab was worst at discharge" names no analyte and is still
-#: unambiguously a question about the series.
-_LAB_SUBJECT_NOUNS = frozenset({
-    "lab", "labs", "laboratory", "laboratories", "panel", "panels",
-    "analyte", "analytes", "bloodwork", "bloods",
-})
-
-
-def asks_about_lab_ranking(question: str, prior_labs: bool = False) -> bool:
-    """Whether this question asks for laboratory values to be ranked or compared.
-
-    The distinction decides the turn's whole evidence set (`graph._freetext_allowed`).
-    A ranking question is answered by the series and by nothing else: the comparison is made
-    against each analyte's own `reference_low` / `reference_high` on the panel this turn is
-    given, and every other tool returns either prose
-    that repeats laboratory numbers incidentally or a record that carries none.
-
-    On Gate 2 (`pilot-verify-20261027-215139`) `dev_t3_03` Turn 2 asked "which lab was
-    worst at discharge?" on a thread whose Turn 1 was `/labs`. The panel was in the
-    transcript and `get_lab_trends` was therefore withdrawn as already-spent
-    (`ONCE_PER_TRANSCRIPT`), leaving a note search as the only tool bound — so the model
-    searched the discharge note, found a hemoglobin of 10.8 and a sodium of 132 inside a
-    narrative passage, and answered with figures that contradicted the 10.0 and 136 it had
-    reported one turn earlier from the series. Both the ranking and the cross-turn
-    consistency failed, and neither could be recovered from the note it read.
-
-    Requires a laboratory SUBJECT as well as a ranking word: "which medication was
-    prescribed at the highest dose" carries a ranking word and is not a lab question, and
-    a false positive there would withdraw the note search that answers it.
-
-    `prior_labs` is the second way in, and it is about the CONVERSATION rather than the
-    sentence. On Gate 3 (`00d1`) `holdout_t3_02` ran `/labs` and was then asked "which one
-    worried you most?". Read on its own that sentence names no laboratory subject, so the
-    predicate returned False, the turn took the ordinary free-text path and searched the
-    discharge note for the word "worried" — `responsiveness 0`, `context 0`. The subject
-    was in the previous turn: a pronoun plus a superlative, immediately after a panel, is
-    a question about that panel. A false positive here costs one panel re-read; a false
-    negative answers a question about the labs by searching a note for the word "worried".
-    """
-    text = str(question or "").lower().translate(_PUNCTUATION)
-    if not text.strip():
-        return False
-    tokens = text.split()
-    if prior_labs:
-        if any(token in _LAB_SUPERLATIVES for token in tokens):
-            return True
-        # "which one worried you most", "which stood out": a set pronoun plus a concern
-        # word, immediately after a panel, is a question about that panel. Without the
-        # pronoun it could be about anything, and the note is the right record for that.
-        if (any(token in _SET_PRONOUNS for token in tokens)
-                and any(token in _LAB_CONCERN_WORDS for token in tokens)):
-            return True
-    if not any(token in _LAB_RANKING_WORDS for token in tokens):
-        return False
-    return bool(_LAB_ANALYTE.search(text)
-                or any(token in _LAB_SUBJECT_NOUNS for token in tokens))
 
 
 def _templated_arguments(args: dict, hadm_id: int | None,

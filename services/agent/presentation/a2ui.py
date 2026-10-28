@@ -454,8 +454,8 @@ def compose_presentation(question: str, answer: str,
     #
     # Decided from `record_sources` and NOT from the published `sources` list, which now
     # also carries the retrieved articles. Reading that list here would let a PubMed turn
-    # vouch for itself: the records are somebody else's patients, and `dev_t1_06` asserts
-    # exactly this turn is not chart-grounded.
+    # vouch for itself: the records are somebody else's patients, and a literature-only
+    # turn is not chart-grounded.
     literature_only = draws_literature and not record_sources
     # A widget IS an answer. `/risk` returns no prose by design, so "substantive" cannot
     # mean "has prose" — it means there is something the reader was given that can be

@@ -316,10 +316,10 @@ _RISK_PROTECTIVE = "Why does {driver} lower this patient's readmission risk?"
 #: The last resort: questions anchored to what the record demonstrably contains, offered
 #: only when every template above produced nothing.
 #:
-#: `/ehr` had no chip at all on Gate 3 (`00d1`, `holdout_t2_01`): its note overview was the
-#: command's own answer, so the note template is skipped for it by design, and the record's
-#: medication plan is not among the sections it returned. Nothing
-#: was left, `follow_ups=True` returned an empty list, and the evaluation lost the item as
+#: `/ehr` can end up with no chip at all: its note overview is the command's own answer,
+#: so the note template is skipped for it by design, and the record's medication plan may
+#: not be among the sections it returned. When nothing is
+#: left, `follow_ups=True` returns an empty list and the item is lost as
 #: unscored. An affordance row is a promise that something is worth asking next; a record
 #: with a hospital course or a medication list always has that.
 _COURSE_TREATMENT = ("What does the hospital course record about how this admission was "

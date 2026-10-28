@@ -476,9 +476,9 @@ def _render_passage(passage: dict[str, Any], *, keep_id: bool = False) -> dict[s
 
     `id` is DROPPED from the model's copy. It is a machine name — `MT-2616-DS_discharge_
     medications_2` — and its trailing digit is a LOCAL position inside one tool result.
-    Beside a global `^[n]` it is a second, disagreeing index: on Gate 3 (`00d1`)
-    `holdout_t4_01` cited `^[2]` for the prednisone taper, which lives in the second
-    medication passage and is `^[3]` on that thread. The prompt already forbids writing
+    Beside a global `^[n]` it is a second, disagreeing index: the trailing digit counts
+    positions INSIDE one tool result, so the second medication passage is `2` by its id
+    and `^[3]` in the thread that shows it. The prompt already forbids writing
     the id into an answer, so the model had no use for it and one way to be misled by it.
     `keep_id` exists for the tests that assert what the tool returned is what is recorded;
     nothing on the model path sets it.
@@ -520,9 +520,9 @@ def _lab_modality(trend: dict[str, Any]) -> str:
 def _citation_header(number: int, modality: str) -> str:
     """The literal marker the model is asked to copy, printed beside the evidence.
 
-    `cite` already told the model WHICH number a unit carries, and it was not enough. On
-    Gate 3 (`00d`) six multi-turn items scored `citation <= 1`, and the judge's language
-    was the same six times: "every citation is incorrect … the claim about the chemotherapy
+    `cite` already told the model WHICH number a unit carries, and it was not enough: six
+    multi-turn items scored `citation <= 1` with the same judge language each time —
+    "every citation is incorrect … the claim about the chemotherapy
     regimen is supported by a `rag_search` passage but is cited to a lab trend for RDW".
     The numbering runs across turns — a Turn‑2 answer citing Turn 1's panel uses `^[1]` for
     RDW and `^[6]` for the note — and a bare `"cite": 1` beside a JSON object is a fact the
@@ -586,9 +586,9 @@ def _render_tool_result(payload: Any, *, offset: int = 0) -> str:
             # Each also carries `cite_modality`, which says what KIND of evidence the
             # number points at. The model can see the difference between a note passage
             # and a laboratory series in the payload's own shape, but not in the number:
-            # `^[4]` and `^[6]` look alike on the page, and on Gate 2 `dev_t4_02` cited a
-            # laboratory trend index onto a narrative claim about transfusion and
-            # medication management (2026-10-27). Labelling the number is what lets the
+            # `^[4]` and `^[6]` look alike on the page, and a laboratory index cited onto
+            # a narrative claim about transfusion and medication management is
+            # indistinguishable from a correct one. Labelling the number is what lets the
             # citation rule in SYSTEM_PROMPT be checked rather than remembered.
             rendered = dict(payload, passages=[
                 ({**_render_passage(passage),

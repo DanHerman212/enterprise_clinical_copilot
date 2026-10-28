@@ -308,8 +308,8 @@ def test_a_risk_driver_question_is_answered_with_the_models_attribution():
     """a6e4ca01: "what explains creatinine as a readmission risk driver?" got the labs only.
 
     The chart says what the value did; only the model says why it counts. The estimate
-    is a second, separate reason the same tool is bound (`dev_t5_03` asked for the score
-    and was told to run a command), and the prompt states both.
+    is a second, separate reason the same tool is bound — a question asking for the score
+    is answered with the score, not redirected to a command — and the prompt states both.
     """
     assert "`predict_readmission` is in front of you on two kinds of question" \
         in SYSTEM_PROMPT
@@ -319,11 +319,9 @@ def test_a_risk_driver_question_is_answered_with_the_models_attribution():
     assert "drivers contributed most" in SYSTEM_PROMPT
     assert "which drivers led" in SYSTEM_PROMPT
     assert "direction" in SYSTEM_PROMPT
-    # The second condition, and the thing it replaced: a question asking for the score
-    # is answered with the score rather than redirected to a command.
-    assert "predict_readmission` is in front of you" in SYSTEM_PROMPT
+    # The second condition: a question about the estimate is answered from the tool.
     assert "probability_display" in SYSTEM_PROMPT
-    assert "never redirected" in SYSTEM_PROMPT
+    assert "Never redirect the reader to a command" in SYSTEM_PROMPT
     # Never a float: the projection gives the model the display strings and no number.
     assert "threshold_display" in SYSTEM_PROMPT
 
@@ -344,7 +342,8 @@ def test_the_prompt_rules_that_gate_two_showed_were_missing():
     """
     assert "enumerate EVERY matching" in SYSTEM_PROMPT
     assert "given inpatient and stopped or held" in SYSTEM_PROMPT
-    assert "Never open a lab answer with a blanket" in SYSTEM_PROMPT
+    assert "Never open a lab answer with a blanket" not in SYSTEM_PROMPT
+    assert "blanket reassurance that contradicts" in SYSTEM_PROMPT
     assert "`_abnormality_rank`" not in SYSTEM_PROMPT
     assert "NEVER written into an answer" not in SYSTEM_PROMPT
     assert "cites each analyte's series" in SYSTEM_PROMPT

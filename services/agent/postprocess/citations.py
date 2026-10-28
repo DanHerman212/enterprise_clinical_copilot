@@ -180,6 +180,62 @@ _KNOWN_MARKER_RE = re.compile(
 )
 
 
+#: A citation marker with whatever space precedes it, so removing the marker does not
+#: leave a gap before the punctuation that followed it.
+_SPACED_MARKER_RE = re.compile(r"([ \t]*)\^\[([^\]]*)\]")
+
+
+def sanitize_citation_range(answer: str, source_total: int) -> str:
+    """Remove citation markers that address no citable unit this conversation showed.
+
+    Numbering is 1-based and bounded: a thread that was shown `source_total` citable
+    units has numbers `1..source_total` and nothing else. A marker outside that range is
+    not a citation in any sense — it is a number the model wrote, and it reaches the
+    reader as a footnote that opens nothing. On Gate 3 (`00d2`) a synthesis turn whose
+    previous `/meds` turn had retrieved no passages wrote "the discharge medications
+    section is empty ^[0]": zero is not a passage position at all, and the sentence was
+    doubly wrong about the record (see the prompt rule on empty versus not-retrieved).
+
+    Bounded rather than merely positive because the same class of invention produces
+    `^[7]` on a thread with three units, which resolves to nothing and scores as a
+    fabricated source.
+
+    A multi-number marker keeps its valid numbers and loses the rest, so `^[1, 9]` on a
+    three-unit thread becomes `^[1]` rather than disappearing: the supported half of the
+    claim still points at its evidence. A marker with no valid number left is removed
+    whole, together with the space before it, so the sentence closes up around the
+    punctuation it had.
+
+    PMID badges are left alone — they address a literature record, not a passage, and
+    this function knows nothing about how many of those the turn returned.
+
+    Deliberately not folded into `renumber_citations`: renumbering decides ORDER, and
+    this decides EXISTENCE. Keeping them apart is what lets the renumbering be tested on
+    its own contract, and what makes this rule auditable as the single place a marker can
+    be deleted.
+    """
+    if "^[" not in (answer or ""):
+        return answer
+    limit = max(int(source_total or 0), 0)
+
+    def _rebuild(match: re.Match) -> str:
+        lead, inner = match.group(1), match.group(2).strip()
+        if inner.upper().startswith("PMID"):
+            return match.group(0)
+        if not re.fullmatch(r"\d+(?:\s*,\s*\d+)*|\d+\s*-\s*\d+", inner):
+            # Not a number and not a PMID: `_drop_unknown_markers` owns this case.
+            return match.group(0)
+        numbers = _expand_citations(inner)
+        valid = [n for n in numbers if 1 <= n <= limit]
+        if not valid:
+            return ""
+        if len(valid) == len(numbers):
+            return match.group(0)
+        return f"{lead}^[{', '.join(str(n) for n in valid)}]"
+
+    return _SPACED_MARKER_RE.sub(_rebuild, answer)
+
+
 def _drop_unknown_markers(answer: str) -> str:
     """Remove `^[...]` markers that are neither a passage number nor a PMID badge.
 

@@ -310,6 +310,43 @@ def _replace_final_text(state: dict, text: str) -> None:
         message.content = text
 
 
+def _citable_unit_total(state: dict) -> int:
+    """How many citation numbers this conversation has handed the model.
+
+    The same sum `tool_node` advances the running number by — the replayed turns' units
+    first, then this turn's — because that is the array a marker addresses.
+    """
+    replayed = state.get("replayed_tool_calls") or []
+    this_turn = state.get("tool_calls") or []
+    return sum(_passage_total(call.get("response")) for call in (*replayed, *this_turn)
+               if isinstance(call, dict))
+
+
+def sanitize_answer_markers(state: dict) -> None:
+    """Drop markers from the settled answer that address no unit the turn was shown.
+
+    Applied at settlement — the one point both routes pass through — rather than in the
+    presentation layer, because the trace, the judge and the browser read the answer from
+    three different places and only the state is common to all three. A marker removed
+    downstream of the trace would still be in the record the judge scores.
+
+    Both answer channels are cleaned: the model's prose, and a command's
+    `deterministic_answer` (which for `/meds` is written in code and carries its own
+    `^[1]`).
+    """
+    total = _citable_unit_total(state)
+    message = final_message(state)
+    if message is not None and isinstance(message.content, str):
+        cleaned = citations.sanitize_citation_range(message.content, total)
+        if cleaned != message.content:
+            message.content = cleaned
+    deterministic = state.get("deterministic_answer")
+    if isinstance(deterministic, str) and deterministic:
+        state["deterministic_answer"] = citations.sanitize_citation_range(
+            deterministic, total
+        )
+
+
 def no_evidence_answer(
     question: str, tool_calls: list[dict], *, declined: bool = False
 ) -> str | None:
@@ -1051,6 +1088,9 @@ async def ask(
                 prose_stream=prose_stream,
                 trace_metadata=command_meta,
             )
+            # The command's answer is settled before anything reads it: a marker removed
+            # after the trace is written would still be in the record the judge scores.
+            sanitize_answer_markers(command_state)
             # `tools:<n>` cannot be known when the span opens. `tools:0` is the tag the
             # triage view filters on, so it is added here, once the count exists.
             observability.stamp_trace_tags(
@@ -1245,6 +1285,11 @@ async def ask(
             or "none",
         )
         _replace_final_text(state, "")
+
+    # A marker that addresses no citable unit is not a citation. Removed here, where the
+    # answer is settled, so the trace the judge reads carries the same text the browser
+    # does (see `sanitize_answer_markers`).
+    sanitize_answer_markers(state)
 
     # The trace id leaves with the state so the layers that need to point back at
     # a run can: `collect.py` stores it per case, and `judge.py` attaches rubric

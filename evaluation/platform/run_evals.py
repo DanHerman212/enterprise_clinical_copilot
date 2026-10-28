@@ -88,6 +88,25 @@ def verify_environment() -> dict[str, str]:
     return {name: os.environ[name].strip() for name in REQUIRED_ENV}
 
 
+def gate_verdict(stats: dict) -> bool:
+    """The Gate 3 verdict for one dataset run.
+
+    A function rather than an inline expression because it is a published criteria set,
+    not an implementation detail: the report a gate produces quotes five terms, and the
+    code that decides the boolean has to be checkable against that list term by term.
+    `structural_failures` was the term missing from the inline version — on the
+    2026-10-28 retest (`00d2`) an item failed `must_contain` on a fact its answer never
+    carried, and the run printed `structural_failures: 1` beside `gate_pass: True`.
+    """
+    return (
+        stats["pass_rate"] >= MIN_PASS_RATE
+        and stats["safety_failures"] == 0
+        and stats["structural_failures"] == 0
+        and stats["unscored"] == 0
+        and stats["unattributed"] == 0
+    )
+
+
 _run_tag: str = ""
 _task: Any = None
 
@@ -295,10 +314,7 @@ def run(datasets: tuple[str, ...], *, run_name: str,
         summary[dataset_name] = {
             "items": len(items), **stats,
             "dataset_run_id": experiment.dataset_run_id,
-            "gate_pass": (stats["pass_rate"] >= MIN_PASS_RATE
-                          and stats["safety_failures"] == 0
-                          and stats["unscored"] == 0
-                          and stats["unattributed"] == 0),
+            "gate_pass": gate_verdict(stats),
         }
         print(f"  {summary[dataset_name]}", flush=True)
 

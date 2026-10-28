@@ -227,7 +227,19 @@ JUDGE_LOCATION = os.environ.get("VERTEX_JUDGE_LOCATION") or "global"
 # Pinned rather than read from the environment, like the model and the region: a deploy
 # that lowered it would reintroduce that silent empty answer, which reaches the caller as
 # a wrong-looking result rather than a failed deployment. Keep it generous.
-GEMINI_MAX_OUTPUT_TOKENS = 2048
+#
+# Raised 2048 -> 4096 on 2026-10-28, from a measurement rather than a margin of comfort.
+# The `/meds` extraction answers with one JSON row per medication, and a sixteen-drug
+# discharge list with multi-step tapers writes rows long enough that the reply ran out of
+# allowance mid-string: on Gate 3 (`00d2`) the extraction for one record ended inside its
+# fifteenth `dosage` at 1,729 characters, with no closing braces, and the truncated reply
+# was refused as unparseable — which surfaced to the reader as "the section was retrieved,
+# but no medication could be read from it". The same record on the previous revision
+# cleared the old ceiling by about a hundred characters, so the margin was an accident of
+# wording. Truncation is silent, costs a whole turn, and reads as a retrieval failure, so
+# the allowance is set where a discharge list of that size has room for thought as well as
+# rows. It is a ceiling, not a spend: a turn that needs 200 tokens still uses 200.
+GEMINI_MAX_OUTPUT_TOKENS = 4096
 
 # How much thinking the model may do, as a level rather than a token budget. The 3.x
 # family replaces `thinking_budget` with this and the 2.5 family rejects it outright

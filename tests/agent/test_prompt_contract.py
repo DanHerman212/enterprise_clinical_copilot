@@ -394,6 +394,19 @@ def test_the_lab_command_prompt_carries_the_same_three_rules():
     assert "cites each one's series" in routing.LABS_FORMATTING
 
 
+def test_a_concern_question_is_answered_with_every_abnormal_analyte_not_a_winner():
+    """Different analytes are in different units, so a ratio of excursions is not a
+    comparison. The rule names all of them with their own bounds instead — the ranking
+    used to be delegated to a cross-unit division the model was asked to perform."""
+    from services.agent.routing import routing
+
+    prompt = " ".join(routing.LABS_FORMATTING.split())
+
+    assert 'which value was "worst"' in prompt
+    assert "ratio of one value's excursion to its interval width is not a clinical" in prompt
+    assert "Do not pick a single winner across analytes of different kinds" in prompt
+
+
 def test_a_number_is_not_distributed_across_the_items_beside_it():
     """a4b7930e: "100% accuracy" reported for three goals when the passage said two.
 

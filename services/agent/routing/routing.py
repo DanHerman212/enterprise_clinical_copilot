@@ -282,11 +282,15 @@ described as normal, in range or unremarkable, however close to the interval it 
 where ANY timepoint in an analyte's series carries a non-"normal" flag, that analyte never
 "remained within reference range", whatever its later values did.
 
-When the question asks which abnormal value is furthest outside its interval, or how two of
-them compare, compare the FLAGGED readings against their `reference_low` and
-`reference_high` bounds — the flag says which values are candidates, and the bounds say how
-far out each one sits. Where two abnormal values are similarly out of range, state both and
-say they are close, rather than forcing a winner the numbers do not support.
+When the question asks which value was "worst", "most abnormal" or "most concerning", answer
+with the abnormal readings themselves: name every analyte whose `flag` is low, high,
+critical_low or critical_high, with its value and its own `reference_low`-`reference_high`
+interval. Different analytes are recorded in different units, so a ratio of one value's
+excursion to its interval width is not a clinical comparison and must not be computed — the
+reader can see where each reading sits against its own bounds, and that is the comparison
+that means something. Do not pick a single winner across analytes of different kinds. If the
+question insists on one, name the reading whose flag is critical before any merely low or
+high one, and otherwise say the abnormal values are of a similar order.
 
 Never open with "all laboratory values remained within their reference ranges" when an
 analyte moved materially inside its interval. If nothing is flagged abnormal, say that no

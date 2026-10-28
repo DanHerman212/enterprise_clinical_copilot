@@ -49,13 +49,21 @@ MANIFEST = {"recent_ed_visits": "0", "prior_inpatient_days": "0",
 # --- 1. an attribution is not a finding about the patient ---------------------------
 
 def test_an_increasing_factor_the_patient_does_not_have_is_marked():
-    """`recent_ed_visits` increases the score for a row that records zero of it."""
+    """`recent_ed_visits` increases the score for a row that records zero of it.
+
+    Marked twice, since `00d3`: with the patient's value and the absent flag, and by being
+    moved out of `top_factors` into `baseline_only_factors`. The annotation alone was not
+    enough — `00d` and `00d3` both narrated the factor as the primary driver anyway.
+    """
     projected = _presented_for_model("predict_readmission", RISK, MANIFEST)
-    factor = next(f for f in projected["top_factors"]
+    everything = [*projected["top_factors"],
+                  *(projected.get("baseline_only_factors") or [])]
+    factor = next(f for f in everything
                   if f["feature"].lower().startswith("recent ed"))
 
     assert factor["patient_value"] == "0"
     assert factor["_baseline_artifact_absent_in_patient"] is True
+    assert factor not in projected["top_factors"]
 
 
 def test_a_factor_the_patient_does_have_carries_its_value_and_no_flag():
@@ -76,8 +84,9 @@ def test_a_feature_the_manifest_cannot_verify_is_not_accused_of_being_absent():
     """
     manifest = {"recent_ed_visits": "0", "prior_inpatient_days": "18.5833"}
     projected = _presented_for_model("predict_readmission", RISK, manifest)
-    by_feature = {factor["feature"].lower(): factor
-                  for factor in projected["top_factors"]}
+    everything = [*projected["top_factors"],
+                  *(projected.get("baseline_only_factors") or [])]
+    by_feature = {factor["feature"].lower(): factor for factor in everything}
 
     # Verifiable and absent.
     assert by_feature["recent ed visits"]["_baseline_artifact_absent_in_patient"] is True

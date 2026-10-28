@@ -354,10 +354,22 @@ def _evidence(tc: dict) -> dict:
         # here: an answer that quotes the tool's own "values are synthetic" disclaimer
         # looked like a fabricated claim, and a faithful answer failed for repeating
         # what the tool told it (pilot, 2026-10-19).
+        #
+        # Each analyte carries its `cite` index because that IS the number an answer's
+        # marker addresses: `citations.citable_passages` makes one numbered unit per
+        # analyte, so `^[2]` is the second entry of this list. Without the index the
+        # judge saw "a single unnumbered tool result" and scored a correct `^[1], ^[2],
+        # ^[3]` as pointing at nothing (`holdout_t1_03`, `00d3`) while scoring the same
+        # numbering 3/3 on `holdout_t1_02` in the same run.
+        labs = resp.get("labs") or resp.get("trends") or resp.get("series") or resp
+        if isinstance(labs, list):
+            labs = [
+                ({**item, "cite": index} if isinstance(item, dict) else item)
+                for index, item in enumerate(labs, start=1)
+            ]
         return {
             "tool": name,
-            "labs": (resp.get("labs") or resp.get("trends")
-                     or resp.get("series") or resp),
+            "labs": labs,
             "synthetic": resp.get("synthetic"),
             "note": resp.get("note"),
         }
@@ -379,18 +391,39 @@ def _evidence(tc: dict) -> dict:
         }
     if name in ("rag_search", "rag_search_sections"):
         passages = resp.get("passages") or []
+        # Numbered for the same reason the analytes are: a passage's position in this
+        # list is the citation number the answer writes, and a judge that cannot see the
+        # position cannot tell a correct marker from an invented one.
         return {
             "tool": name,
             "query": resp.get("query"),
             "passages": [
-                {"section": p.get("section"), "text": (p.get("text") or "")[:PER_PASSAGE_CAP]}
-                for p in passages
+                {"cite": index,
+                 "section": p.get("section"),
+                 "text": (p.get("text") or "")[:PER_PASSAGE_CAP]}
+                for index, p in enumerate(passages, start=1)
             ],
         }
     if name == "discharge_medications":
         # Medication fidelity is graded against the discharge note, and a dose or a
         # route is the thing that gets fabricated — so the payload goes to the judge
         # whole rather than as a 2000-character summary of a dict.
+        #
+        # The passages are numbered when present: a long list is split across several,
+        # and "the taper is in the second one" is only checkable if the judge can see
+        # which one is second. `00d3` scored a `^[3]` attached to a sentence about a drug
+        # that lives in passage 2 by describing the citation as pointing at Clindamycin,
+        # which it could only do because the split is visible at all.
+        passages = resp.get("passages")
+        if isinstance(passages, list) and passages:
+            return {
+                "tool": name,
+                "medications": [
+                    {"cite": index, "text": (p.get("text") or "")[:PER_PASSAGE_CAP]}
+                    for index, p in enumerate(passages, start=1)
+                    if isinstance(p, dict)
+                ],
+            }
         meds = (resp.get("medications") or resp.get("discharge_medications")
                 or resp.get("items") or resp)
         return {"tool": name, "medications": meds}

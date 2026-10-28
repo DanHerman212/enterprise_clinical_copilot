@@ -99,6 +99,7 @@ AGENT_MODULES = frozenset({
     'ingress/run.py',
     'postprocess/__init__.py',
     'postprocess/citations.py',
+    'postprocess/claims.py',
     'postprocess/followups.py',
     'postprocess/guardrail.py',
     'presentation/__init__.py',

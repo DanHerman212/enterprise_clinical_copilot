@@ -139,6 +139,11 @@ class TaskOutput(BaseModel):
     #: resolve to. Kept per turn because the judge has to grade a marker against the
     #: list the reader clicked, not against the order the tools returned passages in.
     turn_sources: list[list[dict[str, Any]]] = Field(default_factory=list)
+    #: Each turn's tool calls with the payload each returned, kept per turn rather than
+    #: flattened into `tool_evidence`. A free-text turn's calls are not exported as
+    #: spans, so without this the numbering the model was shown for that turn exists only
+    #: in the harness's memory and a post-mortem cannot say what `^[2]` pointed at.
+    turn_tool_calls: list[list[dict[str, Any]]] = Field(default_factory=list)
     tool_evidence: list[dict[str, Any]] = Field(default_factory=list)
 
     #: Tracing / diagnosis. Additive to the spec: the evaluators need the envelope

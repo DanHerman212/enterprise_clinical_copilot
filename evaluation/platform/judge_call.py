@@ -70,20 +70,22 @@ def build_user_prompt(input_doc: dict[str, Any], output: dict[str, Any]) -> str:
         parts.append(f"TURN {index + 1} — QUESTION:\n{question}\n\nANSWER:\n{answer}\n")
         cited = _cited_sources(output, index)
         if cited:
-            # The numbering the reader clicks. `sources` is ordered by first appearance
-            # in the answer and renumbered to match, so `^[k]` resolves through THIS
-            # list — while the raw tool payloads below keep the order the tools returned
-            # them in. Grading a marker against the raw array scored a correct answer
-            # `citation: 1` on three consecutive canaries (2026-10-23).
+            # The numbering the reader clicks. Sources are listed by their own number, so
+            # `^[k]` resolves to the entry LABELLED [k] — not to entry k by position, and
+            # not to anything in the raw evidence below. Numbers are no longer rewritten
+            # to first-appearance order (`citations._renumber_citations`, 2026-10-28), so
+            # the label and the number are now the same fact.
             parts.append(
                 f"TURN {index + 1} — THE NUMBERING THIS ANSWER USES: every `^[k]` in the "
-                "answer above resolves to entry [k] of this list, and to nothing else.\n"
+                "answer above resolves to the entry labelled [k] below, and to nothing "
+                "else. A number with no entry here addresses no unit this turn published.\n"
                 + cited + "\n")
     parts.append(
         "RAW TOOL EVIDENCE (what the tools returned, in the order they returned it).\n"
-        "Its passage order is NOT the numbering the answer cites — grade markers against\n"
-        "the per-turn list above, and use this block only to check what the evidence\n"
-        "says:\n" + evidence)
+        "Each passage and each analyte carries the marker the answer must write for it:\n"
+        "`\"cite\": \"^[10]\"` is the unit `^[10]` addresses. A number can be checked\n"
+        "against this block directly, and a unit with no `cite` (an estimate, a medication\n"
+        "list, a search result set) consumes none.\n" + evidence)
     return "\n".join(parts)
 
 

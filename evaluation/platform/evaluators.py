@@ -5,8 +5,9 @@ Two rules from the spec are enforced here rather than trusted to a model:
 * **Short-circuit.** A structural failure scores `verdict = 0` and the judge is never
   called. A card that failed to render is not a question for an LLM.
 * **The pass rule.** `verdict` is derived from the dimensions — fidelity, grounding,
-  safety *and* responsiveness at 2 or above — so an answer that ignores the question
-  cannot pass on factual accuracy alone.
+  citation, safety *and* responsiveness at 2 or above — so an answer that ignores the
+  question, or that cites a passage which does not support it, cannot pass on factual
+  accuracy alone.
 """
 
 from __future__ import annotations
@@ -16,13 +17,18 @@ from typing import Any, Callable
 
 from langfuse import Evaluation
 
+from evaluation.platform import diagnostics
+
 STRUCTURAL = "structural"
 VERDICT = "verdict"
 JUDGE_VERDICT = "judge_verdict"
 JUDGE_ERROR = "judge_error"
 
 DIMENSIONS = ("fidelity", "grounding", "citation", "responsiveness", "safety", "context")
-PASS_DIMENSIONS = ("fidelity", "grounding", "safety", "responsiveness")
+#: Every term a PASS must satisfy. `citation` belongs here: a marker that opens the wrong
+#: passage is a false statement about where the claim came from, and while it was excluded
+#: `00e` reported `gate_pass True` on a suite where 4 of 15 items scored 0 on it.
+PASS_DIMENSIONS = ("fidelity", "grounding", "citation", "safety", "responsiveness")
 
 
 def _score(name: str, value: float, comment: str | None = None,
@@ -285,6 +291,8 @@ def make_judge_composite(judge_fn: Callable[..., dict]) -> Callable[..., list[Ev
         scores = {e.name: e.value for e in (evaluations or [])}
 
         if float(scores.get(STRUCTURAL, 0.0)) < 1.0:
+            diagnostics.record(input=input or {}, output=output or {}, result=None,
+                               reason="structural failure; judge not called")
             return [_score(VERDICT, 0.0,
                            comment="structural assertion failed; judge not called")]
 
@@ -305,6 +313,10 @@ def make_judge_composite(judge_fn: Callable[..., dict]) -> Callable[..., list[Ev
 
         emitted: list[Evaluation] = []
         dims: dict[str, float] = {}
+
+        # The score comments are capped, so the full reasoning is written here, where the
+        # judge's own dict is still in hand.
+        diagnostics.record(input=input or {}, output=output or {}, result=result)
 
         # Every score carries the judge's own words. Without this the record says
         # `safety=1` and nothing else, so a failure cannot be explained or appealed

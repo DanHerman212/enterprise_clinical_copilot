@@ -269,6 +269,28 @@ def test_the_rule_never_upgrades_a_fail():
     assert judge._apply_pass_rule(_sample(verdict="FAIL"))["verdict"] == "FAIL"
 
 
+def test_a_citation_failure_downgrades_a_pass():
+    """`00e`: citation was scored and excluded, and the gate read True at 4/15 zeroes.
+
+    A marker that opens a passage which does not support its sentence is a false
+    statement about where the claim came from, so `PASS` beside `citation: 1` — or 0 —
+    cannot stand.
+    """
+    for citation in (0, 1):
+        graded = judge._apply_pass_rule(_sample(citation=citation))
+        assert graded["verdict"] == "FAIL", citation
+        assert any("citation" in flag for flag in graded["flags"]), citation
+
+
+def test_a_citation_of_two_still_passes():
+    """Some citations misplaced is a 2 on the rubric, and 2 is a pass."""
+    assert judge._apply_pass_rule(_sample(citation=2))["verdict"] == "PASS"
+
+
+def test_citation_is_one_of_the_gated_dimensions():
+    assert "citation" in judge.PASS_DIMENSIONS
+
+
 def test_an_error_sample_is_left_alone():
     broken = {"error": "429 RESOURCE_EXHAUSTED"}
     assert judge._apply_pass_rule(broken) == {"error": "429 RESOURCE_EXHAUSTED"}

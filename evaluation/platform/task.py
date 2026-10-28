@@ -60,19 +60,68 @@ def _answer_text(response: dict) -> str:
     return ""
 
 
-def _evidence(response: dict) -> list[dict[str, Any]]:
-    """Tool payloads with their disclaimers intact.
+def _citation_units(payload: Any) -> int:
+    """How many citation numbers one tool payload consumes.
+
+    The same rule the agent renders with — `citations.citable_passages`: one number per
+    note passage, one per analyte, nothing for an estimate, a medication list or a
+    search result set.
+    """
+    if not isinstance(payload, dict):
+        return 0
+    for key in ("passages", "trends"):
+        rows = payload.get(key)
+        if isinstance(rows, list):
+            return len([row for row in rows if isinstance(row, dict)])
+    return 0
+
+
+def _numbered(payload: Any, cite_start: int) -> Any:
+    """The payload with a `cite` marker on each unit, on a copy.
+
+    The recorded payload is the execution record and is not this function's to rewrite;
+    the judge gets its own copy carrying the number the answer must write.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    for key in ("passages", "trends"):
+        rows = payload.get(key)
+        if not isinstance(rows, list):
+            continue
+        counter = cite_start
+        stamped = []
+        for row in rows:
+            if isinstance(row, dict):
+                stamped.append({**row, "cite": f"^[{counter}]"})
+                counter += 1
+            else:
+                stamped.append(row)
+        return {**payload, key: stamped}
+    return payload
+
+
+def _evidence(response: dict, cite_start: int = 1) -> list[dict[str, Any]]:
+    """Tool payloads with their disclaimers and their citation numbers intact.
 
     `synthetic` and `note` travel with `get_lab_trends` and were dropped by every
     previous collector, which made an answer quoting the tool's own disclaimer look
     fabricated.
+
+    It also used to be one flat list with no numbering at all, so a marker could only be
+    graded by counting array positions in the judge's own head — and the numbering the
+    reader sees was rewritten downstream, so the count landed on the wrong unit (`00e`,
+    2026-10-28). Each unit now carries the marker the answer must write for it, numbered
+    from `cite_start`, which the caller advances by the units this payload consumed.
     """
     out: list[dict[str, Any]] = []
+    counter = cite_start
     for call in (response.get("tool_calls") or []):
         if not isinstance(call, dict):
             continue
         payload = call.get("response")
-        item = {"tool": call.get("name"), "result": payload}
+        item = {"tool": call.get("name"),
+                "result": _numbered(payload, counter)}
+        counter += _citation_units(payload)
         if isinstance(payload, dict):
             for key in ("synthetic", "note"):
                 if key in payload:
@@ -107,6 +156,24 @@ def _verified(response: dict) -> bool | None:
     """
     flag = response.get("verified")
     return flag if isinstance(flag, bool) else None
+
+
+def _tool_calls(response: dict) -> list[dict[str, Any]]:
+    """This turn's tool calls, with the payload each returned, kept per turn.
+
+    `tool_evidence` flattens every turn's calls into one list, which is what the judge
+    needs and not what a post-mortem needs: asked "which passage did `^[2]` point at on
+    turn 3", the flattened list cannot say which turn the entry came from. A free-text
+    turn's calls are not exported as spans either, so this is the only local record.
+    """
+    out: list[dict[str, Any]] = []
+    for call in response.get("tool_calls") or []:
+        if not isinstance(call, dict):
+            continue
+        out.append({"name": call.get("name"),
+                    "args": call.get("args") or {},
+                    "response": call.get("response")})
+    return out
 
 
 def _sources(response: dict) -> list[dict[str, Any]]:
@@ -254,6 +321,18 @@ def make_task(ask: Ask, *, run_tag: str,
         components = [_components(response) for response in responses]
         verified = [_verified(response) for response in responses]
         sources = [_sources(response) for response in responses]
+        tool_calls_per_turn = [_tool_calls(response) for response in responses]
+        # Numbered across the WHOLE thread: a follow-up's first passage continues where
+        # the previous turn's last unit stopped, which is the arithmetic the agent uses
+        # when it renders the same payloads for the model.
+        tool_evidence: list[dict[str, Any]] = []
+        cite_cursor = 1
+        for response in responses:
+            items = _evidence(response, cite_cursor)
+            tool_evidence.extend(items)
+            cite_cursor += sum(_citation_units(call.get("response"))
+                               for call in (response.get("tool_calls") or [])
+                               if isinstance(call, dict))
 
         output = TaskOutput(
             turn_1_response=answers[0],
@@ -265,10 +344,9 @@ def make_task(ask: Ask, *, run_tag: str,
             turn_components=components,
             turn_verified=verified,
             turn_sources=sources,
+            turn_tool_calls=tool_calls_per_turn,
             turn_1_verified=verified[0],
-            tool_evidence=[
-                item for response in responses for item in _evidence(response)
-            ],
+            tool_evidence=tool_evidence,
             session_id=session_id,
             langfuse_trace_id=turn_traces[0],
             turn_trace_ids=list(turn_traces),

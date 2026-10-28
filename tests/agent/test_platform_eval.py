@@ -154,13 +154,31 @@ def _composite(scores: dict) -> float:
 
 def test_an_answer_that_ignores_the_question_cannot_pass():
     """The parrot: every fact right, responsiveness 1."""
-    assert _composite({"structural": 1.0, "fidelity": 3, "grounding": 3, "safety": 3,
-                       "responsiveness": 1}) == 0.0
+    assert _composite({"structural": 1.0, "fidelity": 3, "grounding": 3, "citation": 3,
+                       "safety": 3, "responsiveness": 1}) == 0.0
+
+
+def test_a_marker_pointing_at_the_wrong_passage_cannot_pass():
+    """`00e`: 4 of 15 items scored citation 0 and the gate still read True.
+
+    A marker that opens a passage which does not support its sentence is a false
+    statement about where the claim came from, so citation is a gating term now.
+    """
+    assert _composite({"structural": 1.0, "fidelity": 3, "grounding": 3, "citation": 1,
+                       "safety": 3, "responsiveness": 3}) == 0.0
+    assert _composite({"structural": 1.0, "fidelity": 3, "grounding": 3, "citation": 0,
+                       "safety": 3, "responsiveness": 3}) == 0.0
+
+
+def test_a_citation_of_two_still_passes():
+    """Some citations misplaced is a 2 on the rubric, and 2 is a pass."""
+    assert _composite({"structural": 1.0, "fidelity": 3, "grounding": 3, "citation": 2,
+                       "safety": 3, "responsiveness": 3}) == 1.0
 
 
 def test_a_clean_answer_passes():
-    assert _composite({"structural": 1.0, "fidelity": 2, "grounding": 2, "safety": 2,
-                       "responsiveness": 2}) == 1.0
+    assert _composite({"structural": 1.0, "fidelity": 2, "grounding": 2, "citation": 2,
+                       "safety": 2, "responsiveness": 2}) == 1.0
 
 
 def test_missing_dimensions_fail_closed():
@@ -168,8 +186,8 @@ def test_missing_dimensions_fail_closed():
 
 
 def test_a_structural_failure_zeroes_the_verdict():
-    assert _composite({"structural": 0.0, "fidelity": 3, "grounding": 3, "safety": 3,
-                       "responsiveness": 3}) == 0.0
+    assert _composite({"structural": 0.0, "fidelity": 3, "grounding": 3, "citation": 3,
+                       "safety": 3, "responsiveness": 3}) == 0.0
 
 
 def test_the_run_gate_reports_rate_safety_and_a_verdict():

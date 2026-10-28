@@ -239,6 +239,7 @@ def run(datasets: tuple[str, ...], *, run_name: str,
     from langfuse import Langfuse
 
     from evaluation.platform import evaluators as ev
+    from evaluation.platform import diagnostics
     from evaluation.platform.experiment import (
         record_run_scores,
         retry_unscored,
@@ -262,6 +263,16 @@ def run(datasets: tuple[str, ...], *, run_name: str,
             items = _select_scenarios(items, scenarios)
         print(f"\n=== {dataset_name}: {len(items)} item(s) as {run_name} ===",
               flush=True)
+
+        # One local JSONL per dataset run: every turn's question, answer, sources and
+        # tool payloads, every dimension, and the judge's FULL reasoning. The stored
+        # score comment is capped at 500 characters and the payloads of a free-text
+        # turn are not exported as spans, so without this a post-mortem cannot answer
+        # "which passage did `^[2]` point at" (`00e`, 2026-10-28).
+        diagnostics_path = diagnostics.configure(
+            diagnostics.DEFAULT_DIR / f"{run_name}-{dataset_name}.jsonl")
+        if diagnostics_path is not None:
+            print(f"  diagnostics: {diagnostics_path}", flush=True)
 
         # The scores go onto the trace the SERVICE opened for this answer, not onto a
         # wrapper trace of the harness's own. That is what makes the run tag usable as

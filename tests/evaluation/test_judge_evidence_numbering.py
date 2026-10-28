@@ -1,14 +1,13 @@
 """The judge grades a marker against the numbering the reader clicked.
 
-`/ehr` renumbers an answer's markers to first-appearance order and publishes `sources`
-in exactly that order, so `^[3]` in the answer resolves to entry 3 of the source list a
-clinician sees. The judge was handed the raw tool payloads instead, whose passages keep
-the order the tools returned them in — and with the discharge instructions third in one
-array and fourth in the other, a correct answer scored `citation: 1` on three
-consecutive Gate 1 canaries (2026-10-23).
+`/ehr` publishes `sources` carrying the same number the answer's marker uses, and since
+2026-10-28 that number is never rewritten (`citations._renumber_citations`). Both halves
+travel with the turn: the published list states the numbering beside the answer, and the
+raw tool evidence carries a `cite` marker on every passage and analyte it shows.
 
-These tests pin the alignment: the published numbering travels with the turn, the prompt
-states it beside the answer, and the raw evidence is labelled as a different order.
+The history this replaced: markers used to be renumbered to first-appearance order while
+the raw payloads kept the order the tools returned, so a correct answer scored
+`citation: 1` on three consecutive Gate 1 canaries (2026-10-23).
 """
 
 from __future__ import annotations
@@ -38,12 +37,18 @@ OUTPUT = {
     "turn_responses": ["Summary with ^[3] on instructions.", "Taper: ^[1]."],
     "turn_sources": [SOURCES, [{"cite": 1, "section": "discharge_medications",
                                 "text": "oxycodone SR 20 mg q12h for five days."}]],
+    # What `task._evidence` now builds: every unit carries the marker the answer must
+    # write, numbered across the whole thread.
     "tool_evidence": [
         {"tool": "rag_search_sections", "result": {"passages": [
-            {"section": "history_of_present_illness", "text": "A 61-year-old woman."},
-            {"section": "brief_hospital_course", "text": "Admitted for rehab."},
-            {"section": "discharge_diagnosis", "text": "Status post knee replacement."},
-            {"section": "discharge_instructions", "text": "Continue Coumadin."},
+            {"cite": "^[1]", "section": "history_of_present_illness",
+             "text": "A 61-year-old woman."},
+            {"cite": "^[2]", "section": "brief_hospital_course",
+             "text": "Admitted for rehab."},
+            {"cite": "^[3]", "section": "discharge_diagnosis",
+             "text": "Status post knee replacement."},
+            {"cite": "^[4]", "section": "discharge_instructions",
+             "text": "Continue Coumadin."},
         ]}},
     ],
 }
@@ -57,23 +62,23 @@ def test_the_published_numbering_travels_with_each_turn():
     assert "[4] discharge_diagnosis: Status post knee replacement." in prompt
 
 
-def test_a_marker_is_graded_against_the_published_list_not_the_raw_array():
-    """The regression: the raw array puts the diagnosis third, the answer's list fourth.
+def test_every_raw_unit_carries_the_marker_the_answer_must_write():
+    """The raw block is now directly checkable: `"cite": "^[4]"` IS the instructions.
 
-    Entry [3] of the published list is the instructions passage while the third raw
-    passage is the diagnosis — so a judge reading only the raw evidence sees a swap that
-    is not there.
+    A judge no longer has to count array positions, and a marker can be resolved to a
+    named passage in one read.
     """
     prompt = build_user_prompt(INPUT, OUTPUT)
-
-    published = prompt.split("TURN 1 — THE NUMBERING THIS ANSWER USES")[1]
-    published = published.split("TURN 2")[0]
     raw = prompt.split("RAW TOOL EVIDENCE")[1]
 
-    assert "[3] discharge_instructions" in published
-    assert raw.index("discharge_diagnosis") < raw.index("discharge_instructions"), (
-        "the raw array still lists the diagnosis before the instructions")
-    assert "numbering the answer cites" in prompt
+    assert '"cite": "^[3]"' in raw
+    assert '"cite": "^[4]"' in raw
+    # The fourth raw passage is the instructions, and it says so.
+    instructions = raw.split('"cite": "^[4]"')[1]
+    assert "discharge_instructions" in instructions
+    # The prompt tells the judge what the marker means, in the same words the payload
+    # uses, so the two cannot drift into different conventions.
+    assert '"cite": "^[10]"' in prompt
 
 
 def test_the_second_turn_gets_its_own_numbering():

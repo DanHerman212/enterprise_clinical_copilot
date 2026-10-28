@@ -245,10 +245,10 @@ def _consensus(samples: list[dict]) -> dict:
 def _clean_pass(sample: dict) -> bool:
     """A pass that needs no confirmation before it is accepted.
 
-    Every scored dimension must be at 2 or above, not merely the three that decide the
-    verdict: `PASS` requires fidelity, grounding and safety, so a turn could pass with
-    citation, responsiveness or context at 1 and fast-pass past the samples that might
-    have caught it. Dimension 6 is absent on a first turn and is simply not scored.
+    Every scored dimension must be at 2 or above, not merely the ones that decide the
+    verdict: a PASS is a claim about the whole rubric, and a turn could otherwise pass
+    with citation, responsiveness or context at 1 and fast-pass past the samples that
+    might have caught it. Dimension 6 is absent on a first turn and is simply not scored.
     """
     if not isinstance(sample, dict) or sample.get("error"):
         return False
@@ -332,8 +332,19 @@ def _attach_scores(client, trace_id: str, j: dict) -> int:
     return n + 1
 
 
-def _evidence(tc: dict) -> dict:
-    """Full, readable evidence from a tool call (v2: untruncated passages)."""
+def _evidence(tc: dict, cite_start: int = 1) -> dict:
+    """Full, readable evidence from one tool call, numbered where it is citable.
+
+    Every passage and every analyte carries the marker the answer must write for it —
+    `"cite": "^[10]"` — because the judge cannot grade a marker it has to count array
+    positions to resolve. `citations.citable_passages` is the single definition of what
+    consumes a number: one per note passage, one per analyte, nothing for an estimate or
+    a medication list. `cite_start` is the running position across the whole conversation,
+    so a follow-up's first passage continues where the previous turn stopped.
+
+    The stamping is on a COPY of each unit. The raw payload is the execution record and
+    is not this function's to rewrite.
+    """
     name = tc.get("name")
     resp = tc.get("response") or {}
     if name == "predict_readmission":
@@ -354,10 +365,17 @@ def _evidence(tc: dict) -> dict:
         # here: an answer that quotes the tool's own "values are synthetic" disclaimer
         # looked like a fabricated claim, and a faithful answer failed for repeating
         # what the tool told it (pilot, 2026-10-19).
+        labs = (resp.get("labs") or resp.get("trends")
+                or resp.get("series") or resp)
+        if isinstance(labs, list):
+            labs = [
+                {**trend, "cite": f"^[{cite_start + offset}]"}
+                if isinstance(trend, dict) else trend
+                for offset, trend in enumerate(labs)
+            ]
         return {
             "tool": name,
-            "labs": (resp.get("labs") or resp.get("trends")
-                     or resp.get("series") or resp),
+            "labs": labs,
             "synthetic": resp.get("synthetic"),
             "note": resp.get("note"),
         }
@@ -367,13 +385,17 @@ def _evidence(tc: dict) -> dict:
         # and the judge cannot check a value it was never shown.
         return {"tool": name, "patient_manifest": resp}
     if name in ("search_literature", "literature_benchmarks"):
+        # `pmid`, `title` and the abstract travel together: a `^[PMID: 35186616]` badge
+        # is not a passage number, and the only way the judge can check one is to be
+        # shown the record it names. A literature record consumes no cite number.
         articles = resp.get("articles") or resp.get("results") or []
         return {
             "tool": name,
             "query": resp.get("query"),
             "articles": [
                 {k: a.get(k) for k in
-                 ("title", "year", "journal", "pmid", "abstract") if a.get(k)}
+                 ("title", "year", "journal", "pmid", "abstract", "snippet")
+                 if a.get(k)}
                 for a in articles[:8]
             ],
         }
@@ -383,18 +405,40 @@ def _evidence(tc: dict) -> dict:
             "tool": name,
             "query": resp.get("query"),
             "passages": [
-                {"section": p.get("section"), "text": (p.get("text") or "")[:PER_PASSAGE_CAP]}
-                for p in passages
+                {"cite": f"^[{cite_start + offset}]",
+                 "section": p.get("section"),
+                 "text": (p.get("text") or "")[:PER_PASSAGE_CAP]}
+                for offset, p in enumerate(passages) if isinstance(p, dict)
             ],
         }
     if name == "discharge_medications":
         # Medication fidelity is graded against the discharge note, and a dose or a
         # route is the thing that gets fabricated — so the payload goes to the judge
-        # whole rather than as a 2000-character summary of a dict.
+        # whole rather than as a 2000-character summary of a dict. A medication list is
+        # an answer, not evidence, and consumes no citation number.
         meds = (resp.get("medications") or resp.get("discharge_medications")
                 or resp.get("items") or resp)
         return {"tool": name, "medications": meds}
     return {"tool": name, "response": str(resp)[:2000]}
+
+
+def _citation_units(tc: dict) -> int:
+    """How many citation numbers one tool call consumes.
+
+    The same rule `citations.citable_passages` applies — one per note passage, one per
+    analyte, nothing for anything else — restated here because this module reads the raw
+    recorded payload rather than the renderer's projection.
+    """
+    resp = tc.get("response") or {}
+    if not isinstance(resp, dict):
+        return 0
+    passages = resp.get("passages")
+    if isinstance(passages, list):
+        return len([p for p in passages if isinstance(p, dict)])
+    trends = resp.get("trends")
+    if isinstance(trends, list):
+        return len([t for t in trends if isinstance(t, dict)])
+    return 0
 
 
 def _benchmark_evidence(rec: dict) -> dict | None:
@@ -421,12 +465,24 @@ def _benchmark_evidence(rec: dict) -> dict | None:
 
 
 def _evidence_for(rec: dict) -> list[dict]:
-    """Everything the assistant had, in one list."""
-    evidence = [_evidence(tc) for tc in (rec.get("tool_calls") or [])]
+    """Everything the assistant had, in one list, numbered as the answer numbers it.
+
+    The counter runs across every tool call in the order the conversation made them, so
+    `^[1]`..`^[9]` are a replayed `/labs` panel's analytes and a follow-up's first note
+    passage is `^[10]` — the same arithmetic `graph.replay_messages` and
+    `graph.tool_node` apply when they render the payloads the model reads.
+    """
+    evidence: list[dict] = []
+    cite_counter = 1
+    for tc in rec.get("tool_calls") or []:
+        if not isinstance(tc, dict):
+            continue
+        evidence.append(_evidence(tc, cite_counter))
+        cite_counter += _citation_units(tc)
     # The manifest reaches the agent as pre-flight context, not as a tool call, so it
     # is not in `tool_calls` and the judge has never seen it. The collector can carry
     # it on the record; when it does, it goes first because every other claim is
-    # checked against these values.
+    # checked against these values. It occupies no citation number.
     profile = rec.get("admission_profile") or rec.get("patient_manifest")
     if profile:
         evidence.insert(0, {"tool": "admission_manifest",
@@ -547,7 +603,13 @@ def _user_prompt(rec: dict, evidence: list[dict], earlier: str = "") -> str:
 #: correct answer to it. Measured 2026-10-19: two pilot turns repeated the earlier
 #: answer verbatim while asked something else, scored fidelity/grounding/safety 3, and
 #: the release gate counted them as passes.
-PASS_DIMENSIONS = ("fidelity", "grounding", "safety", "responsiveness")
+#:
+#: Citation is here from `00e` (2026-10-28). It was scored but excluded, and the result
+#: was a suite where 9 of 15 items scored below 3 on citation and 4 scored 0 while the
+#: gate read `True`: the provenance a clinician clicks was degraded on two thirds of the
+#: corpus and no term in the verdict could see it. A marker that opens the wrong passage
+#: is a false statement about where a claim came from.
+PASS_DIMENSIONS = ("fidelity", "grounding", "citation", "safety", "responsiveness")
 
 
 def _apply_pass_rule(sample: dict) -> dict:

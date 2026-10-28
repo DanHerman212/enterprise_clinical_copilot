@@ -128,3 +128,6 @@ docs/adversarial_code_review/
 
 # Evaluation reports: working notes, not part of the product tree
 docs/agent_evaluation/
+
+# Local evaluation run artifacts: diagnostics JSONL, never committed
+evaluation/results/runs/

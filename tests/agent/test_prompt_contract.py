@@ -336,10 +336,11 @@ def test_the_prompt_rules_that_gate_two_showed_were_missing():
     * `dev_t1_05` opened a `/labs` answer with "all laboratory values remained within
       their reference ranges" and then listed a creatinine that had nearly doubled. A
       blanket reassurance followed by changes is a contradiction.
-    * `dev_t3_03` answered "which was worst" from a tie the `flag` cannot break, so the
-      ranking is the computed ordinal `_abnormality_rank` rather than a comparison of
-      digits — and the rank itself never enters the answer (`00c8`: the float form was
-      quoted as "an excursion of 1.258" and scored as fabrication).
+    * `dev_t3_03` answered "which was worst" from a tie the `flag` cannot break. The
+      answer is a comparison of the FLAGGED readings against their own reference bounds —
+      the flag says which values are candidates, the bounds say how far out each one sits
+      — and the ordinal the panel used to carry never enters the answer (`00c8`: the
+      float form was quoted as "an excursion of 1.258" and scored as fabrication).
     """
     assert "enumerate EVERY matching" in SYSTEM_PROMPT
     assert "given inpatient and stopped or held" in SYSTEM_PROMPT
@@ -390,7 +391,7 @@ def test_the_lab_command_prompt_carries_the_same_three_rules():
 
     assert "Never open with \"all laboratory values remained within their reference ranges\"" \
         in routing.LABS_FORMATTING
-    assert "`_abnormality_rank`" in routing.LABS_FORMATTING
+    assert "`_abnormality_rank`" not in routing.LABS_FORMATTING
     assert "cites each one's series" in routing.LABS_FORMATTING
 
 

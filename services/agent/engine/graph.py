@@ -93,10 +93,6 @@ from services.agent.engine.prompts import SYSTEM_PROMPT
 from services.agent.telemetry import observability
 from services.agent.routing import routing
 from services.agent.routing import encounter
-# Imported as a module, not for a name: `run_turn` takes a parameter called
-# `admission_context` (the rendered block), which shadows any bare name here. The
-# profile behind that block is read through `admission_context.current_profile()`.
-from services.agent.routing import admission_context
 from services.agent.telemetry import stages
 
 logger = logging.getLogger(__name__)
@@ -520,7 +516,7 @@ def _freetext_allowed(risk_driver_question: bool,
 
     A third condition REPLACES the set rather than adding to it: a question that asks for
     laboratory values to be RANKED or COMPARED (`routing.asks_about_lab_ranking`). The
-    ranking is the ordinal `_abnormality_rank` the panel carries, and no other tool
+    comparison is made on the panel itself, and no other tool
     contributes to it — a note search returns prose that mentions laboratory numbers
     incidentally, which is how `dev_t3_03` came back on Gate 2 with a hemoglobin of 10.8
     and a sodium of 132 after reporting 10.0 and 136 from the series on the previous turn. So the turn is
@@ -791,13 +787,12 @@ def build_graph(
         last = state["messages"][-1]
         calls = last.tool_calls if isinstance(last, AIMessage) else []
         # `_presented_for_model` rewrites the estimate into the strings the widget
-        # prints, and ranks a lab panel by how far each analyte sits outside its interval.
-        # Projected rather than raw: the model never holds a float it could paste, and
-        # never ranks values it was told not to compare.
+        # prints and withholds its contribution magnitudes. Projected rather than raw:
+        # the model never holds a float it could paste.
 
         messages, recorded = await _execute_tool_calls(
             toolbox, calls, on_event, guard=guard,
-            project=lambda name, payload: _presented_for_model(name, payload),
+            project=_presented_for_model,
             # Everything this turn has already spent, so the budget is a budget for the
             # turn rather than for one iteration of the loop around it.
             already_called=list(state.get("tool_calls") or []),
@@ -1183,8 +1178,8 @@ async def ask(
         # the turn's evidence and a lab chip under an answer about utilization.
         lab_driver_question=routing.asks_about_a_lab_analyte(question),
         # And whether this is a ranking question, which REPLACES the tool set rather than
-        # adding to it: the ranking is the panel's own ordinal `_abnormality_rank`, and a
-        # note search answers it with incidental figures that contradict the series
+        # adding to it: the comparison is made on the panel the turn holds, and a note
+        # search answers it with incidental figures that contradict the series
         # (`dev_t3_03`, Gate 2 2026-10-27).
         lab_ranking_question=lab_ranking_question,
         lab_panel_in_transcript=lab_panel_in_transcript,
@@ -1337,20 +1332,9 @@ def _replayed_tool_messages(
     It also goes through the same PROJECTION a live one does, which is the half this
     function was missing. `tool_node` renders `project(payload)`; this rendered the raw
     payload, so a follow-up turn saw a different result from the turn that fetched it.
-    Two things the model is told to rely on were absent from every replayed turn:
-
-    * the ordinal `_abnormality_rank` on a laboratory panel, which is the only ranking
-      `SYSTEM_PROMPT` permits — "the ranking is decided for you and arrives as
-      `_abnormality_rank` ... read the rank; never compare the values or the interval
-      bounds yourself";
-    * `probability_display` / `threshold_display` in place of the estimate's floats,
-      which is what keeps a number the model could paste out of its hands.
-
-    `dev_t3_03` failed on Gate 2 twice for exactly this. On the 2026-10-28 retest
-    (`00c7`) the follow-up asked "which lab was worst at discharge?", the panel in the
-    transcript carried no ranking at all, and the model did the one thing the prompt
-    forbids — compared the values itself — and named hemoglobin, where the panel ranks red
-    blood cells first.
+    What the projection adds is `probability_display` / `threshold_display` in place of
+    the estimate's floats, which is what keeps a number the model could paste out of its
+    hands — a replayed estimate without them handed the model the raw score.
     """
     asked = AIMessage(
         content="",

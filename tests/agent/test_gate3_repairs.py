@@ -14,8 +14,6 @@ Each is pinned here against its own mechanism, with no model and no network.
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
 from services.agent.engine.mcp_client import (
@@ -84,28 +82,11 @@ def test_the_chip_generator_asks_about_the_top_increasing_factor():
 
     This used to assert the opposite: an increasing factor the patient's profile recorded
     as zero produced no chip at all, so the next turn was never asked to explain a driver
-    the record contradicts. `absent_in_manifest` and the profile plumbing it needed are
-    gone, so the chip is offered again and this test says so rather than pretending
-    otherwise.
+    the record contradicts. `absent_in_manifest`, the profile ContextVar it read and every
+    caller of both are gone, so the chip is offered again and this test says so rather
+    than pretending otherwise.
     """
-    admission_context.set_current_profile(MANIFEST)
-    try:
-        driver = followups._increasing_driver(RISK)
-    finally:
-        admission_context.set_current_profile(None)
-
-    assert driver == "recent ED visits"
-
-
-def test_the_chip_generator_still_asks_about_a_factor_the_patient_has():
-    async def run() -> str:
-        admission_context.set_current_profile({"recent_ed_visits": "2"})
-        try:
-            return followups._increasing_driver(RISK)
-        finally:
-            admission_context.set_current_profile(None)
-
-    assert asyncio.run(run()) == "recent ED visits"
+    assert followups._increasing_driver(RISK) == "recent ED visits"
 
 
 # --- 2. the marker is printed ready to copy ----------------------------------------

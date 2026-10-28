@@ -308,18 +308,17 @@ _CARE_FOLLOW_UP = ("What outpatient follow-up appointments or clinic visits are 
 _MED_REGIMEN = "What are the discharge dosing instructions for {first} and {second}?"
 _RISK_DRIVER = "Why does {driver} increase this patient's readmission risk?"
 
-#: The same question about a PROTECTIVE factor, which is the fallback when every factor
-#: the model ranks upward is one the patient does not have. It asks about the same model
-#: output from the direction that is actually true of this record.
+#: The same question about a PROTECTIVE factor, offered when the payload names no
+#: upward driver at all. It asks about the same model output from the direction that is
+#: true of this record.
 _RISK_PROTECTIVE = "Why does {driver} lower this patient's readmission risk?"
 
 #: The last resort: questions anchored to what the record demonstrably contains, offered
 #: only when every template above produced nothing.
 #:
 #: `/ehr` had no chip at all on Gate 3 (`00d1`, `holdout_t2_01`): its note overview was the
-#: command's own answer, so the note template is skipped for it by design; the record's
-#: medication plan is not among the sections it returned; its only "increases" factor is
-#: one the manifest says the patient does not have and the guardrail now refuses. Nothing
+#: command's own answer, so the note template is skipped for it by design, and the record's
+#: medication plan is not among the sections it returned. Nothing
 #: was left, `follow_ups=True` returned an empty list, and the evaluation lost the item as
 #: unscored. An affordance row is a promise that something is worth asking next; a record
 #: with a hospital course or a medication list always has that.
@@ -523,9 +522,9 @@ def _candidates(*, state: dict[str, Any], scope: str | None, question: str,
         if chip:
             chips.append(chip)
         else:
-            # Every increasing factor is one this patient does not have. The protective
-            # directions are still true of the record, so the same surface asks about one
-            # of those rather than falling silent.
+            # No upward driver in the payload. The protective directions are still true of
+            # the record, so the same surface asks about one of those rather than falling
+            # silent.
             chip = _filled(_RISK_PROTECTIVE, driver=_decreasing_driver(risk))
             if chip:
                 chips.append(chip)
@@ -574,8 +573,8 @@ def _record_anchors(state: dict[str, Any], *, text: str,
     Deliberately few, and each tied to evidence this turn already retrieved: a course
     question only where a hospital course or diagnosis is in the transcript, a dosing
     question only for a drug the note names, a panel question only where a panel exists.
-    An anchor offered without its evidence would be the same defect as a chip about a
-    factor the patient does not have, one layer down.
+    An anchor offered without its evidence is an affordance the record cannot honour, one
+    layer down from a chip whose question has no answer.
     """
     anchors: list[str] = []
     sections = _sections(state)

@@ -30,38 +30,12 @@ is worse than one that knows — but far better than a turn that fails.
 
 from __future__ import annotations
 
-import contextvars
 import logging
 from typing import Any
 
 from services.agent.routing import encounter
 
 _LOG = logging.getLogger(__name__)
-
-#: The profile the block was rendered from, for the layers that must cross-reference it.
-#:
-#: `predict_readmission` returns feature CONTRIBUTIONS, which are relative to a population
-#: baseline and say nothing about whether the patient has the feature at all: on Gate 3
-#: (`00d`) the model listed `recent_ed_visits` as "the primary driver increasing this
-#: risk" for a record whose manifest says `recent_ed_visits: 0`. The projection needs the
-#: recorded value to say so, and the chip generator needs it to stop asking the product's
-#: own question about a factor the patient does not have.
-#:
-#: A ContextVar for the same reason `encounter` is one: it is per-turn state, set by the
-#: pre-flight that reads the row, and read by layers that never see the request.
-_CURRENT_PROFILE: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
-    "admission_profile", default=None)
-
-
-def set_current_profile(profile: dict[str, Any] | None) -> None:
-    """Record this turn's profile, or clear it when the turn has none."""
-    _CURRENT_PROFILE.set(profile if isinstance(profile, dict) and profile else None)
-
-
-def current_profile() -> dict[str, Any] | None:
-    """The profile this turn is running against, or None when there is none."""
-    return _CURRENT_PROFILE.get()
-
 
 #: The MCP tool this calls. It is registered on the server so the pre-flight call
 #: can reach it, and hidden from the model's function declarations so the model
@@ -186,9 +160,6 @@ async def hydrate(box: Any, hadm_id: int | None) -> str:
     no profile from inheriting the previous turn's answer.
     """
     encounter.set_current(None)
-    # Cleared with the encounter type, and for the same reason: a turn with no profile
-    # must not inherit the previous turn's row.
-    set_current_profile(None)
     if not hadm_id or box is None:
         return ""
     try:
@@ -207,5 +178,4 @@ async def hydrate(box: Any, hadm_id: int | None) -> str:
         return ""
     profile = payload.get("profile") or {}
     encounter.set_current(encounter.classify(profile))
-    set_current_profile(profile)
     return render(hadm_id, profile)

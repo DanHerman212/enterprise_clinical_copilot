@@ -1,12 +1,10 @@
 """Replayed tool results carry the same projection a live result does.
 
 `tool_node` renders `_presented_for_model(payload)`; the replay path rendered the raw
-payload, so a follow-up turn saw a *different* result from the turn that fetched it. Two
-things the prompt tells the model to rely on were missing from every replayed turn:
-
-  - the ordinal `_abnormality_rank` on a laboratory panel — the only ranking the prompt
-    permits, and the field `dev_t3_03` needs on Turn 2;
-  - `probability_display` / `threshold_display` in place of the estimate's floats.
+payload, so a follow-up turn saw a *different* result from the turn that fetched it. The
+projection's job is to withhold the estimate's floats — `probability_display` /
+`threshold_display` in their place — so a replayed estimate carried the raw score the
+live turn never showed the model.
 
 Offline: a toolbox whose `call` returns a stored payload, and the real replay path.
 """
@@ -45,9 +43,8 @@ def _body(messages) -> str:
 
 
 #: A panel in the shape `get_lab_trends` returns. Red cells are the furthest outside their
-#: interval (1.26 reference-range widths), then RDW (1.00), then hemoglobin (0.57) — so a
-#: model reading the rank names red cells first, and a model reading the digits is free to
-#: get it wrong.
+#: interval (1.26 reference-range widths), then RDW (1.00), then hemoglobin (0.57) — the
+#: order the prompt asks a ranking answer to derive from the flags and the bounds.
 RONCO_PANEL = {
     "hadm_id": 90000108,
     "trends": [

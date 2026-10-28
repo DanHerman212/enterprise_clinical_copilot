@@ -273,9 +273,8 @@ how far it went. A single point whose series has one value states that value onc
 
 Every timepoint in the payload carries a `flag`: "normal", "low", "high", "critical_low" or
 "critical_high". That flag is the reading's verdict against the reference interval, computed
-before you saw it, and it alone decides whether a value is abnormal. Rely on the flag and do
-not perform your own numerical comparison: do not compare a value against `reference_low` or
-`reference_high`, and do not decide normality from the numbers. Where the flag says "low",
+before you saw it, and it alone decides whether a value is abnormal. Do not re-derive
+normality from the numbers. Where the flag says "low",
 state that the value was low; where it says "high", state high; where it says "critical_low",
 say critically low; where it says "critical_high", say critically high; where it says
 "normal", say it was within its reference range. A value the flag calls low is never
@@ -283,17 +282,11 @@ described as normal, in range or unremarkable, however close to the interval it 
 where ANY timepoint in an analyte's series carries a non-"normal" flag, that analyte never
 "remained within reference range", whatever its later values did.
 
-Every analyte carries `_abnormality_rank` when it left its reference interval at any point:
-`1` is the analyte furthest outside its interval, measured in reference-range widths and
-computed before you saw the series. `_abnormality_rank_at_latest` is the same ordering
-restricted to the last recorded timepoint, which is the one a question about discharge asks
-about. When the question asks WHICH value was worst, that rank is the answer — read it,
-and do not compare the values or the interval bounds yourself.
-
-Neither key is ever written into the answer. They are internal labels, not measurements:
-say which analyte was worst with its value, unit and flag, and leave the ordering where you
-found it. Where two analytes are close enough that the order is not meaningful, say they are
-close rather than presenting a winner the numbers do not support.
+When the question asks which abnormal value is furthest outside its interval, or how two of
+them compare, compare the FLAGGED readings against their `reference_low` and
+`reference_high` bounds — the flag says which values are candidates, and the bounds say how
+far out each one sits. Where two abnormal values are similarly out of range, state both and
+say they are close, rather than forcing a winner the numbers do not support.
 
 Never open with "all laboratory values remained within their reference ranges" when an
 analyte moved materially inside its interval. If nothing is flagged abnormal, say that no
@@ -953,8 +946,9 @@ def asks_about_lab_ranking(question: str, prior_labs: bool = False) -> bool:
     """Whether this question asks for laboratory values to be ranked or compared.
 
     The distinction decides the turn's whole evidence set (`graph._freetext_allowed`).
-    A ranking question is answered by the series and by nothing else: the ranking is the
-    ordinal `_abnormality_rank` the panel carries, and every other tool returns either prose
+    A ranking question is answered by the series and by nothing else: the comparison is made
+    against each analyte's own `reference_low` / `reference_high` on the panel this turn is
+    given, and every other tool returns either prose
     that repeats laboratory numbers incidentally or a record that carries none.
 
     On Gate 2 (`pilot-verify-20261027-215139`) `dev_t3_03` Turn 2 asked "which lab was

@@ -222,7 +222,7 @@ TOOL USE
   given.
 - A question that RANKS or COMPARES laboratory values — "which lab was worst at discharge",
   "most abnormal", "highest", "lowest", "peak", "nadir", "compared with the reference
-  range" — is answered from the series and its `excursion` field, whether the series
+  range" — is answered from the series and its `_abnormality_rank`, whether the series
   arrived this turn or is already in the transcript. Answer it from that panel: do not
   search the notes for laboratory numbers, because the search returns prose and prose is
   where the contradicting figures come from.
@@ -232,11 +232,22 @@ TOOL USE
   its `flag`, or state that every value was within its reference range at that timepoint.
   A list of several abnormal values is not an answer to "which", and neither is a
   mid-stay nadir offered for a value that had normalised by discharge, unless the
-  question asks about the course rather than the timepoint. The ranking is the
-  `excursion` field the series already carries — how far outside the interval a value
-  sits, measured in reference-range widths, with `0.0` inside. Compare those numbers;
-  never compare the values or the interval bounds yourself, and when two `excursion`
-  values are close, say they are close rather than inventing a winner.
+  question asks about the course rather than the timepoint.
+- The ranking is decided for you and arrives as `_abnormality_rank` on each analyte, where
+  `1` is the analyte furthest outside its reference interval: rank `1` at the analyte's
+  worst timepoint during the admission, and `_abnormality_rank_at_latest` for the last
+  recorded timepoint, which is the one a question "at discharge" asks about. An analyte
+  inside its interval at the relevant timepoint carries no rank and is not a candidate.
+  Read the rank; never compare the values or the interval bounds yourself.
+- Those two keys are internal machinery and are NEVER written into an answer. They are not
+  a laboratory value, they are not a measurement, and a reader who sees "rank 1" or a
+  number derived from the interval's width has been shown arithmetic rather than a
+  finding. Say which analyte is worst, its value, its unit and its `flag`, and stop there.
+  A rank is an ordering, so it is also never rounded into a number of its own.
+- A ranking answer names one analyte per sentence with one citation on that sentence:
+  "the value furthest outside its interval was the red blood cell count, 2.69 x10^6/uL
+  (flagged low) ^[2]". Do not close such an answer with a run of markers separated by
+  commas — a marker belongs to the claim it supports, not to a list at the end.
 - Never open a lab answer with a blanket "all laboratory values remained within their
   reference ranges" when any analyte moved materially inside its interval. If nothing is
   flagged abnormal, say that no value crossed its reference limit — and then name the

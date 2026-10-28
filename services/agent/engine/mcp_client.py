@@ -711,8 +711,13 @@ def _excursion(low: Any, high: Any, value: Any) -> float | None:
     Zero inside the interval, positive outside, and normalised by the interval's own
     width — a plain distance ranks a wide interval above a narrow one however abnormal
     the reading is. `followups._excursion` is the same rule for the chip text; this is
-    the copy the model reads, and the two are the same number because they are the same
-    definition rather than because they agree.
+    the copy the projection ranks with.
+
+    INTERNAL. The number this returns never reaches the model and never reaches an answer:
+    it exists to order the panel, and the order is what `_presented_labs` publishes. It
+    was attached to every timepoint until 2026-10-28, and the model quoted it as a
+    clinical measurement — "an excursion of 1.258" — which the judge, holding only what
+    the tool returned, scored as fabrication.
     """
     if any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in (low, high, value)):
         return None
@@ -724,46 +729,83 @@ def _excursion(low: Any, high: Any, value: Any) -> float | None:
     return 0.0
 
 
+#: The key an out-of-range analyte carries in the model's copy of a panel: `1` is the
+#: analyte furthest outside its reference interval. An ORDINAL, never a quantity.
+ABNORMALITY_RANK = "_abnormality_rank"
+
+#: The same ordering restricted to the last recorded timepoint — the one "at discharge"
+#: asks about. Two keys rather than one because the two questions are different: an
+#: analyte can be the worst of the admission and normal by discharge, and the prompt
+#: already forbids offering a mid-stay nadir as the answer to a discharge question.
+ABNORMALITY_RANK_AT_LATEST = "_abnormality_rank_at_latest"
+
+
 def _presented_labs(payload: Any) -> Any:
-    """Lab trends as the model may see them: every timepoint annotated with `excursion`.
+    """Lab trends as the model may see them: out-of-range analytes carry an ordinal rank.
 
-    Why this is computed here rather than by the model. `dev_t3_03` asked which value was
-    "furthest outside its reference range"; haemoglobin was `low`, and so were the red
-    cells and the RDW, so the per-timepoint `flag` could not rank them and the model
-    picked one. The prompt forbids re-deriving the ranking from the digits — correctly,
-    because a digit the model is holding is a digit it can misread — so the ranking has
-    to be computed before the model sees the panel. This is that computation.
+    Why the ranking is computed here rather than by the model. `dev_t3_03` asked which
+    value was "furthest outside its reference range"; haemoglobin was `low`, and so were
+    the red cells and the RDW, so the per-timepoint `flag` could not rank them and the
+    model picked one. The prompt forbids re-deriving the ranking from the digits —
+    correctly, because a digit the model is holding is a digit it can misread — so the
+    ordering is decided before the model sees the panel.
 
-    Applied to the model's copy only. The recorded call keeps what the tool returned, so
-    the execution record and the caller's payload still say exactly what the series said.
+    What is published is the ORDER and not the arithmetic. Until 2026-10-28 the deviation
+    itself was attached to every timepoint as `excursion` / `excursion_max`, and on the
+    `00c8` retest the model quoted it in prose — "an excursion of 1.258" — which is not a
+    laboratory result and which the judge, reading the tool's own output, could only score
+    as invented. A rank cannot be mistaken for a measurement: it is an integer, it says
+    `1` rather than `1.258`, and the prompt names it as machinery that never enters an
+    answer. The deviation still decides the order; it just stays in this function.
+
+    Ties break on the analyte's label, so the same panel always ranks the same way.
+    Applied to the model's copy only: the recorded call keeps what the tool returned.
     """
     if not isinstance(payload, dict):
         return payload
     trends = payload.get("trends")
     if not isinstance(trends, list):
         return payload
+
+    # One pass to score, a second to publish: a rank is a position among the analytes, so
+    # it cannot be assigned until every analyte has been scored.
+    scores: list[tuple[int, float, float, str]] = []
+    for index, trend in enumerate(trends):
+        if not isinstance(trend, dict):
+            continue
+        low, high = trend.get("reference_low"), trend.get("reference_high")
+        peak, latest = 0.0, 0.0
+        points = [point for point in trend.get("series") or [] if isinstance(point, dict)]
+        for point in points:
+            deviation = _excursion(low, high, point.get("value"))
+            if deviation is not None:
+                peak = max(peak, deviation)
+        if points:
+            deviation = _excursion(low, high, points[-1].get("value"))
+            latest = deviation if deviation is not None else 0.0
+        label = str(trend.get("label") or trend.get("key") or "")
+        scores.append((index, peak, latest, label))
+
+    # Furthest outside first; the label breaks a tie so the order is reproducible.
+    def _rank(rows: list[tuple[int, float, float, str]], position: int) -> dict[int, int]:
+        out_of_range = [row for row in rows if row[position] > 0]
+        out_of_range.sort(key=lambda row: (-row[position], row[3]))
+        return {row[0]: rank for rank, row in enumerate(out_of_range, start=1)}
+
+    peak_ranks = _rank(scores, 1)
+    latest_ranks = _rank(scores, 2)
+
     presented = dict(payload)
     rows = []
-    for trend in trends:
+    for index, trend in enumerate(trends):
         if not isinstance(trend, dict):
             rows.append(trend)
             continue
         row = dict(trend)
-        low, high = trend.get("reference_low"), trend.get("reference_high")
-        points = []
-        peak = 0.0
-        for point in trend.get("series") or []:
-            if not isinstance(point, dict):
-                points.append(point)
-                continue
-            excursion = _excursion(low, high, point.get("value"))
-            annotated = dict(point)
-            if excursion is not None:
-                annotated["excursion"] = excursion
-                peak = max(peak, excursion)
-            points.append(annotated)
-        row["series"] = points
-        row["excursion_max"] = round(peak, 3)
+        if index in peak_ranks:
+            row[ABNORMALITY_RANK] = peak_ranks[index]
+        if index in latest_ranks:
+            row[ABNORMALITY_RANK_AT_LATEST] = latest_ranks[index]
         rows.append(row)
     presented["trends"] = rows
     return presented

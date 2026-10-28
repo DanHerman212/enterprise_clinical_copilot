@@ -4,7 +4,7 @@
 payload, so a follow-up turn saw a *different* result from the turn that fetched it. Two
 things the prompt tells the model to rely on were missing from every replayed turn:
 
-  - `excursion` / `excursion_max` on a laboratory panel — the only ranking the prompt
+  - the ordinal `_abnormality_rank` on a laboratory panel — the only ranking the prompt
     permits, and the field `dev_t3_03` needs on Turn 2;
   - `probability_display` / `threshold_display` in place of the estimate's floats.
 
@@ -46,8 +46,8 @@ def _body(messages) -> str:
 
 #: A panel in the shape `get_lab_trends` returns. Red cells are the furthest outside their
 #: interval (1.26 reference-range widths), then RDW (1.00), then hemoglobin (0.57) — so a
-#: model ranking by `excursion_max` names red cells first, and a model reading the digits
-#: is free to get it wrong.
+#: model reading the rank names red cells first, and a model reading the digits is free to
+#: get it wrong.
 RONCO_PANEL = {
     "hadm_id": 90000108,
     "trends": [
@@ -61,7 +61,7 @@ RONCO_PANEL = {
 }
 
 
-def test_a_replayed_lab_panel_carries_excursion_and_excursion_max():
+def test_a_replayed_lab_panel_carries_the_abnormality_rank():
     """The ranking the follow-up is told to read has to survive the replay."""
     messages, _ = asyncio.run(graph.replay_messages(
         _Box({"get_lab_trends": RONCO_PANEL}),
@@ -69,14 +69,14 @@ def test_a_replayed_lab_panel_carries_excursion_and_excursion_max():
     ))
 
     body = _body(messages)
-    assert "excursion" in body, body
-    assert "excursion_max" in body, body
+    assert "_abnormality_rank" in body, body
 
     panel = json.loads(body.split("\n", 1)[1].rsplit("\n", 1)[0])
-    ranked = {trend["label"]: trend["excursion_max"] for trend in panel["trends"]}
+    ranked = {trend["label"]: trend["_abnormality_rank"] for trend in panel["trends"]}
 
-    assert ranked["Red blood cells"] == max(ranked.values()), ranked
-    assert ranked["Red blood cells"] > ranked["RDW"] > ranked["Hemoglobin"], ranked
+    assert ranked["Red blood cells"] == 1, ranked
+    assert ranked == {"Red blood cells": 1, "RDW": 2, "Hemoglobin": 3}, ranked
+    assert "excursion" not in body, body
 
 
 def test_a_replayed_estimate_shows_display_strings_and_no_float():
@@ -113,4 +113,4 @@ def test_the_recorded_replay_still_holds_what_the_tool_returned():
     ))
 
     assert calls[0]["response"] == RONCO_PANEL
-    assert "excursion" not in json.dumps(calls[0]["response"])
+    assert "_abnormality_rank" not in json.dumps(calls[0]["response"])

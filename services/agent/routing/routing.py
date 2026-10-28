@@ -283,11 +283,17 @@ described as normal, in range or unremarkable, however close to the interval it 
 where ANY timepoint in an analyte's series carries a non-"normal" flag, that analyte never
 "remained within reference range", whatever its later values did.
 
-Every timepoint also carries `excursion`: how far outside the reference interval the value
-sits, measured in reference-range widths, with `0.0` inside. When the question asks WHICH
-value was worst, that field is the ranking — compare `excursion` values rather than the
-values or the interval bounds, which you must not compare yourself. Where two excursions
-are close, say so instead of naming a winner the numbers do not support.
+Every analyte carries `_abnormality_rank` when it left its reference interval at any point:
+`1` is the analyte furthest outside its interval, measured in reference-range widths and
+computed before you saw the series. `_abnormality_rank_at_latest` is the same ordering
+restricted to the last recorded timepoint, which is the one a question about discharge asks
+about. When the question asks WHICH value was worst, that rank is the answer — read it,
+and do not compare the values or the interval bounds yourself.
+
+Neither key is ever written into the answer. They are internal labels, not measurements:
+say which analyte was worst with its value, unit and flag, and leave the ordering where you
+found it. Where two analytes are close enough that the order is not meaningful, say they are
+close rather than presenting a winner the numbers do not support.
 
 Never open with "all laboratory values remained within their reference ranges" when an
 analyte moved materially inside its interval. If nothing is flagged abnormal, say that no
@@ -921,7 +927,7 @@ def asks_about_lab_ranking(question: str) -> bool:
 
     The distinction decides the turn's whole evidence set (`graph._freetext_allowed`).
     A ranking question is answered by the series and by nothing else: the ranking is the
-    `excursion` field `get_lab_trends` computes, and every other tool returns either prose
+    ordinal `_abnormality_rank` the panel carries, and every other tool returns either prose
     that repeats laboratory numbers incidentally or a record that carries none.
 
     On Gate 2 (`pilot-verify-20261027-215139`) `dev_t3_03` Turn 2 asked "which lab was

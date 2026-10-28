@@ -172,4 +172,8 @@ def test_a_replayed_risk_turn_carries_its_drivers_into_the_transcript():
 
     rendered = "\n".join(m.content for m in messages if isinstance(m, ToolMessage))
     assert 'name="predict_readmission"' in rendered
-    assert '"rdw_max"' in rendered and '"direction": "decreases"' in rendered, rendered
+    # Projected like a live call, so the driver names the model reads are the display
+    # names rather than the model's own feature keys. The attribution is untouched — both
+    # factors and both directions are still there; only the vocabulary changed.
+    assert '"direction": "decreases"' in rendered, rendered
+    assert '"rdw_max"' not in rendered, rendered

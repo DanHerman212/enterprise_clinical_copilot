@@ -1277,12 +1277,30 @@ def _replayed_tool_messages(
     guard apply identically — replaying a passage outside the wrapper would put
     clinical text where the prompt says instructions live, which is the whole
     reason the boundary exists.
+
+    It also goes through the same PROJECTION a live one does, which is the half this
+    function was missing. `tool_node` renders `project(payload)`; this rendered the raw
+    payload, so a follow-up turn saw a different result from the turn that fetched it.
+    Two things the model is told to rely on were absent from every replayed turn:
+
+    * the `excursion` and `excursion_max` fields on a laboratory panel, which are the
+      only ranking `SYSTEM_PROMPT` permits — "the ranking is the `excursion` field the
+      series already carries ... never compare the values or the interval bounds
+      yourself";
+    * `probability_display` / `threshold_display` in place of the estimate's floats,
+      which is what keeps a number the model could paste out of its hands.
+
+    `dev_t3_03` failed on Gate 2 twice for exactly this. On the 2026-10-28 retest
+    (`00c7`) the follow-up asked "which lab was worst at discharge?", the panel in the
+    transcript carried no `excursion`, and the model did the one thing the prompt forbids
+    — compared the values itself — and named hemoglobin, where the panel ranks red blood
+    cells first.
     """
     asked = AIMessage(
         content="",
         tool_calls=[{"name": call["name"], "args": call.get("args") or {}, "id": call_id}],
     )
-    body = _render_tool_result(payload, offset=offset)
+    body = _render_tool_result(_presented_for_model(call["name"], payload), offset=offset)
     result = ToolMessage(
         content=f'<tool_result name="{call["name"]}">\n{body}\n</tool_result>',
         tool_call_id=call_id,

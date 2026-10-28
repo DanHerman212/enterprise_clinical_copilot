@@ -73,7 +73,13 @@ def test_a_stored_payload_is_replayed_as_an_asked_call_and_its_result():
     assert result.name == "predict_readmission"
     assert result.content.startswith('<tool_result name="predict_readmission">')
     assert result.content.rstrip().endswith("</tool_result>")
-    assert "0.31" in result.content
+    # The model's copy is the PROJECTED one, exactly as a live call is: the estimate
+    # arrives as the display string the widget prints and the float is withheld, so a
+    # follow-up cannot paste a number it was never handed. `calls[...]["response"]` is
+    # still the tool's own payload — see `test_the_recorded_replay_still_holds_what_the
+    # _tool_returned` in `test_replayed_tool_projection.py`.
+    assert "31.0%" in result.content
+    assert '"probability"' not in result.content
 
 
 def test_a_call_without_a_payload_is_re_resolved_rather_than_stored():

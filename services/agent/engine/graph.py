@@ -88,7 +88,6 @@ from services.agent.engine.model import (
 )
 from services.agent.telemetry.stages import emit as _emit
 from services.agent.postprocess import citations
-from services.agent.postprocess import claims
 
 from services.agent.engine.prompts import SYSTEM_PROMPT
 from services.agent.telemetry import observability
@@ -324,40 +323,28 @@ def _citable_unit_total(state: dict) -> int:
 
 
 def sanitize_answer_markers(state: dict) -> None:
-    """Apply every deterministic correction to the settled answer, both channels.
+    """Drop markers from the settled answer that address no unit the turn was shown.
 
-    Runs at settlement — the one point both routes pass through — rather than in the
+    Applied at settlement — the one point both routes pass through — rather than in the
     presentation layer, because the trace, the judge and the browser read the answer from
-    three different places and only the state is common to all three. A correction made
-    downstream of the trace is a correction the judge never sees, which is what made the
-    `00d3` citation scores unreadable.
+    three different places and only the state is common to all three. A marker removed
+    downstream of the trace would still be in the record the judge scores.
 
-    Four corrections, in `claims.enforce`'s order: a marker rebound to the passage that
-    holds the sentence's words, an upward driver the patient does not have corrected to
-    say so, a "remained at" clause replaced by the movement the series shows, and any
-    marker left addressing no citable unit removed.
-
-    Both answer channels are corrected: the model's prose, and a command's
+    Both answer channels are cleaned: the model's prose, and a command's
     `deterministic_answer` (which for `/meds` is written in code and carries its own
     `^[1]`).
     """
     total = _citable_unit_total(state)
-    evidence = [*(state.get("replayed_tool_calls") or []),
-                *(state.get("tool_calls") or [])]
-    manifest = admission_context.current_profile() or {}
-
     message = final_message(state)
     if message is not None and isinstance(message.content, str):
-        cleaned, flags = claims.enforce(message.content, evidence, manifest, total)
+        cleaned = citations.sanitize_citation_range(message.content, total)
         if cleaned != message.content:
             message.content = cleaned
-            state.setdefault("answer_flags", []).extend(flags)
     deterministic = state.get("deterministic_answer")
     if isinstance(deterministic, str) and deterministic:
-        cleaned, flags = claims.enforce(deterministic, evidence, manifest, total)
-        if cleaned != deterministic:
-            state["deterministic_answer"] = cleaned
-            state.setdefault("answer_flags", []).extend(flags)
+        state["deterministic_answer"] = citations.sanitize_citation_range(
+            deterministic, total
+        )
 
 
 def no_evidence_answer(

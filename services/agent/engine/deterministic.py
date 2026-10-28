@@ -70,7 +70,6 @@ from services.agent.engine.mcp_client import (
     _presented_prediction,
 )
 from services.agent.engine.prompts import SYSTEM_PROMPT
-from services.agent.routing import admission_context
 from services.agent.routing.routing import (
     EHR_RECORD_QUERY,
     OUTPATIENT_ENCOUNTER_NOTICE,
@@ -502,13 +501,7 @@ async def run_command(
         if isinstance(call.get("response"), dict)
     )
     tool_messages, recorded = await _execute_tool_calls(
-        toolbox, calls, on_event,
-        # The profile is passed rather than left to the projection's own fallback, so that
-        # both routes name the same manifest explicitly and a future reader can see the
-        # cross-reference is intended on this path too (`00d3`: `/ehr` rendered the
-        # estimate with no `patient_value` while `tool_node` annotated it).
-        project=lambda name, payload: _presented_for_model(
-            name, payload, admission_context.current_profile()),
+        toolbox, calls, on_event, project=_presented_for_model,
         # This path opens `command.<wire>` around the whole turn, so its tool spans
         # have a parent to nest under. The reasoning loop does not, and spanning there
         # produced a separate root trace per tool.
@@ -530,10 +523,7 @@ async def run_command(
             "id": f"{command.wire}-record",
         }]
         extra_messages, extra_recorded = await _execute_tool_calls(
-            toolbox, fallback, on_event,
-            project=lambda name, payload: _presented_for_model(
-                name, payload, admission_context.current_profile()),
-            traced=True,
+            toolbox, fallback, on_event, project=_presented_for_model, traced=True,
             order=order,
             cite_offset=cite_offset + _passage_count(recorded),
         )

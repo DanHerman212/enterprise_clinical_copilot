@@ -34,7 +34,6 @@ from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 from services.agent.routing.admission_context import PREFLIGHT_TOOLS
 from services.agent.routing.admission_context import absent_in_manifest
-from services.agent.routing.admission_context import current_profile
 from services.agent.routing.admission_context import manifest_value
 import logging
 import re
@@ -43,7 +42,6 @@ from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
 from services.agent.postprocess import citations
-from services.agent.postprocess.claims import trajectory_summary
 from services.agent.presentation.domain import humanize
 from services.agent.telemetry import observability, stages
 from services.agent.telemetry.stages import emit as _emit
@@ -780,31 +778,8 @@ def _presented_prediction(name: str, payload: Any,
 
     factors = payload.get("top_factors")
     if isinstance(factors, list):
-        presented = [_presented_factor(factor, manifest) for factor in factors]
-        # An upward driver the patient does not have is not an active driver, and the
-        # model's copy says so structurally rather than in a rule it can ignore.
-        #
-        # `00d` and `00d3` both answered "the primary driver increasing this risk is
-        # recent ED visits" for a record whose manifest reads `recent_ed_visits: 0`. The
-        # annotation (`patient_value` + `_baseline_artifact_absent_in_patient`) was added
-        # for that and did not stop it, because an entry that still reads
-        # `"direction": "increases"` inside `top_factors` is an entry the formatter can
-        # promote. So the entries are separated: `top_factors` holds the drivers this
-        # patient has, and `baseline_only_factors` holds the ones the model weights
-        # upward against a population baseline for a patient who does not present them.
-        #
-        # A projection, not a deletion: the served payload keeps all five factors, the
-        # widget still draws all five bars, and the guardrail compares the prose against
-        # the served values.
-        active, baseline_only = [], []
-        for factor in presented:
-            if isinstance(factor, dict) and factor.get("_baseline_artifact_absent_in_patient"):
-                baseline_only.append(factor)
-            else:
-                active.append(factor)
-        projected["top_factors"] = active
-        if baseline_only:
-            projected["baseline_only_factors"] = baseline_only
+        projected["top_factors"] = [_presented_factor(factor, manifest)
+                                    for factor in factors]
     return projected
 
 
@@ -841,11 +816,6 @@ ABNORMALITY_RANK = "_abnormality_rank"
 #: analyte can be the worst of the admission and normal by discharge, and the prompt
 #: already forbids offering a mid-stay nadir as the answer to a discharge question.
 ABNORMALITY_RANK_AT_LATEST = "_abnormality_rank_at_latest"
-
-#: What an analyte's series did when it moved away from a value and came back to it. A
-#: sentence of fact rather than a rule: `relied on` a negative prompt rule twice and failed
-#: twice, and the series is what decides.
-TRAJECTORY_SUMMARY = "_trajectory_summary"
 
 
 def _presented_labs(payload: Any) -> Any:
@@ -914,16 +884,6 @@ def _presented_labs(payload: Any) -> Any:
             row[ABNORMALITY_RANK] = peak_ranks[index]
         if index in latest_ranks:
             row[ABNORMALITY_RANK_AT_LATEST] = latest_ranks[index]
-        # The course shape, computed rather than read off two endpoints.
-        #
-        # `00d1` and `00d3` both answered a series of 4.42 -> 3.06 -> 3.47 -> 3.06 with
-        # "remained at 3.06 ... at discharge": the first and last values are equal, so an
-        # answer that reads only the ends sees a flat line. The prompt forbids the
-        # wording and the wording still appeared, because the panel gave the model no
-        # reason to think the middle mattered. This states what the middle did.
-        shape = trajectory_summary(trend)
-        if shape is not None:
-            row[TRAJECTORY_SUMMARY] = shape["summary"]
         rows.append(row)
     presented["trends"] = rows
     return presented
@@ -941,18 +901,7 @@ def _presented_for_model(name: str, payload: Any,
     `manifest` is this turn's profile — the same row the pre-flight block in the system
     prompt was rendered from. Optional because a record outside the cohort has none, and
     a projection without it simply cannot annotate what the patient's value was.
-
-    Resolved HERE when the caller omits it, and that fallback is the repair for a split
-    path rather than a convenience. `tool_node` passes `admission_context.current_profile()`
-    explicitly; `run_command` passed nothing, so on Gate 3 (`00d3`) every `/ehr` turn
-    reached the formatter with `feature` and `direction` only — no `patient_value`, no
-    absent-factor marker — and `holdout_t1_01` narrated a zero ED-visit history as the
-    primary driver. Two callers, one of which forgot, is exactly the drift the context
-    variable exists to remove: the profile is already set for the request, so the
-    projection reads it instead of trusting every caller to remember.
     """
-    if manifest is None:
-        manifest = current_profile()
     if name == "get_lab_trends":
         return _presented_labs(payload)
     return _presented_prediction(name, payload, manifest)

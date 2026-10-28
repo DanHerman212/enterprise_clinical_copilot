@@ -238,9 +238,13 @@ def test_an_oversized_passage_is_refused_not_truncated():
     assert body not in content
     assert inner["passages"][1]["text"].startswith("[refused:")
     assert str(gr.MAX_PASSAGE_CHARS + 1) in inner["passages"][1]["text"]
+    assert all("id" not in passage for passage in inner["passages"])
     # The other passage, and the slot the refused one occupies, are untouched.
     assert inner["passages"][0]["text"] == "a short passage"
-    assert [p["id"] for p in inner["passages"]] == ["small", "huge"]
+    # The machine id does not travel to the model. `small` / `huge` are local names, and a
+    # trailing digit in one of them is a second index beside the global `^[n]` — the
+    # confusion that produced `holdout_t4_01`'s wrong citation (`00d1`). The refusal still
+    # keeps its slot so the numbering does not shift.
     assert inner["returned"] == 2
 
 

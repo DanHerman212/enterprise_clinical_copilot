@@ -288,6 +288,26 @@ def _increasing_driver(risk: dict[str, Any]) -> str:
     return ""
 
 
+def _decreasing_driver(risk: dict[str, Any]) -> str:
+    """The highest-ranked factor the model says pushes risk DOWN, as a human label.
+
+    The other half of `_increasing_driver`. A record can have every increasing factor
+    absent — a stable patient whose estimate is still raised — and the model's protective
+    attributions remain true of it: they are directions, and a direction the patient
+    actually has is a question the record can answer.
+    """
+    manifest = admission_context.current_profile()
+    for factor in risk.get("top_factors") or []:
+        if not isinstance(factor, dict):
+            continue
+        if str(factor.get("direction") or "").lower().startswith("decreas"):
+            feature = str(factor.get("feature") or "").strip()
+            if not feature or admission_context.absent_in_manifest(feature, manifest):
+                continue
+            return humanize(feature)
+    return ""
+
+
 # --------------------------------------------------------------------------- templates
 
 _MED_TAPER = "What is the dosing and taper schedule for {drug} at discharge?"
@@ -299,6 +319,27 @@ _CARE_FOLLOW_UP = ("What outpatient follow-up appointments or clinic visits are 
                    "scheduled after discharge?")
 _MED_REGIMEN = "What are the discharge dosing instructions for {first} and {second}?"
 _RISK_DRIVER = "Why does {driver} increase this patient's readmission risk?"
+
+#: The same question about a PROTECTIVE factor, which is the fallback when every factor
+#: the model ranks upward is one the patient does not have. It asks about the same model
+#: output from the direction that is actually true of this record.
+_RISK_PROTECTIVE = "Why does {driver} lower this patient's readmission risk?"
+
+#: The last resort: questions anchored to what the record demonstrably contains, offered
+#: only when every template above produced nothing.
+#:
+#: `/ehr` had no chip at all on Gate 3 (`00d1`, `holdout_t2_01`): its note overview was the
+#: command's own answer, so the note template is skipped for it by design; the record's
+#: medication plan is not among the sections it returned; its only "increases" factor is
+#: one the manifest says the patient does not have and the guardrail now refuses. Nothing
+#: was left, `follow_ups=True` returned an empty list, and the evaluation lost the item as
+#: unscored. An affordance row is a promise that something is worth asking next; a record
+#: with a hospital course or a medication list always has that.
+_COURSE_TREATMENT = ("What does the hospital course record about how this admission was "
+                     "treated?")
+_MED_SINGLE_DOSING = "What are the discharge dosing instructions for {drug}?"
+_LAB_PANEL_OVERVIEW = ("Which laboratory values were abnormal at discharge, and which "
+                       "were within their reference ranges?")
 _LAB_ABNORMAL = ("How does the abnormal discharge {label} ({value} {unit}) compare to "
                  "its reference range and trend?")
 _LAB_NORMAL = ("What were the discharge values for {first} and {second} across the "
@@ -493,6 +534,13 @@ def _candidates(*, state: dict[str, Any], scope: str | None, question: str,
         chip = _filled(_RISK_DRIVER, driver=_increasing_driver(risk))
         if chip:
             chips.append(chip)
+        else:
+            # Every increasing factor is one this patient does not have. The protective
+            # directions are still true of the record, so the same surface asks about one
+            # of those rather than falling silent.
+            chip = _filled(_RISK_PROTECTIVE, driver=_decreasing_driver(risk))
+            if chip:
+                chips.append(chip)
 
     # P7 / P8 — the abnormal discharge value, or the normal panel it belongs to.
     abnormal = _rank_abnormal(labs)
@@ -522,8 +570,39 @@ def _candidates(*, state: dict[str, Any], scope: str | None, question: str,
     # against. Lab chips survive because those results really are there.
     if outpatient and not text:
         chips = [chip for chip in chips if chip.startswith(_LAB_PREFIXES)]
-
+    elif not chips:
+        # Last resort, and the reason the row is never empty on a record that has
+        # something to ask about: every template above is conditional on a specific
+        # signal, and `/ehr` skips the note one because the note was its own answer.
+        chips.extend(_record_anchors(state, text=text, rows=rows, labs=labs))
     return chips
+
+
+def _record_anchors(state: dict[str, Any], *, text: str,
+                    rows: Sequence[dict[str, Any]],
+                    labs: Sequence[dict[str, Any]]) -> list[str]:
+    """Questions the record can answer, for a turn that produced no specific chip.
+
+    Deliberately few, and each tied to evidence this turn already retrieved: a course
+    question only where a hospital course or diagnosis is in the transcript, a dosing
+    question only for a drug the note names, a panel question only where a panel exists.
+    An anchor offered without its evidence would be the same defect as a chip about a
+    factor the patient does not have, one layer down.
+    """
+    anchors: list[str] = []
+    sections = _sections(state)
+    if any(name in sections for name in ("brief_hospital_course", "discharge_diagnosis",
+                                         "history_of_present_illness")):
+        anchors.append(_COURSE_TREATMENT)
+    if rows:
+        drug = str(rows[0] or "").strip()
+        if drug:
+            chip = _filled(_MED_SINGLE_DOSING, drug=drug)
+            if chip:
+                anchors.append(chip)
+    if labs:
+        anchors.append(_LAB_PANEL_OVERVIEW)
+    return anchors
 
 
 def _routable(chip: str, scope: str | None, literature: bool = False) -> bool:

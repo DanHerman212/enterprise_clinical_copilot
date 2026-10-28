@@ -277,10 +277,20 @@ def test_p6_never_asks_for_the_number():
         assert not any(char.isdigit() for char in chip)
 
 
-def test_p6_does_not_fire_without_an_increasing_driver():
+def test_p6_never_claims_an_increase_the_record_does_not_show():
+    """With every factor protective, the chip asks about one of THOSE.
+
+    It used to emit nothing at all, and `holdout_t2_01` then had no chip to click at all
+    (`00d1`, unscored). The question is answerable from the same model output either way;
+    what may not happen is a chip asserting that something increases this patient's risk
+    when the only upward factor is one they do not have.
+    """
     state = _risk_state(factors=[{"feature": "monocytes_min", "contribution": -0.5,
                                   "direction": "decreases", "value": 0.2}])
-    assert not any("readmission risk" in chip for chip in _chips(state))
+    chips = _chips(state)
+
+    assert not any("increase" in chip for chip in chips), chips
+    assert any("lower this patient's readmission risk" in chip for chip in chips), chips
 
 
 # --------------------------------------------------------------------------- P7/P8

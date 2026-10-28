@@ -1098,7 +1098,14 @@ async def ask(
     # series already is decides whether this turn calls for it again: `_fulfilled_by_replay`
     # is the same test `_still_bound` uses, and it distinguishes a full panel from a
     # single-analyte fetch that leaves the rest of the panel unread.
-    lab_ranking_question = routing.asks_about_lab_ranking(question)
+    #
+    # `prior_labs` is what makes a pronoun a subject. "Which one worried you most?" carries
+    # no laboratory noun, and read alone it is not a lab question at all — on Gate 3
+    # (`00d1`) `holdout_t3_02` answered it by searching the discharge note for the word
+    # "worried" (responsiveness 0, context 0). Asked immediately after a panel, "which one"
+    # can only mean one of those values.
+    lab_ranking_question = routing.asks_about_lab_ranking(
+        question, prior_labs=_fulfilled_by_replay("get_lab_trends", replayed_calls))
     lab_panel_in_transcript = _fulfilled_by_replay("get_lab_trends", replayed_calls)
 
     graph = build_graph(

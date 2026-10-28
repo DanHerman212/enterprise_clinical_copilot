@@ -473,16 +473,29 @@ def _passage_total(payload: Any) -> int:
 
 
 
-def _render_passage(passage: dict[str, Any]) -> dict[str, Any]:
-    """Return the passage as the model will see it, or refuse it visibly."""
+def _render_passage(passage: dict[str, Any], *, keep_id: bool = False) -> dict[str, Any]:
+    """Return the passage as the model will see it, or refuse it visibly.
+
+    `id` is DROPPED from the model's copy. It is a machine name — `MT-2616-DS_discharge_
+    medications_2` — and its trailing digit is a LOCAL position inside one tool result.
+    Beside a global `^[n]` it is a second, disagreeing index: on Gate 3 (`00d1`)
+    `holdout_t4_01` cited `^[2]` for the prednisone taper, which lives in the second
+    medication passage and is `^[3]` on that thread. The prompt already forbids writing
+    the id into an answer, so the model had no use for it and one way to be misled by it.
+    `keep_id` exists for the tests that assert what the tool returned is what is recorded;
+    nothing on the model path sets it.
+    """
+    rendered = dict(passage)
+    if not keep_id:
+        rendered.pop("id", None)
     text = passage.get("text")
     if not isinstance(text, str) or len(text) <= MAX_PASSAGE_CHARS:
-        return passage
+        return rendered
     logger.warning(
         "refusing passage %s: %d characters, over the %d-character ceiling",
         passage.get("id"), len(text), MAX_PASSAGE_CHARS,
     )
-    return {**passage, "text": (
+    return {**rendered, "text": (
         f"[refused: {len(text)} characters, over the "
         f"{MAX_PASSAGE_CHARS}-character ceiling for one passage]"
     )}

@@ -1,0 +1,150 @@
+"""The four repairs `00d1` asked for, at the layer each one lives in.
+
+  * a suppressed chip left the row EMPTY (`holdout_t2_01`, unscored) — the pool now falls
+    back to a protective factor and, failing that, to questions the record can answer;
+  * a series that returned to an earlier value was described as unchanged (`t1_02`,
+    `t2_02`) — a prompt rule now forbids the words;
+  * "which one worried you most?" after `/labs` was routed to a note search (`t3_02`) —
+    the predicate now reads the conversation as well as the sentence;
+  * a passage id carried a local position beside the global citation number (`t4_01`,
+    `t4_02`) — the id no longer travels to the model.
+"""
+
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+
+from services.agent.engine.mcp_client import _render_tool_result
+from services.agent.engine.prompts import SYSTEM_PROMPT
+from services.agent.postprocess import followups
+from services.agent.routing import admission_context, routing
+
+
+# --- 1. the chip row is never empty on a record with something to ask about ---------
+
+def _risk(factors):
+    return {"probability": 0.112419, "threshold": 0.11,
+            "top_factors": factors}
+
+
+def _chips(state: dict) -> list[str]:
+    return followups.suggest("What does the note say?", "An answer.", state=state)
+
+
+def test_a_protective_factor_is_offered_when_every_upward_one_is_absent():
+    """`90000067` on Gate 3: the only "increases" factor is one the patient has zero of."""
+    state = {"tool_calls": [{"name": "predict_readmission", "args": {},
+                             "response": _risk([
+                                 {"feature": "recent_ed_visits", "direction": "increases"},
+                                 {"feature": "prior_inpatient_days",
+                                  "direction": "decreases"},
+                             ])}],
+             "command": "summarize"}
+
+    admission_context.set_current_profile({"recent_ed_visits": "0",
+                                           "prior_inpatient_days": "18.5833"})
+    try:
+        chips = _chips(state)
+    finally:
+        admission_context.set_current_profile(None)
+
+    assert chips, "the row came back empty"
+    assert any("lower this patient's readmission risk" in chip for chip in chips), chips
+    assert not any("increase this patient's readmission risk" in chip for chip in chips)
+
+
+def test_a_record_with_a_course_gets_a_question_about_it_even_with_no_chips():
+    """The last resort, for a `/ehr` turn whose note overview was its own answer."""
+    state = {
+        "command": "summarize",
+        "tool_calls": [{"name": "rag_search_sections", "args": {}, "response": {
+            "returned": 2,
+            "passages": [{"id": "p1", "section": "brief_hospital_course",
+                          "text": "Treated with IV antibiotics."},
+                         {"id": "p2", "section": "discharge_diagnosis",
+                          "text": "Pneumonia."}],
+        }}],
+    }
+
+    chips = _chips(state)
+
+    assert chips, "the row came back empty despite a hospital course"
+    assert any("hospital course" in chip for chip in chips), chips
+
+
+def test_an_empty_record_still_offers_nothing():
+    """The fallback is anchored to evidence, so a turn with none offers none."""
+    assert _chips({"command": "summarize", "tool_calls": []}) == []
+
+
+# --- 2. a series that returns to an earlier value was not flat ---------------------
+
+def test_the_prompt_forbids_calling_a_fluctuating_series_flat():
+    prompt = " ".join(SYSTEM_PROMPT.split())
+
+    assert '"remained at"' in prompt
+    assert "EVERY measurement in between" in prompt
+    assert "is a trajectory, not a set of endpoints" in prompt
+
+
+# --- 3. a pronoun after a panel is a question about the panel ---------------------
+
+@pytest.mark.parametrize("question", [
+    "which one worried you most?",
+    "which stood out?",
+    "what was the most concerning value?",
+    "which one was worst?",
+])
+def test_a_pronoun_superlative_after_labs_is_a_lab_question(question):
+    assert routing.asks_about_lab_ranking(question, prior_labs=True) is True
+
+
+@pytest.mark.parametrize("question", [
+    "which one worried you most?",
+    "what was the most concerning value?",
+])
+def test_the_same_question_without_a_panel_is_not_routed_to_the_panel(question):
+    """No previous panel means "which one" has no referent, and the note is the record."""
+    assert routing.asks_about_lab_ranking(question, prior_labs=False) is False
+
+
+def test_the_concern_vocabulary_alone_still_needs_a_lab_subject():
+    assert routing.asks_about_lab_ranking("which lab was most concerning?") is True
+    assert routing.asks_about_lab_ranking("is the medication regimen concerning?") is False
+
+
+# --- 4. one index on a passage, and it is the global one --------------------------
+
+def test_a_passage_carries_no_local_identifier():
+    """`MT-…_discharge_medications_2` prints a 2 beside a global `^[3]`."""
+    import json  # noqa: PLC0415
+
+    rendered = json.loads(_render_tool_result({"passages": [
+        {"id": "MT-2616-DS_discharge_medications_2", "section": "discharge_medications",
+         "text": "Prednisone 40 mg."},
+    ]}))
+
+    passage = rendered["passages"][0]
+    assert "id" not in passage
+    assert passage["cite"] == 1
+    assert passage["cite_header"].startswith("[CITATION ^[1] |")
+
+
+def test_the_global_number_survives_the_offset_of_a_later_turn():
+    import json  # noqa: PLC0415
+
+    rendered = json.loads(_render_tool_result(
+        {"passages": [{"id": "x_2", "section": "brief_hospital_course", "text": "t"}]},
+        offset=2))
+
+    assert rendered["passages"][0]["cite"] == 3
+    assert "[CITATION ^[3] |" in rendered["passages"][0]["cite_header"]
+
+
+def test_the_prompt_requires_a_marker_on_every_synthesis_paragraph():
+    prompt = " ".join(SYSTEM_PROMPT.split())
+
+    assert "every paragraph that states a fact carries the marker" in prompt
+    assert "including a paragraph restating an estimate" in prompt

@@ -911,7 +911,34 @@ _LAB_RANKING_WORDS = frozenset({
     "highest", "lowest", "peak", "peaks", "nadir", "nadirs", "maximum", "minimum",
     "rank", "ranked", "ranking", "rankings", "compare", "compares", "comparison",
     "furthest", "farthest", "biggest", "largest", "smallest",
+    # How a clinician asks the same question without naming the panel: the concern it
+    # caused. `dev_t3_03`'s "which lab was worst" and `holdout_t3_02`'s "which one
+    # worried you most" are one question, and only the first was recognised.
+    "worried", "worry", "worries", "worrying", "worrisome", "concerning", "concern",
+    "concerns", "concerned", "critical", "critically", "severe", "severely",
+    "stood", "stand", "stands", "outlier", "outliers",
 })
+
+#: The words that make a question a SUPERLATIVE about a set already in the conversation,
+#: rather than a new lookup. Paired with a pronoun, they are how a follow-up asks "of
+#: those, which" — "which one worried you most", "which stood out", "what was the most
+#: abnormal".
+_LAB_SUPERLATIVES = frozenset({
+    "most", "worst", "biggest", "highest", "lowest", "furthest", "farthest",
+    "ranked", "ranking",
+})
+
+#: How a clinician says "of the values in front of me, which is the troubling one" without
+#: naming a superlative: the concern, or the fact that one stood out.
+_LAB_CONCERN_WORDS = frozenset({
+    "worried", "worry", "worries", "worrying", "worrisome",
+    "concerning", "concern", "concerns", "concerned",
+    "stood", "stand", "stands", "notable", "striking",
+})
+
+#: The pronouns that make a question about a set rather than about a thing. Paired with a
+#: concern word and a panel in the previous turn, they are a question about that panel.
+_SET_PRONOUNS = frozenset({"which", "what"})
 
 #: The nouns that stand in for a named analyte when the question speaks about the panel
 #: rather than one value. "Which lab was worst at discharge" names no analyte and is still
@@ -922,7 +949,7 @@ _LAB_SUBJECT_NOUNS = frozenset({
 })
 
 
-def asks_about_lab_ranking(question: str) -> bool:
+def asks_about_lab_ranking(question: str, prior_labs: bool = False) -> bool:
     """Whether this question asks for laboratory values to be ranked or compared.
 
     The distinction decides the turn's whole evidence set (`graph._freetext_allowed`).
@@ -942,11 +969,29 @@ def asks_about_lab_ranking(question: str) -> bool:
     Requires a laboratory SUBJECT as well as a ranking word: "which medication was
     prescribed at the highest dose" carries a ranking word and is not a lab question, and
     a false positive there would withdraw the note search that answers it.
+
+    `prior_labs` is the second way in, and it is about the CONVERSATION rather than the
+    sentence. On Gate 3 (`00d1`) `holdout_t3_02` ran `/labs` and was then asked "which one
+    worried you most?". Read on its own that sentence names no laboratory subject, so the
+    predicate returned False, the turn took the ordinary free-text path and searched the
+    discharge note for the word "worried" — `responsiveness 0`, `context 0`. The subject
+    was in the previous turn: a pronoun plus a superlative, immediately after a panel, is
+    a question about that panel. A false positive here costs one panel re-read; a false
+    negative answers a question about the labs by searching a note for the word "worried".
     """
     text = str(question or "").lower().translate(_PUNCTUATION)
     if not text.strip():
         return False
     tokens = text.split()
+    if prior_labs:
+        if any(token in _LAB_SUPERLATIVES for token in tokens):
+            return True
+        # "which one worried you most", "which stood out": a set pronoun plus a concern
+        # word, immediately after a panel, is a question about that panel. Without the
+        # pronoun it could be about anything, and the note is the right record for that.
+        if (any(token in _SET_PRONOUNS for token in tokens)
+                and any(token in _LAB_CONCERN_WORDS for token in tokens)):
+            return True
     if not any(token in _LAB_RANKING_WORDS for token in tokens):
         return False
     return bool(_LAB_ANALYTE.search(text)

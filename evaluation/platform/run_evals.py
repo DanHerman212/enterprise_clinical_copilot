@@ -35,6 +35,11 @@ DATASETS = ("clinical-census-pilot-v2", "suite2-adversarial-v1")
 #: reached by `--datasets ecc-tier2-dev-suite` and not by the default.
 DEV_SUITE_DATASET = "ecc-tier2-dev-suite"
 
+#: The Tier 2 blind holdout suite (Phase 05). Same gate, opposite cohort: 15 scenarios
+#: over four records the dev suite never names (`dev_suite.HOLDOUT_HADM_IDS`). Seeded by
+#: `evaluation/platform/sync_holdout_suite.py`; reached the same way, by naming it.
+HOLDOUT_SUITE_DATASET = "ecc-tier2-holdout-suite"
+
 #: Gate 1's three canary scenarios, and nothing else (Phase 04 §4.2).
 CANARY_SCENARIOS = ("dev_t1_01", "dev_t2_03", "dev_t7_01")
 
@@ -370,7 +375,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     targets = tuple(args.datasets) if args.datasets else DATASETS
-    allowed = (*DATASETS, DEV_SUITE_DATASET)
+    allowed = (*DATASETS, DEV_SUITE_DATASET, HOLDOUT_SUITE_DATASET)
     if args.allow_full_census:
         allowed = (*allowed, FULL_CENSUS_DATASET)
     refused = [name for name in targets if name not in allowed]

@@ -63,64 +63,6 @@ def current_profile() -> dict[str, Any] | None:
     return _CURRENT_PROFILE.get()
 
 
-#: The `predict_readmission` `top_factors` entries whose value the profile can verify.
-#:
-#: Only these. The model also reports `rdw_max`, `oncology_flag`, `monocytes_min` and the
-#: rest, and the profile carries no field for them — so "the patient does not have this"
-#: is a claim nothing here could support, and guessing it from the key would be a second
-#: invention on top of the first.
-MANIFEST_VALUE_FEATURES: dict[str, str] = {
-    "age": "age",
-    "prior_admission_count": "prior_admission_count",
-    "prior_inpatient_days": "prior_inpatient_days",
-    "recent_ed_visits": "recent_ed_visits",
-    "admission_type": "admission_type",
-    "discharge_location": "discharge_location",
-    "index_los_days": "index_los_days",
-}
-
-#: Recorded values that mean "the patient does not have this": a count of zero, a false
-#: flag, an empty field. Anything non-empty and non-zero is a value the patient HAS.
-_ABSENT_VALUES = frozenset({"", "0", "0.0", "false", "no", "none", "null", "-"})
-
-
-def manifest_value(feature: str, profile: dict[str, Any] | None) -> str | None:
-    """The patient's recorded value for a model feature, or None if it cannot be read.
-
-    None means "this projection does not know", and it is the answer for every feature
-    the profile has no column for. It is deliberately not the same as an absent value: a
-    missing field is ignorance, a zero is a finding.
-    """
-    field = MANIFEST_VALUE_FEATURES.get(str(feature or "").strip().lower())
-    if field is None or not isinstance(profile, dict):
-        return None
-    value = profile.get(field)
-    if value is None:
-        return ""
-    return str(value).strip() if str(value).strip() else ""
-
-
-def absent_in_manifest(feature: str, profile: dict[str, Any] | None) -> bool:
-    """Whether the patient's own row says they do not have this factor.
-
-    The single definition, shared by the projection that annotates the factor and the
-    chip generator that must not ask a question about it. A contribution is measured
-    against a population baseline, so the model can rank a feature as increasing risk for
-    a record whose value is zero — `recent_ed_visits` on Gate 3's `90000067`, whose
-    manifest reads `0`, where the answer asserted a history of ED visits and the chip
-    asked why they increased the risk (`00d`, fidelity 0 and 1, one safety failure).
-    """
-    value = manifest_value(feature, profile)
-    if value is None:
-        return False
-    text = value.strip().lower()
-    if text in _ABSENT_VALUES:
-        return True
-    try:
-        return float(text) == 0.0
-    except (TypeError, ValueError):
-        return False
-
 #: The MCP tool this calls. It is registered on the server so the pre-flight call
 #: can reach it, and hidden from the model's function declarations so the model
 #: cannot call it a second time (see `mcp_client.gemini_tool`).

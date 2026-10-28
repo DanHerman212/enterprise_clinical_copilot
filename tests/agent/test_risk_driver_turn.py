@@ -106,4 +106,11 @@ def test_the_driver_instructions_forbid_the_model_s_own_mechanics():
 
 
 def test_the_driver_instructions_state_the_precision_rule():
-    assert "not \"16.0417 days\"" in prompts.SYSTEM_PROMPT
+    """One rule, not three. The block and the payload are quoted exactly as given.
+
+    The prompt used to carry a second bullet restating this for the manifest and a third
+    telling the model to round a machine float to a whole number, which contradicted it.
+    Both are gone; the surviving rule is the one this asserts.
+    """
+    assert "EXACTLY as the block or the tool payload gives them" in prompts.SYSTEM_PROMPT
+    assert "not \"16.0417 days\"" not in prompts.SYSTEM_PROMPT

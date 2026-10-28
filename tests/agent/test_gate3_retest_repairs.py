@@ -33,8 +33,14 @@ def _chips(state: dict) -> list[str]:
     return followups.suggest("What does the note say?", "An answer.", state=state)
 
 
-def test_a_protective_factor_is_offered_when_every_upward_one_is_absent():
-    """`90000067` on Gate 3: the only "increases" factor is one the patient has zero of."""
+def test_the_upward_factor_is_offered_ahead_of_a_protective_one():
+    """`90000067` on Gate 3: the only "increases" factor leads the chip row.
+
+    This test used to assert the reverse — that the row skipped the upward factor because
+    the patient's profile recorded zero of it, and fell through to a protective one. The
+    manifest cross-reference that decision needed has been removed, so the chip follows
+    the payload's own ranking again.
+    """
     state = {"tool_calls": [{"name": "predict_readmission", "args": {},
                              "response": _risk([
                                  {"feature": "recent_ed_visits", "direction": "increases"},
@@ -43,16 +49,10 @@ def test_a_protective_factor_is_offered_when_every_upward_one_is_absent():
                              ])}],
              "command": "summarize"}
 
-    admission_context.set_current_profile({"recent_ed_visits": "0",
-                                           "prior_inpatient_days": "18.5833"})
-    try:
-        chips = _chips(state)
-    finally:
-        admission_context.set_current_profile(None)
+    chips = _chips(state)
 
     assert chips, "the row came back empty"
-    assert any("lower this patient's readmission risk" in chip for chip in chips), chips
-    assert not any("increase this patient's readmission risk" in chip for chip in chips)
+    assert any("increase this patient's readmission risk" in chip for chip in chips), chips
 
 
 def test_a_record_with_a_course_gets_a_question_about_it_even_with_no_chips():

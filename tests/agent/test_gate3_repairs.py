@@ -48,72 +48,53 @@ MANIFEST = {"recent_ed_visits": "0", "prior_inpatient_days": "0",
 
 # --- 1. an attribution is not a finding about the patient ---------------------------
 
-def test_an_increasing_factor_the_patient_does_not_have_is_marked():
-    """`recent_ed_visits` increases the score for a row that records zero of it."""
-    projected = _presented_for_model("predict_readmission", RISK, MANIFEST)
+def test_a_driver_carries_its_name_and_direction_and_nothing_else():
+    """The projection is a function of the tool result, not of the patient.
+
+    `patient_value` used to be copied into each factor as a cross-reference against the
+    admission's row. It is gone: the row is stated once, in `<admission_metadata>`, and
+    the projection now carries the two fields the prose and the bars share. This test is
+    what keeps the third field from coming back.
+    """
+    projected = _presented_for_model("predict_readmission", dict(RISK))
     factor = next(f for f in projected["top_factors"]
                   if f["feature"].lower().startswith("recent ed"))
 
-    assert factor["patient_value"] == "0"
-    assert factor["_baseline_artifact_absent_in_patient"] is True
+    assert factor == {"feature": "recent ED visits", "direction": "increases"}
+    assert all(set(entry) <= {"feature", "direction"}
+               for entry in projected["top_factors"])
 
 
-def test_a_factor_the_patient_does_have_carries_its_value_and_no_flag():
-    manifest = {"prior_inpatient_days": "24.6667"}
-    projected = _presented_for_model("predict_readmission", RISK, manifest)
-    factor = next(f for f in projected["top_factors"]
-                  if f["feature"].lower().startswith("prior inpatient"))
-
-    assert factor["patient_value"] == "24.6667"
-    assert "_baseline_artifact_absent_in_patient" not in factor
+def test_the_projection_takes_no_manifest():
+    """A caller cannot pass one, which is the point: one fact, one place."""
+    with pytest.raises(TypeError):
+        _presented_for_model("predict_readmission", dict(RISK), MANIFEST)  # noqa: PLC2801
 
 
-def test_a_feature_the_manifest_cannot_verify_is_not_accused_of_being_absent():
-    """`rdw_max` has no manifest column, so the projection says nothing about it.
-
-    Silence is the correct answer: "the patient does not have this" is a claim nothing
-    here could support, and inferring it from the key would be a second invention.
-    """
-    manifest = {"recent_ed_visits": "0", "prior_inpatient_days": "18.5833"}
-    projected = _presented_for_model("predict_readmission", RISK, manifest)
-    by_feature = {factor["feature"].lower(): factor
-                  for factor in projected["top_factors"]}
-
-    # Verifiable and absent.
-    assert by_feature["recent ed visits"]["_baseline_artifact_absent_in_patient"] is True
-    # Verifiable and present.
-    assert "_baseline_artifact_absent_in_patient" not in by_feature[
-        "prior inpatient days"]
-    # Not verifiable at all — no flag either way.
-    unverifiable = by_feature["red cell distribution width (rdw)"]
-    assert "patient_value" not in unverifiable
-    assert "_baseline_artifact_absent_in_patient" not in unverifiable
-
-
-def test_without_a_manifest_the_projection_still_withholds_the_floats():
-    projected = _presented_for_model("predict_readmission", RISK)
+def test_the_projection_still_withholds_the_floats():
+    projected = _presented_for_model("predict_readmission", dict(RISK))
 
     assert "probability" not in projected
     assert projected["probability_display"] == "11.2%"
     assert all("patient_value" not in factor for factor in projected["top_factors"])
 
 
-def test_the_chip_generator_will_not_ask_about_an_absent_factor():
-    """The chip is the second half of `holdout_t2_01`: the product asking itself.
+def test_the_chip_generator_asks_about_the_top_increasing_factor():
+    """The chip follows the payload, not the patient's row.
 
-    `recent_ed_visits` is the highest-ranked increasing factor and the patient has zero
-    of them, so the chip must fall through to the next candidate rather than offer a
-    question whose only honest answer is "that is not true of this patient".
+    This used to assert the opposite: an increasing factor the patient's profile recorded
+    as zero produced no chip at all, so the next turn was never asked to explain a driver
+    the record contradicts. `absent_in_manifest` and the profile plumbing it needed are
+    gone, so the chip is offered again and this test says so rather than pretending
+    otherwise.
     """
-    async def run() -> str:
-        # The profile is per-turn state, set by the pre-flight; set it here directly.
-        admission_context.set_current_profile(MANIFEST)
-        try:
-            return followups._increasing_driver(RISK)
-        finally:
-            admission_context.set_current_profile(None)
+    admission_context.set_current_profile(MANIFEST)
+    try:
+        driver = followups._increasing_driver(RISK)
+    finally:
+        admission_context.set_current_profile(None)
 
-    assert asyncio.run(run()) == ""
+    assert driver == "recent ED visits"
 
 
 def test_the_chip_generator_still_asks_about_a_factor_the_patient_has():

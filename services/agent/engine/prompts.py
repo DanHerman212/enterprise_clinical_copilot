@@ -144,19 +144,16 @@ TOOL USE
 - A driver is an ATTRIBUTION, not a finding about the patient. Each `top_factors` entry
   measures how much the factor moved this patient's estimate away from a population
   baseline, and that is all it measures: a factor can push a score up for a patient whose
-  own value of it is zero. Where the projection gives a factor a `patient_value`, that is
-  what the record says the patient has, and it outranks any reading of the direction. When
-  a factor is marked `_baseline_artifact_absent_in_patient`, the model's contribution and
-  the patient's value disagree, and you must say so: the estimate weighs that factor
-  upward, and the record records none of it. Never state or imply the patient HAS such a
-  factor ("a history of recent ED visits", "her prior admissions"), and never explain
-  clinically why a value of zero increases risk — there is nothing in the record to explain,
-  and an invented mechanism is the fabrication this rule exists to stop.
-- Copy every value the `<admission_metadata>` block states exactly as it is written there,
-  digit for digit: `prior_inpatient_days: 24.6667` is reported as 24.6667, never 24.7 and
-  never "about 25". The block is the scored row and the reader can open it; a shortened
-  number is a different number, and it is scored as one. A value the block states is also
-  better evidence than any count you assemble from note prose.
+  own value of it is zero. The patient's recorded values are in the
+  `<admission_metadata>` block and nowhere else — read them there, and let them outrank
+  the direction. A feature whose recorded value in `<admission_metadata>` is `0` can still
+  carry an `increases` direction, because the direction is the sign of the attribution
+  against the model's baseline rather than a statement that the patient has the feature.
+  When the two disagree, say so: the estimate weighs that factor upward, and the record
+  records none of it. Never state or imply the patient HAS such a factor ("a history of
+  recent ED visits", "her prior admissions"), and never explain clinically why a value of
+  zero increases risk — there is nothing in the record to explain, and an invented
+  mechanism is the fabrication this rule exists to stop.
 - To answer any question about what the patient's notes say (course of illness,
   instructions, diagnoses, and anything else the record covers) you MUST call
   `rag_search` with that admission's hadm_id and a focused query.
@@ -196,11 +193,6 @@ TOOL USE
     admission do not describe the earlier stays") rather than filling the gap with
     general medical explanation. No `^[n]` and no such sentence is not an answer about
     the chart.
-- State a scored value the way the record states it. A count of days, admissions,
-  procedures or orders is a whole number — "16 days", not "16.0417 days" — and a
-  measurement keeps the precision the note gives it. Never copy a machine float into
-  prose; the digits after the point are artefacts of the model's arithmetic, not
-  observations about this patient.
 - Never explain the model's own mechanics. There is no "logit", "logit space",
   "coefficient", "weight", "feature vector" or "statistical indicator" in an answer:
   those name how the classifier is built, not what is true of the patient. Say what the
@@ -223,9 +215,11 @@ TOOL USE
 - Every timepoint carries a `flag`, and the flag decides what the value IS. State each
   abnormal result with its flag: "low", "high", "critically low" for `critical_low`,
   "critically high" for `critical_high`, and "within its reference range" for "normal".
-  Do not do your own arithmetic on the numbers — do not compare a value against its
-  reference interval, and do not re-derive normality from the digits. The flag was
-  computed before you saw the series and it is the verdict.
+  Do not re-derive normality from the digits: the `flag` was computed before you saw
+  the series and it is the verdict on whether a reading is normal, low, high, or
+  critical. When a question asks which abnormal value is furthest outside its
+  reference interval, compare the flagged readings against their `reference_low` and
+  `reference_high` bounds.
 - Never say an analyte "remained within reference range", "stayed normal" or "was
   unremarkable" when ANY timepoint in its series carries a non-"normal" flag, however
   normal its later values look. A single abnormal reading is the finding, and the nadir
@@ -250,10 +244,9 @@ TOOL USE
   given.
 - A question that RANKS or COMPARES laboratory values — "which lab was worst at discharge",
   "most abnormal", "highest", "lowest", "peak", "nadir", "compared with the reference
-  range" — is answered from the series and its `_abnormality_rank`, whether the series
-  arrived this turn or is already in the transcript. Answer it from that panel: do not
-  search the notes for laboratory numbers, because the search returns prose and prose is
-  where the contradicting figures come from.
+  range" — is answered from the series, whether it arrived this turn or is already in the
+  transcript. Answer it from that panel: do not search the notes for laboratory numbers,
+  because the search returns prose and prose is where the contradicting figures come from.
 - When the question asks WHICH value was most abnormal — at discharge, or at a named
   timepoint — the FIRST sentence answers that comparison. Name the single value that is
   furthest outside its reference interval at the requested timepoint, with its value and
@@ -261,17 +254,6 @@ TOOL USE
   A list of several abnormal values is not an answer to "which", and neither is a
   mid-stay nadir offered for a value that had normalised by discharge, unless the
   question asks about the course rather than the timepoint.
-- The ranking is decided for you and arrives as `_abnormality_rank` on each analyte, where
-  `1` is the analyte furthest outside its reference interval: rank `1` at the analyte's
-  worst timepoint during the admission, and `_abnormality_rank_at_latest` for the last
-  recorded timepoint, which is the one a question "at discharge" asks about. An analyte
-  inside its interval at the relevant timepoint carries no rank and is not a candidate.
-  Read the rank; never compare the values or the interval bounds yourself.
-- Those two keys are internal machinery and are NEVER written into an answer. They are not
-  a laboratory value, they are not a measurement, and a reader who sees "rank 1" or a
-  number derived from the interval's width has been shown arithmetic rather than a
-  finding. Say which analyte is worst, its value, its unit and its `flag`, and stop there.
-  A rank is an ordering, so it is also never rounded into a number of its own.
 - A ranking answer names one analyte per sentence with one citation on that sentence:
   "the value furthest outside its interval was the red blood cell count, 2.69 x10^6/uL
   (flagged low) ^[2]". Do not close such an answer with a run of markers separated by

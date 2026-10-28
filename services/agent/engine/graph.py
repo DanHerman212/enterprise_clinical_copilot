@@ -797,8 +797,7 @@ def build_graph(
 
         messages, recorded = await _execute_tool_calls(
             toolbox, calls, on_event, guard=guard,
-            project=lambda name, payload: _presented_for_model(
-                name, payload, admission_context.current_profile()),
+            project=lambda name, payload: _presented_for_model(name, payload),
             # Everything this turn has already spent, so the budget is a budget for the
             # turn rather than for one iteration of the loop around it.
             already_called=list(state.get("tool_calls") or []),
@@ -1358,8 +1357,7 @@ def _replayed_tool_messages(
         tool_calls=[{"name": call["name"], "args": call.get("args") or {}, "id": call_id}],
     )
     body = _render_tool_result(
-        _presented_for_model(call["name"], payload,
-                             admission_context.current_profile()),
+        _presented_for_model(call["name"], payload),
         offset=offset)
     result = ToolMessage(
         content=f'<tool_result name="{call["name"]}">\n{body}\n</tool_result>',

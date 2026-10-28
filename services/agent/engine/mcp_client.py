@@ -33,8 +33,6 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 from services.agent.routing.admission_context import PREFLIGHT_TOOLS
-from services.agent.routing.admission_context import absent_in_manifest
-from services.agent.routing.admission_context import manifest_value
 import logging
 import re
 
@@ -670,7 +668,7 @@ def _is_number(value: Any) -> bool:
 
 
 
-def _presented_factor(factor: Any, manifest: dict[str, Any] | None = None) -> Any:
+def _presented_factor(factor: Any) -> Any:
     """One risk driver, named and directed, with no magnitude to quote.
 
     Rebuilt field by field rather than copied and edited, because the field that has to
@@ -678,18 +676,11 @@ def _presented_factor(factor: Any, manifest: dict[str, Any] | None = None) -> An
     want of a use — the widget draws it as a bar length — but because it is not this
     turn's to state.
 
-    `patient_value` is the cross-reference, and it is the one field added rather than
-    removed. A contribution is measured against a population baseline, so the model can
-    report a factor as INCREASING risk for a patient who does not have it: on Gate 3
-    (`00d`) `holdout_t1_01` was answered with "the primary driver increasing this risk is
-    recent ED visits" for a record whose manifest reads `recent_ed_visits: 0`, and the
-    judge scored it as both a fidelity and a safety failure. Annotating the factor with
-    what the row actually records is what lets the prompt tell the two apart — the model's
-    attribution is one fact, the patient's value is another, and an answer that merges
-    them is the failure.
-
-    `_baseline_artifact_absent_in_patient` names the contradiction so the prose rule can
-    bite on it instead of on a judgement about the numbers.
+    Two fields and no more: the humanized feature name, which is the name both the prose
+    and the bars use, and the direction the model attached to it. The patient's own value
+    for the feature is deliberately NOT copied in here. It is already stated in the
+    `<admission_metadata>` block, which is the row the model scored, and a second copy
+    inside the factor is a second thing that can disagree with the first.
     """
     if not isinstance(factor, dict):
         return factor
@@ -698,17 +689,10 @@ def _presented_factor(factor: Any, manifest: dict[str, Any] | None = None) -> An
     }
     if isinstance(factor.get("direction"), str):
         presented["direction"] = factor["direction"]
-    feature = str(factor.get("feature") or "")
-    patient_value = manifest_value(feature, manifest)
-    if patient_value is not None:
-        presented["patient_value"] = patient_value
-        if absent_in_manifest(feature, manifest):
-            presented["_baseline_artifact_absent_in_patient"] = True
     return presented
 
 
-def _presented_prediction(name: str, payload: Any,
-                          manifest: dict[str, Any] | None = None) -> Any:
+def _presented_prediction(name: str, payload: Any) -> Any:
     """The prediction result as the interface shows it, for the model to read.
 
     The model has never seen a feature key, and the keys are not words a clinician reads:
@@ -744,13 +728,12 @@ def _presented_prediction(name: str, payload: Any,
     score is stripped and shown as a safety swap — so withholding it also removes a way
     for a good answer to be visibly withdrawn from a reader mid-sentence.
 
-    They also gain `patient_value` where the admission profile can supply it. Direction is
-    not evidence that the patient has the factor: it is measured against a population
-    baseline, so on Gate 3 (`00d`) a record whose manifest reads `recent_ed_visits: 0` was
-    answered with "the primary driver increasing this risk is recent ED visits" — a
-    fidelity and safety failure at once. The recorded value is the second half of the
-    sentence, and `_baseline_artifact_absent_in_patient` marks the contradiction so the
-    prose rule can bite on it.
+    The patient's own values are not here either, and that is a change from an earlier
+    shape of this function. Direction is not evidence that the patient has the factor —
+    it is measured against a population baseline, so a record whose `<admission_metadata>`
+    reads `recent_ed_visits: 0` can be told the factor increased its estimate. What the
+    row actually records is stated in that block and nowhere else, so it is one fact in
+    one place rather than two copies that can disagree.
 
     `EHR_FORMATTING` names both display strings, and the guardrail still checks the prose
     against the SERVED value, because it reads the recorded call and not this copy. It
@@ -778,133 +761,27 @@ def _presented_prediction(name: str, payload: Any,
 
     factors = payload.get("top_factors")
     if isinstance(factors, list):
-        projected["top_factors"] = [_presented_factor(factor, manifest)
-                                    for factor in factors]
+        projected["top_factors"] = [_presented_factor(factor) for factor in factors]
     return projected
 
 
-def _excursion(low: Any, high: Any, value: Any) -> float | None:
-    """How far outside a reference interval a value sits, in range-widths.
-
-    Zero inside the interval, positive outside, and normalised by the interval's own
-    width — a plain distance ranks a wide interval above a narrow one however abnormal
-    the reading is. `followups._excursion` is the same rule for the chip text; this is
-    the copy the projection ranks with.
-
-    INTERNAL. The number this returns never reaches the model and never reaches an answer:
-    it exists to order the panel, and the order is what `_presented_labs` publishes. It
-    was attached to every timepoint until 2026-10-28, and the model quoted it as a
-    clinical measurement — "an excursion of 1.258" — which the judge, holding only what
-    the tool returned, scored as fabrication.
-    """
-    if any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in (low, high, value)):
-        return None
-    width = max(float(high) - float(low), 1e-9)
-    if value > high:
-        return round((float(value) - float(high)) / width, 3)
-    if value < low:
-        return round((float(low) - float(value)) / width, 3)
-    return 0.0
 
 
-#: The key an out-of-range analyte carries in the model's copy of a panel: `1` is the
-#: analyte furthest outside its reference interval. An ORDINAL, never a quantity.
-ABNORMALITY_RANK = "_abnormality_rank"
-
-#: The same ordering restricted to the last recorded timepoint — the one "at discharge"
-#: asks about. Two keys rather than one because the two questions are different: an
-#: analyte can be the worst of the admission and normal by discharge, and the prompt
-#: already forbids offering a mid-stay nadir as the answer to a discharge question.
-ABNORMALITY_RANK_AT_LATEST = "_abnormality_rank_at_latest"
-
-
-def _presented_labs(payload: Any) -> Any:
-    """Lab trends as the model may see them: out-of-range analytes carry an ordinal rank.
-
-    Why the ranking is computed here rather than by the model. `dev_t3_03` asked which
-    value was "furthest outside its reference range"; haemoglobin was `low`, and so were
-    the red cells and the RDW, so the per-timepoint `flag` could not rank them and the
-    model picked one. The prompt forbids re-deriving the ranking from the digits —
-    correctly, because a digit the model is holding is a digit it can misread — so the
-    ordering is decided before the model sees the panel.
-
-    What is published is the ORDER and not the arithmetic. Until 2026-10-28 the deviation
-    itself was attached to every timepoint as `excursion` / `excursion_max`, and on the
-    `00c8` retest the model quoted it in prose — "an excursion of 1.258" — which is not a
-    laboratory result and which the judge, reading the tool's own output, could only score
-    as invented. A rank cannot be mistaken for a measurement: it is an integer, it says
-    `1` rather than `1.258`, and the prompt names it as machinery that never enters an
-    answer. The deviation still decides the order; it just stays in this function.
-
-    Ties break on the analyte's label, so the same panel always ranks the same way.
-    Applied to the model's copy only: the recorded call keeps what the tool returned.
-    """
-    if not isinstance(payload, dict):
-        return payload
-    trends = payload.get("trends")
-    if not isinstance(trends, list):
-        return payload
-
-    # One pass to score, a second to publish: a rank is a position among the analytes, so
-    # it cannot be assigned until every analyte has been scored.
-    scores: list[tuple[int, float, float, str]] = []
-    for index, trend in enumerate(trends):
-        if not isinstance(trend, dict):
-            continue
-        low, high = trend.get("reference_low"), trend.get("reference_high")
-        peak, latest = 0.0, 0.0
-        points = [point for point in trend.get("series") or [] if isinstance(point, dict)]
-        for point in points:
-            deviation = _excursion(low, high, point.get("value"))
-            if deviation is not None:
-                peak = max(peak, deviation)
-        if points:
-            deviation = _excursion(low, high, points[-1].get("value"))
-            latest = deviation if deviation is not None else 0.0
-        label = str(trend.get("label") or trend.get("key") or "")
-        scores.append((index, peak, latest, label))
-
-    # Furthest outside first; the label breaks a tie so the order is reproducible.
-    def _rank(rows: list[tuple[int, float, float, str]], position: int) -> dict[int, int]:
-        out_of_range = [row for row in rows if row[position] > 0]
-        out_of_range.sort(key=lambda row: (-row[position], row[3]))
-        return {row[0]: rank for rank, row in enumerate(out_of_range, start=1)}
-
-    peak_ranks = _rank(scores, 1)
-    latest_ranks = _rank(scores, 2)
-
-    presented = dict(payload)
-    rows = []
-    for index, trend in enumerate(trends):
-        if not isinstance(trend, dict):
-            rows.append(trend)
-            continue
-        row = dict(trend)
-        if index in peak_ranks:
-            row[ABNORMALITY_RANK] = peak_ranks[index]
-        if index in latest_ranks:
-            row[ABNORMALITY_RANK_AT_LATEST] = latest_ranks[index]
-        rows.append(row)
-    presented["trends"] = rows
-    return presented
-
-
-def _presented_for_model(name: str, payload: Any,
-                         manifest: dict[str, Any] | None = None) -> Any:
+def _presented_for_model(name: str, payload: Any) -> Any:
     """The tool result in the form the MODEL reads. Never the form the caller records.
 
-    Two tools need a translation the model must not perform itself: the estimate, whose
-    floats are replaced by the display strings the widget prints and whose drivers are
-    cross-referenced against the admission's own row, and the lab series, whose ranking is
-    computed rather than inferred. Everything else passes through untouched.
+    One tool needs a translation the model must not perform itself: the estimate, whose
+    floats are replaced by the display strings the widget prints and whose contribution
+    magnitudes are withheld. Everything else — note passages, medication lists, lab
+    series — passes through exactly as the tool returned it.
 
-    `manifest` is this turn's profile — the same row the pre-flight block in the system
-    prompt was rendered from. Optional because a record outside the cohort has none, and
-    a projection without it simply cannot annotate what the patient's value was.
+    The lab series used to be rewritten here, carrying an ordinal
+    `_abnormality_rank` computed from how far each analyte sat outside its reference
+    interval. That is gone: the panel reaches the model as the tool wrote it, and the
+    prompt asks for the comparison in prose. Nothing is cross-referenced against the
+    patient either, so the same call renders the same way whichever route asked for it.
     """
-    if name == "get_lab_trends":
-        return _presented_labs(payload)
-    return _presented_prediction(name, payload, manifest)
+    return _presented_prediction(name, payload)
 
 
 

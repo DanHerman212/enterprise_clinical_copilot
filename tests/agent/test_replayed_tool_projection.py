@@ -61,22 +61,26 @@ RONCO_PANEL = {
 }
 
 
-def test_a_replayed_lab_panel_carries_the_abnormality_rank():
-    """The ranking the follow-up is told to read has to survive the replay."""
+def test_a_replayed_lab_panel_carries_the_series_and_its_citation_numbers():
+    """A replayed panel is the tool's own payload plus the numbering, and nothing else.
+
+    The replay path used to have to reproduce the projection's `_abnormality_rank`, which
+    is gone: the panel now reaches the model exactly as the tool returned it, with the
+    citation fields the renderer adds for every passage-shaped unit.
+    """
     messages, _ = asyncio.run(graph.replay_messages(
         _Box({"get_lab_trends": RONCO_PANEL}),
         _turn("get_lab_trends", RONCO_PANEL, question="/labs", hadm_id=90000108),
     ))
 
     body = _body(messages)
-    assert "_abnormality_rank" in body, body
+    assert "_abnormality_rank" not in body, body
+    assert "excursion" not in body, body
 
     panel = json.loads(body.split("\n", 1)[1].rsplit("\n", 1)[0])
-    ranked = {trend["label"]: trend["_abnormality_rank"] for trend in panel["trends"]}
-
-    assert ranked["Red blood cells"] == 1, ranked
-    assert ranked == {"Red blood cells": 1, "RDW": 2, "Hemoglobin": 3}, ranked
-    assert "excursion" not in body, body
+    assert [trend["cite"] for trend in panel["trends"]] == [1, 2, 3]
+    assert [trend["label"] for trend in panel["trends"]] == [
+        "Hemoglobin", "Red blood cells", "RDW"]
 
 
 def test_a_replayed_estimate_shows_display_strings_and_no_float():

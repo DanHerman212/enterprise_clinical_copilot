@@ -344,8 +344,8 @@ def test_the_prompt_rules_that_gate_two_showed_were_missing():
     assert "enumerate EVERY matching" in SYSTEM_PROMPT
     assert "given inpatient and stopped or held" in SYSTEM_PROMPT
     assert "Never open a lab answer with a blanket" in SYSTEM_PROMPT
-    assert "`_abnormality_rank`" in SYSTEM_PROMPT
-    assert "NEVER written into an answer" in SYSTEM_PROMPT
+    assert "`_abnormality_rank`" not in SYSTEM_PROMPT
+    assert "NEVER written into an answer" not in SYSTEM_PROMPT
     assert "cites each analyte's series" in SYSTEM_PROMPT
 
 

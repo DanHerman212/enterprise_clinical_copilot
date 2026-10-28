@@ -120,3 +120,8 @@ docs/ux_workshop/phase1/live/
 
 # Plain-text context bundles (generated for review, never committed)
 *-code-bundle.txt
+
+# stuff that came from "evolutionary scar tissue"
+docs/adversarial_code_review/
+
+

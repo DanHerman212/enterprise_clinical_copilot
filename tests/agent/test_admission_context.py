@@ -317,13 +317,17 @@ def test_a_declaration_without_a_replayed_score_still_retrieves():
     assert model.calls == 2
 
 
-def test_a_machine_float_is_stated_as_the_count_it_is():
-    """§5.5.2: the manifest said 16.0417 and the answer quoted it back.
+def test_a_machine_float_is_stated_exactly_as_the_row_holds_it():
+    """The block is scored ground truth, so it may not shorten a number.
 
-    The profile arrives from BigQuery with every column as a string, so the value that
-    needed formatting was `"16.0417"`, not the float. Formatting only floats left the
-    manifest — and the answer — saying "recorded as 16.0417 days" (measured in the
-    production UI, `agent-00178-2zh`, 2026-10-24).
+    This used to round: `"16.0417"` rendered as "16", on the argument that four decimals
+    claim a precision neither the record nor the model has, after an answer was seen
+    saying "recorded as 16.0417 days" (`agent-00178-2zh`, 2026-10-24).
+
+    That fixed the prose by changing the record. On Gate 3 (`00d`) `holdout_t5_02` was
+    scored a fidelity failure for printing `24.7` where the expected value is `24.6667` —
+    the manifest had already rounded it, and the answer repeated what it was shown. The
+    block now states what the row states; prose style is the prompt's business.
     """
     block = admission_context.render(
         90000078, {"prior_inpatient_days": "16.0417",
@@ -331,20 +335,19 @@ def test_a_machine_float_is_stated_as_the_count_it_is():
                    "admission_type": "Emergency (EW EMER.)"},
     )
 
-    assert "prior_inpatient_days: 16\n" in block
-    assert "16.0417" not in block
+    assert "prior_inpatient_days: 16.0417" in block
     assert "prior_admissions: 4" in block
     # A non-numeric column is quoted as it stands.
     assert "admission_type: Emergency (EW EMER.)" in block
 
 
-def test_a_numeric_float_is_formatted_the_same_way():
+def test_a_numeric_float_is_stated_exactly_too():
     block = admission_context.render(90000078, {"prior_inpatient_days": 16.0417})
 
-    assert "prior_inpatient_days: 16\n" in block
+    assert "prior_inpatient_days: 16.0417" in block
 
 
-def test_a_genuinely_fractional_value_keeps_one_decimal():
+def test_a_genuinely_fractional_value_keeps_every_digit():
     block = admission_context.render(90000078, {"index_los_days": "4.46"})
 
-    assert "length_of_stay_days: 4.5" in block
+    assert "length_of_stay_days: 4.46" in block

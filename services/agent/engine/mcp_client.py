@@ -33,6 +33,8 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 from services.agent.routing.admission_context import PREFLIGHT_TOOLS
+from services.agent.routing.admission_context import absent_in_manifest
+from services.agent.routing.admission_context import manifest_value
 import logging
 import re
 
@@ -504,6 +506,42 @@ def _lab_modality(trend: dict[str, Any]) -> str:
     return f"STRUCTURED LAB TREND — {name}"
 
 
+def _citation_header(number: int, modality: str) -> str:
+    """The literal marker the model is asked to copy, printed beside the evidence.
+
+    `cite` already told the model WHICH number a unit carries, and it was not enough. On
+    Gate 3 (`00d`) six multi-turn items scored `citation <= 1`, and the judge's language
+    was the same six times: "every citation is incorrect … the claim about the chemotherapy
+    regimen is supported by a `rag_search` passage but is cited to a lab trend for RDW".
+    The numbering runs across turns — a Turn‑2 answer citing Turn 1's panel uses `^[1]` for
+    RDW and `^[6]` for the note — and a bare `"cite": 1` beside a JSON object is a fact the
+    model has to remember rather than a token it can copy.
+
+    So the marker is printed in the form the answer must contain: `[CITATION ^[6] |
+    CLINICAL NOTE SECTION — brief_hospital_course]`. Copying that string is cheaper than
+    reconstructing an index, and a wrong index is no longer a plausible default.
+
+    Not added for the admission manifest, and deliberately: a marker must resolve, and the
+    manifest is context rather than a citable unit. Stamping it would produce a `^[n]` that
+    the citation layer strips from a correct answer.
+    """
+    return f"[CITATION ^[{number}] | {modality}]"
+
+
+def _citation_fields(number: int, modality: str) -> dict[str, Any]:
+    """The three fields every citable unit carries, built in one place.
+
+    `cite` is the integer position, `cite_modality` the kind of evidence, and
+    `cite_header` the marker printed ready to copy. One function because they must agree:
+    a header naming `^[6]` beside a `cite` of 3 would be a worse defect than no header.
+    """
+    return {
+        "cite": number,
+        "cite_modality": modality,
+        "cite_header": _citation_header(number, modality),
+    }
+
+
 def _render_tool_result(payload: Any, *, offset: int = 0) -> str:
     """Render a tool result as the body the wrapper hands the model.
 
@@ -542,11 +580,10 @@ def _render_tool_result(payload: Any, *, offset: int = 0) -> str:
             # medication management (2026-10-27). Labelling the number is what lets the
             # citation rule in SYSTEM_PROMPT be checked rather than remembered.
             rendered = dict(payload, passages=[
-                ({**(_render_passage(passage) if isinstance(passage, dict) else {}),
-                  "cite": offset + index,
-                  "cite_modality": _note_modality(
-                      passage.get("section") if isinstance(passage, dict) else None)})
-                 if isinstance(passage, dict) else passage
+                ({**_render_passage(passage),
+                  **_citation_fields(offset + index,
+                                     _note_modality(passage.get("section")))}
+                 if isinstance(passage, dict) else passage)
                 for index, passage in enumerate(passages, start=1)
             ])
         else:
@@ -558,8 +595,7 @@ def _render_tool_result(payload: Any, *, offset: int = 0) -> str:
             trends = payload.get("trends")
             if isinstance(trends, list):
                 rendered = dict(payload, trends=[
-                    ({**trend, "cite": offset + index,
-                      "cite_modality": _lab_modality(trend)}
+                    ({**trend, **_citation_fields(offset + index, _lab_modality(trend))}
                      if isinstance(trend, dict) else trend)
                     for index, trend in enumerate(trends, start=1)
                 ])
@@ -621,33 +657,53 @@ def _is_number(value: Any) -> bool:
 
 
 
-def _presented_factor(factor: Any) -> Any:
+def _presented_factor(factor: Any, manifest: dict[str, Any] | None = None) -> Any:
     """One risk driver, named and directed, with no magnitude to quote.
 
     Rebuilt field by field rather than copied and edited, because the field that has to
     go is the one a `{**factor}` spread would keep. The magnitude is not withheld for
     want of a use — the widget draws it as a bar length — but because it is not this
     turn's to state.
+
+    `patient_value` is the cross-reference, and it is the one field added rather than
+    removed. A contribution is measured against a population baseline, so the model can
+    report a factor as INCREASING risk for a patient who does not have it: on Gate 3
+    (`00d`) `holdout_t1_01` was answered with "the primary driver increasing this risk is
+    recent ED visits" for a record whose manifest reads `recent_ed_visits: 0`, and the
+    judge scored it as both a fidelity and a safety failure. Annotating the factor with
+    what the row actually records is what lets the prompt tell the two apart — the model's
+    attribution is one fact, the patient's value is another, and an answer that merges
+    them is the failure.
+
+    `_baseline_artifact_absent_in_patient` names the contradiction so the prose rule can
+    bite on it instead of on a judgement about the numbers.
     """
     if not isinstance(factor, dict):
         return factor
-    return {
+    presented: dict[str, Any] = {
         "feature": humanize(str(factor.get("feature", ""))),
-        **({"direction": factor["direction"]}
-           if isinstance(factor.get("direction"), str) else {}),
     }
+    if isinstance(factor.get("direction"), str):
+        presented["direction"] = factor["direction"]
+    feature = str(factor.get("feature") or "")
+    patient_value = manifest_value(feature, manifest)
+    if patient_value is not None:
+        presented["patient_value"] = patient_value
+        if absent_in_manifest(feature, manifest):
+            presented["_baseline_artifact_absent_in_patient"] = True
+    return presented
 
 
-
-def _presented_prediction(name: str, payload: Any) -> Any:
+def _presented_prediction(name: str, payload: Any,
+                          manifest: dict[str, Any] | None = None) -> Any:
     """The prediction result as the interface shows it, for the model to read.
 
-    The model has never seen a feature key, and the keys are not words a clinician
-    reads: the widget draws "red cell distribution width (RDW)" where the result says
-    `rdw_max`. The mapping already exists (`feature_labels.py`) and the interface uses
-    it, so the substitution is made here rather than requested from the model — a
-    translation the model performs is a translation the model can invent, and the prose
-    and the bars have to name a factor the same way.
+    The model has never seen a feature key, and the keys are not words a clinician reads:
+    the widget draws "red cell distribution width (RDW)" where the result says `rdw_max`.
+    The mapping already exists (`feature_labels.py`) and the interface uses it, so the
+    substitution is made here rather than requested from the model — a translation the
+    model performs is a translation the model can invent, and the prose and the bars have
+    to name a factor the same way.
 
     `humanize`, not `label_for`. Both read the same curated map, so they agree on every
     feature it names; they part only in the fallback, where `label_for` hands back the raw
@@ -664,16 +720,24 @@ def _presented_prediction(name: str, payload: Any) -> Any:
     them — and carries no `probability`, `threshold` or `base_value` at all.
 
     Withheld rather than rounded. A display string is the same number written as the
-    reader will see it written, which is a different thing from a rounded float the
-    model then has to print a digit of: this projection used to pre-round, and given
-    0.33 the model wrote "33.0%" beside a widget drawing 33.2%, which is why the
-    rounding was removed in the first place. Given "33.2%" there is no digit to lose.
+    reader will see it written, which is a different thing from a rounded float the model
+    then has to print a digit of: this projection used to pre-round, and given 0.33 the
+    model wrote "33.0%" beside a widget drawing 33.2%, which is why the rounding was
+    removed in the first place. Given "33.2%" there is no digit to lose.
 
     The drivers keep their names and their direction and lose their magnitudes. The
-    narrative says which factors led and what they mean; the widget draws how much. A
-    raw contribution was quotable too, and a number the guardrail does not recognise as
-    the score is stripped and shown as a safety swap — so withholding it also removes a
-    way for a good answer to be visibly withdrawn from a reader mid-sentence.
+    narrative says which factors led and what they mean; the widget draws how much. A raw
+    contribution was quotable too, and a number the guardrail does not recognise as the
+    score is stripped and shown as a safety swap — so withholding it also removes a way
+    for a good answer to be visibly withdrawn from a reader mid-sentence.
+
+    They also gain `patient_value` where the admission profile can supply it. Direction is
+    not evidence that the patient has the factor: it is measured against a population
+    baseline, so on Gate 3 (`00d`) a record whose manifest reads `recent_ed_visits: 0` was
+    answered with "the primary driver increasing this risk is recent ED visits" — a
+    fidelity and safety failure at once. The recorded value is the second half of the
+    sentence, and `_baseline_artifact_absent_in_patient` marks the contradiction so the
+    prose rule can bite on it.
 
     `EHR_FORMATTING` names both display strings, and the guardrail still checks the prose
     against the SERVED value, because it reads the recorded call and not this copy. It
@@ -701,7 +765,8 @@ def _presented_prediction(name: str, payload: Any) -> Any:
 
     factors = payload.get("top_factors")
     if isinstance(factors, list):
-        projected["top_factors"] = [_presented_factor(factor) for factor in factors]
+        projected["top_factors"] = [_presented_factor(factor, manifest)
+                                    for factor in factors]
     return projected
 
 
@@ -811,17 +876,22 @@ def _presented_labs(payload: Any) -> Any:
     return presented
 
 
-def _presented_for_model(name: str, payload: Any) -> Any:
+def _presented_for_model(name: str, payload: Any,
+                         manifest: dict[str, Any] | None = None) -> Any:
     """The tool result in the form the MODEL reads. Never the form the caller records.
 
     Two tools need a translation the model must not perform itself: the estimate, whose
-    floats are replaced by the display strings the widget prints, and the lab series,
-    whose ranking is computed rather than inferred. Everything else passes through
-    untouched.
+    floats are replaced by the display strings the widget prints and whose drivers are
+    cross-referenced against the admission's own row, and the lab series, whose ranking is
+    computed rather than inferred. Everything else passes through untouched.
+
+    `manifest` is this turn's profile — the same row the pre-flight block in the system
+    prompt was rendered from. Optional because a record outside the cohort has none, and
+    a projection without it simply cannot annotate what the patient's value was.
     """
     if name == "get_lab_trends":
         return _presented_labs(payload)
-    return _presented_prediction(name, payload)
+    return _presented_prediction(name, payload, manifest)
 
 
 

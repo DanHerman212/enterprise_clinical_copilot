@@ -93,6 +93,10 @@ from services.agent.engine.prompts import SYSTEM_PROMPT
 from services.agent.telemetry import observability
 from services.agent.routing import routing
 from services.agent.routing import encounter
+# Imported as a module, not for a name: `run_turn` takes a parameter called
+# `admission_context` (the rendered block), which shadows any bare name here. The
+# profile behind that block is read through `admission_context.current_profile()`.
+from services.agent.routing import admission_context
 from services.agent.telemetry import stages
 
 logger = logging.getLogger(__name__)
@@ -756,7 +760,8 @@ def build_graph(
 
         messages, recorded = await _execute_tool_calls(
             toolbox, calls, on_event, guard=guard,
-            project=_presented_for_model,
+            project=lambda name, payload: _presented_for_model(
+                name, payload, admission_context.current_profile()),
             # Everything this turn has already spent, so the budget is a budget for the
             # turn rather than for one iteration of the loop around it.
             already_called=list(state.get("tool_calls") or []),
@@ -1300,7 +1305,10 @@ def _replayed_tool_messages(
         content="",
         tool_calls=[{"name": call["name"], "args": call.get("args") or {}, "id": call_id}],
     )
-    body = _render_tool_result(_presented_for_model(call["name"], payload), offset=offset)
+    body = _render_tool_result(
+        _presented_for_model(call["name"], payload,
+                             admission_context.current_profile()),
+        offset=offset)
     result = ToolMessage(
         content=f'<tool_result name="{call["name"]}">\n{body}\n</tool_result>',
         tool_call_id=call_id,

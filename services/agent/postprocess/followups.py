@@ -47,6 +47,7 @@ import re
 from collections.abc import Sequence
 from typing import Any
 
+from services.agent.routing import admission_context
 from services.agent.routing import routing
 from services.agent.presentation.domain import humanize
 
@@ -263,14 +264,27 @@ def _risk(state: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _increasing_driver(risk: dict[str, Any]) -> str:
-    """The highest-ranked factor the model says pushes risk up, as a human label."""
+    """The highest-ranked factor the model says pushes risk up, as a human label.
+
+    Skipping the factors the patient's own row says they do not have. A contribution is
+    measured against a population baseline, so the model can rank a feature as increasing
+    risk for a record whose value is zero — `recent_ed_visits` on Gate 3's `90000067`,
+    whose manifest reads `0`. Offering that as a chip asks the product's own question
+    ("why does recent ED visits increase this patient's readmission risk?") and then
+    requires the next turn to answer it, which is how `holdout_t2_01` came to assert a
+    history of ED visits the record contradicts (`00d`, fidelity 0.0).
+
+    A chip is a promise that the question is answerable, and this one is not.
+    """
+    manifest = admission_context.current_profile()
     for factor in risk.get("top_factors") or []:
         if not isinstance(factor, dict):
             continue
         if str(factor.get("direction") or "").lower().startswith("increas"):
             feature = str(factor.get("feature") or "").strip()
-            if feature:
-                return humanize(feature)
+            if not feature or admission_context.absent_in_manifest(feature, manifest):
+                continue
+            return humanize(feature)
     return ""
 
 

@@ -30,12 +30,96 @@ is worse than one that knows — but far better than a turn that fails.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 from typing import Any
 
 from services.agent.routing import encounter
 
 _LOG = logging.getLogger(__name__)
+
+#: The profile the block was rendered from, for the layers that must cross-reference it.
+#:
+#: `predict_readmission` returns feature CONTRIBUTIONS, which are relative to a population
+#: baseline and say nothing about whether the patient has the feature at all: on Gate 3
+#: (`00d`) the model listed `recent_ed_visits` as "the primary driver increasing this
+#: risk" for a record whose manifest says `recent_ed_visits: 0`. The projection needs the
+#: recorded value to say so, and the chip generator needs it to stop asking the product's
+#: own question about a factor the patient does not have.
+#:
+#: A ContextVar for the same reason `encounter` is one: it is per-turn state, set by the
+#: pre-flight that reads the row, and read by layers that never see the request.
+_CURRENT_PROFILE: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "admission_profile", default=None)
+
+
+def set_current_profile(profile: dict[str, Any] | None) -> None:
+    """Record this turn's profile, or clear it when the turn has none."""
+    _CURRENT_PROFILE.set(profile if isinstance(profile, dict) and profile else None)
+
+
+def current_profile() -> dict[str, Any] | None:
+    """The profile this turn is running against, or None when there is none."""
+    return _CURRENT_PROFILE.get()
+
+
+#: The `predict_readmission` `top_factors` entries whose value the profile can verify.
+#:
+#: Only these. The model also reports `rdw_max`, `oncology_flag`, `monocytes_min` and the
+#: rest, and the profile carries no field for them — so "the patient does not have this"
+#: is a claim nothing here could support, and guessing it from the key would be a second
+#: invention on top of the first.
+MANIFEST_VALUE_FEATURES: dict[str, str] = {
+    "age": "age",
+    "prior_admission_count": "prior_admission_count",
+    "prior_inpatient_days": "prior_inpatient_days",
+    "recent_ed_visits": "recent_ed_visits",
+    "admission_type": "admission_type",
+    "discharge_location": "discharge_location",
+    "index_los_days": "index_los_days",
+}
+
+#: Recorded values that mean "the patient does not have this": a count of zero, a false
+#: flag, an empty field. Anything non-empty and non-zero is a value the patient HAS.
+_ABSENT_VALUES = frozenset({"", "0", "0.0", "false", "no", "none", "null", "-"})
+
+
+def manifest_value(feature: str, profile: dict[str, Any] | None) -> str | None:
+    """The patient's recorded value for a model feature, or None if it cannot be read.
+
+    None means "this projection does not know", and it is the answer for every feature
+    the profile has no column for. It is deliberately not the same as an absent value: a
+    missing field is ignorance, a zero is a finding.
+    """
+    field = MANIFEST_VALUE_FEATURES.get(str(feature or "").strip().lower())
+    if field is None or not isinstance(profile, dict):
+        return None
+    value = profile.get(field)
+    if value is None:
+        return ""
+    return str(value).strip() if str(value).strip() else ""
+
+
+def absent_in_manifest(feature: str, profile: dict[str, Any] | None) -> bool:
+    """Whether the patient's own row says they do not have this factor.
+
+    The single definition, shared by the projection that annotates the factor and the
+    chip generator that must not ask a question about it. A contribution is measured
+    against a population baseline, so the model can rank a feature as increasing risk for
+    a record whose value is zero — `recent_ed_visits` on Gate 3's `90000067`, whose
+    manifest reads `0`, where the answer asserted a history of ED visits and the chip
+    asked why they increased the risk (`00d`, fidelity 0 and 1, one safety failure).
+    """
+    value = manifest_value(feature, profile)
+    if value is None:
+        return False
+    text = value.strip().lower()
+    if text in _ABSENT_VALUES:
+        return True
+    try:
+        return float(text) == 0.0
+    except (TypeError, ValueError):
+        return False
 
 #: The MCP tool this calls. It is registered on the server so the pre-flight call
 #: can reach it, and hidden from the model's function declarations so the model
@@ -66,40 +150,34 @@ _FIELDS: tuple[tuple[str, str], ...] = (
 
 
 def _display(value: Any) -> str:
-    """A number the way a clinician writes it, and everything else as it stands.
+    """A number exactly as the row carries it, and everything else as it stands.
 
-    The feature store returns `prior_inpatient_days` as 16.0417 because that is the
-    encoded row, not an observation. `_clean` used to stringify it verbatim, so the
-    manifest stated "prior_inpatient_days: 16.0417" and a risk-driver answer quoted it
-    back as "recorded as 16.0417 days" (measured in the production UI,
-    `agent-00177-qr5`, 2026-10-24). Four decimals claim a precision neither the record
-    nor the model has.
+    The feature store returns `prior_inpatient_days` as "24.6667" because that is the
+    encoded row. This function used to round it to one decimal — 16.0417 became "16.0" —
+    on the argument that four decimals claim a precision neither the record nor the
+    model has, after an answer was seen saying "recorded as 16.0417 days"
+    (`agent-00177-qr5`, 2026-10-24).
 
-    Counts and days are whole numbers; anything genuinely fractional keeps one decimal.
-    Formatting here rather than downstream is deliberate: the number is shown to the
-    model, and a prompt rule asking it to round is a request it can decline.
+    That was the wrong layer to fix it. The manifest is verified ground truth that the
+    judge holds the answer against, so a manifest that states "24.7" for a row holding
+    24.6667 is a manifest that disagrees with the dataset — and on Gate 3 (`00d`)
+    `holdout_t5_02` was scored a fidelity failure for printing "24.7" while the expected
+    value was 24.6667. Whispering the record is not the same as writing it well: the
+    prompt asks the model to reproduce these values character-for-character and to use
+    them descriptively, and it cannot do the first if this layer has already shortened
+    the number.
+
+    So the value travels exactly. Prose style is the prompt's business; the digits are
+    the record's.
     """
     if isinstance(value, bool):
         return str(value)
     if isinstance(value, (int, float)):
-        rounded = round(float(value), 1)
-        if rounded.is_integer():
-            return str(int(rounded))
-        return f"{rounded:.1f}"
-    # The profile arrives from BigQuery with every column as a string, so the count that
-    # needs formatting is usually `"16.0417"` rather than 16.0417. A value that is not a
-    # number — "Emergency (EMER)", "Home" — is returned untouched.
-    text = str(value).strip()
-    try:
-        number = float(text)
-    except (TypeError, ValueError):
         return str(value)
-    if text.isdigit():
-        return text
-    rounded = round(number, 1)
-    if rounded.is_integer():
-        return str(int(rounded))
-    return f"{rounded:.1f}"
+    # The profile arrives from BigQuery with every column as a string, so the value that
+    # needs care is usually `"24.6667"` rather than 24.6667. Anything that is not a
+    # number — "Emergency (EMER)", "Home" — is returned untouched.
+    return str(value).strip()
 
 
 def _clean(value: Any) -> str:
@@ -166,6 +244,9 @@ async def hydrate(box: Any, hadm_id: int | None) -> str:
     no profile from inheriting the previous turn's answer.
     """
     encounter.set_current(None)
+    # Cleared with the encounter type, and for the same reason: a turn with no profile
+    # must not inherit the previous turn's row.
+    set_current_profile(None)
     if not hadm_id or box is None:
         return ""
     try:
@@ -184,4 +265,5 @@ async def hydrate(box: Any, hadm_id: int | None) -> str:
         return ""
     profile = payload.get("profile") or {}
     encounter.set_current(encounter.classify(profile))
+    set_current_profile(profile)
     return render(hadm_id, profile)

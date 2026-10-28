@@ -433,7 +433,9 @@ def _freetext_allowed(risk_driver_question: bool,
                       wants_literature: bool,
                       lab_driver_question: bool = False,
                       declared_follow_up: bool = False,
-                      risk_score_question: bool = False) -> frozenset[str]:
+                      risk_score_question: bool = False,
+                      lab_ranking_question: bool = False,
+                      lab_panel_in_transcript: bool = False) -> frozenset[str]:
     """The tools the reasoning loop may call on this turn.
 
     `routing.FREETEXT_TOOLS` is the standing boundary: a command's tool is absent rather
@@ -475,6 +477,18 @@ def _freetext_allowed(risk_driver_question: bool,
     The series documents nothing such a question asked, so it is withheld unless the
     driver IS an analyte (`routing.asks_about_a_lab_analyte`).
 
+    A third condition REPLACES the set rather than adding to it: a question that asks for
+    laboratory values to be RANKED or COMPARED (`routing.asks_about_lab_ranking`). The
+    ranking is the `excursion` field the series carries, and no other tool contributes to
+    it — a note search returns prose that mentions laboratory numbers incidentally, which
+    is how `dev_t3_03` came back on Gate 2 with a hemoglobin of 10.8 and a sodium of 132
+    after reporting 10.0 and 136 from the series on the previous turn. So the turn is
+    given the lab tool and nothing else. When the panel is ALREADY in the transcript the
+    withdrawal is not made here: `_still_bound` takes `get_lab_trends` away through
+    `ONCE_PER_TRANSCRIPT` / `FULL_FETCH_UNFILTERED`, which leaves this turn with nothing to
+    call and `route` ending it — the evidence is in hand, and binding a note search beside
+    it invites exactly the search that produced the contradiction.
+
     What is NOT relaxed: the model never sees a raw float. The projection in
     `mcp_client._presented_for_model` shows the score and the threshold as the display
     strings the widget prints, and withholds `probability`, `threshold` and `base_value`
@@ -489,6 +503,12 @@ def _freetext_allowed(risk_driver_question: bool,
     if risk_driver_question:
         if not lab_driver_question:
             allowed.discard("get_lab_trends")
+    if lab_ranking_question:
+        # Nothing but the panel answers a ranking question. Whether the panel still has
+        # to be FETCHED is `_still_bound`'s question, not this one: a full panel already
+        # in the transcript takes this tool away for the turn, and an empty binding is
+        # what `route` reads as "the evidence is in hand".
+        return frozenset({"get_lab_trends"}) & routing.FREETEXT_TOOLS
     return frozenset(allowed)
 
 
@@ -614,6 +634,8 @@ def build_graph(
     lab_driver_question: bool = False,
     follow_up_declared: bool = False,
     risk_score_question: bool = False,
+    lab_ranking_question: bool = False,
+    lab_panel_in_transcript: bool = False,
 ):
     """Compile the graph. `on_event` receives progress stages; None disables them.
 
@@ -649,7 +671,8 @@ def build_graph(
     # force anything on the questions that need it most.
     allowed = _freetext_allowed(risk_driver_question, wants_literature,
                                lab_driver_question, follow_up_declared,
-                               risk_score_question)
+                               risk_score_question, lab_ranking_question,
+                               lab_panel_in_transcript)
     freetext_tools = _tools(toolbox, allowed=allowed)
     chat_model = model_gateway.build_llm(model)
     llm = chat_model.bind_tools(freetext_tools)
@@ -821,6 +844,15 @@ def build_graph(
             # then removed the tool that would have answered it, so the turn answered
             # from the notes that the labs were not documented. Provenance is a fact the
             # client has; it sends it.
+            return END
+        if lab_ranking_question and lab_panel_in_transcript:
+            # The same argument as the manifest and the declared follow-up, on a third
+            # kind of question: a ranking of laboratory values is answered from the
+            # panel, and the panel is in the transcript. Nothing is bound on this turn
+            # (`_freetext_allowed`), so demanding a retrieval would demand a call the
+            # model cannot make — and the demand text names `rag_search`, which is
+            # exactly the search that produced figures contradicting the series
+            # (`dev_t3_03`, Gate 2 2026-10-27).
             return END
         return "demand_retrieval"
 
@@ -1046,6 +1078,24 @@ async def ask(
     # (`replay_messages`). A chart turn keeps neither.
     wants_literature = routing.asks_for_literature(question)
 
+    # Earlier turns' published-records searches are carried only into a turn that is
+    # itself about published records. See `replay_messages`: a `search_literature`
+    # result left in the transcript re-entered every later turn, binding a marker to an
+    # article nobody had been shown and badging a chart answer as general evidence.
+    #
+    # Built before the graph rather than after it, because ONE binding decision reads it:
+    # whether the laboratory panel this turn is asked to rank is already in hand
+    # (`_freetext_allowed`). The replay is the only place that fact lives.
+    replayed, replayed_calls = await replay_messages(
+        toolbox, turns, keep_literature=wants_literature)
+
+    # A ranking question about laboratory values is answered from the series. Where that
+    # series already is decides whether this turn calls for it again: `_fulfilled_by_replay`
+    # is the same test `_still_bound` uses, and it distinguishes a full panel from a
+    # single-analyte fetch that leaves the rest of the panel unread.
+    lab_ranking_question = routing.asks_about_lab_ranking(question)
+    lab_panel_in_transcript = _fulfilled_by_replay("get_lab_trends", replayed_calls)
+
     graph = build_graph(
         toolbox, model=model, on_event=on_event, question_kind=question_kind,
         # The one identifier this turn holds, checked against what is about to
@@ -1081,6 +1131,12 @@ async def ask(
         # disposition is not documented by a lab series, so asking for one put a panel in
         # the turn's evidence and a lab chip under an answer about utilization.
         lab_driver_question=routing.asks_about_a_lab_analyte(question),
+        # And whether this is a ranking question, which REPLACES the tool set rather than
+        # adding to it: the ranking is the series' own `excursion` field, and a note
+        # search answers it with incidental figures that contradict the series
+        # (`dev_t3_03`, Gate 2 2026-10-27).
+        lab_ranking_question=lab_ranking_question,
+        lab_panel_in_transcript=lab_panel_in_transcript,
     )
 
     config: dict = {"recursion_limit": RECURSION_LIMIT}
@@ -1103,13 +1159,6 @@ async def ask(
     tracing = observability.handler()
     if tracing is not None:
         config["callbacks"] = [tracing]
-
-    # Earlier turns' published-records searches are carried only into a turn that is
-    # itself about published records. See `replay_messages`: a `search_literature`
-    # result left in the transcript re-entered every later turn, binding a marker to an
-    # article nobody had been shown and badging a chart answer as general evidence.
-    replayed, replayed_calls = await replay_messages(
-        toolbox, turns, keep_literature=wants_literature)
 
     # The same root span the command path uses, for the same two reasons: the trace
     # gets its tags and session id from us rather than depending on the SDK reading

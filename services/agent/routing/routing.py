@@ -893,6 +893,60 @@ def asks_about_a_lab_analyte(question: str) -> bool:
     return bool(_LAB_ANALYTE.search(question or ""))
 
 
+#: The words a question uses when it wants a laboratory value RANKED, COMPARED or placed
+#: against its reference interval — "which lab was worst at discharge", "most abnormal",
+#: the peak, the nadir, "highest creatinine".
+#:
+#: Single tokens rather than phrases: "most abnormal" and "furthest out of range" are two
+#: words each and a phrase list would have to enumerate every modifier that can precede
+#: the adjective. The adjective is the cue.
+_LAB_RANKING_WORDS = frozenset({
+    "worst", "worse", "abnormal", "abnormalities", "deranged", "extreme", "extremes",
+    "highest", "lowest", "peak", "peaks", "nadir", "nadirs", "maximum", "minimum",
+    "rank", "ranked", "ranking", "rankings", "compare", "compares", "comparison",
+    "furthest", "farthest", "biggest", "largest", "smallest",
+})
+
+#: The nouns that stand in for a named analyte when the question speaks about the panel
+#: rather than one value. "Which lab was worst at discharge" names no analyte and is still
+#: unambiguously a question about the series.
+_LAB_SUBJECT_NOUNS = frozenset({
+    "lab", "labs", "laboratory", "laboratories", "panel", "panels",
+    "analyte", "analytes", "bloodwork", "bloods",
+})
+
+
+def asks_about_lab_ranking(question: str) -> bool:
+    """Whether this question asks for laboratory values to be ranked or compared.
+
+    The distinction decides the turn's whole evidence set (`graph._freetext_allowed`).
+    A ranking question is answered by the series and by nothing else: the ranking is the
+    `excursion` field `get_lab_trends` computes, and every other tool returns either prose
+    that repeats laboratory numbers incidentally or a record that carries none.
+
+    On Gate 2 (`pilot-verify-20261027-215139`) `dev_t3_03` Turn 2 asked "which lab was
+    worst at discharge?" on a thread whose Turn 1 was `/labs`. The panel was in the
+    transcript and `get_lab_trends` was therefore withdrawn as already-spent
+    (`ONCE_PER_TRANSCRIPT`), leaving a note search as the only tool bound — so the model
+    searched the discharge note, found a hemoglobin of 10.8 and a sodium of 132 inside a
+    narrative passage, and answered with figures that contradicted the 10.0 and 136 it had
+    reported one turn earlier from the series. Both the ranking and the cross-turn
+    consistency failed, and neither could be recovered from the note it read.
+
+    Requires a laboratory SUBJECT as well as a ranking word: "which medication was
+    prescribed at the highest dose" carries a ranking word and is not a lab question, and
+    a false positive there would withdraw the note search that answers it.
+    """
+    text = str(question or "").lower().translate(_PUNCTUATION)
+    if not text.strip():
+        return False
+    tokens = text.split()
+    if not any(token in _LAB_RANKING_WORDS for token in tokens):
+        return False
+    return bool(_LAB_ANALYTE.search(text)
+                or any(token in _LAB_SUBJECT_NOUNS for token in tokens))
+
+
 def _templated_arguments(args: dict, hadm_id: int | None,
                          command: Command) -> dict:
     """`args` over `hadm_id`, refusing when an admission is needed and absent.

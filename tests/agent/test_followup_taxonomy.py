@@ -283,6 +283,18 @@ class _Model:
         self.bound.append(sorted(tool.name for tool in tools))
         return _Turn(self, tool_choice)
 
+    async def ainvoke(self, messages, **kwargs) -> AIMessage:
+        """The UNBOUND pass: what a turn gets when nothing is left worth binding.
+
+        A laboratory ranking or comparison question is the case. Its evidence is the
+        series, `_still_bound` withdraws `get_lab_trends` once the replay holds the whole
+        panel, and the turn is answered from the series it already has. Recorded like any
+        other pass, with `None` as the choice, because the loop's question is how many
+        passes the run made.
+        """
+        self.choices.append(None)
+        return AIMessage(content=ANSWER)
+
 
 class _Turn:
     def __init__(self, owner: _Model, choice: str | None) -> None:

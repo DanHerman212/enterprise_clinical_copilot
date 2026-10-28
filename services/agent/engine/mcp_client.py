@@ -487,6 +487,23 @@ def _render_passage(passage: dict[str, Any]) -> dict[str, Any]:
 
 
 
+def _note_modality(section: Any) -> str:
+    """The modality label for one note passage, as the model reads it.
+
+    The two labels are the vocabulary SYSTEM_PROMPT's citation rule is written in, so they
+    are built here and nowhere else: a second spelling of either would be a rule the model
+    cannot match against what it was shown.
+    """
+    name = str(section or "").strip() or "unrecorded section"
+    return f"CLINICAL NOTE SECTION — {name}"
+
+
+def _lab_modality(trend: dict[str, Any]) -> str:
+    """The modality label for one analyte's series."""
+    name = str(trend.get("label") or trend.get("key") or "").strip() or "laboratory value"
+    return f"STRUCTURED LAB TREND — {name}"
+
+
 def _render_tool_result(payload: Any, *, offset: int = 0) -> str:
     """Render a tool result as the body the wrapper hands the model.
 
@@ -516,10 +533,20 @@ def _render_tool_result(payload: Any, *, offset: int = 0) -> str:
             # begin with "discharge" (TF-7, measured 2026-10-23). The number is now given
             # rather than inferred, and the positions the citation layer resolves against
             # are the same numbers.
+            #
+            # Each also carries `cite_modality`, which says what KIND of evidence the
+            # number points at. The model can see the difference between a note passage
+            # and a laboratory series in the payload's own shape, but not in the number:
+            # `^[4]` and `^[6]` look alike on the page, and on Gate 2 `dev_t4_02` cited a
+            # laboratory trend index onto a narrative claim about transfusion and
+            # medication management (2026-10-27). Labelling the number is what lets the
+            # citation rule in SYSTEM_PROMPT be checked rather than remembered.
             rendered = dict(payload, passages=[
                 ({**(_render_passage(passage) if isinstance(passage, dict) else {}),
-                  "cite": offset + index})
-                if isinstance(passage, dict) else passage
+                  "cite": offset + index,
+                  "cite_modality": _note_modality(
+                      passage.get("section") if isinstance(passage, dict) else None)})
+                 if isinstance(passage, dict) else passage
                 for index, passage in enumerate(passages, start=1)
             ])
         else:
@@ -531,8 +558,9 @@ def _render_tool_result(payload: Any, *, offset: int = 0) -> str:
             trends = payload.get("trends")
             if isinstance(trends, list):
                 rendered = dict(payload, trends=[
-                    ({**trend, "cite": offset + index} if isinstance(trend, dict)
-                     else trend)
+                    ({**trend, "cite": offset + index,
+                      "cite_modality": _lab_modality(trend)}
+                     if isinstance(trend, dict) else trend)
                     for index, trend in enumerate(trends, start=1)
                 ])
     return _escape_delimiter(json.dumps(rendered, ensure_ascii=False))

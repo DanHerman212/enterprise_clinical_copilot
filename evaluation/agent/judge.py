@@ -68,8 +68,8 @@ DIMS = ["fidelity", "grounding", "citation", "responsiveness", "safety", "contex
 # timeout makes a hang raise (-> retried, then flagged) instead of stalling the
 # whole judge. Mirrors collect.py's per-ask timeout.
 #
-# Raised 45 -> 90 on 2026-10-21. `gemini-2.5-pro` on the regional endpoint
-# (us-east1) is markedly slower than the flash models the agent itself uses, and a
+# Raised 45 -> 90 on 2026-10-21. `gemini-2.5-pro` on the judge's endpoint is markedly
+# slower than the flash models the agent itself uses, and a
 # 45s ceiling was cutting off calls that were still working: the suite-2 run that
 # day recorded five items as "no response within 45s", which is a timeout this
 # harness chose, not a judgement about the answer.
@@ -89,8 +89,8 @@ def judge_timeout_seconds() -> int:
 
 # Ceiling on the quota backoff. A 429 is a quota WINDOW, and every provider's is at
 # least a minute wide; 60s of waiting meant the retry landed inside the same window
-# and burned an attempt for nothing. Doubling from 15s under this cap covers a
-# two-minute window in three attempts.
+# and burned an attempt for nothing. Doubling from the 30s floor under this cap covers a
+# two-minute window in two attempts.
 _JUDGE_BACKOFF_CAP_SECONDS = int(os.environ.get("JUDGE_BACKOFF_CAP_SECONDS", "120"))
 
 # P2 fix (2026-08-14, after human judge-validation showed kappa=0): the judge
@@ -650,14 +650,23 @@ def _judge(client, system: str, user: str) -> dict:
         if timed_out and attempt >= 1:
             break
         # Printed, not swallowed. A retry ladder with nothing on stdout is
-        # indistinguishable from a hung job.
-        print(f"  judge retry {attempt + 1}/{attempts} after {last[:120]}", flush=True)
+        # indistinguishable from a hung job — and the message is printed WHOLE. It used
+        # to be cut to 120 characters, which on 2026-10-27 left a truncated tail of a
+        # `429 RESOURCE_EXHAUSTED` body and destroyed the one field that would have named
+        # the exhausted quota (`quota_metric` comes after the retry metadata). An error
+        # string this harness chose to shorten cannot be diagnosed later.
+        print(f"  judge retry {attempt + 1}/{attempts} after {last}", flush=True)
         if not timed_out:
             # Exponential, and quota-aware: a 429 needs a wait long enough for the
-            # window to roll over (15s, 30s, 60s, 120s), while a malformed reply needs
+            # window to roll over (30s, 60s, 120s, 120s), while a malformed reply needs
             # only a beat (1s, 2s, 4s). Both are capped so a persistent failure cannot
             # turn one item into a quarter-hour of silence.
-            base = 15 if quota else 1
+            #
+            # The quota floor was 15s and is now 30s. A 429 is a 60-second ROLLING window,
+            # so a retry at 15s and another at 45s (15 + 30) both land inside the window
+            # that refused the first call: three attempts spent, nothing learned. Starting
+            # at 30s puts the second attempt at 90s, past the window's edge.
+            base = 30 if quota else 1
             time.sleep(min(_JUDGE_BACKOFF_CAP_SECONDS, base * 2 ** attempt))
     return {"error": last}
 
@@ -1072,8 +1081,8 @@ def main() -> int:
     report_path = Path(args.report_path)
 
     _load_env_file(HARNESS / ".env.langfuse")
-    # The model's endpoint, not the project's region: the pinned model is not served in
-    # us-east1, so this client answered 404 from the day of the swap until it was fixed.
+    # The judge's endpoint, not the project's region: `config.JUDGE_LOCATION` defaults to
+    # `global` (see the note there) and is overridable with `VERTEX_JUDGE_LOCATION`.
     client = genai.Client(vertexai=True, project=PROJECT, location=JUDGE_LOCATION)
 
     if args.mode == "adversarial":

@@ -367,7 +367,12 @@ def test_the_prompt_pins_medication_names_sections_and_both_timepoints():
     # Wrapped across lines in the prompt, so the halves are asserted.
     assert "name the section the cited" in SYSTEM_PROMPT
     assert "passage actually is" in SYSTEM_PROMPT
-    assert "`discharge_medications` section was absent" in SYSTEM_PROMPT
+    # `dev_t4_02` in the Gate 2 full suite: Turn 2 reported the medications section was
+    # retrieved and held none, and Turn 3 called it "unavailable". The instruction that
+    # asked for that word is gone; the distinction it collapsed is the rule now.
+    assert "section itself was unavailable" not in SYSTEM_PROMPT
+    assert 'Reserve "unavailable"' in SYSTEM_PROMPT
+    assert "RETRIEVED and contained no listed items is empty" in SYSTEM_PROMPT
     assert "state both the extreme value of the admission" in SYSTEM_PROMPT
 
     from services.agent.routing import routing

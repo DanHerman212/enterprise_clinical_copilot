@@ -206,8 +206,17 @@ GEMINI_MODEL = "gemini-3.1-flash-lite"
 # `gemini-2.5-flash` answer on the regional endpoint and are NOT_FOUND on the global
 # one, which is the reverse of the pinned model's arrangement. Hence a location
 # constant of its own.
+#
+# Re-measured 2026-10-28: BOTH endpoints answer `gemini-2.5-pro` (a one-token probe
+# returned 200 from each within the same minute), so the 2026-09-30 finding no longer
+# holds. The default is now `global`, because the judge is the one caller that runs
+# several requests in the same second and the regional endpoint's per-region quota is
+# what produced the `429 RESOURCE_EXHAUSTED` rows that blocked the Gate 2 judge passes:
+# a single region's token window is a shared resource, and a global endpoint pools it.
+# `VERTEX_JUDGE_LOCATION` overrides, so a run can be pinned back to a region without a
+# code change — and the constant is read at call time by `judge._judge`'s client.
 JUDGE_MODEL = "gemini-2.5-pro"
-JUDGE_LOCATION = LOCATION  # us-east1 — the region the 2.5 models are served from
+JUDGE_LOCATION = os.environ.get("VERTEX_JUDGE_LOCATION") or "global"
 
 # Thinking and the answer share this allowance, and the model stops when it runs out
 # without raising: the call returns 200 with empty text and finish_reason=MAX_TOKENS.

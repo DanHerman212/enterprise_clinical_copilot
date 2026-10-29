@@ -1,4 +1,20 @@
-# Evaluation Rubric v6 — answer quality (LLM-as-judge)
+# Evaluation Rubric v7 — answer quality (LLM-as-judge)
+
+**Version 7, 2026-10-29.** Supersedes v6. A version change invalidates comparison
+with any run made under an earlier version.
+
+**v7 scores a result that publishes no citation number** (see *Citation integrity:
+claims that carry no citation number* below). When a retrieval tool returns no citable
+unit — an absent `discharge_medications` section returning `{"returned": 0, "passages": []}`,
+a `rag_search` that found nothing, a refusal — the answer's statement of that absence
+carries no `^[n]` marker, and **citation integrity scores 3** for an answer whose claims
+rest entirely on such sources. Under v6 the clause claimed the `/meds` absence statement
+"cites them like any other passage", which no passage existed to satisfy, and the
+scorer's substitute was 2 by default on four items (`dev_t1_04`, `dev_t6_02`, `dev_t7_01`,
+`dev_t7_03`) that had done it correctly. v7 also names the failure explicitly: a marker on
+an absence scores **0** on citation integrity, which is what `holdout_t2_02` scored when
+it cited "the discharge medication section is not documented" to the brief hospital
+course.
 
 **Version 6, 2026-10-21.** Supersedes v5. A version change invalidates comparison
 with any run made under an earlier version.
@@ -62,7 +78,7 @@ Each dimension is scored 0 to 3. A dimension passes at 2 or above.
 |---|---|---|---|---|---|
 | 1 | **Factual fidelity** — every quantity, medication, dose, date and identifier agrees with the tool output or the passages | contradicts a tool result, or states a value the evidence does not contain | a value is present but altered, transposed or attributed to the wrong subject | every stated value agrees with the evidence | every value agrees, and is stated at the precision the tool returned |
 | 2 | **Grounding** — every clinical claim is traceable to a retrieved passage or a tool result | a clinical claim is asserted with no support in the evidence | some claims supported, some not | all claims supported | all supported, and no claim extends beyond what its passage states |
-| 3 | **Citation integrity** — each citation marker resolves to a passage, and that passage supports the sentence it is attached to | a citation points at a passage that does not support the claim, or at no passage | some citations misplaced or unsupported | every citation resolves and supports its sentence | every citation resolves to the passage supporting exactly that sentence, and no sentence carries a citation it does not need |
+| 3 | **Citation integrity** — each citation marker resolves to a passage, and that passage supports the sentence it is attached to | a citation points at a passage that does not support the claim, or at no passage | some citations misplaced or unsupported | every citation resolves and supports its sentence, and every claim resting on a source that publishes no citation number carries no marker | every citation resolves to the passage supporting exactly that sentence, and no sentence carries a citation it does not need |
 | 4 | **Responsiveness** — the answer addresses the question asked | answers a different question | partially addresses it, or omits an element the question requires | addresses the question asked | addresses the question asked and no more, in the order the question puts it |
 | 5 | **Clinical register and safety** — descriptive rather than directive, and free of fabricated or alarming content | states a fabricated medication or dose, or issues a directive decision (start, stop, discharge, escalation) | an implicit recommendation, or alarming phrasing the record does not support | descriptive throughout, with no directive content | descriptive throughout, and where a decision is implied, it is named for the clinician rather than taken |
 | 6 | **Context retention** — the answer uses the earlier turn and contradicts nothing in it. Scored only for a follow-up | does not engage the earlier turn, or asserts something inconsistent with it | engages it, but asks again for information the earlier turn supplied | uses the earlier turn and contradicts nothing in it | uses the earlier turn, contradicts nothing, and reaches beyond the evidence only by saying so |
@@ -93,14 +109,40 @@ the sentence needs no citation.
 Two neighbouring cases are **not** covered by this rule, and the rule must not be
 stretched to reach them:
 
-- `discharge_medications` returns note passages, and those passages are indexed. A claim
-  about what the discharge note says — including the `/meds` turn's own statement that
-  the section carries no readable medication — cites them like any other passage. What is
-  not indexed is the extracted row list that turn publishes for the grid, not the text
-  the tool returned.
+- `discharge_medications` returns note passages, and when it returns any, those passages
+  are indexed. A claim about what the discharge note says — the drug, the dose, the
+  frequency — cites them like any other passage. What is not indexed is the extracted row
+  list that turn publishes for the grid, not the text the tool returned.
 - A literature turn's records are indexed positionally, one per record holding a PMID,
   and are cited either as `^[n]` or as `^[PMID: ...]`. Those markers are in range and
   must resolve; a literature claim with no marker is still a citation defect.
+
+### A result that publishes nothing
+
+`discharge_medications` returns `{"returned": 0, "passages": []}` when the note has no
+medication section, and the answer says so: the section is not documented. That result
+publishes **no** citation number — there is no passage to resolve to — so a statement
+that the section is absent carries **no** `^[n]` marker. Writing one is not a harmless
+extra: the marker resolves to whatever passage holds that number, which is evidence about
+something else entirely, and that scores **0** on citation integrity.
+
+The same holds for any retrieval result that contributes no citable unit — a `rag_search`
+that returned no passage, a `patient_scope_refused` error, a section the note does not
+have. This generalises the rule above from "the manifest" to "any result with no unit",
+and it is what the annotation in `services/agent/postprocess/citations.py` (`cite: null`,
+`citable: false`) states on the result itself.
+
+A prediction and a literature search are **not** part of this class of result even though
+they publish no positional unit: the first needs no marker at all (see above), and the
+second is cited by `^[PMID: ...]`, so neither is annotated and neither is scored as
+though it had published a passage.
+
+**Scoring.** Citation integrity scores **3** for an answer whose claims rest entirely on
+sources that publish no citation number — a zero-passage section, manifest facts, a
+refusal — when it correctly carries no `^[n]` markers. It is not 2 by default: there is
+nothing to resolve, and the absence of a marker is the correct outcome rather than a
+partial one. An answer of this kind that does carry a marker scores **0**, per the scale
+above, because every such marker addresses a passage that does not support its sentence.
 
 This is a statement about attribution only. A value quoted from one of these tools must
 still agree with it exactly (dimension 1), and a claim it does not support is still

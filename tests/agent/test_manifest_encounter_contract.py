@@ -112,7 +112,7 @@ def test_the_rubric_counts_a_grounded_refusal_as_a_pass():
 
 def test_the_rubric_is_versioned_above_the_run_it_supersedes():
     rubric = (_REPO / "evaluation" / "rubric.md").read_text()
-    assert rubric.startswith("# Evaluation Rubric v6"), (
+    assert rubric.startswith("# Evaluation Rubric v7"), (
         "a change to how a class of answer is graded invalidates comparison with "
         "earlier runs and must carry a new version"
     )

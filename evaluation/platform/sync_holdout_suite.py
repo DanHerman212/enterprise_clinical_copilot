@@ -42,7 +42,7 @@ DATASET = "ecc-tier2-holdout-suite"
 HOLDOUT_SUITE_PATH = REPO / "evaluation" / "datasets" / "holdout_suite.jsonl"
 DESCRIPTION = ("Tier 2 blind holdout suite: 15 scenarios over 4 unseen records, "
                "7 interaction and adversarial trajectories")
-RUBRIC_VERSION = "v6"
+RUBRIC_VERSION = "v7"
 EXPECTED_ITEMS = 15
 
 

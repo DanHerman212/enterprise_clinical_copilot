@@ -740,6 +740,38 @@ def citation_fields(number: int, modality: str) -> dict[str, Any]:
     }
 
 
+#: What a zero-unit payload says about itself. Printed where the model composes the
+#: sentence, not only in the system prompt: on `pilot-verify-20261029-170609`,
+#: `holdout_t2_02` wrote `^[13]` on "the discharge medication section is not documented"
+#: — a sentence about a section that returned `"passages": []` and therefore owned no
+#: number. The rule against it was already in `SYSTEM_PROMPT`; what the model lacked was
+#: any local signal that this result had no slot to reach for, so it took the next number
+#: it could see, which was the brief hospital course.
+ZERO_UNIT_NOTE = (
+    "this result publishes no citable unit; no sentence about it may carry a ^[n]"
+)
+
+
+def zero_unit_fields() -> dict[str, Any]:
+    """The annotation a citation-bearing payload carries when it contributes no number.
+
+    A retrieval result with no unit is not inert: it is the difference between "the
+    section lists nothing" and "the section was never fetched", and the model has to know
+    that about the result in front of it.
+
+    Only a payload that carries `passages` or `trends` can wear these fields. A
+    `predict_readmission` result and a `search_literature` result are answers, not
+    evidence: the first owns no citation surface at all, and the second is cited by
+    `^[PMID: ...]`, so stamping either one `citable: false` would contradict a marker that
+    is valid on that turn.
+
+    These fields are description only. `citable_passages` and `passage_total` key on
+    `passages` and `trends` and never read `cite`, so a payload wearing them still
+    counts zero — the numbering of every later unit is unchanged.
+    """
+    return {"cite": None, "citable": False, "cite_note": ZERO_UNIT_NOTE}
+
+
 def note_modality(section: Any) -> str:
     """The modality label for one note passage, as the model reads it.
 
@@ -767,7 +799,8 @@ def render_numbered(
 
     One unit, one number, continuing from `offset` — how many units the conversation had
     already shown. Which payloads carry units is `citable_passages`' answer, and this
-    function follows it exactly; a payload that contributes no unit comes back unchanged.
+    function follows it exactly. A payload that carries `passages` or `trends` and
+    contributes no unit gains `zero_unit_fields()`; anything else is returned unchanged.
 
     `dress` is the caller's own per-unit shaping (dropping machine ids, refusing an
     over-long passage). It runs before the numbers are attached, so the numbers describe
@@ -785,6 +818,8 @@ def render_numbered(
 
     passages = payload.get("passages")
     if isinstance(passages, list):
+        if not any(isinstance(passage, dict) for passage in passages):
+            return {**payload, **zero_unit_fields()}
         return dict(payload, passages=[
             unit(passage, offset + index, note_modality(passage.get("section")))
             if isinstance(passage, dict) else passage
@@ -792,9 +827,18 @@ def render_numbered(
         ])
     trends = payload.get("trends")
     if isinstance(trends, list):
+        if not any(isinstance(trend, dict) for trend in trends):
+            return {**payload, **zero_unit_fields()}
         return dict(payload, trends=[
             unit(trend, offset + index, lab_modality(trend))
             if isinstance(trend, dict) else trend
             for index, trend in enumerate(trends, start=1)
         ])
+    if "passages" in payload or "trends" in payload:
+        # The key is present but is not a usable array: still a retrieval result that
+        # published nothing, and the one case the model must not try to cite.
+        return {**payload, **zero_unit_fields()}
+    # Neither array: a prediction, a medication row list, a literature search. Returned
+    # unchanged — `search_literature` is cited by `^[PMID: ...]`, so marking it
+    # `citable: false` would deny a marker that is valid on that turn.
     return payload

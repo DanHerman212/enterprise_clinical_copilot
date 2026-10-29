@@ -47,7 +47,7 @@ A2UI envelope traversal and command-to-tool mappings must not be copy-pasted acr
 
 ## 5. Dependency Direction & Allowed Import DAG
 
-* **`evaluation/platform/`** → may import `shared/` and read-only contracts from `services.agent.postprocess.citations` (`passage_total`) and `services.agent.routing` (`COMMANDS`). **May not** import `evaluation/agent/`.
+* **`evaluation/platform/`** → may import `shared/`, `services.mcp.config`, and read-only contracts from `services.agent.postprocess.citations` (`passage_total`), `services.agent.routing` (`COMMANDS`), and `services.agent.ingress.contracts` (`parse_agent_request`). **May not** import `evaluation/agent/`.
 * **`evaluation/platform/run_evals.py` & `dry_run.py`** → may import `evaluation/platform/evaluators.py`, `task.py`, `schemas.py`, and `runner.py`.
 * **`evaluation/platform/evaluators.py`** → may import `evaluation/platform/schemas.py`, `judge_call.py`, and `shared/`.
 * **`evaluation/platform/judge_call.py`** → may import `evaluation/platform/judge_client.py` and `schemas.py`.

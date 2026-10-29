@@ -57,7 +57,7 @@ Langfuse root trace output (`observability.set_trace_io`) must record the exact 
 Packages must respect a strict top-down dependency graph. Lower layers may never import higher layers, and sibling leaf packages may only import across explicitly declared edges:
 
 * **`ingress/`** → may import `turn.py`, `routing/`, `telemetry/`, `presentation/` (wire types only).
-* **`turn.py`** → may import `routing/`, `engine/`, `postprocess/`, `presentation/`, `telemetry/`.
+* **`turn.py`** → may import `routing/`, `engine/`, `postprocess/`, `presentation/`, `telemetry/`, and `ingress/contracts.py` (response schema validation).
 * **`presentation/`** → may import `postprocess/citations.py` (read-only source resolution) and shared domain/label utilities. **May not** import `engine/`, `ingress/`, or `routing/encounter.py`.
 * **`engine/`** → may import `routing/`, `postprocess/citations.py` (for tool-result numbering), `postprocess/answer.py`, and `telemetry/`. **May not** import `presentation/` or `ingress/`.
 * **`postprocess/`** → may import `routing/` and `telemetry/`. **May not** import `engine/`, `presentation/`, or `ingress/`.

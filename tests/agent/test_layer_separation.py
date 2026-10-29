@@ -736,11 +736,11 @@ def test_the_platform_puts_nothing_but_the_repo_root_on_sys_path():
 
 
 #: What the platform may reach outside itself, from
-#: `docs/architecture/15-evaluation_harness_architecture.md` §5.
+#: `docs/architecture/15-evaluation_harness_architecture.md` §5, transcribed.
 #:
 #: Two read-only contracts from the agent — the citation counter and the command table —
 #: plus `shared/`, so the harness numbers passages with the same function the agent does.
-#: Two more are read-only contracts of the same kind that §5's list does not name:
+#: Two more are read-only contracts of the same kind, now named by §5 as well:
 #:
 #:   * `services.mcp.config`, because the judge needs the project, the location and the
 #:     model, and config is where this deployment declares them. It is the import the
@@ -750,7 +750,7 @@ def test_the_platform_puts_nothing_but_the_repo_root_on_sys_path():
 #:     to refuse a body the service would refuse *before* spending a request on it.
 #:
 #: Everything else — the retired collector, the inventory scripts, the training package —
-#: is out, which is what the prohibition above states.
+#: is out, which is what the prohibition in §4 states.
 ALLOWED_PLATFORM_EXTERNALS = (
     "shared",
     "services.agent.postprocess.citations",

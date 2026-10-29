@@ -33,6 +33,6 @@ WORKDIR /app
 COPY pipelines /app/pipelines
 COPY retrieval /app/services/mcp/retrieval
 # config.py and the corpus configuration resolve relative to the package
-# (retrieval/config.py reads ../rag_config.yaml), so they ship together.
+# (retrieval/index_config.py reads ../rag_config.yaml), so they ship together.
 COPY __init__.py config.py rag_config.yaml /app/services/mcp/
 ENV PYTHONPATH=/app

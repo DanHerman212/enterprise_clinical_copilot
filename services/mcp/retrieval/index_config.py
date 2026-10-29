@@ -1,4 +1,4 @@
-"""Config-as-code loader for the RAG pipeline.
+"""Index, corpus and chunking settings, as code.
 
 Single source of truth for corpus, chunking, index, eval, and deploy settings.
 Reads ``rag_config.yaml`` (committed) and exposes typed values, so the ingest

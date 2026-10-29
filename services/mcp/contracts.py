@@ -284,6 +284,15 @@ class LabTrendResult(TypedDict):
     returned: int
     trends: list[LabTrendSeries]
     synthetic: bool
+    # What the values ARE, in one word, on every payload. `synthetic` says the shape of
+    # the data; `source` says where it came from, and it is the field a caller should
+    # read to decide whether it may present a value as a measurement. It used to be
+    # discoverable only by reading `note`, which is prose: a surface that rendered the
+    # series without parsing the sentence had no way to know, and a caller should not
+    # have to read English to stay out of a compliance problem. Required, because a lab
+    # payload that does not say where its numbers came from is exactly the payload that
+    # gets presented as a real one.
+    source: str
     note: NotRequired[str]
 
 
@@ -295,13 +304,15 @@ def validate_lab_trend_result(payload: Any) -> LabTrendResult | ToolError:
         raise ToolContractError("Lab-trend payload is not an object.")
     if "error" in payload:
         return _validate_error(payload)
-    required = ("hadm_id", "returned", "trends", "synthetic")
+    required = ("hadm_id", "returned", "trends", "synthetic", "source")
     if any(field not in payload for field in required):
         raise ToolContractError("Lab-trend payload is missing a required field.")
     if not isinstance(payload["hadm_id"], int) or isinstance(payload["hadm_id"], bool):
         raise ToolContractError("Lab-trend hadm_id is invalid.")
     if payload["synthetic"] is not True:
         raise ToolContractError("Lab-trend payload does not declare itself synthetic.")
+    if not isinstance(payload["source"], str) or not payload["source"]:
+        raise ToolContractError("Lab-trend payload does not name its source.")
     trends = payload["trends"]
     if not isinstance(trends, list):
         raise ToolContractError("Lab-trend `trends` is not a list.")

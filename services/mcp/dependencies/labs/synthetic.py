@@ -45,6 +45,11 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any
 
+#: What these values are, in one word. Declared here, beside the generator that invents
+#: them, and stamped onto every payload at the tool boundary: a caller should not have to
+#: read the `note` sentence — or this docstring — to learn that nothing was measured.
+SOURCE = "synthetic"
+
 #: Timepoints per trajectory. Four is the roadmap's floor and six its ceiling; a stay between
 #: them gets one per day, which is roughly how often a basic metabolic panel is drawn.
 MIN_POINTS = 4

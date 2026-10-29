@@ -23,9 +23,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-for path in (REPO, REPO / "evaluation" / "agent"):
-    if str(path) not in sys.path:
-        sys.path.insert(0, str(path))
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 
 from pydantic import ValidationError  # noqa: E402
 

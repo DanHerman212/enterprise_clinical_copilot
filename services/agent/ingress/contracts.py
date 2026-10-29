@@ -4,7 +4,7 @@ from __future__ import annotations
 from shared.errors import AgentResponseError  # noqa: F401 — re-exported
 
 import re
-from typing import Any, NotRequired, TypedDict
+from typing import Any, TypedDict
 
 from services.agent.routing import routing
 from services.agent.routing.routing import UnknownChip, compose_question, own_words
@@ -62,36 +62,14 @@ class ResolvedSource(TypedDict):
     query: str
 
 
-class LiteratureArticle(TypedDict):
-    """One PubMed record as it arrives from the MCP tool.
-
-    Declared here rather than imported from `services.mcp.contracts`: the agent and
-    the MCP server are separate images, and this is the agent's view of a payload
-    that crossed a network boundary — the same reason `AgentToolCall` is declared
-    here rather than shared.
-    """
-
-    pmid: str
-    title: str
-    journal: str
-    pub_date: str
-    abstract: str
-    url: str
-
-
-class LiteratureResult(TypedDict):
-    query: str
-    returned: int
-    articles: list[LiteratureArticle]
-    # Present when a search legitimately matched nothing. Absent when it matched
-    # something, which is why the whole result is carried rather than only the
-    # articles: an empty list cannot say whether a search happened.
-    note: NotRequired[str]
-    # True when the search could not be made at all. The agent is told to report this
-    # as unavailability rather than as absence, because claiming a thing does not
-    # exist when nobody looked for it invents a fact.
-    degraded: NotRequired[bool]
-
+# The literature payload is declared once, by the server that produces it. The agent's
+# copy of these two shapes had already drifted: the server's article carries
+# `authors: str` for the reference line, and this view of it did not, so a field added
+# to a tool payload was invisible to the wire contract that describes the same bytes.
+# The two images are built from this one tree, and this module already imports
+# `services.mcp.contracts` elsewhere, so a shared declaration costs nothing the copy
+# was buying.
+from services.mcp.contracts import LiteratureArticle, LiteratureResult  # noqa: F401
 
 # Whether a tool's result can be produced again by asking the same tool the same
 # question, and therefore whether a caller that stores a turn needs to keep it.

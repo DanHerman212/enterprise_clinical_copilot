@@ -20,9 +20,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-for _path in (REPO, REPO / "evaluation" / "agent"):
-    if str(_path) not in sys.path:
-        sys.path.insert(0, str(_path))
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 
 import httpx  # noqa: E402
 

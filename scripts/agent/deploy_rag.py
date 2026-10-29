@@ -58,7 +58,7 @@ from services.mcp.config import (  # noqa: E402
     LOCATION,
     PROJECT,
 )
-from services.mcp.retrieval.config import load as load_config  # noqa: E402
+from services.mcp.retrieval.index_config import load as load_config  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import recall_gate  # noqa: E402

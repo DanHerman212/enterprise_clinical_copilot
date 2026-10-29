@@ -158,11 +158,13 @@ def test_every_series_is_a_course_and_not_scatter():
 
 
 def test_the_payload_says_it_is_generated():
-    """`synthetic` is in the contract so a surface cannot pass a drawing off as a record."""
+    """`synthetic` and `source` are in the contract so a surface cannot pass a drawing
+    off as a record — and cannot be told to read a sentence to find out."""
     payload = {
         "hadm_id": 90000015,
         "returned": 1,
         "synthetic": True,
+        "source": "synthetic",
         "trends": [syn.lab_trends(90000015, features=ROW, analytes=["hemoglobin"])[0]],
     }
 
@@ -172,6 +174,43 @@ def test_the_payload_says_it_is_generated():
         validate_lab_trend_result({**payload, "synthetic": False})
     with pytest.raises(ToolContractError):
         validate_lab_trend_result({**payload, "returned": 2})
+    # Provenance is required, not inferred from `note`: a payload that does not say
+    # where its numbers came from is the one that gets presented as real.
+    stripped = {key: value for key, value in payload.items() if key != "source"}
+    with pytest.raises(ToolContractError):
+        validate_lab_trend_result(stripped)
+    with pytest.raises(ToolContractError):
+        validate_lab_trend_result({**payload, "source": ""})
+
+
+def test_the_served_payload_stamps_its_source_at_the_boundary(monkeypatch):
+    """Every caller receives `source`, not only one that reads the `note` sentence.
+
+    Stamped in the tool rather than in the generator, because the tool is the boundary
+    every consumer crosses — the agent's toolbox, the console, and anything added later
+    that never learns the panel is generated.
+    """
+    import asyncio
+
+    from services.mcp.tools import labs
+
+    class _Source:
+        def exists(self, hadm_id):
+            return True
+
+    monkeypatch.setattr(labs, "get_feature_source", lambda: _Source())
+    monkeypatch.setattr(
+        labs, "lab_trends",
+        lambda hadm_id, wanted, features, note: [
+            syn.lab_trends(hadm_id, features=ROW, analytes=["hemoglobin"])[0]
+        ],
+    )
+
+    payload = asyncio.run(labs.get_lab_trends(90000015, "hemoglobin"))
+
+    assert payload["source"] == "synthetic"
+    assert payload["synthetic"] is True
+    assert validate_lab_trend_result(payload) is payload
 
 
 def test_an_analyte_the_contract_defines_is_the_only_flag_vocabulary():
@@ -181,6 +220,7 @@ def test_an_analyte_the_contract_defines_is_the_only_flag_vocabulary():
         "hadm_id": 1,
         "returned": 1,
         "synthetic": True,
+        "source": "synthetic",
         "trends": [{
             "key": "rdw", "label": "RDW", "unit": "%",
             "reference_low": 11.5, "reference_high": 14.5, "decimals": 1,
@@ -202,6 +242,7 @@ def _lab_payload():
         "returned": len(trends),
         "trends": trends,
         "synthetic": True,
+        "source": "synthetic",
         "note": "Generated from this admission's features.",
     }
 

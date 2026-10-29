@@ -33,7 +33,7 @@ from services.mcp.config import (  # noqa: E402
     LOCATION,
     PROJECT,
 )
-from services.mcp.retrieval.config import load as load_config  # noqa: E402
+from services.mcp.retrieval.index_config import load as load_config  # noqa: E402
 
 PARENT = f"projects/{PROJECT}/locations/{LOCATION}"
 

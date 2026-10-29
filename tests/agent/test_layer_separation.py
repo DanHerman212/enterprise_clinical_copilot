@@ -485,3 +485,300 @@ def test_every_module_binds_the_globals_it_uses():
             unbound[str(path.relative_to(root))] = missing
 
     assert unbound == {}, "modules reference globals they never bind"
+
+
+# --- the same discipline where the last two defects lived -------------------
+#
+# `services/mcp` and `evaluation/` had no boundary rule at all until `00d8`. Both are
+# where the same two shapes of defect landed: a value written down twice (the tool list
+# in the server and in `tools/__init__`; the judge's dimension list in four modules) and
+# a `sys.path` hack that made the duplicate importable, and therefore invisible. A rule
+# about `services/agent` alone could not see either.
+
+REPO = pathlib.Path(SERVICES).parent
+MCP_ROOT = pathlib.Path(SERVICES, "mcp")
+EVAL_ROOT = REPO / "evaluation"
+PLATFORM_ROOT = EVAL_ROOT / "platform"
+
+
+def _package_path(path):
+    """The dotted package one file lives in, named from the repository root."""
+    return ".".join(path.parent.relative_to(REPO).parts)
+
+
+def _resolved_imports(path):
+    """(absolute module, lineno, enclosing function) for every import in one file.
+
+    Relative imports are resolved, because the rules below are about packages reaching
+    each other and `from . import tools` reaches one without naming it absolutely. The
+    `_imports` helper above skips them on purpose — it only asks whether a module can
+    reach `mlops` — so this is a second walker rather than a widened one.
+    """
+    tree = ast.parse(path.read_text())
+    spans = [(node.lineno, node.end_lineno or node.lineno, node.name)
+             for node in ast.walk(tree)
+             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
+
+    def enclosing(lineno):
+        names = [name for start, end, name in spans if start <= lineno <= end]
+        return names[0] if names else None
+
+    resolved = []
+    for node in ast.walk(tree):
+        modules = []
+        if isinstance(node, ast.Import):
+            modules = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            if not node.level:
+                # Absolute: the module is named in full and names no package to join.
+                modules = [node.module] if node.module else []
+            else:
+                base = _package_path(path)
+                for _ in range(node.level - 1):
+                    base = base.rsplit(".", 1)[0]
+                if node.module:
+                    modules = [f"{base}.{node.module}"]
+                else:
+                    # `from . import tools`: the names are the submodules it reaches.
+                    modules = [f"{base}.{alias.name}" for alias in node.names]
+        for module in modules:
+            resolved.append((module, node.lineno, enclosing(node.lineno)))
+    return resolved
+
+
+def _reaching(root, prefix, *, skip=()):
+    """Every import under one tree that reaches `prefix`, as readable strings."""
+    offenders = []
+    for path in sorted(root.rglob("*.py")):
+        if "__pycache__" in str(path):
+            continue
+        relative = path.relative_to(root)
+        if skip and any(part in skip for part in relative.parts[:-1]):
+            continue
+        for module, lineno, function in _resolved_imports(path):
+            if module == prefix or module.startswith(prefix + "."):
+                where = f"{relative}:{lineno}"
+                offenders.append(f"{where} in {function}()" if function else where)
+    return offenders
+
+
+def test_both_trees_were_actually_walked():
+    """A guard on the guards: a wrong path would make every rule below vacuous."""
+    assert len(list(MCP_ROOT.rglob("*.py"))) > 15
+    assert len(list(PLATFORM_ROOT.rglob("*.py"))) > 15
+
+
+def test_the_import_walker_sees_a_known_edge():
+    """Positive control for every ban above: they are worth what the walker finds.
+
+    A walker that resolved nothing would pass all five rules while the tree reached
+    anywhere it liked. The agent genuinely imports the MCP contracts today, so that
+    edge is the canary.
+    """
+    assert _reaching(pathlib.Path(SERVICES, "agent"), "services.mcp.contracts")
+
+
+def test_the_online_mcp_tree_never_imports_the_ingest_pipelines():
+    """`pipelines/` is a batch image; the serving image must not pull it in.
+
+    It is not a style rule: the container is built from `services/mcp`, and an import
+    of the ingest pipeline from a tool would drag its dependencies — and its billable
+    batch code — into the request path.
+    """
+    offline = _reaching(MCP_ROOT, "services.mcp.pipelines", skip={"pipelines"})
+
+    assert offline == [], "the serving path reaches the ingest pipelines:\n" + "\n".join(offline)
+
+
+def test_the_mcp_service_never_imports_the_agent():
+    """The server is the leaf: it is deployed without the agent, and cannot reach it."""
+    reaching = _reaching(MCP_ROOT, "services.agent")
+
+    assert reaching == [], "services/mcp imports the agent:\n" + "\n".join(reaching)
+
+
+def test_the_agent_never_imports_the_ingest_pipelines():
+    reaching = _reaching(pathlib.Path(SERVICES, "agent"), "services.mcp.pipelines")
+
+    assert reaching == [], "the agent imports the ingest pipelines:\n" + "\n".join(reaching)
+
+
+def test_no_shipped_module_imports_the_evaluation_harness():
+    """The mirror of the `mlops` rule, and the same reasoning.
+
+    The harness measures the shipped code; shipped code must not be able to depend on
+    it, or the thing under test and the thing testing it become one image and the
+    measurement stops being independent.
+    """
+    reaching = _reaching(SERVICES, "evaluation")
+
+    assert reaching == [], "shipped code imports the harness:\n" + "\n".join(reaching)
+
+
+#: What each package under `services/mcp` may import, keyed by subpackage; `"root"` is
+#: the modules directly in `services/mcp` (server, contracts, config, runtime).
+#:
+#: `docs/architecture/14-mcp_service_architecture.md` §5, transcribed. The tree is a
+#: wiring layer, two leaves and one vocabulary package: `tools` produce payloads,
+#: `dependencies` fetch them, `retrieval` holds the note vocabulary and index settings,
+#: and the top level registers the tools. A tool importing a tool, or a dependency
+#: importing a tool, is the shape that wrote the tool list down twice.
+#:
+#: `root` may import `tools` and nothing else below the top level, which is why the
+#: feature-source label moved into `config.py`: the health endpoint reported it, and
+#: reading it out of `dependencies.features` was an edge the charter forbids.
+ALLOWED_MCP = {
+    "root": {"root", "tools"},
+    "tools": {"root", "dependencies", "retrieval"},
+    "dependencies": {"root"},
+    "retrieval": set(),
+    "pipelines": {"root", "retrieval"},
+}
+
+
+def _mcp_package(path):
+    parts = path.relative_to(MCP_ROOT).parts
+    return "root" if len(parts) == 1 else parts[0]
+
+
+#: The real subpackages. A root-level *module* (`config`, `runtime`, `contracts`) shares
+#: the `root` key with the server, so an edge into one has to be classified as `root`
+#: rather than as a package of its own.
+MCP_SUBPACKAGES = frozenset(
+    child.name for child in MCP_ROOT.iterdir()
+    if child.is_dir() and not child.name.startswith("__")
+)
+
+
+def test_the_mcp_subpackages_import_only_downwards():
+    violations = []
+    for path in sorted(MCP_ROOT.rglob("*.py")):
+        if "__pycache__" in str(path):
+            continue
+        package = _mcp_package(path)
+        for module, lineno, function in _resolved_imports(path):
+            if not module.startswith("services.mcp"):
+                continue
+            rest = module[len("services.mcp"):].lstrip(".")
+            head = rest.split(".")[0] if rest else ""
+            target = head if head in MCP_SUBPACKAGES else "root"
+            if target != package and target not in ALLOWED_MCP[package]:
+                where = f"{path.relative_to(MCP_ROOT)}:{lineno}"
+                violations.append(
+                    f"{where} in {function}(): {package} imports {target} "
+                    f"(allowed: {' / '.join(sorted(ALLOWED_MCP[package]))})"
+                )
+
+    assert violations == [], "the mcp DAG is not one-way:\n" + "\n".join(violations)
+
+
+def test_the_platform_never_imports_the_retired_collector():
+    """`evaluation/agent/` is legacy analysis; the live harness must not reach it.
+
+    It reached it through `sys.path.insert(0, "evaluation/agent")` and `import judge`
+    inside a function, which is the reason the platform could not be run without the
+    module it was replacing. The data directory stays — the case files live there and
+    are read as JSON, not imported.
+    """
+    reaching = _reaching(PLATFORM_ROOT, "evaluation.agent")
+
+    assert reaching == [], "the platform imports the retired collector:\n" + "\n".join(reaching)
+
+
+def test_the_platform_puts_nothing_but_the_repo_root_on_sys_path():
+    """The path hack, as a rule.
+
+    Several platform modules are entry points run as a script, where the repository
+    root is not on `sys.path` by default, so one module-level insert of the root is
+    legitimate. What is not legitimate is inserting a *package* — that is how a module
+    that should have been imported became reachable and then invisible — or doing it
+    from inside a function, where it hides the dependency from everything that reads
+    the imports.
+    """
+    offenders = []
+    inspected = 0
+    for path in sorted(PLATFORM_ROOT.rglob("*.py")):
+        if "__pycache__" in str(path):
+            continue
+        tree = ast.parse(path.read_text())
+        spans = [(node.lineno, node.end_lineno or node.lineno, node.name)
+                 for node in ast.walk(tree)
+                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            func = node.func
+            if not (isinstance(func.value, ast.Attribute) and func.value.attr == "path"
+                    and isinstance(func.value.value, ast.Name) and func.value.value.id == "sys"):
+                continue
+            if func.attr not in {"insert", "append", "extend"}:
+                continue
+            inspected += 1
+            relative = str(path.relative_to(PLATFORM_ROOT))
+            inside = [name for start, end, name in spans
+                      if start <= node.lineno <= end]
+            if inside:
+                offenders.append(f"{relative}:{node.lineno} mutates sys.path in {inside[0]}()")
+                continue
+            argument = ast.unparse(node.args[1] if len(node.args) > 1 else node.args[0]) \
+                if node.args else ""
+            if argument != "str(REPO)":
+                offenders.append(
+                    f"{relative}:{node.lineno} puts {argument or '?'} on sys.path"
+                )
+
+    assert offenders == [], (
+        "only the repository root, at module level:\n" + "\n".join(offenders)
+    )
+    # The entry points do mutate `sys.path`, so a detector that inspected nothing
+    # would be a rule with no subject.
+    assert inspected >= 6, f"only {inspected} sys.path mutations found"
+
+
+#: What the platform may reach outside itself, from
+#: `docs/architecture/15-evaluation_harness_architecture.md` §5.
+#:
+#: Two read-only contracts from the agent — the citation counter and the command table —
+#: plus `shared/`, so the harness numbers passages with the same function the agent does.
+#: Two more are read-only contracts of the same kind that §5's list does not name:
+#:
+#:   * `services.mcp.config`, because the judge needs the project, the location and the
+#:     model, and config is where this deployment declares them. It is the import the
+#:     agent's own model runtime makes; the alternative is a third copy of
+#:     `"gemini-2.5-pro"`.
+#:   * `services.agent.ingress.contracts` (`parse_agent_request`), which `runner.py` uses
+#:     to refuse a body the service would refuse *before* spending a request on it.
+#:
+#: Everything else — the retired collector, the inventory scripts, the training package —
+#: is out, which is what the prohibition above states.
+ALLOWED_PLATFORM_EXTERNALS = (
+    "shared",
+    "services.agent.postprocess.citations",
+    "services.agent.routing",
+    "services.agent.ingress.contracts",
+    "services.mcp.config",
+)
+
+
+def test_the_platform_imports_only_what_its_charter_allows():
+    offenders = []
+    for path in sorted(PLATFORM_ROOT.rglob("*.py")):
+        if "__pycache__" in str(path):
+            continue
+        for module, lineno, function in _resolved_imports(path):
+            if not module.startswith(("evaluation", "services", "shared", "mlops")):
+                continue
+            if module.startswith(("evaluation.platform", "shared")):
+                continue
+            if any(module == allowed or module.startswith(allowed + ".")
+                   for allowed in ALLOWED_PLATFORM_EXTERNALS):
+                continue
+            where = f"{path.relative_to(PLATFORM_ROOT)}:{lineno}"
+            offenders.append(
+                f"{where} in {function}(): {module}"
+                if function else f"{where}: {module}"
+            )
+
+    assert offenders == [], (
+        "the platform reaches outside its charter:\n" + "\n".join(offenders)
+    )

@@ -67,7 +67,7 @@ flowchart LR
 | `retrieval/sections.py` | Parses a discharge note into its named sections. |
 | `retrieval/chunking.py` | Splits those sections into the citable passages the index stores and retrieval returns. |
 | `retrieval/embed.py` | Turns text into the vector the index holds. |
-| `retrieval/config.py` | The retrieval settings as code: corpus, chunking, index, evaluation, deployment. |
+| `retrieval/index_config.py` | The retrieval settings as code: corpus, chunking, index, evaluation, deployment. |
 | `retrieval/notes.py` | A local cache of the note corpus, so repeated probes do not re-read it each time. |
 | `retrieval/concepts.py` | Clinical concept tagging with assertion handling. Runs in its own environment. |
 | `retrieval/source_fingerprint.py` | A digest of the source tables, so every artifact can name the data it was built from. |

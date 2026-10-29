@@ -27,7 +27,7 @@ from pipelines.components.embed_chunks import embed_chunks  # noqa: E402
 from pipelines.components.eval_ingest import eval_ingest  # noqa: E402
 from services.mcp.config import PROJECT as PROJECT_ID  # noqa: E402
 from services.mcp.retrieval.chunking import DEFAULT_PACK_TO  # noqa: E402
-from services.mcp.retrieval.config import load as load_rag_config  # noqa: E402
+from services.mcp.retrieval.index_config import load as load_rag_config  # noqa: E402
 from services.mcp.retrieval.embed import OUTPUT_DIMENSIONALITY  # noqa: E402
 from services.mcp.retrieval.source_fingerprint import (  # noqa: E402
     source_fingerprint,

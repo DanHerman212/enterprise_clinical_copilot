@@ -36,7 +36,7 @@ from google.cloud import aiplatform, storage
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from services.mcp.config import LOCATION, PROJECT  # noqa: E402
-from services.mcp.retrieval.config import load as load_config  # noqa: E402
+from services.mcp.retrieval.index_config import load as load_config  # noqa: E402
 from services.mcp.retrieval.eval_report import write_artifacts  # noqa: E402
 from services.mcp.retrieval.gate import recall_result  # noqa: E402
 

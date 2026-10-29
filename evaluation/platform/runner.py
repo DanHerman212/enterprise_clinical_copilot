@@ -27,10 +27,8 @@ from typing import Any
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-AGENT_DIR = REPO / "evaluation" / "agent"
-for _path in (REPO, AGENT_DIR):
-    if str(_path) not in sys.path:
-        sys.path.insert(0, str(_path))
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 
 AGENT_URL = "https://agent-jamycsjjzq-ue.a.run.app"
 

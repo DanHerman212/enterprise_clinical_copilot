@@ -72,7 +72,7 @@ def test_the_embedding_space_is_defined_once(monkeypatch):
     """
     import importlib
 
-    import services.mcp.retrieval.config as pipeline_config
+    import services.mcp.retrieval.index_config as pipeline_config
     import services.mcp.tools.retrieval as serving
     from services.mcp.pipelines import rag_ingest_pipeline as pipeline
 
@@ -108,7 +108,7 @@ def test_the_embedding_space_is_defined_once(monkeypatch):
 
 def test_a_returning_embedding_block_is_an_error(tmp_path):
     """Deleting the copy is the fix; refusing its return is what keeps it deleted."""
-    import services.mcp.retrieval.config as pipeline_config
+    import services.mcp.retrieval.index_config as pipeline_config
 
     doc = yaml.safe_load(pipeline_config.CONFIG_PATH.read_text())
     doc["embedding"] = {"model": "gemini-embedding-001", "dimensions": 768,

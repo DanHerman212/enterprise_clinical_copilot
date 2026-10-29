@@ -19,7 +19,8 @@ from functools import lru_cache
 from typing import Any
 
 from ..contracts import AdmissionProfileResult, ToolError, tool_error
-from ..dependencies.features import FEATURE_SOURCE, FeatureSource, get_feature_source
+from ..config import FEATURE_SOURCE
+from ..dependencies.features import FeatureSource, get_feature_source
 from ._validation import valid_hadm_id
 
 _LOG = logging.getLogger(__name__)

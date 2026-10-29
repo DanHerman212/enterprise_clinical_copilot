@@ -22,8 +22,9 @@ from services.mcp.contracts import (
     tool_error,
     validate_lab_trend_result,
 )
-from services.mcp.dependencies.features import FEATURE_SOURCE, get_feature_source
-from services.mcp.dependencies.labs.synthetic import lab_trends
+from services.mcp.config import FEATURE_SOURCE
+from services.mcp.dependencies.features import get_feature_source
+from services.mcp.dependencies.labs.synthetic import SOURCE, lab_trends
 from services.mcp.tools._validation import valid_hadm_id
 
 #: Analytes this tool will draw, named for the caller. Derived from the panel rather than
@@ -112,6 +113,10 @@ async def get_lab_trends(hadm_id: int, analyte: str = "") -> LabTrendResult | To
         "returned": len(trends),
         "trends": trends,
         "synthetic": True,
+        # Stamped here, at the boundary every consumer crosses, rather than only in the
+        # `note` sentence below. The generator knows the values are generated; a caller
+        # holding the payload should not have to read prose to find that out.
+        "source": SOURCE,
         "note": (
             "Generated from this admission's features, not read from a laboratory "
             "record. Values the model scored are reproduced exactly."

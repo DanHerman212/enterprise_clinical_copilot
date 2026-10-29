@@ -18,8 +18,8 @@ from ..contracts import (
     tool_error,
     validate_prediction_result,
 )
+from ..config import FEATURE_SOURCE
 from ..dependencies.features import (
-    FEATURE_SOURCE,
     FeatureSource,
     get_feature_source,
     to_instance,

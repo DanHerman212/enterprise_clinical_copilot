@@ -21,17 +21,9 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from .config import LOCATION, PROJECT
-from .dependencies.features import FEATURE_SOURCE
+from .config import FEATURE_SOURCE
 from .runtime import requires_cloud_run_auth
-from .tools import (
-    discharge_medications,
-    get_admission_profile,
-    get_lab_trends,
-    predict_readmission,
-    rag_search,
-    rag_search_sections,
-    search_literature,
-)
+from . import tools
 
 # Query parameters whose values must never appear in a log line.
 _REDACTED_QUERY_KEYS = ("api_key", "email")
@@ -92,13 +84,12 @@ server = MCPServer(
         "features, and the values the model was scored on are reproduced exactly."
     ),
 )
-server.add_tool(predict_readmission)
-server.add_tool(rag_search)
-server.add_tool(rag_search_sections)
-server.add_tool(discharge_medications)
-server.add_tool(search_literature)
-server.add_tool(get_lab_trends)
-server.add_tool(get_admission_profile)
+# Registered from the package's declared list, not from a second copy of it. The seven
+# names used to be written here as well, so adding a tool meant editing `tools/__init__`
+# and this block, and forgetting the second edit produced a tool that existed, was
+# importable, and was never served — the failure mode a boundary test cannot see.
+for _name in tools.__all__:
+    server.add_tool(getattr(tools, _name))
 
 
 @server.custom_route("/health", methods=["GET"])

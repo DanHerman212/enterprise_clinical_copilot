@@ -44,6 +44,17 @@ PROJECT = resolve_project_id()
 # the duplication is the reason the pin is worth having here rather than nowhere.
 LOCATION = "us-east1"
 
+# Which store serves the model's feature rows. Reported in every prediction payload and
+# on `/health` so the provenance of a score is visible without reading the reader.
+#
+# Declared here rather than beside `dependencies/features/`: it is a deployment fact
+# about which store this service was built against, the same kind of fact as `PROJECT`,
+# and three tools plus the server's health endpoint report it. Keeping it in the
+# dependency package made the server's top level import a subpackage to print a
+# constant, which the package's charter forbids — the boundary test could see that edge
+# and named it.
+FEATURE_SOURCE = "bigquery"
+
 # Where the chat model is served, which is deliberately not `LOCATION`.
 #
 # `LOCATION` names the region of the project's own resources — the vector index, the

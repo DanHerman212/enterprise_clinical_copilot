@@ -26,9 +26,8 @@ from evaluation.platform.schemas import MIN_PASS_RATE
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-for _path in (REPO,):
-    if str(_path) not in sys.path:
-        sys.path.insert(0, str(_path))
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 
 #: Hardcoded targets (spec §5). Deliberately not a parameter.
 DATASETS = ("clinical-census-pilot-v2", "suite2-adversarial-v1")

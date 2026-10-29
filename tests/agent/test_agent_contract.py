@@ -441,14 +441,16 @@ def test_every_registered_tool_is_classified_as_derivable_or_kept():
 
     A new tool that is not classified here would be emitted with whatever the
     composition falls back to, and the failure that produces is invisible: note
-    text accumulating in the web application's database. The tool names are read
-    from the server that registers them rather than listed twice.
+    text accumulating in the web application's database. The tool names come from the
+    list the server registers from (`tools.__all__`) rather than a second reading of
+    `server.py`: since the server registers whatever that list declares, a regex over
+    the server's source would have gone on passing while serving nothing.
     """
-    server = (Path(__file__).resolve().parents[2]
-              / "services" / "mcp" / "server.py").read_text()
-    registered = set(re.findall(r"server\.add_tool\((\w+)\)", server))
+    from services.mcp import tools
 
-    assert registered, "no tools found — has registration moved?"
+    registered = set(tools.__all__)
+
+    assert registered, "no tools declared — has registration moved?"
     assert registered == RE_DERIVABLE_TOOLS | RESULT_KEPT_TOOLS | PREFLIGHT_TOOLS
     assert not RE_DERIVABLE_TOOLS & RESULT_KEPT_TOOLS
     # A pre-flight tool's payload is folded into the prompt and forgotten, so it is

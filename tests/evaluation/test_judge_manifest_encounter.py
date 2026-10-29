@@ -26,11 +26,11 @@ from pathlib import Path
 import pytest
 
 _REPO = Path(__file__).resolve().parents[2]
-for _path in (_REPO, _REPO / "evaluation" / "agent"):
+for _path in (_REPO,):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-import build_census  # noqa: E402
+import evaluation.build_census as build_census  # noqa: E402
 from services.agent.routing.admission_context import STAY_ONLY_FIELDS  # noqa: E402
 
 #: One served row, shaped the way BigQuery returns it: every column a string, the

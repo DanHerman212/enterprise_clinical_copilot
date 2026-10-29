@@ -38,7 +38,7 @@ the judge reads the probability out of the `predict_readmission` tool response,
 not out of the case file.
 
 Usage (from repo root):
-    .venv/bin/python evaluation/agent/build_census.py
+    .venv/bin/python evaluation/build_census.py
 """
 
 from __future__ import annotations
@@ -49,11 +49,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-HARNESS = HERE.parents[1]
-if str(HARNESS) not in sys.path:
-    sys.path.insert(0, str(HARNESS))
+# The repository root, so `evaluation.*` and `services.*` resolve when this is run as a
+# script. It is the only entry ever put on the path, and it is the root: the
+# `evaluation/agent` insert this module once needed is gone with the move.
+REPO = HERE.parent
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 
-RESULTS = HERE / "results"
+# The census is an artifact of the cohort, and it stays where the rest of the record does:
+# `fixtures.CASES` and the retention sweep both read `evaluation/agent/results`. Only the
+# CODE moved out of that tree.
+RESULTS = HERE / "agent" / "results"
 COHORT = RESULTS / "hybrid_cohort_v2.json"
 OUT = RESULTS / "cases_82.json"
 OUT_OUTPATIENT = RESULTS / "cases_outpatient.json"

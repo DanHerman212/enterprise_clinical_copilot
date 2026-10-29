@@ -26,11 +26,11 @@ import sys
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[2]
-for _path in (_REPO, _REPO / "evaluation" / "agent"):
+for _path in (_REPO,):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-import build_census  # noqa: E402
+import evaluation.build_census as build_census  # noqa: E402
 from evaluation.outpatient_oracle import OUTPATIENT_HADM_IDS  # noqa: E402
 
 #: The three suite-2 cases that failed. Named so the test fails loudly if one of them

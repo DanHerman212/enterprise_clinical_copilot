@@ -757,6 +757,11 @@ ALLOWED_PLATFORM_EXTERNALS = (
     "services.agent.routing",
     "services.agent.ingress.contracts",
     "services.mcp.config",
+    # The cohort builder sits at the top of `evaluation/`, beside the rubric and the
+    # oracle, and the dataset sync needs its manifest decoder. It is not part of the
+    # harness pipeline and not in the retired collector: `evaluation.agent` stays
+    # forbidden, and this entry names one module, not a package.
+    "evaluation.build_census",
 )
 
 

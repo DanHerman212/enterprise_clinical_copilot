@@ -160,7 +160,7 @@ def test_a_command_turn_reports_the_prose_it_actually_produced():
 
 def test_census_case_carries_the_decoded_manifest():
     """`build_census` puts the manifest on the case, decoded by the server's decoder."""
-    from evaluation.agent import build_census
+    from evaluation import build_census
 
     manifest = {"index_los_days": "6", "admission_type": "Urgent (URGENT)",
                 "prior_inpatient_days": "3"}
@@ -170,7 +170,7 @@ def test_census_case_carries_the_decoded_manifest():
 
 def test_a_case_without_a_decoded_manifest_still_builds():
     """An admission the decoder could not read is a missing manifest, not a crash."""
-    from evaluation.agent import build_census
+    from evaluation import build_census
 
     assert build_census.case_for(90000015, {})["manifest"] == {}
 

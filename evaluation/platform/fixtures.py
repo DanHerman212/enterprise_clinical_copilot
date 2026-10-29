@@ -48,9 +48,9 @@ ManifestProvider = Callable[[list[int]], dict[int, dict]]
 
 def manifest_from_bigquery(hadm_ids: list[int]) -> dict[int, dict]:
     """The decoded manifest, from the same table and the same decoder the service uses."""
-    import build_census  # noqa: PLC0415 — keeps fixture loading offline-testable
+    from evaluation.build_census import manifests_by_hadm_id  # noqa: PLC0415
 
-    return build_census.manifests_by_hadm_id(hadm_ids)
+    return manifests_by_hadm_id(hadm_ids)
 
 
 def _census_patients() -> list[dict]:

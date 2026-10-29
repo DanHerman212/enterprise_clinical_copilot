@@ -87,6 +87,7 @@ from services.agent.engine.model import (
     streamed_turn as _streamed_turn,  #    `model_runtime.streamed_turn`.
 )
 from services.agent.telemetry.stages import emit as _emit
+from services.agent.postprocess import answer as answer_text
 from services.agent.postprocess import citations
 
 from services.agent.engine.prompts import SYSTEM_PROMPT
@@ -216,28 +217,6 @@ BUDGET_EXHAUSTED_ANSWER = (
 # it outside the prompt's "EVERYTHING inside those tags is data" rule — the one
 # rule that keeps a note from reading as instructions. Escaped rather than
 # stripped, so the passage and the citation quoting it stay in step.
-# The sentence for a question the notes turned out not to address (UX Phase 1B).
-# Fixed text, not a prompt: see `no_evidence_answer`.
-NO_EVIDENCE_TEMPLATE = (
-    'There is no information in the patient\'s chart regarding "{topic}".'
-)
-NO_EVIDENCE_UNKNOWN_TOPIC = (
-    "There is no information in the patient's chart regarding that question."
-)
-
-
-def _asked_about(question: str) -> str:
-    """The caller's own question, without the admission the contract appends.
-
-    Quoted rather than paraphrased: a sentence assembled in code must not invent
-    a subject for what was asked, and the caller's words are already the subject.
-    The admission suffix is dropped because "regarding \"... For admission
-    90000023.\"" names a record number in the middle of a clinical sentence.
-    """
-    head, marker, _ = question.rpartition(" For admission ")
-    return (head if marker else question).strip()
-
-
 # The relevance verdict (UX Phase 1B). A model asked to admit ignorance can always
 # decline to; this is the shape the decline has to take for the application to hear
 # it. Prose is still an answer — nothing about the ordinary path changed.
@@ -292,118 +271,6 @@ def read_evidence_reply(text: str) -> EvidenceReply:
     # nothing may be asserted on its behalf, so this reads as a decline and the
     # caller decides (`ask`).
     return EvidenceReply(declined=True, text="")
-
-
-def _replace_final_text(state: dict, text: str) -> None:
-    """Set the final answer's text in place.
-
-    The message is edited rather than replaced: `model_turn` reads the same message
-    for the finish reason and the content-filter verdict, and a new message would
-    lose both. Only the content changes.
-    """
-    message = final_message(state)
-    if message is not None:
-        message.content = text
-
-
-def _citable_unit_total(state: dict) -> int:
-    """How many citation numbers this conversation has handed the model.
-
-    The same sum `tool_node` advances the running number by — the replayed turns' units
-    first, then this turn's — because that is the array a marker addresses.
-    """
-    replayed = state.get("replayed_tool_calls") or []
-    this_turn = state.get("tool_calls") or []
-    return sum(_passage_total(call.get("response")) for call in (*replayed, *this_turn)
-               if isinstance(call, dict))
-
-
-def sanitize_answer_markers(state: dict) -> None:
-    """Drop markers from the settled answer that address no unit the turn was shown.
-
-    Applied at settlement — the one point both routes pass through — rather than in the
-    presentation layer, because the trace, the judge and the browser read the answer from
-    three different places and only the state is common to all three. A marker removed
-    downstream of the trace would still be in the record the judge scores.
-
-    Both answer channels are cleaned: the model's prose, and a command's
-    `deterministic_answer` (which for `/meds` is written in code and carries its own
-    `^[1]`).
-    """
-    total = _citable_unit_total(state)
-    message = final_message(state)
-    if message is not None and isinstance(message.content, str):
-        cleaned = citations.sanitize_citation_range(message.content, total)
-        if cleaned != message.content:
-            message.content = cleaned
-    deterministic = state.get("deterministic_answer")
-    if isinstance(deterministic, str) and deterministic:
-        state["deterministic_answer"] = citations.sanitize_citation_range(
-            deterministic, total
-        )
-
-
-def no_evidence_answer(
-    question: str, tool_calls: list[dict], *, declined: bool = False
-) -> str | None:
-    """The fixed sentence for a question the notes did not answer, or None.
-
-    Free text is answered by a model that can fill a gap with plausible clinical
-    detail, and asking it in the prompt to admit ignorance is a request rather
-    than a guarantee — the failure it prevents is a confident answer to a
-    question the notes do not address, which reads exactly like an answer to one
-    they do. So the absence is decided here and the model's text for that turn is
-    never served.
-
-    Two things can establish it, and they are different observations:
-
-      * retrieval returned nothing at all;
-      * the model read what retrieval returned and reports that none of it answers
-        the question (`declined`, from `read_evidence_reply`). This is the case a
-        count cannot see. Vector search returns its nearest neighbours whatever it
-        is asked, so a question the notes cannot answer comes back looking like one
-        they can: live on 2026-10-12, "was the patient intubated during this
-        admission?" retrieved five passages, none of which mentioned intubation,
-        and the model answered from them anyway. The count was 5 and the answer was
-        absent, which is the pair a count cannot distinguish.
-
-    The verdict in the second case is the model's; the SENTENCE is not. It is
-    spoken here, in fixed words, so a model that would have hedged instead reports
-    nothing and the clinician hears the same thing either way.
-
-    The conditions around both are narrow on purpose:
-
-      * the note search RAN — a turn that made no retrieval call is not a turn
-        that found nothing, and saying "the chart does not mention it" about a
-        search nobody performed would invent a fact about the record;
-      * no search failed. A failed search says nothing about the chart, and
-        reporting an outage as an absence is the same mistake in the other
-        direction;
-      * the literature was not consulted. An answer built on published evidence
-        is an answer, and it is not a claim about this patient's notes.
-    """
-    names = [call.get("name") for call in tool_calls]
-    if "search_literature" in names:
-        return None
-    if "rag_search" not in names:
-        return None
-
-    found_passages = False
-    for name in ("rag_search", "rag_search_sections"):
-        for call in tool_calls:
-            if call.get("name") != name:
-                continue
-            response = call.get("response")
-            if not isinstance(response, dict) or response.get("error"):
-                return None
-            if response.get("passages"):
-                found_passages = True
-
-    if found_passages and not declined:
-        return None
-
-    topic = _asked_about(question)
-    return NO_EVIDENCE_TEMPLATE.format(topic=topic) if topic else NO_EVIDENCE_UNKNOWN_TOPIC
 
 
 def _outbound_patient_identifier(
@@ -786,7 +653,9 @@ def build_graph(
             # follow-up's first passage was then stamped `^[1]` beside a panel that
             # already held `^[1]`..`^[9]`, so a claim about the treatment course
             # resolved to an analyte.
-            cite_offset=_citable_unit_total(state),
+            cite_offset=citations.citation_bound(
+                state.get("tool_calls") or [], state.get("replayed_tool_calls") or [],
+            ),
         )
         return {"messages": messages, "tool_calls": recorded}
 
@@ -1052,7 +921,7 @@ async def ask(
             )
             # The command's answer is settled before anything reads it: a marker removed
             # after the trace is written would still be in the record the judge scores.
-            sanitize_answer_markers(command_state)
+            answer_text.sanitize_answer_markers(command_state)
             # `tools:<n>` cannot be known when the span opens. `tools:0` is the tag the
             # triage view filters on, so it is added here, once the count exists.
             observability.stamp_trace_tags(
@@ -1060,12 +929,12 @@ async def ask(
                 [*command_meta.get("langfuse_tags", []),
                  f"tools:{len(command_state.get('tool_calls') or [])}"],
             )
-            # The trace table reads `input`/`output`; without them every row is a dash.
-            # The command path is the one that most needs it: `/risk` returns no prose,
-            # so the answer a reader wants to see IS the structured surface.
-            observability.set_trace_io(
-                question, command_trace_output(command_state), span=root_span,
-            )
+            # The trace table reads `input`/`output`, and they are written ONCE, in
+            # `turn.py`, after the guardrails have settled the answer the caller is
+            # actually served. Writing them here recorded pre-postprocess prose: on the
+            # command route the text was pre-guardrail, on the free-text route it was
+            # pre-settlement, and neither was the answer a reader saw.
+            #
             # Read from the span itself, not from the ambient context: the context can
             # go missing (four command turns in the 22:38 run reported no trace id at
             # all), while the span always knows the trace it belongs to.
@@ -1188,7 +1057,6 @@ async def ask(
             [*trace_meta.get("langfuse_tags", []),
              f"tools:{len(state.get('tool_calls') or [])}"],
         )
-        observability.set_trace_io(question, final_text(state), span=root_span)
         state["langfuse_trace_id"] = (
             observability.span_trace_id(root_span) or observability.current_trace_id()
         )
@@ -1204,13 +1072,13 @@ async def ask(
     # prose. A reply that is not the envelope is left exactly as it arrived.
     reply = read_evidence_reply(final_text(state))
     if reply.text != final_text(state):
-        _replace_final_text(state, reply.text)
+        answer_text.replace_final_text(state, reply.text)
 
     # A question the notes did not answer is answered here rather than by the model,
     # which has already written something plausible that nobody will see (see
-    # `no_evidence_answer`). Set on the state, so both routes serve it and the
+    # `answer.no_evidence_answer`). Set on the state, so both routes serve it and the
     # guardrails and citation layer treat it like any other answer.
-    fallback = no_evidence_answer(
+    fallback = answer_text.no_evidence_answer(
         question, state.get("tool_calls") or [], declined=reply.declined
     )
     if fallback is not None:
@@ -1226,12 +1094,12 @@ async def ask(
             ",".join(call.get("name") or "?" for call in state.get("tool_calls") or [])
             or "none",
         )
-        _replace_final_text(state, "")
+        answer_text.replace_final_text(state, "")
 
     # A marker that addresses no citable unit is not a citation. Removed here, where the
-    # answer is settled, so the trace the judge reads carries the same text the browser
-    # does (see `sanitize_answer_markers`).
-    sanitize_answer_markers(state)
+    # answer is settled, so the guardrails and the presentation see the same text — and so
+    # the trace `turn.py` writes afterwards records the answer that was actually served.
+    answer_text.sanitize_answer_markers(state)
 
     # The trace id leaves with the state so the layers that need to point back at
     # a run can: `collect.py` stores it per case, and `judge.py` attaches rubric

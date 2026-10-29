@@ -98,6 +98,7 @@ AGENT_MODULES = frozenset({
     'ingress/http.py',
     'ingress/run.py',
     'postprocess/__init__.py',
+    'postprocess/answer.py',
     'postprocess/citations.py',
     'postprocess/followups.py',
     'postprocess/guardrail.py',

@@ -500,59 +500,6 @@ def _render_passage(passage: dict[str, Any], *, keep_id: bool = False) -> dict[s
 
 
 
-def _note_modality(section: Any) -> str:
-    """The modality label for one note passage, as the model reads it.
-
-    The two labels are the vocabulary SYSTEM_PROMPT's citation rule is written in, so they
-    are built here and nowhere else: a second spelling of either would be a rule the model
-    cannot match against what it was shown.
-    """
-    name = str(section or "").strip() or "unrecorded section"
-    return f"CLINICAL NOTE SECTION — {name}"
-
-
-def _lab_modality(trend: dict[str, Any]) -> str:
-    """The modality label for one analyte's series."""
-    name = str(trend.get("label") or trend.get("key") or "").strip() or "laboratory value"
-    return f"STRUCTURED LAB TREND — {name}"
-
-
-def _citation_header(number: int, modality: str) -> str:
-    """The literal marker the model is asked to copy, printed beside the evidence.
-
-    `cite` already told the model WHICH number a unit carries, and it was not enough: six
-    multi-turn items scored `citation <= 1` with the same judge language each time —
-    "every citation is incorrect … the claim about the chemotherapy
-    regimen is supported by a `rag_search` passage but is cited to a lab trend for RDW".
-    The numbering runs across turns — a Turn‑2 answer citing Turn 1's panel uses `^[1]` for
-    RDW and `^[6]` for the note — and a bare `"cite": 1` beside a JSON object is a fact the
-    model has to remember rather than a token it can copy.
-
-    So the marker is printed in the form the answer must contain: `[CITATION ^[6] |
-    CLINICAL NOTE SECTION — brief_hospital_course]`. Copying that string is cheaper than
-    reconstructing an index, and a wrong index is no longer a plausible default.
-
-    Not added for the admission manifest, and deliberately: a marker must resolve, and the
-    manifest is context rather than a citable unit. Stamping it would produce a `^[n]` that
-    the citation layer strips from a correct answer.
-    """
-    return f"[CITATION ^[{number}] | {modality}]"
-
-
-def _citation_fields(number: int, modality: str) -> dict[str, Any]:
-    """The three fields every citable unit carries, built in one place.
-
-    `cite` is the integer position, `cite_modality` the kind of evidence, and
-    `cite_header` the marker printed ready to copy. One function because they must agree:
-    a header naming `^[6]` beside a `cite` of 3 would be a worse defect than no header.
-    """
-    return {
-        "cite": number,
-        "cite_modality": modality,
-        "cite_header": _citation_header(number, modality),
-    }
-
-
 def _render_tool_result(payload: Any, *, offset: int = 0) -> str:
     """Render a tool result as the body the wrapper hands the model.
 
@@ -571,45 +518,11 @@ def _render_tool_result(payload: Any, *, offset: int = 0) -> str:
     """
     if isinstance(payload, str):
         return _escape_delimiter(payload)
-    rendered = payload
-    if isinstance(payload, dict):
-        passages = payload.get("passages")
-        if isinstance(passages, list):
-            # Each passage carries the number its citation marker must use. The model was
-            # previously handed an unlabelled array and had to count positions to emit
-            # `^[n]`, and on a four-section summary it counted wrong: `^[3]` went to the
-            # discharge instructions and `^[4]` to the discharge diagnosis, both of which
-            # begin with "discharge" (TF-7, measured 2026-10-23). The number is now given
-            # rather than inferred, and the positions the citation layer resolves against
-            # are the same numbers.
-            #
-            # Each also carries `cite_modality`, which says what KIND of evidence the
-            # number points at. The model can see the difference between a note passage
-            # and a laboratory series in the payload's own shape, but not in the number:
-            # `^[4]` and `^[6]` look alike on the page, and a laboratory index cited onto
-            # a narrative claim about transfusion and medication management is
-            # indistinguishable from a correct one. Labelling the number is what lets the
-            # citation rule in SYSTEM_PROMPT be checked rather than remembered.
-            rendered = dict(payload, passages=[
-                ({**_render_passage(passage),
-                  **_citation_fields(offset + index,
-                                     _note_modality(passage.get("section")))}
-                 if isinstance(passage, dict) else passage)
-                for index, passage in enumerate(passages, start=1)
-            ])
-        else:
-            # A laboratory panel is the second kind of citable evidence (Phase E,
-            # 2026-10-26). Without a number the trajectory was not something the model
-            # could cite, and a question about an analyte therefore had no citable answer
-            # in front of it: the loop searched the note for a citable passage and
-            # appended a second paragraph drawn from it. One analyte, one number.
-            trends = payload.get("trends")
-            if isinstance(trends, list):
-                rendered = dict(payload, trends=[
-                    ({**trend, **_citation_fields(offset + index, _lab_modality(trend))}
-                     if isinstance(trend, dict) else trend)
-                    for index, trend in enumerate(trends, start=1)
-                ])
+    # Numbering is `citations`': it owns what a citable unit is (`citable_passages`) and
+    # it is the module that will later resolve or delete a marker, so it also stamps the
+    # numbers. `dress` is the shaping only this layer knows about — dropping the machine
+    # id, refusing an over-long passage — and it runs before the numbers are attached.
+    rendered = citations.render_numbered(payload, offset, dress=_render_passage)
     return _escape_delimiter(json.dumps(rendered, ensure_ascii=False))
 
 

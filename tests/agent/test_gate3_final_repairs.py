@@ -18,8 +18,17 @@ from services.agent.engine.deterministic import (
     medication_narrative,
     parse_medications,
 )
-from services.agent.engine.graph import sanitize_answer_markers
-from services.agent.postprocess.citations import sanitize_citation_range
+from services.agent.postprocess.answer import sanitize_answer_markers
+from services.agent.postprocess.citations import enforce_citations
+
+
+def sanitize_citation_range(answer: str, *, source_total: int) -> str:
+    """The settlement half of `enforce_citations`, as these tests used to call it.
+
+    The two functions were merged into one on 2026-10-29; this shim keeps the assertions
+    below written against the bound alone.
+    """
+    return enforce_citations(answer, source_total)[0]
 from services.mcp.config import GEMINI_MAX_OUTPUT_TOKENS
 
 
@@ -171,11 +180,27 @@ def test_nothing_is_citable_so_every_number_is_removed():
     )
 
 
-def test_a_pmid_badge_is_not_a_passage_number_and_survives():
-    """The literature badge addresses a record, not a passage position."""
+def test_a_pmid_badge_must_name_a_record_the_turn_retrieved():
+    """The literature badge addresses a record, and only a record this turn saw.
+
+    Changed 2026-10-29. This test used to pin the opposite rule — that a PMID badge was
+    left alone because the settlement pass knew nothing about literature records. It
+    left a fabricated identifier standing until a later pass removed it, and only if that
+    pass ran. The bound now carries the retrieved PMIDs, so the badge is checked where
+    every other marker is checked.
+    """
     answer = "Trial evidence supports this ^[PMID: 12345678]."
 
-    assert sanitize_citation_range(answer, source_total=2) == answer
+    kept, flags = enforce_citations(answer, 2, {"12345678"})
+    assert kept == answer
+    assert flags == []
+
+    stripped, flags = enforce_citations(answer, 2)
+    assert "PMID" not in stripped
+    assert stripped == "Trial evidence supports this."
+    # Flagged in the same `^<digits>` form as a passage number, so one filter counts every
+    # unresolvable marker: a labelled badge and a bare identifier name the same record.
+    assert flags == ["citation_out_of_range:^12345678"]
 
 
 def test_a_section_name_marker_is_left_to_the_unknown_marker_pass():

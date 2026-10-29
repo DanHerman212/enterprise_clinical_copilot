@@ -26,6 +26,7 @@ import pytest
 
 from services.agent.engine import graph
 from services.agent.engine.graph import _execute_tool_calls
+from services.agent.postprocess import answer as answer_text
 from services.agent.engine.mcp_client import MCPToolbox
 from services.agent.engine.prompts import SYSTEM_PROMPT
 
@@ -221,7 +222,7 @@ def test_the_record_number_rule_has_both_halves():
     intubated during this admission".
     """
     assert "no admission id" in SYSTEM_PROMPT
-    assert "90000023" not in graph._asked_about(
+    assert "90000023" not in answer_text._asked_about(
         "Was she febrile? For admission 90000023.")
 
 

@@ -29,6 +29,8 @@ as bounding headers. One vocabulary, one drift surface (S7-02 / ECC-33).
 """
 
 import re
+from collections.abc import Callable, Iterable
+from typing import Any
 
 from services.mcp.retrieval.sections import KNOWN_HEADINGS
 
@@ -184,9 +186,10 @@ def _renumber_citations(answer: str) -> tuple[str, dict[int, int]]:
     return "".join(out), numbers
 
 
-#: Any `^[...]` marker at all, valid or not. Used to find the ones that are not
-#: citations so they can be removed rather than printed.
-_ANY_MARKER_RE = re.compile(r"\^\[[^\]]*\]")
+#: Any `^[...]` marker at all, valid or not, with its body captured. The one regex every
+#: pass in this module scans with: `_drop_unknown_markers` decides which non-numeric forms
+#: survive, and `enforce_citations` decides which numeric and PMID forms do.
+_ANY_MARKER_RE = re.compile(r"\^\[([^\]]*)\]")
 
 #: What a marker must look like to be KEPT: a note-passage number or set of them,
 #: or a literature PMID badge. Everything else is a model invention and is dropped.
@@ -197,67 +200,151 @@ _KNOWN_MARKER_RE = re.compile(
     re.IGNORECASE,
 )
 
+#: The numeric forms a marker body may take: `3`, `1, 2`, `1-3`.
+_NUMERIC_BODY_RE = re.compile(r"\d+(?:\s*,\s*\d+)*|\d+\s*-\s*\d+")
 
-#: A citation marker with whatever space precedes it, so removing the marker does not
-#: leave a gap before the punctuation that followed it.
-_SPACED_MARKER_RE = re.compile(r"([ \t]*)\^\[([^\]]*)\]")
+#: A marker that names a literature record rather than a position.
+_PMID_BODY_RE = re.compile(r"PMID:?\s*(\d+)", re.IGNORECASE)
 
 
-def sanitize_citation_range(answer: str, source_total: int) -> str:
-    """Remove citation markers that address no citable unit this conversation showed.
+def enforce_citations(
+    answer: str,
+    slots: int,
+    pmids: "Iterable[str]" = (),
+) -> tuple[str, list[str]]:
+    """Keep the markers that resolve; delete the ones that do not; report the latter.
 
-    Numbering is 1-based and bounded: a thread that was shown `source_total` citable
-    units has numbers `1..source_total` and nothing else. A marker outside that range is
-    not a citation in any sense — it is a number the model wrote, and it reaches the
-    reader as a footnote that opens nothing. A synthesis turn whose previous `/meds`
-    turn had retrieved no passages once wrote "the discharge medications
-    section is empty ^[0]": zero is not a passage position at all, and the sentence was
-    doubly wrong about the record (see the prompt rule on empty versus not-retrieved).
+    The single place a citation marker can be deleted, and the single definition of what
+    "resolves" means. Two functions did this until 2026-10-29 — this one's predecessor
+    (`sanitize_citation_range`) and `guardrail.check_citations` — with two different
+    counts and two different deletion mechanisms. They disagreed about laboratory
+    analytes, which is what failed four items on `pilot-verify-20261028-205050`: markers
+    the model had written correctly were deleted as out of range.
 
-    Bounded rather than merely positive because the same class of invention produces
-    `^[7]` on a thread with three units, which resolves to nothing and scores as a
-    fabricated source.
+    `slots` is the bound, and it is the length of the array the model was numbered
+    against — one per note passage AND one per laboratory analyte, across the replayed
+    turns and this one (`citation_bound`). `pmids` are the records a literature turn
+    actually retrieved; a `^[PMID: ...]` badge naming anything else is an invented
+    identifier and is removed rather than printed.
 
-    A multi-number marker keeps its valid numbers and loses the rest, so `^[1, 9]` on a
-    three-unit thread becomes `^[1]` rather than disappearing: the supported half of the
-    the claim still points at its evidence. The kept numbers are emitted as one
-    single-number marker each (`^[1] ^[2] ^[9]`), because that is the only shape the
-    browser's marker regex can turn into a control. A marker with no valid number left
-    is removed whole, together with the space before it, so the sentence closes up
-    around the punctuation it had.
+    Three outcomes per marker:
 
-    PMID badges are left alone — they address a literature record, not a passage, and
-    this function knows nothing about how many of those the turn returned.
+      * **resolvable** — left exactly as written;
+      * **partly resolvable** — a multi-number marker (`^[1, 9]`, `^[2-6]`) keeps its
+        valid numbers and loses the rest, emitted as one single-number marker each,
+        because a single number is the only shape the browser's marker regex can turn
+        into a control;
+      * **unresolvable** — removed whole.
 
-    Deliberately not folded into `renumber_citations`: renumbering decides ORDER, and
-    this decides EXISTENCE. Keeping them apart is what lets the renumbering be tested on
-    its own contract, and what makes this rule auditable as the single place a marker can
-    be deleted.
+    A removal takes the run of spaces in front of the marker with it, so no gap is left
+    behind. What it cannot take is the separator that FOLLOWED it: a sentence ending
+    `discharge ^[4], ^[5], ^[6].` loses all three markers and is left holding the commas
+    that sat between them. `_tidy_removed_markers` then closes those runs up, which is
+    why the output reads `discharge.` rather than `discharge,,,,,,.` — the artefact four
+    answers carried when the deletion and the tidy lived in different modules.
+
+    A marker that is neither numeric nor a PMID (`^[brief_hospital_course]`) is left
+    alone here: `_drop_unknown_markers`, reached through `renumber_citations`, owns that
+    vocabulary. One regex, two rules about what a marker may say, no third opinion.
     """
     if "^[" not in (answer or ""):
+        return answer, []
+    limit = max(int(slots or 0), 0)
+    allowed = {str(pmid) for pmid in pmids}
+    flags: list[str] = []
+    out: list[str] = []
+    last = 0
+
+    for match in _ANY_MARKER_RE.finditer(answer):
+        body = match.group(1).strip()
+        conclusion = _conclude(body, limit, allowed)
+        if conclusion is None:
+            continue
+        # Taken from the start of the whitespace in front of the marker, so a deletion
+        # does not leave a gap and a rewrite keeps exactly one separating space.
+        start = match.start()
+        while start > last and answer[start - 1] in " \t":
+            start -= 1
+        lead = answer[start:match.start()]
+        out.append(answer[last:start])
+        kept, found = conclusion
+        flags.extend(found)
+        if kept:
+            out.append(lead + " ".join(f"^[{number}]" for number in kept))
+        last = match.end()
+    out.append(answer[last:])
+    return _tidy_removed_markers("".join(out)), flags
+
+
+def _conclude(
+    body: str, limit: int, allowed: "set[str]",
+) -> "tuple[list[int], list[str]] | None":
+    """What to do with one marker body. None means leave the marker exactly as written.
+
+    Returns the numbers to emit and the flags to report; an empty number list means the
+    marker is unresolvable and goes.
+    """
+    if not body:
+        return [], ["citation_out_of_range:^[]"]
+    # A record identifier, in either form the model writes it: the labelled
+    # `^[PMID: 35186616]`, or the bare `^[35186616]` it produces when it has been told
+    # twice not to label one. Both name the same record, so both resolve the same way.
+    pmid = _PMID_BODY_RE.fullmatch(body)
+    if pmid is not None:
+        number = pmid.group(1)
+        if number in allowed:
+            return None
+        return [], [f"citation_out_of_range:^{number}"]
+    if not _NUMERIC_BODY_RE.fullmatch(body):
+        # A section name or other invention: `_drop_unknown_markers` decides its fate.
+        return None
+
+    def resolves(number: int) -> bool:
+        return 1 <= number <= limit or str(number) in allowed
+
+    numbers = _expand_citations(body)
+    valid: list[int] = []
+    for number in numbers:
+        if resolves(number) and number not in valid:
+            valid.append(number)
+    missing = [n for n in dict.fromkeys(numbers) if not resolves(n)]
+    flags = [f"citation_out_of_range:^{n}" for n in missing]
+    if len(numbers) == 1:
+        # One number, and it resolves: the marker is already correct, so it is left
+        # byte-for-byte. Anything else here would rewrite a good citation.
+        return (None if valid else ([], flags))
+    # A cluster is expanded whether or not any of it is out of range: one number per
+    # marker is the only shape the browser can turn into a control.
+    return valid, flags
+
+
+def _tidy_removed_markers(answer: str) -> str:
+    """Close up the punctuation a deleted marker left stranded.
+
+    The cases measured on 2026-10-28, all caused by removing a marker that sat between
+    two separators:
+
+      * `discharge ^[4], ^[5], ^[6].` -> `discharge,,,,,,,,.`
+      * `strictures, ^[11] ^[12].` -> `strictures,.`
+      * `creatinine ^[6] and eGFR` -> a double space where the space before the marker
+        and the space after it met
+
+    Each rule is a no-op on text that had no marker removed, so a clean answer passes
+    through unchanged; that is asserted, because a whitespace rule that rewrites passing
+    prose is how the meds guard once damaged a correct answer.
+    """
+    if not answer:
         return answer
-    limit = max(int(source_total or 0), 0)
-
-    def _rebuild(match: re.Match) -> str:
-        lead, inner = match.group(1), match.group(2).strip()
-        if inner.upper().startswith("PMID"):
-            return match.group(0)
-        if not re.fullmatch(r"\d+(?:\s*,\s*\d+)*|\d+\s*-\s*\d+", inner):
-            # Not a number and not a PMID: `_drop_unknown_markers` owns this case.
-            return match.group(0)
-        numbers = _expand_citations(inner)
-        valid = [n for n in numbers if 1 <= n <= limit]
-        seen: list[int] = []
-        for n in valid:
-            if n not in seen:
-                seen.append(n)
-        if not seen:
-            return ""
-        if len(seen) == 1 and len(numbers) == 1:
-            return match.group(0)
-        return f"{lead}" + " ".join(f"^[{n}]" for n in seen)
-
-    return _SPACED_MARKER_RE.sub(_rebuild, answer)
+    cleaned = re.sub(r"[ \t]{2,}", " ", answer)
+    cleaned = re.sub(r"[ \t]+([.,;:])", r"\1", cleaned)
+    # A separator left in front of another separator, or in front of the sentence's own
+    # terminator, says nothing: `,,` and `,.` are debris, not punctuation.
+    for _ in range(3):
+        collapsed = re.sub(r"([,;:])\s*(?=[.,;:])", "", cleaned)
+        if collapsed == cleaned:
+            break
+        cleaned = collapsed
+    return cleaned
 
 
 def _drop_unknown_markers(answer: str) -> str:
@@ -558,8 +645,155 @@ def citable_passages(payload: object) -> list[dict]:
 def passage_total(payload: object) -> int:
     """How many citation numbers one tool result consumes.
 
-    The single definition of that count. `graph` advances its running number by this and
-    the citation layer concatenates the same array, so a marker the model was given and
-    the record it opens are the same position by construction.
+    The single definition of that count. The model's numbering and every enforcement
+    pass advance by this and resolve against it, so a marker the model was given and the
+    record it opens are the same position by construction.
     """
     return len(citable_passages(payload))
+
+
+def citation_bound(
+    tool_calls: list[dict] | None,
+    conversation_calls: list[dict] | None = None,
+) -> int:
+    """How many numbered citations this conversation's answer may address.
+
+    The length of the array the model was numbered against: one unit per note passage AND
+    one per laboratory analyte, over the replayed turns first and this turn second
+    (`replay_messages` and `tool_node` advance the same sum). A literature turn has no
+    such units, so its article count stands in — a `^[n]` on a `/pubmed` answer addresses
+    one of the records the search returned.
+
+    The one counter. Two existed until 2026-10-29 — this sum and a passages-only count in
+    `guardrail` — and their disagreement deleted nine correct analyte markers from a
+    first-turn `/labs` answer (`pilot-verify-20261028-205050`).
+    """
+    units = sum(
+        passage_total(call.get("response"))
+        for call in (*(conversation_calls or []), *(tool_calls or []))
+        if isinstance(call, dict)
+    )
+    return units or literature_slots(tool_calls)
+
+
+def literature_slots(tool_calls: list[dict] | None) -> int:
+    """How many articles a literature turn can cite: the records holding a PMID.
+
+    Matched to the canvas, which drops a record with no pmid because it cannot be cited
+    or linked (`a2ui._usable_articles`), so the numbered citations a reader can open are
+    exactly these records.
+    """
+    for call in tool_calls or []:
+        if call.get("name") != "search_literature":
+            continue
+        articles = (call.get("response") or {}).get("articles")
+        if isinstance(articles, list):
+            return sum(
+                1 for article in articles
+                if isinstance(article, dict) and article.get("pmid")
+            )
+    return 0
+
+
+def literature_pmids(tool_calls: list[dict] | None) -> frozenset[str]:
+    """The PMIDs a literature turn may name instead of a position.
+
+    The companion to `literature_slots`, read from the same call, so the identifiers
+    `enforce_citations` accepts and the records the canvas draws are the same set.
+    """
+    for call in tool_calls or []:
+        if call.get("name") != "search_literature":
+            continue
+        articles = (call.get("response") or {}).get("articles")
+        if isinstance(articles, list):
+            return frozenset(
+                str(article["pmid"]) for article in articles
+                if isinstance(article, dict) and article.get("pmid")
+            )
+    return frozenset()
+
+
+def citation_header(number: int, modality: str) -> str:
+    """The literal marker the model is asked to copy, printed beside the evidence.
+
+    `cite` says which number a unit carries, and it was not enough: six multi-turn items
+    scored `citation <= 1` with the same judge language — the claim is supported by one
+    kind of evidence and cited to another. The numbering runs across turns, and a bare
+    `"cite": 1` beside a JSON object is a fact the model has to remember rather than a
+    token it can copy.
+    """
+    return f"[CITATION ^[{number}] | {modality}]"
+
+
+def citation_fields(number: int, modality: str) -> dict[str, Any]:
+    """The three fields every citable unit carries, built in one place.
+
+    `cite` is the integer position, `cite_modality` the kind of evidence, and
+    `cite_header` the marker printed ready to copy. One function because they must agree:
+    a header naming `^[6]` beside a `cite` of 3 would be a worse defect than no header.
+    """
+    return {
+        "cite": number,
+        "cite_modality": modality,
+        "cite_header": citation_header(number, modality),
+    }
+
+
+def note_modality(section: Any) -> str:
+    """The modality label for one note passage, as the model reads it.
+
+    The two labels are the vocabulary the prompt's citation rule is written in, so they
+    are built here and nowhere else: a second spelling of either would be a rule the
+    model cannot match against what it was shown.
+    """
+    name = str(section or "").strip() or "unrecorded section"
+    return f"CLINICAL NOTE SECTION — {name}"
+
+
+def lab_modality(trend: dict[str, Any]) -> str:
+    """The modality label for one analyte's series."""
+    name = str(trend.get("label") or trend.get("key") or "").strip() or "laboratory value"
+    return f"STRUCTURED LAB TREND — {name}"
+
+
+def render_numbered(
+    payload: Any,
+    offset: int = 0,
+    *,
+    dress: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+) -> Any:
+    """Stamp the citation numbers onto the copy of a tool result the model reads.
+
+    One unit, one number, continuing from `offset` — how many units the conversation had
+    already shown. Which payloads carry units is `citable_passages`' answer, and this
+    function follows it exactly; a payload that contributes no unit comes back unchanged.
+
+    `dress` is the caller's own per-unit shaping (dropping machine ids, refusing an
+    over-long passage). It runs before the numbers are attached, so the numbers describe
+    the units the model is about to read rather than the ones the tool returned.
+
+    This belongs here, not in the tool client: a number the model writes is a number this
+    module will later have to resolve or delete, and the two must not be able to disagree.
+    """
+    if not isinstance(payload, dict):
+        return payload
+
+    def unit(item: dict[str, Any], number: int, modality: str) -> dict[str, Any]:
+        shaped = dress(item) if dress is not None else dict(item)
+        return {**shaped, **citation_fields(number, modality)}
+
+    passages = payload.get("passages")
+    if isinstance(passages, list):
+        return dict(payload, passages=[
+            unit(passage, offset + index, note_modality(passage.get("section")))
+            if isinstance(passage, dict) else passage
+            for index, passage in enumerate(passages, start=1)
+        ])
+    trends = payload.get("trends")
+    if isinstance(trends, list):
+        return dict(payload, trends=[
+            unit(trend, offset + index, lab_modality(trend))
+            if isinstance(trend, dict) else trend
+            for index, trend in enumerate(trends, start=1)
+        ])
+    return payload

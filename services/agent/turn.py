@@ -36,7 +36,7 @@ from services.agent.ingress.contracts import (
     AgentResponseError,
     validate_agent_success,
 )
-from services.agent.engine.graph import final_message, final_text
+from services.agent.engine.graph import command_trace_output, final_message, final_text
 from services.agent.postprocess.guardrail import guard_answer
 from services.agent.engine.mcp_client import MCP_TRANSPORT
 from services.agent.ingress.contracts import is_served
@@ -203,6 +203,18 @@ async def compose_success(
     # `trimmed_calls`.
     guarded = guard_answer(
         text, state["tool_calls"], state.get("replayed_tool_calls") or []
+    )
+
+    # The trace records the answer the caller is SERVED, and it is written here, once,
+    # after the guardrails and before anything composes from the result. The charter's
+    # Law 5. It used to be written in `graph.ask`, on both routes, before this point:
+    # the command route stamped pre-guardrail text and the free-text route stamped
+    # pre-settlement text, so the two disagreed with each other and neither was the
+    # answer a reader saw. A turn that carries no prose (`/risk`) records the structured
+    # surface instead, which is what the widget draws and the honest record of the turn.
+    observability.set_trace_io(
+        question,
+        (guarded["answer"] or "").strip() or command_trace_output(state),
     )
 
     # tool_calls carry name, arguments, response and whether the response can be

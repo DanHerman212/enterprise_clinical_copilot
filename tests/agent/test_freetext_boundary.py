@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from langchain_core.messages import AIMessage  # noqa: E402
 
 from services.agent.engine import graph
+from services.agent.postprocess import answer as answer_text  # noqa: E402
 from services.agent.routing import routing  # noqa: E402
 from services.agent.routing.admission_context import PREFLIGHT_TOOLS  # noqa: E402
 from services.agent.engine.mcp_client import (  # noqa: E402
@@ -185,7 +186,7 @@ QUESTION = "Was there any concern about a blood clot in her leg?"
 
 
 def test_an_empty_search_becomes_the_fixed_sentence():
-    answer = graph.no_evidence_answer(QUESTION, [EMPTY])
+    answer = answer_text.no_evidence_answer(QUESTION, [EMPTY])
 
     assert answer == (
         'There is no information in the patient\'s chart regarding '
@@ -196,40 +197,40 @@ def test_an_empty_search_becomes_the_fixed_sentence():
 def test_the_admission_suffix_is_not_quoted_into_the_sentence():
     """The contract appends the admission to the question the model is asked; a
     record number inside a clinical sentence reads as a reference to nothing."""
-    answer = graph.no_evidence_answer(f"{QUESTION} For admission 90000023.", [EMPTY])
+    answer = answer_text.no_evidence_answer(f"{QUESTION} For admission 90000023.", [EMPTY])
 
     assert "90000023" not in answer
     assert "For admission" not in answer
 
 
 def test_a_search_that_returned_passages_is_left_to_the_model():
-    assert graph.no_evidence_answer(QUESTION, [WITH_PASSAGES]) is None
+    assert answer_text.no_evidence_answer(QUESTION, [WITH_PASSAGES]) is None
 
 
 def test_a_turn_that_searched_nothing_is_not_an_absence():
     """Saying "the chart does not mention it" about a search nobody ran invents a
     fact about the record."""
-    assert graph.no_evidence_answer(QUESTION, []) is None
-    assert graph.no_evidence_answer(QUESTION, [SECTIONS_EMPTY]) is None
+    assert answer_text.no_evidence_answer(QUESTION, []) is None
+    assert answer_text.no_evidence_answer(QUESTION, [SECTIONS_EMPTY]) is None
 
 
 def test_a_failed_search_is_not_an_empty_one():
     """An outage says nothing about whether the chart holds the answer, and
     reporting one as an absence turns infrastructure into a clinical statement."""
-    assert graph.no_evidence_answer(QUESTION, [FAILED]) is None
+    assert answer_text.no_evidence_answer(QUESTION, [FAILED]) is None
 
 
 def test_an_answer_built_on_the_literature_is_an_answer():
     """The fallback is about this patient's notes. A question answered from
     published evidence was answered."""
-    assert graph.no_evidence_answer(QUESTION, [EMPTY, LITERATURE]) is None
+    assert answer_text.no_evidence_answer(QUESTION, [EMPTY, LITERATURE]) is None
 
 
 def test_passages_from_the_summary_tools_are_evidence_too():
     sections = _call("rag_search_sections", {"returned": 1, "passages": [
         {"id": "n_brief_hospital_course_1", "text": "..."}]})
 
-    assert graph.no_evidence_answer(QUESTION, [EMPTY, sections]) is None
+    assert answer_text.no_evidence_answer(QUESTION, [EMPTY, sections]) is None
 
 
 # --- the model's own verdict on what it was given (UX Phase 1B) ----------------
@@ -293,22 +294,22 @@ def test_an_unclosed_brace_is_prose_not_a_parse_target():
 def test_the_verdict_is_what_the_count_cannot_see():
     """Five passages, none of them an answer: the count is 5 and the answer is
     absent, which is the pair a count cannot distinguish."""
-    assert graph.no_evidence_answer(
+    assert answer_text.no_evidence_answer(
         QUESTION, [WITH_PASSAGES], declined=True) == FIXED_SENTENCE
 
 
 def test_a_verdict_cannot_make_an_absence_out_of_a_failed_search():
     """The verdict is the model's; the sentence is ours. An outage still says
     nothing about whether the chart holds the answer."""
-    assert graph.no_evidence_answer(QUESTION, [FAILED], declined=True) is None
+    assert answer_text.no_evidence_answer(QUESTION, [FAILED], declined=True) is None
 
 
 def test_a_verdict_without_a_search_is_not_an_absence():
-    assert graph.no_evidence_answer(QUESTION, [], declined=True) is None
+    assert answer_text.no_evidence_answer(QUESTION, [], declined=True) is None
 
 
 def test_a_verdict_on_a_literature_turn_is_not_an_absence():
-    assert graph.no_evidence_answer(QUESTION, [EMPTY, LITERATURE], declined=True) is None
+    assert answer_text.no_evidence_answer(QUESTION, [EMPTY, LITERATURE], declined=True) is None
 
 
 # --- and that it is the answer that reaches the caller ------------------------

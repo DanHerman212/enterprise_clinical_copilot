@@ -12,6 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from services.agent.postprocess import citations  # noqa: E402
 from services.agent.postprocess import guardrail as g  # noqa: E402
 from services.agent.presentation.domain import display_probability  # noqa: E402
 
@@ -527,14 +528,14 @@ def test_dropping_a_dose_does_not_corrupt_a_similar_dose():
 # --- citation stripping (ECC-14) ----------------------------------------------
 
 def test_out_of_range_citation_is_stripped_and_flagged():
-    cleaned, flags = g.check_citations("Recovered well ^[1]. See also ^[4].", slots=1)
+    cleaned, flags = citations.enforce_citations("Recovered well ^[1]. See also ^[4].", slots=1)
     assert "^[1]" in cleaned
     assert "^[4]" not in cleaned
     assert flags == ["citation_out_of_range:^4"]
 
 
 def test_citation_with_zero_slots_is_stripped():
-    cleaned, flags = g.check_citations("The notes say so ^[1].", slots=0)
+    cleaned, flags = citations.enforce_citations("The notes say so ^[1].", slots=0)
     assert "^[1]" not in cleaned
     assert flags == ["citation_out_of_range:^1"]
 
@@ -567,14 +568,14 @@ def test_a_literature_turn_offers_one_slot_per_record_that_can_be_cited():
     so a slot always has something behind it to open."""
     calls = _search({"pmid": "1"}, {"pmid": "2"}, {"title": "no pmid"})
 
-    assert g._literature_slots(calls) == 2
+    assert citations.literature_slots(calls) == 2
 
 
 def test_a_turn_with_no_search_offers_no_slots():
-    assert g._literature_slots([{"name": "rag_search",
+    assert citations.literature_slots([{"name": "rag_search",
                                  "response": {"passages": [{"text": "x"}]}}]) == 0
-    assert g._literature_slots([]) == 0
-    assert g._literature_slots(None) == 0
+    assert citations.literature_slots([]) == 0
+    assert citations.literature_slots(None) == 0
 
 
 def test_markers_survive_on_a_literature_turn():
@@ -584,9 +585,9 @@ def test_markers_survive_on_a_literature_turn():
     model that made its claims up."""
     calls = _search({"pmid": "1"}, {"pmid": "2"}, {"pmid": "3"})
 
-    cleaned, flags = g.check_citations(
+    cleaned, flags = citations.enforce_citations(
         "ERAS did not change readmission ^[1]; day-case surgery lowered it ^[2].",
-        slots=g._literature_slots(calls),
+        slots=citations.literature_slots(calls),
     )
 
     assert "^[1]" in cleaned
@@ -598,8 +599,8 @@ def test_a_marker_past_the_last_record_is_still_stripped():
     """The fix widens the range; it does not remove the guard."""
     calls = _search({"pmid": "1"}, {"pmid": "2"}, {"pmid": "3"})
 
-    cleaned, flags = g.check_citations(
-        "A claim ^[4].", slots=g._literature_slots(calls)
+    cleaned, flags = citations.enforce_citations(
+        "A claim ^[4].", slots=citations.literature_slots(calls)
     )
 
     assert "^[4]" not in cleaned
@@ -616,10 +617,10 @@ def test_a_marker_past_the_last_record_is_still_stripped():
 def test_a_marker_written_as_a_pmid_resolves_against_the_retrieved_records():
     calls = _search({"pmid": "35186616"}, {"pmid": "42337790"})
 
-    cleaned, flags = g.check_citations(
+    cleaned, flags = citations.enforce_citations(
         "Bilateral disease is common ^[PMID: 35186616].",
-        slots=g._literature_slots(calls),
-        pmids=g._literature_pmids(calls),
+        slots=citations.literature_slots(calls),
+        pmids=citations.literature_pmids(calls),
     )
 
     assert "^[PMID: 35186616]" in cleaned
@@ -629,7 +630,7 @@ def test_a_marker_written_as_a_pmid_resolves_against_the_retrieved_records():
 def test_a_marker_naming_a_pmid_that_was_never_retrieved_is_stripped():
     """The form is accepted; the claim behind it is still checked against the records.
     An invented identifier left in the prose reads as evidence."""
-    cleaned, flags = g.check_citations(
+    cleaned, flags = citations.enforce_citations(
         "Supported ^[PMID: 35186616]. Also invented ^[PMID: 99999999].",
         slots=1,
         pmids={"35186616"},
@@ -641,7 +642,7 @@ def test_a_marker_naming_a_pmid_that_was_never_retrieved_is_stripped():
 
 
 def test_a_bare_identifier_resolves_the_same_as_a_labelled_one():
-    cleaned, flags = g.check_citations(
+    cleaned, flags = citations.enforce_citations(
         "A claim ^[35186616].", slots=1, pmids={"35186616"}
     )
 
@@ -652,7 +653,7 @@ def test_a_bare_identifier_resolves_the_same_as_a_labelled_one():
 def test_a_note_turn_has_no_identifiers_to_name():
     """A note turn carries no PMIDs, so nothing but a position resolves on it — the
     identifier form is not a way past the position rule."""
-    cleaned, flags = g.check_citations("The notes say so ^[PMID: 1].", slots=0)
+    cleaned, flags = citations.enforce_citations("The notes say so ^[PMID: 1].", slots=0)
 
     assert "^[PMID: 1]" not in cleaned
     assert flags == ["citation_out_of_range:^1"]
@@ -661,10 +662,10 @@ def test_a_note_turn_has_no_identifiers_to_name():
 def test_the_identifiers_a_literature_turn_may_name_come_from_the_search():
     calls = _search({"pmid": "1"}, {"pmid": "2"}, {"title": "no pmid"})
 
-    assert g._literature_pmids(calls) == frozenset({"1", "2"})
-    assert g._literature_pmids([{"name": "rag_search", "response": {}}]) == frozenset()
-    assert g._literature_pmids([]) == frozenset()
-    assert g._literature_pmids(None) == frozenset()
+    assert citations.literature_pmids(calls) == frozenset({"1", "2"})
+    assert citations.literature_pmids([{"name": "rag_search", "response": {}}]) == frozenset()
+    assert citations.literature_pmids([]) == frozenset()
+    assert citations.literature_pmids(None) == frozenset()
 
 
 def test_guard_answer_wires_the_identifiers_through():
@@ -1027,9 +1028,9 @@ def _retrieval(count):
 
 def test_slots_count_analytes_and_passages_together():
     """The count is `citations.passage_total` over the whole conversation."""
-    assert g._citation_slots(_lab_panel(), None) == 9
-    assert g._citation_slots(_retrieval(3), _lab_panel()) == 12
-    assert g._citation_slots([], None) == 0
+    assert citations.citation_bound(_lab_panel(), None) == 9
+    assert citations.citation_bound(_retrieval(3), _lab_panel()) == 12
+    assert citations.citation_bound([], None) == 0
 
 
 def test_a_first_turn_lab_panel_keeps_every_analyte_marker():

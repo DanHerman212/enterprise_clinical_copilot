@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 
 from services.agent.engine import graph as gr
+from services.agent.postprocess import citations
 
 #: Nine analytes — the panel a `/labs` turn shows, and the units that turn consumes.
 PANEL = {
@@ -67,11 +68,18 @@ def _state(*, replayed=(), this_turn=()):
     return {"replayed_tool_calls": list(replayed), "tool_calls": list(this_turn)}
 
 
+def _units(state):
+    """The bound, read from the one place that defines it (`00d7` Row 1)."""
+    return citations.citation_bound(
+        state.get("tool_calls") or [], state.get("replayed_tool_calls") or [],
+    )
+
+
 def test_a_replayed_lab_panel_consumes_nine_citation_numbers():
     """The panel is nine citable units, not zero — `citable_passages` gives one per analyte."""
     state = _state(replayed=[{"name": "get_lab_trends", "args": {}, "response": PANEL}])
 
-    assert gr._citable_unit_total(state) == 9
+    assert _units(state) == 9
 
 
 def test_the_offset_counts_replayed_labs_and_this_turns_calls_together():
@@ -80,7 +88,7 @@ def test_the_offset_counts_replayed_labs_and_this_turns_calls_together():
         this_turn=[{"name": "rag_search", "args": {}, "response": RAG}],
     )
 
-    assert gr._citable_unit_total(state) == 10
+    assert _units(state) == 10
 
 
 def test_the_offset_after_a_replayed_lab_panel_is_ten_not_one():
@@ -97,7 +105,7 @@ def test_the_offset_after_a_replayed_lab_panel_is_ten_not_one():
         box,
         [{"name": "rag_search", "id": "c1",
           "args": {"hadm_id": 90000101, "query": "chemotherapy regimen"}}],
-        cite_offset=gr._citable_unit_total(state),
+        cite_offset=_units(state),
     ))
 
     body = messages[0].content
@@ -113,7 +121,7 @@ def test_without_a_replayed_panel_the_first_passage_is_still_one():
         box,
         [{"name": "rag_search", "id": "c1",
           "args": {"hadm_id": 90000101, "query": "chemotherapy regimen"}}],
-        cite_offset=gr._citable_unit_total(_state()),
+        cite_offset=_units(_state()),
     ))
 
     assert '"cite": 1' in messages[0].content
@@ -131,7 +139,7 @@ def test_the_next_turn_continues_from_where_this_one_stopped():
 
     messages, _ = asyncio.run(gr._execute_tool_calls(
         box, [call],
-        cite_offset=gr._citable_unit_total(
+        cite_offset=_units(
             _state(replayed=[{"name": "get_lab_trends", "args": {}, "response": PANEL}])
         ),
     ))
@@ -141,9 +149,9 @@ def test_the_next_turn_continues_from_where_this_one_stopped():
         replayed=[{"name": "get_lab_trends", "args": {}, "response": PANEL},
                   {"name": "rag_search", "args": {}, "response": RAG}],
     )
-    assert gr._citable_unit_total(next_turn) == 10
+    assert _units(next_turn) == 10
 
     messages, _ = asyncio.run(gr._execute_tool_calls(
-        box, [dict(call, id="c2")], cite_offset=gr._citable_unit_total(next_turn),
+        box, [dict(call, id="c2")], cite_offset=_units(next_turn),
     ))
     assert '"cite": 11' in messages[0].content

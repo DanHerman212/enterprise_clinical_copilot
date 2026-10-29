@@ -139,14 +139,7 @@ def _source_freqs(text: str) -> set[str]:
     return _canon_freqs(text)
 
 
-# --- Citation ---------------------------------------------------------------
-
-# A citation marker as it arrives, in either form the model writes: the instructed
-# `^[2]`, or the identifier form `^[PMID: 35186616]` that the instruction forbids and the
-# model produces anyway. Those markers were served as literal text in production
-# (2026-10-13) because nothing downstream recognised them — the renderer printed them,
-# and this guard could not see them to strip them.
-_CITE = re.compile(r"\^\[\s*(?:PMID\s*[:#]?\s*)?(\d+)\s*\]", re.IGNORECASE)
+# --- Retrieval -------------------------------------------------------------
 
 
 def _passage_sections(tool_calls: list[dict]) -> tuple[list[dict], str]:
@@ -240,56 +233,17 @@ def verify_med_tokens(answer: str, evidence_text: str) -> tuple[str, list[str]]:
     return re.sub(r"[ \t]{2,}", " ", cleaned).strip(), flags
 
 
-def _literature_slots(tool_calls: list[dict]) -> int:
-    """How many articles a literature turn can cite: the records holding a PMID.
-
-    Matched to the canvas, which drops a record with no pmid because it cannot be cited
-    or linked (`a2ui._usable_articles`), so the numbered citations a reader can open are
-    exactly these records. Counting the raw list instead would let a marker point at a
-    record the canvas never draws.
-    """
-    for call in tool_calls or []:
-        if call.get("name") != "search_literature":
-            continue
-        articles = (call.get("response") or {}).get("articles")
-        if isinstance(articles, list):
-            return sum(
-                1 for article in articles
-                if isinstance(article, dict) and article.get("pmid")
-            )
-    return 0
-
-
-def _literature_pmids(tool_calls: list[dict]) -> frozenset[str]:
-    """The PMIDs a literature turn may name instead of a position.
-
-    The companion to `_literature_slots`, read from the same call, so the identifiers this
-    accepts and the records the canvas draws are the same set.
-    """
-    for call in tool_calls or []:
-        if call.get("name") != "search_literature":
-            continue
-        articles = (call.get("response") or {}).get("articles")
-        if isinstance(articles, list):
-            return frozenset(
-                str(article["pmid"])
-                for article in articles
-                if isinstance(article, dict) and article.get("pmid")
-            )
-    return frozenset()
-
-
 def _literature_text(tool_calls: list[dict]) -> str:
     """The text of every literature record this conversation retrieved.
 
-    The companion to `_literature_slots`, and the reason the risk guard takes a second
-    argument at all — see the note above `_RISK_DECIMAL`. Title as well as abstract,
-    because a rate can be stated in either and this is a substring test rather than a
-    reading.
+    The companion to `citations.literature_slots`, and the reason the risk guard takes a
+    second argument at all — see the note above `_RISK_DECIMAL`. Title as well as
+    abstract, because a rate can be stated in either and this is a substring test rather
+    than a reading.
 
-    Accumulated across every search in the evidence, unlike the citation helpers above,
-    which read the first. A marker addresses one turn's slots; a percentage quoted from
-    an earlier turn's record is still a percentage that was retrieved, and the rule being
+    Accumulated across every search in the evidence, unlike the citation helpers, which
+    read the first. A marker addresses one turn's slots; a percentage quoted from an
+    earlier turn's record is still a percentage that was retrieved, and the rule being
     implemented is "the turn retrieved this number", which does not expire.
     """
     chunks: list[str] = []
@@ -366,44 +320,6 @@ def _lab_text(tool_calls: list[dict]) -> str:
                     chunks.append(f"{text}{unit}")
                     chunks.append(f"{text} {unit}")
     return "\n".join(chunks)
-
-
-def check_citations(
-    answer: str,
-    slots: int,
-    pmids: "frozenset[str] | set[str]" = frozenset(),
-) -> tuple[str, list[str]]:
-    """Strip + flag markers that point at a citation this turn cannot resolve.
-
-    `slots` is how many numbered citations the conversation has shown the model: one per
-    retrieved note passage AND one per laboratory analyte, across the replayed turns and
-    this one — the same array `graph._render_tool_result` numbers against, counted by
-    `_citation_slots`. A literature turn has no such units and passes its article count
-    instead. Every unit is numbered from 1 in the order the model was given it, so this
-    count is the whole of what a marker may legally address by position.
-
-    `pmids` are the identifiers a literature turn may name instead: the model writes
-    `^[PMID: ...]` often enough that refusing the form outright serves it as literal text,
-    and accepting it unchecked would let an invented identifier read as evidence. A marker
-    resolves if it names either.
-
-    An out-of-range marker left in rendered as a citation to nothing — with zero slots an
-    answer containing ^[1] was served intact (ECC-14). It is the same failure whether the
-    slot was never retrieved or never existed, so it is the same guard.
-    """
-    allowed = {str(pmid) for pmid in pmids}
-    flags: list[str] = []
-    spans: list[tuple[int, int]] = []
-    for m in _CITE.finditer(answer):
-        digits = m.group(1)
-        number = int(digits)
-        if not (1 <= number <= slots or digits in allowed):
-            flags.append(f"citation_out_of_range:^{digits}")
-            spans.append((m.start(), m.end()))
-    if not spans:
-        return answer, flags
-    cleaned = _remove_spans(answer, spans)
-    return re.sub(r" +([,.;:])", r"\1", cleaned).strip(), flags
 
 
 # --- Risk-number guard (ECC-04) ----------------------------------------------
@@ -992,44 +908,6 @@ def verify_lab_values(
     return " ".join(kept).strip(), flags
 
 
-def _citation_slots(
-    tool_calls: list[dict],
-    conversation_calls: list[dict] | None,
-) -> int:
-    """How many numbered citations this conversation's answer may address.
-
-    The array the model was numbered against, and nothing else. `graph._render_tool_result`
-    advances the numbering with `citations.passage_total`, which counts one unit per note
-    passage AND one per laboratory analyte, over the replayed turns first and this one
-    second; `a2ui.compose_presentation` resolves markers against the same concatenation.
-
-    Counting `_passage_sections` here instead was the defect this replaces. That helper
-    answers a different question — which retrieved NOTE text the dose, age and lab guards
-    verify against — and it recognises only the three retrieval tools. A turn that
-    retrieved a laboratory panel therefore counted zero units however many analytes it
-    was shown, and every marker the model wrote against them was deleted as out of range.
-    Measured on the 2026-10-28 Gate 2 run (`pilot-verify-20261028-205050`):
-
-      * `dev_t1_05`, a first-turn `/labs`: nine correct analyte markers, `slots` 0, all
-        nine stripped;
-      * `dev_t5_02`: nine analytes numbered 4..12, three passage slots, all nine stripped;
-      * `dev_t6_01`: `^[8]` (potassium) and `^[14]` stripped, leaving the lone `^[3]` the
-        judge then read as the model citing one analyte for two;
-      * `dev_t4_01`: `^[11]` and `^[13]` stripped, `^[2]` and `^[5]` kept only because two
-        analyte numbers happened to fall below the passage count.
-
-    A literature turn contributes no citable unit here (an article is not a passage), so
-    it still falls back to `_literature_slots` in the caller. A PMID is not a position:
-    it names a record the reader can open, and the canvas draws this turn's search, so
-    articles are counted for this turn only.
-    """
-    return sum(
-        citations.passage_total(call.get("response"))
-        for call in (*(conversation_calls or []), *(tool_calls or []))
-        if isinstance(call, dict)
-    )
-
-
 def guard_answer(
     answer: str,
     tool_calls: list[dict],
@@ -1085,27 +963,22 @@ def guard_answer(
     flags += f
     flags += flag_invented_dates(answer, passages)
     # Slots are the numbering the MODEL was shown, which since TF-10 runs across the
-    # replayed turns and this one: `graph._render_tool_result` numbers every passage in
-    # the conversation continuously, and `a2ui.compose_presentation` resolves against the
+    # replayed turns and this one: the renderer numbers every citable unit in the
+    # conversation continuously, and `a2ui.compose_presentation` resolves against the
     # same concatenation. Counting this turn alone deleted the markers a follow-up
     # legitimately placed in an earlier turn's passage — observed live on
     # `agent-00175-ttr`, 2026-10-24, where a chip answer citing `^[6]` against six
     # passages (five replayed, one fresh) was served as `chart_synthesis_without_citations`
     # with `citation_out_of_range:^6`. The marker was correct; the count was not.
     #
-    # The units themselves are `citations.passage_total`'s: a note passage AND a
-    # laboratory analyte each take a number, and the count spans both halves of the
-    # conversation (see `_citation_slots` for the four Gate 2 failures this replaced).
-    #
-    # Articles for a literature turn are the fallback, not an addition: a literature
-    # search contributes no citable unit, and counting only passages stripped every marker
-    # out of a properly grounded summary (observed live 2026-10-13). The identifiers
-    # travel too, because the model cites by PMID as well as by position. Articles are
-    # counted for THIS turn only — a PMID is not a position: it names a record the reader
-    # can open, and the canvas draws this turn's search.
-    slots = (_citation_slots(tool_calls, conversation_calls)
-             or _literature_slots(tool_calls))
-    answer, f = check_citations(answer, slots, _literature_pmids(tool_calls))
+    # Both the count and the enforcement are `citations`': one definition of what a unit
+    # is, one definition of when a marker dies (see `citations.enforce_citations`). This
+    # module owns the clinical checks, not the citation arithmetic.
+    answer, f = citations.enforce_citations(
+        answer,
+        citations.citation_bound(tool_calls, conversation_calls),
+        citations.literature_pmids(tool_calls),
+    )
     flags += f
 
     if not answer.strip() and (original or "").strip():

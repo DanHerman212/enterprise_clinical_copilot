@@ -229,7 +229,8 @@ def _note_sections(tool_calls: list[dict]) -> dict[str, str]:
 
 
 def turn_phenotype(tool_calls: list[dict],
-                   evidence: list[dict] | None = None) -> str:
+                   evidence: list[dict] | None = None,
+                   *, is_outpatient: bool | None = None) -> str:
     """The condition this turn's patient has, resolved from the chart it read.
 
     Read from the note sections the evidence carries, in the order a clinician reads a
@@ -262,7 +263,7 @@ def turn_phenotype(tool_calls: list[dict],
          and not isinstance((call.get("args") or {}).get("hadm_id"), bool)),
         None,
     )
-    if hadm_id is not None and not is_matrix_eligible(hadm_id):
+    if hadm_id is not None and not is_matrix_eligible(hadm_id, is_outpatient=is_outpatient):
         return ""
     return resolve_phenotype(
         _note_sections(calls),
@@ -275,7 +276,8 @@ def compose_presentation(question: str, answer: str,
                          command_payload: dict | None = None,
                          command: str | None = None,
                          context_grounded: bool = False,
-                         evidence: list[dict] | None = None) -> dict:
+                         evidence: list[dict] | None = None,
+                         *, is_outpatient: bool | None = None) -> dict:
     """The full presentation contract for an answered question.
 
     One call produces every field the browser consumes, so the answer's
@@ -484,7 +486,7 @@ def compose_presentation(question: str, answer: str,
         # Resolved from the chart the conversation has read, so a follow-up and a
         # `/pubmed` turn that came after an `/ehr` still know whose condition the
         # cohorts are being compared against.
-        phenotype=turn_phenotype(tool_calls, evidence_calls),
+        phenotype=turn_phenotype(tool_calls, evidence_calls, is_outpatient=is_outpatient),
         eligible=admission_eligible(tool_calls),
         # The clinician's own words, when the turn had any: the other half of the
         # condition-lock, so a question about a condition this patient does not have

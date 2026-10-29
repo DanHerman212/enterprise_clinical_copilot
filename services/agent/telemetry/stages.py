@@ -64,6 +64,16 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
+from services.agent.routing.routing import (
+    LABEL_RESULT_FAILED,
+    LABEL_RESULT_RISK,
+    LABEL_UNKNOWN_TOOL,
+    RESULT_LABELS,
+    RESULT_NOUN_FALLBACK,
+    RESULT_NOUNS,
+    TOOL_LABELS,
+)
+
 logger = logging.getLogger(__name__)
 
 # --- The closed vocabulary -------------------------------------------------
@@ -138,69 +148,11 @@ QUESTION_KIND_LABELS = {
     "labs": "Reading the Laboratory Question",
 }
 
-# One label per tool the MCP server advertises (`services/mcp/server.py`).
-# Each is phrased as the action the call performs, so it stays true even when
-# the call fails. A test walks the live tool list and fails if a tool is added
-# without a label here, which is what stops this table drifting into fiction.
-TOOL_LABELS = {
-    "predict_readmission": "Reading the Risk Model",
-    "rag_search": "Searching the Discharge Notes",
-    "rag_search_sections": "Reading the Note Sections",
-    "discharge_medications": "Reading the Discharge Medications",
-    "search_literature": "Searching the Literature",
-    # A lab drill-down is a chart read like any other, and it was unlabelled until
-    # 2026-10-22: every `/labs` step and every clicked driver announced itself as
-    # "Consulting a Tool", which is the fallback speaking for a tool this table had not
-    # been taught. The specific name is the whole point of the row.
-    "get_lab_trends": "Reading the Lab Trajectories",
-    # The pre-flight manifest is normally hydrated before the model runs, so its
-    # label is only ever drawn when the model asks for it itself.
-    "get_admission_profile": "Reading the Admission Profile",
-}
 
-# Used when the MCP server advertises a tool this table has not been taught.
-# Deliberately vague AND still true: a tool is being consulted. The caller
-# never sees a name it cannot interpret, and the omission is logged (see
-# `graph._emit`) so it is fixed rather than silently rendered.
-LABEL_UNKNOWN_TOOL = "Consulting a Tool"
 
-# Result labels. Each reports the call's own output; the failure wording exists
-# so a tool that did not answer is never rendered as a count of zero, which
-# would say "nothing was found" when the truth is "nothing was asked".
-LABEL_RESULT_FAILED = "The Tool Did Not Respond"
-LABEL_RESULT_RISK = "Read the Risk Score"
-LABEL_RESULT_PASSAGES = "Read the Note Passages"
-LABEL_RESULT_SECTIONS = "Read the Note Sections"
-LABEL_RESULT_MEDICATIONS = "Read the Discharge Medications"
-LABEL_RESULT_LITERATURE = "Read the Articles"
-LABEL_RESULT_LABS = "Read the Lab Trajectories"
 
-RESULT_LABELS = {
-    "predict_readmission": LABEL_RESULT_RISK,
-    "rag_search": LABEL_RESULT_PASSAGES,
-    "rag_search_sections": LABEL_RESULT_SECTIONS,
-    "discharge_medications": LABEL_RESULT_MEDICATIONS,
-    "search_literature": LABEL_RESULT_LITERATURE,
-    "get_lab_trends": LABEL_RESULT_LABS,
-}
 
-# What a returned count counts. The noun travels with the tool because one number
-# means different things to different tools, and a count is only informational if
-# the noun is right: three passages of a discharge note, three published records.
-# "Found 3 Note Passages" was served for a PubMed search until 2026-10-12 — the
-# count was correct and the noun described a different system, which is the same
-# defect as a label that names a tool the caller cannot see.
-RESULT_NOUNS = {
-    "rag_search": "Note Passage",
-    "rag_search_sections": "Note Section",
-    "search_literature": "Literature Record",
-    # A trajectory is one analyte's course, not a passage and not a record: the count
-    # under a lab drill-down says how many series were drawn.
-    "get_lab_trends": "Lab Trajectory",
-}
 
-# For a tool this table has not been taught. Vague and true, like LABEL_UNKNOWN_TOOL.
-RESULT_NOUN_FALLBACK = "Result"
 
 
 def _plural(count: int, noun: str) -> str:

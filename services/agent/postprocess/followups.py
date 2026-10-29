@@ -48,7 +48,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from services.agent.routing import routing
-from services.agent.presentation.domain import humanize
+from shared.labels import humanize
 
 logger = logging.getLogger(__name__)
 
@@ -438,7 +438,7 @@ def _literature_topic(state: dict[str, Any], question: str) -> str:
     is scoped to.
     """
     for call in state.get("tool_calls") or []:
-        if not isinstance(call, dict) or call.get("name") != "search_literature":
+        if not isinstance(call, dict) or call.get("name") not in routing.LITERATURE_TOOLS:
             continue
         query = str((call.get("args") or {}).get("query") or "").strip()
         if query:

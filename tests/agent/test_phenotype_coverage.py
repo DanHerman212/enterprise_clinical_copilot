@@ -97,7 +97,10 @@ def _ehr_turn(hadm_id: int, diagnosis: str) -> dict:
                      "text": diagnosis}]}}]
     return compose_presentation(
         "/ehr", "Summary of the admission.^[1]", [*sections, _predict(hadm_id)],
-        command="summarize")
+        command="summarize",
+        # `compose_presentation` no longer reads the encounter for itself (`00d7` Row 11);
+        # `turn.py` passes it, so the harness does too.
+        is_outpatient=encounter.current_is_outpatient())
 
 
 def _matrix(out: dict) -> dict | None:
@@ -232,10 +235,15 @@ class TestEveryInpatientIsCompared:
 
     def test_an_outpatient_note_is_still_refused(self):
         """The one refusal that survives, and the reason it does: there was no stay to be
-        readmitted from."""
+        readmitted from.
+
+        The encounter is passed in since 2026-10-29 (`00d7` Row 11): the predicate no
+        longer reads `routing.encounter`'s `ContextVar` for itself.
+        """
         for hadm_id in sorted(NON_ADMISSION):
             _classify(hadm_id)
-            assert is_matrix_eligible(hadm_id) is False
+            assert is_matrix_eligible(hadm_id, is_outpatient=True) is False
+            assert is_matrix_eligible(hadm_id, is_outpatient=False) is True
             out = _ehr_turn(hadm_id, DIAGNOSIS["neurological_medical"])
             assert _matrix(out) is None, f"{hadm_id} is not an admission"
 

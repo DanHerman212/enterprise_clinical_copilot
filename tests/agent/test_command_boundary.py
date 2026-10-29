@@ -32,13 +32,14 @@ from services.agent.engine import graph  # noqa: E402
 from services.agent.engine import model as model_gateway
 from services.agent.engine import model
 from services.agent.routing import routing  # noqa: E402
+from services.agent.engine import prompts  # noqa: E402
 from services.agent.engine.deterministic import (  # noqa: E402
     _NO_READMISSION,
     _presented_prediction,
-    medication_narrative,
     parse_medications,
     run_command,
 )
+from services.agent.postprocess.answer import medication_narrative  # noqa: E402
 from services.agent.ingress.contracts import parse_agent_request  # noqa: E402
 from services.agent.ingress.contracts import AgentRequestError  # noqa: E402
 from services.mcp.tools import __all__ as REGISTERED_TOOLS  # noqa: E402
@@ -259,7 +260,7 @@ def test_the_formatting_turn_cannot_call_anything(command):
     assert isinstance(system, SystemMessage)
     # The command's own formatting instruction is what the model is given, not
     # the tool-choosing system prompt.
-    assert command.formatting in system.content
+    assert prompts.formatting_for(command.wire) in system.content
 
 
 def test_the_supplementary_result_reaches_the_formatting_turn():
@@ -319,7 +320,7 @@ def test_the_record_wide_search_answers_an_absence_only_after_it_returns_nothing
     # The extra call is a record-wide search of this admission, and it is the last one.
     assert box.calls[-1] == (
         "rag_search",
-        {"hadm_id": 90000023, "query": routing.EHR_RECORD_QUERY},
+        {"hadm_id": 90000023, "query": prompts.EHR_RECORD_QUERY},
     )
 
     # Its result reaches the formatting turn, which is what lets the prose distinguish
@@ -400,7 +401,7 @@ def test_the_summary_prompt_names_the_strings_the_payload_carries():
     which is the failure this pair exists to prevent — so the two are asserted against each
     other rather than separately.
     """
-    formatting = routing.command_for("summarize").formatting
+    formatting = prompts.formatting_for("summarize")
     projected = _presented_prediction("predict_readmission", dict(SERVED_RISK))
 
     for field in ("probability_display", "threshold_display"):
@@ -423,7 +424,7 @@ def test_the_summary_prompt_makes_sections_conditional_on_the_evidence():
     Asserted as the section names plus the omission rule, so the wording can be improved
     without failing a test that only ever checked the requirement is still stated.
     """
-    formatting = routing.command_for("summarize").formatting
+    formatting = prompts.formatting_for("summarize")
 
     # The inpatient heading, and the outpatient counterpart that replaces it.
     assert "Hospital course" in formatting
@@ -877,7 +878,7 @@ def test_the_formatter_is_told_the_question_that_was_asked():
 
 def test_the_requested_analytes_are_what_the_labs_prompt_is_about():
     """Passing the question in is only half the fix: the prompt has to use it."""
-    from services.agent.routing.routing import LABS_FORMATTING
+    from services.agent.engine.prompts import LABS_FORMATTING
 
     assert "Read the question at the top of this input" in LABS_FORMATTING
     assert "those analytes are the answer" in LABS_FORMATTING

@@ -136,7 +136,42 @@ def test_agent_module_manifest_is_exact():
 
 # --- the one-way subpackage DAG ---------------------------------------------
 
-LEAF_PACKAGES = {"postprocess", "presentation", "telemetry", "routing"}
+#: What each package may import, from `docs/architecture/13-agent_module_boundaries.md`
+#: §5. `"root"` is `turn.py`, the orchestrator, which may reach every package.
+#:
+#: `root` additionally lists `ingress`, and that is the one deliberate widening of §5's
+#: row: the orchestrator COMPOSES the payload and validates it against the wire contract
+#: (`validate_agent_success`, `RE_DERIVABLE_TOOLS`), so the contract module is a shared
+#: vocabulary between the two. §5 was written before `turn.py` owned that check; the
+#: alternative is a second copy of the response contract inside the orchestrator, which
+#: is exactly the kind of duplicate this file exists to prevent.
+#:
+#: This replaces the previous rule, which forbade only leaf -> {ingress, engine}. That
+#: rule permitted everything that actually went wrong: `engine` importing
+#: `presentation` to name a feature label, `postprocess` importing `presentation` for the
+#: same map, `routing` holding the prompts, and `ingress` reaching into `engine` for the
+#: graph and the toolbox. A rule that only forbids root-node imports does not describe a
+#: layered system.
+ALLOWED = {
+    "root": {"routing", "engine", "postprocess", "presentation", "telemetry", "ingress"},
+    "ingress": {"root", "routing", "telemetry", "presentation"},
+    "engine": {"routing", "postprocess", "telemetry", "engine"},
+    "postprocess": {"routing", "telemetry", "postprocess"},
+    "presentation": {"postprocess", "presentation"},
+    "telemetry": {"routing", "telemetry"},
+    "routing": {"routing"},
+}
+
+#: Where a package may import postprocess from, when it may at all. A package allowed to
+#: read `citations` is not thereby allowed to read the guardrails: the citation contract
+#: is a shared vocabulary, the guardrails are the answer pipeline.
+POSTPROCESS_LEAVES = {"citations", "guardrail", "answer", "followups"}
+
+POSTPROCESS_MODULES = {
+    "root": {"citations", "guardrail", "answer", "followups"},    "engine": {"citations", "answer"},
+    "presentation": {"citations"},
+    "postprocess": {"citations", "guardrail", "answer", "followups"},
+}
 
 
 def _agent_imports(node):
@@ -157,8 +192,38 @@ def _package_of(path):
     return parts[index + 1] if index + 1 < len(parts) - 1 else "root"
 
 
+def _agent_imports(node):
+    """(module, imported names) for every import of a `services.agent` module.
+
+    The names travel with the module because `from services.agent.postprocess import
+    citations` imports no module path at all: the subpackage is `postprocess` and the
+    module is one of the names. Without them the check could see a package and not the
+    leaf it actually reached for.
+    """
+    found = []
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.ImportFrom) and sub.module:
+            if sub.module.startswith("services.agent"):
+                found.append((sub.module, [a.name for a in sub.names]))
+        elif isinstance(sub, ast.Import):
+            for alias in sub.names:
+                if alias.name.startswith("services.agent"):
+                    found.append((alias.name, []))
+    return found
+
+
+def _targets(module, names):
+    """(package key, postprocess leaves) for one imported module."""
+    rest = module.split("services.agent.", 1)[1] if "services.agent." in module else "turn"
+    parts = [part for part in rest.split(".") if part]
+    head = parts[0] if parts else "turn"
+    key = "root" if head == "turn" else head
+    leaves = parts[1:2] or [name for name in names if name in POSTPROCESS_LEAVES]
+    return key, [leaf for leaf in leaves if leaf in POSTPROCESS_LEAVES]
+
+
 def test_subpackage_import_dag_is_acyclic():
-    """The six subpackages only ever import downwards, and nothing late-imports.
+    """The six subpackages import only downwards, and nothing late-imports.
 
     Two properties, because they fail for the same reason and cannot be fixed
     independently: a cycle shows up first as a function-local import, which is how
@@ -171,24 +236,143 @@ def test_subpackage_import_dag_is_acyclic():
     for path in sorted(root.rglob("*.py")):
         if "__pycache__" in str(path):
             continue
-        source = path.read_text()
-        tree = ast.parse(source)
+        tree = ast.parse(path.read_text())
         package = _package_of(path)
+        allowed = ALLOWED[package]
 
-        for module in _agent_imports(tree):
-            target = module.split("services.agent.")[-1].split(".")[0]
-            if package in LEAF_PACKAGES and target in {"ingress", "engine"}:
-                violations.append(f"{path.relative_to(root)}: {package} imports {target}")
-            if package == "engine" and target == "ingress":
-                violations.append(f"{path.relative_to(root)}: engine imports ingress")
+        for module, names in _agent_imports(tree):
+            target, leaves = _targets(module, names)
+            if target != package and target not in allowed:
+                violations.append(
+                    f"{path.relative_to(root)}: {package} imports {target} "
+                    f"(charter §5 allows {' / '.join(sorted(allowed))})"
+                )
+                continue
+            if target == "postprocess":
+                for leaf in leaves or [""]:
+                    if leaf not in POSTPROCESS_MODULES[package]:
+                        violations.append(
+                            f"{path.relative_to(root)}: {package} imports "
+                            f"postprocess.{leaf or '*'} (charter §5 allows "
+                            f"{' / '.join(sorted(POSTPROCESS_MODULES[package]))})"
+                        )
 
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                for module in _agent_imports(node):
+                for module, _ in _agent_imports(node):
                     late.append(f"{path.relative_to(root)}:{node.lineno} in {node.name}()")
 
-    assert violations == [], "the subpackage DAG is not one-way"
+    assert violations == [], "the subpackage DAG is not one-way:\n" + "\n".join(violations)
     assert late == [], "function-local services.agent imports hide a cycle"
+
+
+# --- the charter's laws, as tests -------------------------------------------
+# Each law names a single owner. These read the shipped modules and fail when a second
+# implementation appears; they are the rules that were broken while this codebase grew.
+
+
+def _shipped_sources():
+    root = pathlib.Path(SERVICES, "agent")
+    for path in sorted(root.rglob("*.py")):
+        if "__pycache__" in str(path):
+            continue
+        yield path, path.read_text()
+
+
+def test_law1_only_citations_defines_a_marker_regex():
+    """Law 1: no module outside `postprocess/citations.py` may parse `^[...]`.
+
+    A second marker regex is how the two range strippers drifted apart in the first
+    place: one of them read a single number, the other a whole cluster, and neither knew
+    the other existed.
+    """
+    owner = pathlib.Path("postprocess", "citations.py")
+    offenders = [
+        str(path.relative_to(root))
+        for path, _ in []
+    ]
+    root = pathlib.Path(SERVICES, "agent")
+    for path, source in _shipped_sources():
+        if path.relative_to(root) == owner:
+            continue
+        if r"\^\[" in source:
+            offenders.append(str(path.relative_to(root)))
+    assert offenders == [], (
+        "a citation-marker regex outside postprocess/citations.py: " + ", ".join(offenders)
+    )
+
+
+def test_law2_fallback_sentences_live_in_postprocess():
+    """Law 2: the fixed sentences an answer can be replaced with are `postprocess/`'s."""
+    from services.agent.engine import model as model_turn
+    from services.agent.postprocess import answer
+    from services.agent.routing import routing
+
+    for name in ("SILENT_TURN_SENTENCE", "OUTPATIENT_SILENT_TURN_SENTENCE"):
+        assert hasattr(answer, name), name
+        assert not hasattr(model_turn, name), f"engine.model still defines {name}"
+    assert hasattr(answer, "OUTPATIENT_EHR_NOTICE")
+    assert not hasattr(routing, "OUTPATIENT_EHR_NOTICE"), "routing still holds the notice"
+    assert hasattr(answer, "medication_narrative")
+
+
+def _assigns(path, name):
+    """True when this module ASSIGNS `name` at module level (an import is not one)."""
+    for node in ast.parse(path.read_text()).body:
+        if isinstance(node, ast.Assign):
+            if any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
+                return True
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == name:
+                return True
+    return False
+
+
+def test_law3_prompt_text_lives_in_engine_prompts():
+    """Law 3: `routing/` decides what to run; `engine/prompts.py` says how it writes."""
+    from services.agent.engine import prompts
+    from services.agent.routing import routing
+
+    for name in ("MEDS_FORMATTING", "LABS_FORMATTING", "EHR_FORMATTING",
+                 "LITERATURE_FORMATTING", "EHR_RECORD_QUERY", "OUTPATIENT_ENCOUNTER_NOTICE"):
+        assert hasattr(prompts, name), name
+        assert not hasattr(routing, name), f"routing still holds {name}"
+    for name in ("FORMATTER_PREAMBLE", "RETRIEVAL_DEMAND"):
+        assert hasattr(prompts, name), name
+    root = pathlib.Path(SERVICES, "agent")
+    assert not _assigns(root / "engine/deterministic.py", "FORMATTER_PREAMBLE")
+    assert not _assigns(root / "engine/graph.py", "RETRIEVAL_DEMAND")
+    # And a command's instruction is resolved by wire name, not carried in the table.
+    assert prompts.formatting_for("labs") == prompts.LABS_FORMATTING
+    assert prompts.formatting_for("risk") == ""
+
+
+def test_law4_tool_registries_are_declared_once():
+    """Law 4: wire names, capability groups and labels are `routing/`'s."""
+    from services.agent.routing import routing
+    from services.agent.telemetry import stages
+
+    for name in ("PASSAGE_TOOLS", "LITERATURE_TOOLS", "TOOL_LABELS", "RESULT_LABELS",
+                 "RESULT_NOUNS"):
+        assert hasattr(routing, name), name
+    assert stages.TOOL_LABELS is routing.TOOL_LABELS
+    assert stages.RESULT_LABELS is routing.RESULT_LABELS
+    assert routing.PASSAGE_TOOLS == frozenset(
+        {"rag_search", "rag_search_sections", "discharge_medications"}
+    )
+
+
+def test_law5_the_trace_is_written_once_in_turn():
+    """Law 5: only the orchestrator records the served answer on the trace."""
+    root = pathlib.Path(SERVICES, "agent")
+    offenders = [
+        str(path.relative_to(root))
+        for path, source in _shipped_sources()
+        if "set_trace_io(" in source and path.name not in {"turn.py", "observability.py"}
+    ]
+    assert offenders == [], (
+        "set_trace_io outside turn.py/observability.py: " + ", ".join(offenders)
+    )
 
 
 # --- every patch still lands on something -----------------------------------

@@ -12,6 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from services.agent.postprocess import answer as answer_text  # noqa: E402
 from services.agent.postprocess import citations  # noqa: E402
 from services.agent.postprocess import guardrail as g  # noqa: E402
 from services.agent.presentation.domain import display_probability  # noqa: E402
@@ -964,7 +965,7 @@ def test_an_answer_that_is_only_an_invented_disposition_abstains():
 
     out = g.guard_answer(answer, REHAB_NOTE)
 
-    assert out["answer"] == g.GUARDED_ABSTENTION, out
+    assert out["answer"] == answer_text.GUARDED_ABSTENTION, out
     assert "abstained_after_guard" in out["flags"], out["flags"]
 
 

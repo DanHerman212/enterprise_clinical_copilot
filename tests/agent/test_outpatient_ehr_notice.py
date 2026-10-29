@@ -28,6 +28,7 @@ from services.agent.engine import model as model_gateway
 from services.agent.engine import graph
 from services.agent.engine import model as model_turn
 from services.agent.routing import encounter, routing
+from services.agent.postprocess import answer
 from services.agent.presentation.a2ui import compose_presentation
 from services.agent.engine.deterministic import run_command
 
@@ -94,7 +95,7 @@ def _run(hadm_id: int, *, reply: str = "a summary", model: object | None = None)
 def test_an_outpatient_record_gets_the_encounter_notice(hadm_id):
     state, _, model = _run(hadm_id)
 
-    assert state["deterministic_answer"] == routing.OUTPATIENT_EHR_NOTICE
+    assert state["deterministic_answer"] == answer.OUTPATIENT_EHR_NOTICE
     assert model.calls == 0, "an empty record is answered without a model turn"
 
 
@@ -127,7 +128,7 @@ def test_the_turns_trace_output_is_not_empty(hadm_id):
     """The trace row reads its output off the state; an empty answer leaves a dash."""
     state, _, _ = _run(hadm_id)
 
-    assert graph.command_trace_output(state).strip() == routing.OUTPATIENT_EHR_NOTICE
+    assert graph.command_trace_output(state).strip() == answer.OUTPATIENT_EHR_NOTICE
 
 
 def test_the_record_wide_search_still_runs_before_the_notice():
@@ -153,8 +154,8 @@ def test_a_formatter_that_says_nothing_leaves_a_readable_answer():
     state, _, model = _run(90000015, reply="")
 
     assert model.calls == 1
-    assert state["deterministic_answer"] == model_turn.SILENT_TURN_SENTENCE
-    assert graph.command_trace_output(state).strip() == model_turn.SILENT_TURN_SENTENCE
+    assert state["deterministic_answer"] == answer.SILENT_TURN_SENTENCE
+    assert graph.command_trace_output(state).strip() == answer.SILENT_TURN_SENTENCE
 
 
 def test_an_outpatient_formatter_that_says_nothing_uses_the_encounter_wording():
@@ -169,7 +170,7 @@ def test_an_outpatient_formatter_that_says_nothing_uses_the_encounter_wording():
             box, labs, OUTPATIENT[0], question="/labs", model="test-model",
         ))
 
-    assert state["deterministic_answer"] == model_turn.OUTPATIENT_SILENT_TURN_SENTENCE
+    assert state["deterministic_answer"] == answer.OUTPATIENT_SILENT_TURN_SENTENCE
     assert graph.command_trace_output(state).strip()
 
 

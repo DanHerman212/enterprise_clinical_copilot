@@ -32,6 +32,7 @@ import re
 from collections.abc import Callable, Iterable
 from typing import Any
 
+from services.agent.routing import routing
 from services.mcp.retrieval.sections import KNOWN_HEADINGS
 
 # Presentation-only aliases on top of the canonical KNOWN_HEADINGS. These
@@ -684,7 +685,7 @@ def literature_slots(tool_calls: list[dict] | None) -> int:
     exactly these records.
     """
     for call in tool_calls or []:
-        if call.get("name") != "search_literature":
+        if call.get("name") not in routing.LITERATURE_TOOLS:
             continue
         articles = (call.get("response") or {}).get("articles")
         if isinstance(articles, list):
@@ -702,7 +703,7 @@ def literature_pmids(tool_calls: list[dict] | None) -> frozenset[str]:
     `enforce_citations` accepts and the records the canvas draws are the same set.
     """
     for call in tool_calls or []:
-        if call.get("name") != "search_literature":
+        if call.get("name") not in routing.LITERATURE_TOOLS:
             continue
         articles = (call.get("response") or {}).get("articles")
         if isinstance(articles, list):

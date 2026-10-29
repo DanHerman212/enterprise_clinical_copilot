@@ -15,9 +15,9 @@ from langchain_core.messages import AIMessage
 
 from evaluation.platform.run_evals import gate_verdict
 from services.agent.engine.deterministic import (
-    medication_narrative,
     parse_medications,
 )
+from services.agent.postprocess.answer import medication_narrative
 from services.agent.postprocess.answer import sanitize_answer_markers
 from services.agent.postprocess.citations import enforce_citations
 

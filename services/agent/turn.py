@@ -25,6 +25,7 @@ import time
 from collections.abc import Callable, Sequence
 
 from services.agent.routing import admission_context
+from services.agent.routing import encounter
 from services.agent.telemetry import observability as chain
 from services.agent.postprocess import followups
 from services.agent.engine import model as model_turn
@@ -36,9 +37,15 @@ from services.agent.ingress.contracts import (
     AgentResponseError,
     validate_agent_success,
 )
-from services.agent.engine.graph import command_trace_output, final_message, final_text
+from services.agent.engine.graph import (
+    ask,
+    command_trace_output,
+    final_message,
+    final_text,
+)
 from services.agent.postprocess.guardrail import guard_answer
-from services.agent.engine.mcp_client import MCP_TRANSPORT
+from services.agent.engine.mcp_client import MCP_TRANSPORT, MCP_URL, toolbox
+from services.agent.engine.model import finish_reason
 from services.agent.ingress.contracts import is_served
 
 logger = logging.getLogger(__name__)
@@ -264,6 +271,10 @@ async def compose_success(
         # this one, so the source table has to be the same concatenation (TF-10).
         evidence=[*(state.get("replayed_tool_calls") or []),
                   *(state.get("tool_calls") or [])],
+        # The encounter is the orchestrator's fact to read (`00d7` Row 11): presentation
+        # may not reach into `routing.encounter`'s process-global `ContextVar`, so the
+        # boolean arrives as an argument.
+        is_outpatient=encounter.current_is_outpatient(),
     )
 
     # Chosen from the record this turn already holds, not proposed by a model: a chip

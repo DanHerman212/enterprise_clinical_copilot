@@ -28,6 +28,7 @@ from services.agent.engine import graph
 from services.agent.engine.graph import _execute_tool_calls
 from services.agent.postprocess import answer as answer_text
 from services.agent.engine.mcp_client import MCPToolbox
+from services.agent.engine import prompts
 from services.agent.engine.prompts import SYSTEM_PROMPT
 
 
@@ -166,7 +167,7 @@ def test_no_prompt_still_prescribes_a_risk_band_word():
     "high", "low" or "borderline" has no prose to live in at all now: `/risk` was
     retired on 2026-10-26, the widget derives the band from the same number, and the
     estimate reaches prose only through `/ehr`, which is governed by
-    `routing.EHR_FORMATTING`.
+    `prompts.EHR_FORMATTING`.
 
     Asserted rather than dropped, because the constraint is still load-bearing: the band
     is a visual the interface derives from the served value, and any prose that invents
@@ -176,11 +177,15 @@ def test_no_prompt_still_prescribes_a_risk_band_word():
     from services.agent.routing import routing
 
     assert [command.wire for command in routing.COMMANDS if command.wire == "risk"] == []
+    # `RISK_FORMATTING` was deleted on 2026-10-29 (`00d7` Row 5): it had been marked
+    # retired since 2026-10-13 and nothing read it. Asserted as an absence so the constant
+    # cannot come back carrying the band wording.
+    assert not hasattr(prompts, "RISK_FORMATTING")
     for band in ("high", "low", "borderline"):
-        assert f'label the risk "{band}"' not in routing.RISK_FORMATTING
+        assert f'label the risk "{band}"' not in prompts.EHR_FORMATTING
     # The formatting that DOES carry the score states the same rule, so a `/ehr` answer
     # cannot invent a band either.
-    assert "probability_display" in routing.EHR_FORMATTING
+    assert "probability_display" in prompts.EHR_FORMATTING
 
 
 @pytest.mark.parametrize("rule,marker", RULE_MARKERS)
@@ -235,7 +240,7 @@ def test_the_free_text_prompt_is_told_when_the_record_is_an_outpatient_visit():
     speech-therapy progress note — produced "this admission" and a hospital course.
     """
     from services.agent.routing import encounter
-    from services.agent.routing.routing import OUTPATIENT_ENCOUNTER_NOTICE
+    from services.agent.engine.prompts import OUTPATIENT_ENCOUNTER_NOTICE
 
     outpatient = 90000073  # a speech-therapy progress note, verified as such below
     encounter.set_current(encounter.OUTPATIENT)
@@ -381,8 +386,8 @@ def test_the_prompt_pins_medication_names_sections_and_both_timepoints():
 
     from services.agent.routing import routing
 
-    assert "BOTH the most extreme value" in routing.LABS_FORMATTING
-    assert "value the series ends on at discharge" in routing.LABS_FORMATTING
+    assert "BOTH the most extreme value" in prompts.LABS_FORMATTING
+    assert "value the series ends on at discharge" in prompts.LABS_FORMATTING
 
 
 def test_the_lab_command_prompt_carries_the_same_three_rules():
@@ -390,9 +395,9 @@ def test_the_lab_command_prompt_carries_the_same_three_rules():
     from services.agent.routing import routing
 
     assert "Never open with \"all laboratory values remained within their reference ranges\"" \
-        in routing.LABS_FORMATTING
-    assert "`_abnormality_rank`" not in routing.LABS_FORMATTING
-    assert "cites each one's series" in routing.LABS_FORMATTING
+        in prompts.LABS_FORMATTING
+    assert "`_abnormality_rank`" not in prompts.LABS_FORMATTING
+    assert "cites each one's series" in prompts.LABS_FORMATTING
 
 
 def test_a_concern_question_is_answered_with_every_abnormal_analyte_not_a_winner():
@@ -401,7 +406,7 @@ def test_a_concern_question_is_answered_with_every_abnormal_analyte_not_a_winner
     used to be delegated to a cross-unit division the model was asked to perform."""
     from services.agent.routing import routing
 
-    prompt = " ".join(routing.LABS_FORMATTING.split())
+    prompt = " ".join(prompts.LABS_FORMATTING.split())
 
     assert 'which value was "worst"' in prompt
     assert "ratio of one value's excursion to its interval width is not a clinical" in prompt

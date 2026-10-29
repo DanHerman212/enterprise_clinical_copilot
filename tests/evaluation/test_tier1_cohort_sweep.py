@@ -26,6 +26,8 @@ import pytest
 from services.agent.routing import admission_context
 from services.agent.presentation import domain as admission_phenotypes
 from services.agent.routing import encounter, routing
+from services.agent.engine import prompts
+from services.agent.postprocess import answer as answer_text
 from evaluation.outpatient_oracle import OUTPATIENT_HADM_IDS
 from services.agent.ingress import contracts as served_admissions
 from services.agent.engine import deterministic
@@ -222,8 +224,8 @@ def test_an_outpatient_turn_carries_the_encounter_notice():
     with_notice = deterministic._formatter_input([], True, "Summarise the note.")
     without = deterministic._formatter_input([], False, "Summarise the note.")
 
-    assert routing.OUTPATIENT_ENCOUNTER_NOTICE in with_notice
-    assert routing.OUTPATIENT_ENCOUNTER_NOTICE not in without
+    assert prompts.OUTPATIENT_ENCOUNTER_NOTICE in with_notice
+    assert prompts.OUTPATIENT_ENCOUNTER_NOTICE not in without
 
 
 def test_an_outpatient_record_is_not_comparable_against_a_cohort():
@@ -447,9 +449,9 @@ def test_the_medication_narrative_handles_both_outcomes(sweep):
     for hadm_id in sorted(INPATIENT):
         payload = _payload_for(sweep, hadm_id, "meds")
         returned = len(payload.get("passages") or [])
-        empty = deterministic.medication_narrative([], returned)
+        empty = answer_text.medication_narrative([], returned)
         assert isinstance(empty, str) and empty.strip(), hadm_id
-        with_rows = deterministic.medication_narrative(
+        with_rows = answer_text.medication_narrative(
             [{"medication": "warfarin", "dose": "4 mg"}], returned)
         assert "warfarin" in with_rows, hadm_id
 
@@ -464,7 +466,7 @@ def test_the_meds_payload_builds_and_its_marker_resolves(sweep):
             continue
         recorded = _recorded_meds(hadm_id, dict(payload))
         deterministic._consolidate_medication_passages(recorded)
-        answer = deterministic.medication_narrative(rows, 1)
+        answer = answer_text.medication_narrative(rows, 1)
         try:
             out = compose_presentation(
                 "What medications is she going home on?", answer, recorded,

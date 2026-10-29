@@ -20,6 +20,8 @@ import pytest
 
 from services.agent.engine import deterministic
 from services.agent.routing import routing
+from services.agent.engine import prompts
+from services.agent.postprocess import answer as answer_text
 from services.agent.presentation.a2ui import compose_presentation
 from services.agent.engine.prompts import SYSTEM_PROMPT
 from services.agent.telemetry.stages import RESULT_LABELS, RESULT_NOUNS, TOOL_LABELS
@@ -192,7 +194,7 @@ def test_the_meds_marker_resolves_to_the_consolidated_text():
     """The wiring, not just the helper: `^[1]` must address the whole list."""
     recorded = _meds_recorded()
     deterministic._consolidate_medication_passages(recorded)
-    answer = deterministic.medication_narrative(
+    answer = answer_text.medication_narrative(
         [{"medication": "warfarin", "dose": "4 mg"}], 1)
 
     out = compose_presentation(
@@ -209,10 +211,10 @@ def test_the_meds_marker_resolves_to_the_consolidated_text():
 
 def test_the_ehr_instruction_no_longer_asks_for_markdown_headings():
     """`##` streamed to the reader as literal characters until the answer settled."""
-    assert "## " not in routing.EHR_FORMATTING
+    assert "## " not in prompts.EHR_FORMATTING
     for label in ("**Hospital course.**", "**Clinical course.**",
                   "**Discharge diagnosis.**", "**Discharge instructions.**"):
-        assert label in routing.EHR_FORMATTING
+        assert label in prompts.EHR_FORMATTING
 
 
 def test_the_ehr_instruction_matches_the_summary_style():

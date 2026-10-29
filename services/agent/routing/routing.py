@@ -57,17 +57,6 @@ from services.agent.routing import encounter
 # turn read; this module answers only "which tools run".
 from services.mcp.retrieval.sections import SUMMARY_SECTIONS
 
-#: What `/ehr` searches for when the sectioned retrieval returns nothing.
-#:
-#: `rag_search_sections` looks for four named discharge-summary headings. An
-#: outpatient note has none of them, so the call legitimately returned zero
-#: passages — and the answer then reported the RECORD as empty rather than those
-#: sections as absent (90000051, "Summarize the note", 2026-10-21). One
-#: record-wide search is what makes an absence statement a statement about the
-#: record: if this returns nothing either, there really is nothing to summarize.
-EHR_RECORD_QUERY = "patient history, clinical course, diagnosis, treatment and plan"
-
-
 class UnknownCommand(ValueError):
     """An intent arrived that this table does not define."""
 
@@ -153,9 +142,6 @@ class Command:
     supplementary: tuple[ToolSpec, ...] = ()
     #: Sections this command may cite, when it is a section command.
     sections: tuple[str, ...] = ()
-    #: What the formatting turn must produce. The model receives the tool result
-    #: and this instruction, and has no tools, so it can only format.
-    formatting: str = ""
     #: Whether this command's answer is prose at all. `/risk` sets this False: the
     #: widget prints the score, the band and the threshold, so a sentence beneath it
     #: said the same thing a second time. Composing that sentence was also the only
@@ -201,240 +187,6 @@ class Command:
 # summary covers.
 
 
-RISK_FORMATTING = """Retired 2026-10-13 (UX ruling). The risk command returns the widget
-and no prose, so this instruction has no turn to inhabit. Kept as a name rather than
-deleted because the reasoning it carried is the record of why the prose went away:
-an LLM was in this command's loop only to format a number the widget already prints
-exactly, and it could not do it at the widget's precision.
-
-Amended 2026-10-15 (UX remediation). The retirement above is about `/risk`, whose answer IS
-the widget, and it stands untouched. A unified `/ehr` turn is the other case, and both are
-governed by one rule:
-
-  The widget owns the quantitative score and the driver bars. On a unified `/ehr` turn the
-  narrative's fourth section synthesizes how those drivers relate to the clinical course
-  without restating raw unformatted floats.
-
-That is a division of labour, not a reversal of the 2026-10-13 ruling, and the difference is
-what each sentence is for. The deleted sentence said the same thing the widget said, in the
-widget's own terms — a second copy of one number. The fourth section says what no widget can:
-why these drivers, for this patient, and what they mean for the follow-up plan."""
-
-MEDS_FORMATTING = """Extract the discharge medications from the note sections you were given.
-Return a JSON object with one key, "medications", holding an array of objects with exactly
-these fields: "medication", "dosage", "frequency".
-
-You are given TWO sections, and a medication may appear in either or both. The discharge
-medications section is usually the list of drug names; the discharge instructions section
-usually states the doses and frequencies, and sometimes names drugs the list omits.
-
-Include EVERY medication that appears in either section. A drug named in the instructions but
-absent from the list is still a discharge medication and must have a row: dropping a prescribed
-drug is the one error this extraction must never make.
-
-Order the rows as the discharge medications section lists them, then any drug that appears only
-in the instructions, in the order it appears there.
-
-Take each value verbatim from the text you were given. If neither section states a dosage or a
-frequency for a medication, use an empty string. An empty field is the honest answer; a guessed
-dose is a clinical error. Do not infer a dose from a similar drug, do not normalise or expand an
-abbreviation, do not convert units or spellings, and do not add a medication, a dosage or a
-frequency that does not appear in the text.
-
-Return only the JSON object, with no prose before or after it."""
-
-LABS_FORMATTING = """Describe the laboratory trajectories you were given, for a clinician who
-asked what these measurements did during this admission.
-
-Read the question at the top of this input. Where it names specific analytes — "her
-hemoglobin and sodium", "the creatinine" — those analytes are the answer, and the prose is
-about them alone. Describe the named analytes and say nothing about the rest of the panel:
-a list of ten trajectories where two were asked for buries the answer, and the card already
-shows every series. Where the question names no analyte, describe the panel you were given.
-
-Write two to four sentences, in prose. Say what moved and in which direction, where each
-analyte started, and how far it went. Give the values you need to make that concrete, at the
-precision you were given them: the payload states each analyte's values to its own reporting
-precision, and a value re-rounded in your sentence would disagree with the number in the card
-beside it for no reason.
-
-Name every abnormal reading. For each analyte you describe, state each timepoint the flag
-calls abnormal, with its value and the flag's own term. Name the nadir (the lowest value) or
-the peak (the highest) explicitly when the series has one that is abnormal, rather than
-leaving the reader to find it in the series: "it fell to 7.1 g/dL on hospital day 3" is the
-sentence that matters, and "it varied" is the sentence that loses it.
-
-For every analyte you call abnormal, state BOTH the most extreme value of the admission
-(the nadir or the peak) and the value the series ends on at discharge, when the two
-differ: "red cells fell to a nadir of 2.66 on day 1.8 and were 2.69 at discharge". One
-timepoint is not a trajectory, and which one a summary happens to pick is not the
-reader's choice — extreme-only leaves the discharge state unknown, discharge-only hides
-how far it went. A single point whose series has one value states that value once.
-
-Every timepoint in the payload carries a `flag`: "normal", "low", "high", "critical_low" or
-"critical_high". That flag is the reading's verdict against the reference interval, computed
-before you saw it, and it alone decides whether a value is abnormal. Do not re-derive
-normality from the numbers. Where the flag says "low",
-state that the value was low; where it says "high", state high; where it says "critical_low",
-say critically low; where it says "critical_high", say critically high; where it says
-"normal", say it was within its reference range. A value the flag calls low is never
-described as normal, in range or unremarkable, however close to the interval it looks — and
-where ANY timepoint in an analyte's series carries a non-"normal" flag, that analyte never
-"remained within reference range", whatever its later values did.
-
-When the question asks which value was "worst", "most abnormal" or "most concerning", answer
-with the abnormal readings themselves: name every analyte whose `flag` is low, high,
-critical_low or critical_high, with its value and its own `reference_low`-`reference_high`
-interval. Different analytes are recorded in different units, so a ratio of one value's
-excursion to its interval width is not a clinical comparison and must not be computed — the
-reader can see where each reading sits against its own bounds, and that is the comparison
-that means something. Do not pick a single winner across analytes of different kinds. If the
-question insists on one, name the reading whose flag is critical before any merely low or
-high one, and otherwise say the abnormal values are of a similar order.
-
-Never open with "all laboratory values remained within their reference ranges" when an
-analyte moved materially inside its interval. If nothing is flagged abnormal, say that no
-value crossed its reference limit, and then name the movements that did happen with their
-size: a creatinine that nearly doubled is a finding even though it never left its range,
-and a reassurance followed by a list of changes is a contradiction in two sentences.
-
-A sentence that covers several analytes cites each one's series (`^[1], ^[2]`); one marker
-under a claim about "all laboratory values" does not support it.
-
-The trajectories were generated from this admission's own recorded features. They were NOT read
-from a laboratory record. Say so once, plainly, in the course of the answer — the card carries
-the same statement, and a reader who assumes these are measured results has been misled by
-omission. Do not overstate it, and do not repeat it in every sentence.
-
-Describe only what the payload contains. Never invent a value, a trend, a cause or a
-comparison against a normal population that is not in the reference interval you were given.
-Where an analyte is inside its range, say that rather than implying a problem; where a
-trajectory has no reference interval, say what it did without judging it.
-
-Never write an admission id, a note id, or any other identifier into the prose: they are ours,
-not clinical facts, and the reader cannot look them up. Write no heading — this is a short
-answer about a course, not a report. Write nothing about medications, and append no disclaimer
-about missing information."""
-
-EHR_FORMATTING = """Summarise the note sections you were given, for a clinician.
-Write flowing prose with these section labels, in this order:
-
-- **Hospital course.** for an inpatient admission. Where the record is an outpatient
-  encounter — the caveat in the tool result says when it is — there was no admission, so
-  write **Clinical course.** instead. Never write a hospital course for a record that was
-  not a stay.
-- **Discharge diagnosis.** only if the passages you were given contain a discharge diagnosis.
-- **Discharge instructions.** only if the passages you were given contain discharge instructions.
-- **Readmission risk & trajectory.** only where a readmission-risk estimate was given to you.
-
-A label the passages do not support is a label you omit. Omitting a section is the correct
-answer; inventing one to satisfy the format is a clinical error, and a fabricated discharge plan
-is the worst version of it. Never write a label and then fill it with a claim the passages do
-not contain, and never write a placeholder such as "not documented" under a label of your own
-choosing.
-
-Open each section with its label in bold, followed by a period, at the START of its own
-paragraph — exactly `**Hospital course.**`, or `**Clinical course.**` for an outpatient record,
-and so on — then the prose of that section on the same line. The interface sets the bold run as
-the section's heading, which is why it must be the first thing in the paragraph and must end
-with the period: a label buried mid-sentence cannot be found, and markdown heading syntax
-(`##`) is not used anywhere in this answer — it reaches the reader as literal characters while
-the answer is being written.
-
-Use bold for nothing else in this answer, and never wrap a whole section in a single bold run.
-
-The note sections summarise the passages you were given, and a section is written only where the
-passages contain what it names.
-
-Cite each sentence with the number of the passage that supports it. Each passage in the
-tool result carries a `cite` value: that is the number to write, and it is not the
-position of the section you are writing. The two happen to match only by coincidence
-otherwise, and a marker that resolves to another section is a citation the reader cannot
-trust — a discharge diagnosis cited as the discharge instructions is the failure this
-sentence exists to prevent.
-
-Report what the record documents and stop there. Do not close with clinical advice, a vigilance
-or monitoring recommendation, a follow-up plan of your own, or any statement about what the
-clinician should do: those are orders this answer does not give, and a closing "clinical
-vigilance ... remains appropriate" is exactly that (TF-8, 2026-10-23). A management step the
-note itself states is reported as the note's, with its citation — "she was advised to follow up
-with her surgeon on 09/21/2007" — so the only action in this answer is one a passage states
-first.
-
-The final section applies only where a readmission-risk estimate was also given, and it explains
-that estimate for THIS patient: what
-the named drivers mean clinically, how they connect to the course and the discharge
-plan, and what they imply for follow-up. Name each driver exactly as the risk result names it,
-so the sentence and the bar beside it describe one factor one way.
-
-State the readmission risk using ONLY the `probability_display` and `threshold_display` strings
-the risk result gives you, or describe the risk qualitatively. Never write an unrounded
-floating-point number, and never write a figure of your own: the raw values are not in the
-result you were given, so a decimal you produce was not read from anywhere. Do not round a
-number, do not re-derive one, and do not compute a percentage, a count or a score of your own —
-the widget prints the score to a precision this prose cannot reproduce, and a number here that
-disagrees with the number beside it is worse than no number at all.
-
-The drivers are given to you as names and directions, without magnitudes. Say which led and
-what they mean for the follow-up plan, and describe magnitude qualitatively — a leading driver,
-a modest contributor — from how the factors rank and which way they point. The bars beside
-your sentence carry the quantities.
-
-Cite with an inline marker of the form ^[1], ^[2], ^[3]: the FIRST passage you were given is
-^[1], the second is ^[2], and so on, in the order the passages appear in the result. Put the
-marker immediately after the first claim that draws on that passage. Cite each passage at
-most once in the whole answer.
-
-Never write a passage identifier into the prose. The result gives each passage an id such as
-the note and section it came from; that id is a machine name for the passage, not a citation,
-and it must not appear in an answer a clinician reads. The ^[n] marker is the only form of
-citation, and it is what the interface turns into the numbered source the reader can open.
-
-Write nothing about medications, and append no disclaimer about missing information."""
-
-LITERATURE_FORMATTING = """Summarise the published literature you were given, for a clinician asking
-the question above. The records were retrieved for that question, so the summary must answer it.
-
-Write a concise synthesis in two to four sentences: what the retrieved evidence says about the
-question, not what the question was. Do not open by naming or restating the topic — the reader
-has the question in front of them, and a sentence that repeats it is the first thing they skip.
-
-Ground every claim in the records. If the evidence is thin, mixed, or only partly answers the
-question, say that plainly rather than generalising past it.
-
-When a readmission-risk result for this patient is given to you as well, the turn is a
-comparison and the comparison is what the answer is for. Say where this patient's estimate sits
-against the published rates — above them, below them, or among them — and state the patient's own
-estimate using ONLY the `probability_display` string the risk result gives you, exactly as it
-writes it. Name the population each rate belongs to, because the record's cohort and this patient
-are two different groups: a published rate is a reference point, never a claim about her, and a
-sentence that lets the two blur is the failure this section must not make. A rate you quote must
-be the figure the record states — do not average two rates into a new one, and do not compute a
-difference the records do not state themselves.
-
-Explain the comparison from this patient's own drivers, naming each as the risk result names it.
-Where a record identifies a factor this patient also has, say so. Where none of them does, say
-that the records do not address her drivers — an alignment the records do not make is one your
-prose may not supply. If no usable risk result was given, write no comparison at all: a difference
-needs two figures and you have one.
-
-Cite with an inline marker of the form ^[1], ^[2], ^[3]: the FIRST record you were given is ^[1],
-the second is ^[2], and so on, in the order the records appear. Put the marker immediately after
-the claim that draws on that record. Cite each record at most once, and cite every record you
-actually used.
-
-The marker is the record's POSITION in the list, never its identifier: write ^[1], not
-^[PMID: 35186616]. The interface resolves both, but only the position is checked against what
-was retrieved, so an identifier printed by mistake may be removed from your answer.
-
-Never write a PMID, a DOI, a journal name or an article title into the prose: the interface
-draws the records from the structured result, with their links, beside this summary.
-
-If no records were retrieved, or the search failed, write NOTHING that claims to summarise
-evidence. State only that the search returned no records (or could not be completed) and do not
-invent findings, authors, or a topic."""
-
-
 COMMANDS: tuple[Command, ...] = (
     Command(
         wire="labs",
@@ -448,7 +200,6 @@ COMMANDS: tuple[Command, ...] = (
         forbidden=frozenset({"predict_readmission", "rag_search", "rag_search_sections",
                              "discharge_medications", "search_literature"})
                   | PREFLIGHT_TOOLS,
-        formatting=LABS_FORMATTING,
         # The model's description of the trajectory IS the answer, so it is announced as
         # it is written — the same grant `/ehr` and `/pubmed` have, and for the same
         # reason. This command exists because asking for lab trajectories in free text
@@ -475,7 +226,6 @@ COMMANDS: tuple[Command, ...] = (
         args={"hadm_id": "{hadm_id}"},
         forbidden=frozenset({"predict_readmission", "rag_search", "rag_search_sections",
                              "search_literature", "get_lab_trends"}) | PREFLIGHT_TOOLS,
-        formatting=MEDS_FORMATTING,
         # Prose to announce, and the model's reply is not it: the narrative is written
         # in code, so `prose_is_model_output` stays False and the turn does not stream.
         streams_prose=True,
@@ -493,7 +243,6 @@ COMMANDS: tuple[Command, ...] = (
         forbidden=frozenset({"rag_search", "discharge_medications",
                              "search_literature", "get_lab_trends"}) | PREFLIGHT_TOOLS,
         sections=SUMMARY_SECTIONS,
-        formatting=EHR_FORMATTING,
         # The model's cited summary is the answer, so it is announced as it is written.
         # Its markers are resolved after the turn, so what a caller watches arrive is
         # provisional until the citation layer has finished with it.
@@ -528,7 +277,6 @@ COMMANDS: tuple[Command, ...] = (
         forbidden=frozenset({"rag_search", "rag_search_sections",
                              "discharge_medications", "get_lab_trends",
                              "predict_readmission"}) | PREFLIGHT_TOOLS,
-        formatting=LITERATURE_FORMATTING,
         # The synthesis is the answer, and it cites PMIDs the citation layer resolves
         # after the turn: same swap protocol as `/ehr`.
         streams_prose=True,
@@ -915,59 +663,11 @@ def _templated_arguments(args: dict, hadm_id: int | None,
 #: `docs/agent_evaluation/00b1-outpatient-signal_measurement_271026.md` records why no
 #: other field could stand in for it.
 
-#: The instruction that tells a prompt the record is an outpatient encounter.
-#:
-#: One text, both paths. `deterministic._NO_READMISSION` appends it to a command's
-#: formatting input and `graph._context_block` appends it to the free-text system prompt,
-#: because the defect it prevents is a property of the RECORD and not of the route: 90000073
-#: wrote "this admission" about a speech-therapy visit from the `/ehr` path, and 90000073
-#: "Summarize the note" wrote it from the free-text path, where nothing had ever told the
-#: loop the record was not a stay (2026-10-21).
-#:
-#: It is a constant here rather than in either caller because the vocabulary a request is
-#: routed by is owned here, and a second copy of this instruction would drift from the
-#: rule that decides when it is appended (`routing.encounter`).
-OUTPATIENT_ENCOUNTER_NOTICE = (
-    "OUTPATIENT ENCOUNTER: this record is an outpatient note — a visit, not an inpatient "
-    "stay. There was no admission, no hospital course, no discharge and no readmission risk "
-    "to estimate, so none of those words applies to it. Do not write the words "
-    '"admission", "hospital course", "discharge diagnosis" or "discharge instructions", do '
-    "not write a 'Readmission risk & trajectory' section, do not state a risk percentage "
-    "and do not describe risk drivers. Write \"this encounter\" or \"this visit\" instead of "
-    '"this admission", and write "Clinical course" instead of "Hospital course". A heading '
-    "the passages do not support is omitted, never filled with a claim.")
-
-
 #: What `/risk` says when the record is not an admission.
 #:
 #: A refusal rather than an estimate, because there is no readmission to estimate: the
 #: record is an outpatient visit, so a probability computed for it would be a number
 #: about a stay that never happened. It is deterministic prose, not a model turn — the
-#: `/risk` command makes no model call at all, and asking one here would let the score
-#: come back in words.
-OUTPATIENT_RISK_REFUSAL = (
-    "This record is an outpatient encounter, not a hospital admission, so there is no "
-    "readmission risk to estimate. There was no stay to be readmitted from — ask about "
-    "this visit instead, or run the command on an inpatient admission."
-)
-
-#: Served by `/ehr` on an outpatient record whose note yields nothing to summarise.
-#:
-#: Added 2026-10-23 (TF-6). The formatter was handed an empty record and abstained —
-#: "I don't have an answer for that" — which named neither the encounter nor its
-#: consequence, and left the turn's trace row with no output because the state it came
-#: from carried no answer text. The notice says what the record is, what it therefore
-#: does not hold, and what remains available; it invents no stay, no length of stay and
-#: no discharge list.
-OUTPATIENT_EHR_NOTICE = (
-    "This record is an outpatient encounter, not a hospital admission, so there is no "
-    "discharge summary to review: no hospital course, discharge diagnosis or discharge "
-    "medication list exists for this visit, and nothing here should be read as an "
-    "inpatient stay. Ask about this visit instead, or run the command on an inpatient "
-    "admission."
-)
-
-
 def supplementary_arguments(
         command: Command, hadm_id: int | None,
         topic: str | None = None) -> list[tuple[str, dict]]:
@@ -1165,3 +865,97 @@ def words_of(question: str) -> str:
     text = " ".join(str(question or "").split())
     stripped = _ADMISSION_SUFFIX.sub("", text).strip()
     return stripped or text
+
+
+# ==== Tool registries (moved from telemetry/stages.py 2026-10-29) ====
+#
+# Law 4: tool wire names, capability groups and the human label for each are declared
+# once, here. `engine/`, `postprocess/` and `telemetry/` read this table; none of them
+# keeps a copy, so a new tool is added in one place.
+#
+#: Tools whose result is note text. One number per passage they return, and the
+#: passages are what the dose, age, disposition and lab guards verify claims against.
+PASSAGE_TOOLS: frozenset[str] = frozenset(
+    {"rag_search", "rag_search_sections", "discharge_medications"}
+)
+
+# One label per tool the MCP server advertises (`services/mcp/server.py`).
+# Each is phrased as the action the call performs, so it stays true even when
+# the call fails. A test walks the live tool list and fails if a tool is added
+# without a label here, which is what stops this table drifting into fiction.
+TOOL_LABELS = {
+    "predict_readmission": "Reading the Risk Model",
+    "rag_search": "Searching the Discharge Notes",
+    "rag_search_sections": "Reading the Note Sections",
+    "discharge_medications": "Reading the Discharge Medications",
+    "search_literature": "Searching the Literature",
+    # A lab drill-down is a chart read like any other, and it was unlabelled until
+    # 2026-10-22: every `/labs` step and every clicked driver announced itself as
+    # "Consulting a Tool", which is the fallback speaking for a tool this table had not
+    # been taught. The specific name is the whole point of the row.
+    "get_lab_trends": "Reading the Lab Trajectories",
+    # The pre-flight manifest is normally hydrated before the model runs, so its
+    # label is only ever drawn when the model asks for it itself.
+    "get_admission_profile": "Reading the Admission Profile",
+}
+
+
+# Used when the MCP server advertises a tool this table has not been taught.
+# Deliberately vague AND still true: a tool is being consulted. The caller
+# never sees a name it cannot interpret, and the omission is logged (see
+# `graph._emit`) so it is fixed rather than silently rendered.
+LABEL_UNKNOWN_TOOL = "Consulting a Tool"
+
+
+# Result labels. Each reports the call's own output; the failure wording exists
+# so a tool that did not answer is never rendered as a count of zero, which
+# would say "nothing was found" when the truth is "nothing was asked".
+LABEL_RESULT_FAILED = "The Tool Did Not Respond"
+
+
+LABEL_RESULT_RISK = "Read the Risk Score"
+
+
+LABEL_RESULT_PASSAGES = "Read the Note Passages"
+
+
+LABEL_RESULT_SECTIONS = "Read the Note Sections"
+
+
+LABEL_RESULT_MEDICATIONS = "Read the Discharge Medications"
+
+
+LABEL_RESULT_LITERATURE = "Read the Articles"
+
+
+LABEL_RESULT_LABS = "Read the Lab Trajectories"
+
+
+RESULT_LABELS = {
+    "predict_readmission": LABEL_RESULT_RISK,
+    "rag_search": LABEL_RESULT_PASSAGES,
+    "rag_search_sections": LABEL_RESULT_SECTIONS,
+    "discharge_medications": LABEL_RESULT_MEDICATIONS,
+    "search_literature": LABEL_RESULT_LITERATURE,
+    "get_lab_trends": LABEL_RESULT_LABS,
+}
+
+
+# What a returned count counts. The noun travels with the tool because one number
+# means different things to different tools, and a count is only informational if
+# the noun is right: three passages of a discharge note, three published records.
+# "Found 3 Note Passages" was served for a PubMed search until 2026-10-12 — the
+# count was correct and the noun described a different system, which is the same
+# defect as a label that names a tool the caller cannot see.
+RESULT_NOUNS = {
+    "rag_search": "Note Passage",
+    "rag_search_sections": "Note Section",
+    "search_literature": "Literature Record",
+    # A trajectory is one analyte's course, not a passage and not a record: the count
+    # under a lab drill-down says how many series were drawn.
+    "get_lab_trends": "Lab Trajectory",
+}
+
+
+# For a tool this table has not been taught. Vague and true, like LABEL_UNKNOWN_TOOL.
+RESULT_NOUN_FALLBACK = "Result"

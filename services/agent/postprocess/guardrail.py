@@ -31,7 +31,9 @@ from __future__ import annotations
 import json
 import re
 
+from services.agent.postprocess import answer as answer_text
 from services.agent.postprocess import citations
+from services.agent.routing import routing
 
 # --- Redacted age -----------------------------------------------------------
 
@@ -155,7 +157,7 @@ def _passage_sections(tool_calls: list[dict]) -> tuple[list[dict], str]:
     passages = []
     for tc in tool_calls or []:
         name = tc.get("name")
-        if name not in ("rag_search", "rag_search_sections", "discharge_medications"):
+        if name not in routing.PASSAGE_TOOLS:
             continue
         for p in (tc.get("response") or {}).get("passages") or []:
             section = p.get("section")
@@ -248,7 +250,7 @@ def _literature_text(tool_calls: list[dict]) -> str:
     """
     chunks: list[str] = []
     for call in tool_calls or []:
-        if call.get("name") != "search_literature":
+        if call.get("name") not in routing.LITERATURE_TOOLS:
             continue
         articles = (call.get("response") or {}).get("articles")
         if not isinstance(articles, list):
@@ -818,14 +820,6 @@ _NEGATION_WINDOW = 30
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 
-# Served when every claim in an answer was removed, because an empty answer is not
-# an answer: the caller has to be told the record does not support the question.
-GUARDED_ABSTENTION = (
-    "I can't confirm that from this patient's record. The note I can see does not "
-    "document it, and I won't state it as if it did. Ask about another part of the "
-    "record and I'll answer from what is documented."
-)
-
 
 def _asserted(category: str, sentence: str, pattern: re.Pattern) -> bool:
     """True when this sentence claims the disposition, rather than denying it."""
@@ -986,7 +980,7 @@ def guard_answer(
         # Serving an empty answer would look like a rendering failure; serving the
         # original would serve the invention. The caller is told the record does not
         # support the question, which is the true statement about the turn.
-        answer = GUARDED_ABSTENTION
+        answer = answer_text.GUARDED_ABSTENTION
         flags.append("abstained_after_guard")
 
     return {"answer": answer, "flags": sorted(set(flags))}

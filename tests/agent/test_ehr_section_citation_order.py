@@ -25,6 +25,7 @@ from services.agent.engine import model as model_gateway
 from services.agent.engine import graph
 from services.agent.engine import model
 from services.agent.routing import routing
+from services.agent.engine import prompts
 from services.agent.presentation.a2ui import compose_presentation
 from services.agent.engine.deterministic import run_command
 from services.mcp.retrieval.sections import SUMMARY_SECTIONS
@@ -184,8 +185,8 @@ def test_the_ordering_is_scoped_to_the_summary_command():
 def test_the_formatter_is_told_to_cite_the_passage_not_the_section_position():
     # One assertion per line of the instruction, because the prose wraps and a
     # substring that spans a wrap asserts nothing.
-    assert "position of the section you are writing" in routing.EHR_FORMATTING
-    assert "carries a `cite` value" in routing.EHR_FORMATTING
+    assert "position of the section you are writing" in prompts.EHR_FORMATTING
+    assert "carries a `cite` value" in prompts.EHR_FORMATTING
 
 
 def test_each_passage_carries_the_number_its_marker_must_use():
@@ -240,5 +241,5 @@ def test_the_formatter_reads_the_same_order_the_citation_layer_numbers():
 
 
 def test_tf8_prohibits_a_closing_vigilance_sentence():
-    assert "Do not close with clinical advice" in routing.EHR_FORMATTING
-    assert "vigilance" in routing.EHR_FORMATTING
+    assert "Do not close with clinical advice" in prompts.EHR_FORMATTING
+    assert "vigilance" in prompts.EHR_FORMATTING

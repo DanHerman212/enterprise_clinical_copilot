@@ -1,11 +1,6 @@
 """Validated request contract for the private agent HTTP service."""
 from __future__ import annotations
 
-from services.agent.engine.mcp_client import (  # noqa: F401
-    RecordedToolCall,
-    validate_recorded_tool_call,
-)
-
 from shared.errors import AgentResponseError  # noqa: F401 — re-exported
 
 import re

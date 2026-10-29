@@ -23,20 +23,22 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from services.agent.telemetry import observability as chain
-from services.agent.engine import model as model_turn
 from services.agent.routing import encounter, routing
 from services.agent.telemetry import stages
 from services.agent.routing import routing as questions
 from services.agent import turn
 from services.agent.ingress.contracts import AgentRequestError, parse_agent_request
-from services.agent.engine.graph import ask, final_message
-from services.agent.engine.mcp_client import MCP_TRANSPORT, toolbox
 from services.agent.telemetry import observability
 from services.agent.turn import (
     AgentAnswerUnavailable,
+    MCP_TRANSPORT,
     StageLog as _StageLog,
     _response_fields,
+    ask,
     compose_success as _compose_success,
+    final_message,
+    finish_reason as _finish_reason,
+    toolbox,
     unserved_admission as _unserved_admission,
 )
 from services.mcp.runtime import requires_cloud_run_auth, timeout_chain
@@ -335,7 +337,7 @@ async def ask_route(request: Request) -> JSONResponse:
         )
     log.record(
         trace, parsed["question"], "ok",
-        finish_reason=model_turn.finish_reason(final_message(state)),
+        finish_reason=_finish_reason(final_message(state)),
         **_response_fields(state),
         tool_calls=[call["name"] for call in payload["tool_calls"]],
         # The names, because which guard fired is the whole diagnostic: a count
@@ -645,7 +647,7 @@ async def _stream_chain(
             payload["routed_to"] = parsed["routed_to"]
         log.record(
             trace, parsed["question"], "ok",
-            finish_reason=model_turn.finish_reason(final_message(state)),
+            finish_reason=_finish_reason(final_message(state)),
             **_response_fields(state),
             tool_calls=[call["name"] for call in payload["tool_calls"]],
             guardrail_flags=payload["guardrail_flags"],

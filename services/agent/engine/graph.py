@@ -91,6 +91,7 @@ from services.agent.postprocess import answer as answer_text
 from services.agent.postprocess import citations
 
 from services.agent.engine.prompts import SYSTEM_PROMPT
+from services.agent.engine import prompts
 from services.agent.telemetry import observability
 from services.agent.routing import routing
 from services.agent.routing import encounter
@@ -395,32 +396,6 @@ def _freetext_allowed(risk_driver_question: bool,
     return frozenset(allowed)
 
 
-# Sent to the model when a run is about to end with an answer and no retrieval happened.
-#
-# Why this exists: free text is the one path where the model chooses the tool, and left
-# on `AUTO` it will sometimes answer a chart question having called nothing at all.
-# Measured 2026-10-15 — two turns in one thread returned `tool_calls: []`, the
-# presentation composed with no citation slots, and the `^[1]..^[3]` the model had
-# written anyway were stripped by the citation guard, correctly, as pointing at nothing.
-# What reached the clinician was a confident summary of the chart with no evidence
-# attached, which is the failure the whole citation contract exists to prevent.
-#
-# It restates the redirect rather than removing it, because the demand has to be able to
-# come back with the same answer it gave the first time: a risk or medication question is
-# answered by NAMING the command that owns it and stopping, and that answer calls no tool
-# either. Without the second paragraph the demand would read as "a tool call is mandatory",
-# which would turn a redirect into a summary read out of the notes — the boundary this
-# path already refuses to cross.
-RETRIEVAL_DEMAND = """\
-You answered without calling a tool. If this question is about what the patient's notes
-say, then you do not have the answer: call `rag_search` with the admission's hadm_id and a
-focused query now, and answer from the passages it returns.
-
-If instead this is a question whose answer belongs to a command — a readmission risk
-score, or a discharge medication list — then answer it exactly as you just did, by naming
-the command that produces it and stopping."""
-
-
 def names_a_command(answer: str) -> bool:
     """Whether this reply is naming the command that owns the question.
 
@@ -665,7 +640,7 @@ def build_graph(
         # instruction inside a run rather than a second contract. The transcript it joins
         # is the run's own and is never stored as the turn's question.
         return {
-            "messages": [HumanMessage(content=RETRIEVAL_DEMAND)],
+            "messages": [HumanMessage(content=prompts.RETRIEVAL_DEMAND)],
             "retrieval_demanded": True,
         }
 
@@ -752,7 +727,7 @@ def _context_block(admission_context: str, hadm_id: int | None = None) -> str:
     reads as a continuation of the rules it is qualifying rather than as a peer
     of them.
 
-    An OUTPATIENT record also gets `routing.OUTPATIENT_ENCOUNTER_NOTICE` here, and
+    An OUTPATIENT record also gets `prompts.OUTPATIENT_ENCOUNTER_NOTICE` here, and
     this is the only place the free-text path can learn it. `SYSTEM_PROMPT` is
     admission-independent by construction, so without this the loop wrote "this
     admission" and a hospital course about a speech-therapy visit — the identical
@@ -763,7 +738,7 @@ def _context_block(admission_context: str, hadm_id: int | None = None) -> str:
     parts = [(admission_context or "").strip()]
     if encounter.current_is_outpatient() is True:
         parts.append("<encounter_notice>\n"
-                     f"{routing.OUTPATIENT_ENCOUNTER_NOTICE}\n"
+                     f"{prompts.OUTPATIENT_ENCOUNTER_NOTICE}\n"
                      "</encounter_notice>")
     text = "\n\n".join(part for part in parts if part)
     return f"\n\n{text}" if text else ""

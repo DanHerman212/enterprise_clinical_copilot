@@ -40,7 +40,7 @@ from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
 from services.agent.postprocess import citations
-from services.agent.presentation.domain import humanize
+from shared.labels import humanize
 from services.agent.telemetry import observability, stages
 from services.agent.telemetry.stages import emit as _emit
 from shared.errors import AgentResponseError

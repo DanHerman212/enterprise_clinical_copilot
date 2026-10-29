@@ -9,10 +9,13 @@ from services.agent.ingress.contracts import (
     RESULT_KEPT_TOOLS,
     AgentRequestError,
     AgentResponseError,
-    validate_recorded_tool_call,
     parse_agent_request,
     validate_agent_success,
 )
+# The internal trace record is `engine`'s type, not part of the wire contract: the
+# re-export through `ingress.contracts` was removed on 2026-10-29 because it made the
+# HTTP layer depend on the engine for a name it never used.
+from services.agent.engine.mcp_client import validate_recorded_tool_call
 
 
 def test_parse_agent_request_canonicalises_the_question():

@@ -21,6 +21,7 @@ from starlette.testclient import TestClient  # noqa: E402
 
 from services.agent.ingress import http as srv  # noqa: E402
 from services.agent.engine import model as model_turn  # noqa: E402
+from services.agent.postprocess import answer  # noqa: E402
 
 
 def _turn(text="", **metadata):
@@ -108,11 +109,11 @@ def test_a_clean_finish_with_no_text_is_an_abstention_not_a_failure():
     probe safely (observed live, `inj-04`, 2026-10-17).
     """
     assert model_turn.silent_refusal(_turn(finish_reason="STOP")) == (
-        model_turn.SILENT_TURN_SENTENCE
+        answer.SILENT_TURN_SENTENCE
     )
     # The sentence has to be a useful answer in its own right, because for a probe
     # that is all the caller will ever see.
-    assert "don't have an answer" in model_turn.SILENT_TURN_SENTENCE.lower()
+    assert "don't have an answer" in answer.SILENT_TURN_SENTENCE.lower()
 
 
 def test_the_abstention_sentence_names_only_what_the_record_can_offer():
@@ -125,7 +126,7 @@ def test_the_abstention_sentence_names_only_what_the_record_can_offer():
     says do not exist.
     """
     outpatient = model_turn.silent_refusal(_turn(finish_reason="STOP"), outpatient=True)
-    assert outpatient == model_turn.OUTPATIENT_SILENT_TURN_SENTENCE
+    assert outpatient == answer.OUTPATIENT_SILENT_TURN_SENTENCE
 
     for term in ("admission", "readmission", "discharge medication"):
         assert term not in outpatient.lower(), f"outpatient sentence offers {term!r}"

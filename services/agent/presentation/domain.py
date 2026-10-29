@@ -18,11 +18,6 @@ from __future__ import annotations
 
 import re
 
-# Imported at module scope rather than inside `is_matrix_eligible`: a function-local
-# import of a `services.agent` module is how a cycle gets in without showing up as one
-# (`tests/agent/test_layer_separation.py` refuses them for that reason).
-from services.agent.routing import encounter
-
 # The risk score is shown to two decimals everywhere it is shown: the widget, the
 # component payload, and the prose. Six decimals — what the service returns —
 # implies a precision the model does not have, and it made the same score read as
@@ -51,53 +46,12 @@ def display_probability(value):
     return round(float(value), RISK_DECIMALS)
 
 
-FEATURE_LABELS: dict[str, str] = {
-    "age": "age",
-    "gender": "sex",
-    "has_procedure": "procedure performed",
-    "procedure_count": "procedures",
-    "oncology_flag": "oncology history",
-    "medication_count": "medication count",
-    "medication_order_count": "medication order count",
-    "prior_inpatient_days": "prior inpatient days",
-    "prior_admission_count": "prior admissions",
-    "index_los_days": "length of stay",
-    "recent_ed_visits": "recent ED visits",
-    "hemoglobin_min": "lowest hemoglobin",
-    "sodium_min": "lowest sodium",
-    "sodium_max": "highest sodium",
-    "sodium_last": "recent sodium",
-    "rbc_min": "lowest red blood cell count",
-    "rbc_last": "recent red blood cell count",
-    "rdw_max": "red cell distribution width (RDW)",
-    "monocytes_min": "lowest monocyte count",
-    "race": "race",
-    "admission_type": "admission type",
-    "discharge_location": "discharge destination",
-    "insurance": "insurance type",
-}
-
-
-def label_for(feature: str) -> str:
-    """Human label for a feature key; falls back to the raw key if unknown."""
-    return FEATURE_LABELS.get(feature, feature)
-
-
-def humanize(feature: str) -> str:
-    """Best human label for a feature key, for visual consumption.
-
-    1. Known parent feature -> curated label (FEATURE_LABELS).
-    2. Otherwise normalize the raw key to Title Case, handling both
-       camelCase and snake_case: medicationOrderCount and
-       medication_order_count both become "Medication Order Count". This is
-       the safety net for any feature not in the curated map.
-    """
-    known = FEATURE_LABELS.get(feature)
-    if known is not None:
-        return known
-    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", feature)
-    words = [w for w in re.split(r"[\s_\-]+", spaced) if w]
-    return " ".join(w.capitalize() for w in words) if words else feature
+# The feature label map and its two accessors live in `shared/labels.py` since
+# 2026-10-29 (`00d7` Row 10): `engine/mcp_client.py` and `postprocess/followups.py`
+# needed to name a feature, and importing them from this module made both packages
+# depend on the presentation layer. Re-exported here so this module's own callers —
+# `a2ui`, `canvas` and the tests — keep one import site.
+from shared.labels import FEATURE_LABELS, humanize, label_for  # noqa: E402  (re-export)
 
 
 # ===========================================================================
@@ -297,10 +251,10 @@ ADMISSION_PHENOTYPE: dict[int, str] = {
 #: rehabilitation and progress notes. Kept as the phenotype map's own record of that fact
 #: for the audit tooling; it is no longer what refuses a comparison at request time.
 #:
-#: `is_matrix_eligible` reads `routing.encounter`, which reads `encounter_type` off the
-#: record's feature row, because a runtime decision taken from a list of ids is the same
-#: defect in a third place: a record added to the cohort without being added here would
-#: be offered a readmission comparison it cannot support.
+#: `is_matrix_eligible` takes the encounter as an argument (`00d7` Row 11): it used to
+#: read `routing.encounter`'s process-global `ContextVar`, which made a display decision
+#: depend on hidden state no caller could see. The orchestrator reads the encounter and
+#: passes the boolean.
 NON_ADMISSION: frozenset[int] = frozenset({
     90000028, 90000040, 90000051, 90000054, 90000073,
 })
@@ -327,7 +281,7 @@ def bucket_for(hadm_id: int) -> Bucket | None:
     return BUCKETS.get(key) if key else None
 
 
-def is_matrix_eligible(hadm_id: int) -> bool:
+def is_matrix_eligible(hadm_id: int, *, is_outpatient: bool | None = None) -> bool:
     """Whether this record may be paired with a cohort comparison at all.
 
     The only refusal left is the record not being an admission. It used to also require a
@@ -337,13 +291,13 @@ def is_matrix_eligible(hadm_id: int) -> bool:
     `GENERAL_INPATIENT` (see `risk_canvas._comparative_matrix`), so what is left to refuse
     is the one thing a readmission rate cannot describe: a visit that was never a stay.
 
-    That fact comes from the turn's `routing.encounter`, set by the pre-flight from the
-    record's own `encounter_type` column, so this module is not the authority on which
-    records are visits — it asks. `hadm_id` is kept in the signature because every caller
-    has one and because an unknown record (no encounter stated) must stay eligible, which
-    is the behaviour this predicate had when it consulted a set.
+    That fact comes from the caller: `is_outpatient` is the turn's encounter, read by
+    `turn.py` from the pre-flight's `encounter_type` and passed down. This module is not
+    the authority on which records are visits — it is told. `hadm_id` is kept in the
+    signature because every caller has one and because an unknown record (no encounter
+    stated) must stay eligible.
     """
-    return encounter.current_is_outpatient() is not True
+    return is_outpatient is not True
 
 
 # ---------------------------------------------------------------------------

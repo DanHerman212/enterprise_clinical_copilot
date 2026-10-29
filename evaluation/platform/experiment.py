@@ -195,19 +195,32 @@ def run_linked(
     with ThreadPoolExecutor(max_workers=max(1, max_concurrency)) as pool:
         outcomes = list(pool.map(one, items))
 
+    stats = summarise_run(outcomes)
+    dataset_run_id = next((o.dataset_run_id for o in outcomes if o.dataset_run_id), None)
+
+    return DatasetRun(stats=stats, item_results=outcomes, dataset_run_id=dataset_run_id)
+
+
+def summarise_run(outcomes: list[ItemOutcome]) -> dict[str, Any]:
+    """Every run-level number, in one place.
+
+    `evaluators.summarise_item_results` owns the per-item arithmetic; `unattributed` is
+    added here because it is the one count that needs the OUTPUT — an answer we obtained
+    but cannot fully point at. A task that failed is already counted `unscored`; counting
+    it here as well would report one gap twice. Any turn counts, not only the first: a
+    two-turn item whose second trace is missing is half-unopenable even though its scores
+    have somewhere to land.
+
+    Both readers call this — the run's own result and `record_run_scores` — so the gate
+    the CLI returns and the gate score Langfuse stores are computed from the same dict.
+    """
     stats = ev.summarise_item_results(outcomes)
-    # An answer we obtained but cannot fully point at. A task that failed is already
-    # counted `unscored`; counting it here as well would report one gap twice.
-    # Any turn counts, not only the first: a two-turn item whose second trace is missing
-    # is half-unopenable even though its scores have somewhere to land.
     stats["unattributed"] = sum(
         1 for outcome in outcomes
         if outcome.error is None
         and any(not found for found in trace_ids_for_turns(outcome.output))
     )
-    dataset_run_id = next((o.dataset_run_id for o in outcomes if o.dataset_run_id), None)
-
-    return DatasetRun(stats=stats, item_results=outcomes, dataset_run_id=dataset_run_id)
+    return stats
 
 
 def retry_unscored(
@@ -279,8 +292,11 @@ def record_run_scores(
     """
     if dataset_run_id is None:
         return
+    # The full stats, including `unattributed`, so the run gate scores the same five
+    # terms the CLI verdict checks (`00d8` Row 3).
+    stats = summarise_run(outcomes)
     for evaluator in run_evaluators:
-        for evaluation in evaluator(item_results=outcomes):
+        for evaluation in evaluator(item_results=outcomes, stats=stats):
             client.create_score(dataset_run_id=dataset_run_id, name=evaluation.name,
                                 value=evaluation.value, comment=evaluation.comment,
                                 data_type=evaluation.data_type)

@@ -425,7 +425,7 @@ def test_wire_commands_are_compared_in_their_executed_form():
 
 def test_components_are_read_from_the_a2ui_messages():
     """The service sends `a2ui.messages`; there is no `a2ui_components` field."""
-    from evaluation.platform import a2ui
+    from shared import a2ui
 
     envelope = {"messages": [{"updateComponents": {"components": [
         {"component": "Column"}, {"component": "LiteratureList"}]}}]}
@@ -451,9 +451,9 @@ def test_the_command_map_matches_the_service_without_importing_it_at_runtime():
     2026-10-20), so the agreement is checked here, in the test suite, where importing
     the service modules is normal and free.
     """
-    import prompt_set
+    from evaluation.platform import case_set
 
-    assert ev.EXECUTED_COMMAND == prompt_set.WIRE_COMMAND
+    assert ev.EXECUTED_COMMAND == case_set.WIRE_COMMAND
 
 
 def test_evaluators_does_not_manipulate_sys_path():

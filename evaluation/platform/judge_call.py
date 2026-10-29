@@ -3,21 +3,25 @@
 One call per item is the agreed decision (spec §2.2): the 2-of-3 consensus existed to
 absorb judge variance, but it tripled cost and exhausted quota. Variance is now
 something to measure from the run, not to average away inside it.
+
+Self-contained since 2026-10-29 (`00d8` Rows 5 and 6). It used to insert
+`evaluation/agent` on `sys.path` and `import judge` inside a function, which made the
+live harness depend on the retired collector, hid the dependency from every static scan,
+and made `judge` impossible to import twice. The rubric moved to `evaluation/rubric.md`
+— it is the contract both judges read, not a file owned by the collector — and the Vertex
+call moved to `judge_client.py`.
 """
 
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from typing import Any, Callable
 
-HERE = Path(__file__).resolve().parent
-HARNESS = HERE.parents[1] / "evaluation" / "agent"
-if str(HARNESS) not in sys.path:
-    sys.path.insert(0, str(HARNESS))
+from evaluation.platform import judge_client
 
-RUBRIC = (HARNESS / "rubric.md").read_text()
+#: The canonical clinical grading rubric. Top-level, shared, and read once.
+RUBRIC = (Path(__file__).resolve().parents[1] / "rubric.md").read_text()
 
 
 MANIFEST_RULES = (
@@ -138,18 +142,17 @@ def make_judge_fn(client_factory: Callable[[], Any] | None = None) -> Callable[.
             if client_factory is not None:
                 cached["client"] = client_factory()
             else:
-                import judge  # noqa: PLC0415 — heavy import, needed only here
-                from google import genai  # noqa: PLC0415
+                from google import genai  # noqa: PLC0415 — heavy import, needed only here
 
                 cached["client"] = genai.Client(
-                    vertexai=True, project=judge.PROJECT, location=judge.JUDGE_LOCATION)
+                    vertexai=True, project=judge_client.PROJECT,
+                    location=judge_client.JUDGE_LOCATION)
         return cached["client"]
 
     def judge_fn(*, input: dict[str, Any], output: dict[str, Any]) -> dict:
-        import judge  # noqa: PLC0415
-
         user = build_user_prompt(input, output)
-        # `judge._judge` carries the timeout and the quota-aware backoff.
-        return judge._judge(_client(), RUBRIC, user)
+        # `judge_client.judge` carries the ceiling and the quota-aware backoff, and
+        # applies the item pass rule from `schemas.PASS_DIMENSIONS`.
+        return judge_client.judge(_client(), RUBRIC, user)
 
     return judge_fn

@@ -103,7 +103,7 @@ def test_the_judge_prompt_no_longer_treats_admission_type_as_proof():
 
 
 def test_the_rubric_counts_a_grounded_refusal_as_a_pass():
-    rubric = (_REPO / "evaluation" / "agent" / "rubric.md").read_text()
+    rubric = (_REPO / "evaluation" / "rubric.md").read_text()
     assert "Refusing a tool that does not apply" in rubric
     assert "that is the correct answer and it\n**passes**" in rubric
     assert "must never be scored as one" in rubric
@@ -111,7 +111,7 @@ def test_the_rubric_counts_a_grounded_refusal_as_a_pass():
 
 
 def test_the_rubric_is_versioned_above_the_run_it_supersedes():
-    rubric = (_REPO / "evaluation" / "agent" / "rubric.md").read_text()
+    rubric = (_REPO / "evaluation" / "rubric.md").read_text()
     assert rubric.startswith("# Evaluation Rubric v6"), (
         "a change to how a class of answer is graded invalidates comparison with "
         "earlier runs and must carry a new version"

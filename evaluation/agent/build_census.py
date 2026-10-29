@@ -69,7 +69,7 @@ BANDS = (("low", 0.0, 0.10), ("borderline", 0.10, 0.20), ("high", 0.20, 1.01))
 # this file used to carry its own tuple of three, with the old `summarize` key, so the
 # census printed "82 x 3 prompts" while the collector ran four paths. One list, owned by
 # prompt_set, or the two disagree and the disagreement looks like a missing case.
-from prompt_set import CENSUS_PROMPTS as PROMPTS  # noqa: E402
+from evaluation.platform.case_set import CENSUS_PROMPTS as PROMPTS  # noqa: E402
 
 # Derived from the feature table: an id present here is an id the agent can
 # answer for.

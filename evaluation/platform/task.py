@@ -12,8 +12,13 @@ import json
 import re
 from typing import Any, Callable
 
-from evaluation.platform import a2ui
+from shared import a2ui
 from evaluation.platform.schemas import DatasetItemInput, TaskOutput
+#: One definition of what consumes a citation number (`00d8` Row 1, charter Law 1).
+#: The harness stamps the same markers the agent renders, and a local counter is how the
+#: two drifted apart: the harness counted passages-only while the agent counted passages
+#: and analytes, which is the `00d6` failure reproduced inside the measurement.
+from services.agent.postprocess.citations import passage_total
 
 #: `ask(**kw) -> dict` — the agent round-trip. Injected so the dry run can use a fake.
 Ask = Callable[..., dict]
@@ -63,17 +68,11 @@ def _answer_text(response: dict) -> str:
 def _citation_units(payload: Any) -> int:
     """How many citation numbers one tool payload consumes.
 
-    The same rule the agent renders with — `citations.citable_passages`: one number per
-    note passage, one per analyte, nothing for an estimate, a medication list or a
-    search result set.
+    Delegates to `citations.passage_total`. The local rules — one number per note
+    passage, one per analyte, nothing for an estimate, a medication list or a search
+    result set — are that function's to state, and this module states none of them.
     """
-    if not isinstance(payload, dict):
-        return 0
-    for key in ("passages", "trends"):
-        rows = payload.get(key)
-        if isinstance(rows, list):
-            return len([row for row in rows if isinstance(row, dict)])
-    return 0
+    return passage_total(payload)
 
 
 def _numbered(payload: Any, cite_start: int) -> Any:

@@ -13,24 +13,21 @@ flattening them would run the follow-up out of order under concurrency.
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from typing import Callable
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-HARNESS = REPO / "evaluation" / "agent"
-if str(HARNESS) not in sys.path:
-    sys.path.insert(0, str(HARNESS))
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
+#: Dataset fixtures built from committed files. `DATA` is where the legacy collector kept
+#: its case JSON, and it stays a data directory: no module is imported from it (`00d8`
+#: Row 9).
+DATA = REPO / "evaluation" / "agent"
 
-import prompt_set  # noqa: E402
-
+from evaluation.platform import case_set  # noqa: E402
 from evaluation.platform.schemas import DatasetItemInput  # noqa: E402
 
-CASES = HARNESS / "results" / "cases_82.json"
-SUITE2 = HARNESS / "suite2_cases.json"
+CASES = DATA / "results" / "cases_82.json"
+SUITE2 = DATA / "suite2_cases.json"
 
 #: How many items each dataset must contain. Asserted at seed time: a seeded dataset
 #: that is quietly short is a pass rate over an unknown subset.
@@ -41,8 +38,8 @@ SUITE2 = HARNESS / "suite2_cases.json"
 #: not have. Datasets cannot be deleted in this Langfuse version, so the shell stays and
 #: the corrected dataset takes the next version.
 EXPECTED_COUNTS = {
-    "clinical-census-pilot-v2": 1 * len(prompt_set.CENSUS_PROMPTS),
-    "clinical-census-full-v1": 82 * len(prompt_set.CENSUS_PROMPTS),
+    "clinical-census-pilot-v2": 1 * len(case_set.CENSUS_PROMPTS),
+    "clinical-census-full-v1": 82 * len(case_set.CENSUS_PROMPTS),
     "suite2-adversarial-v1": 30,
 }
 
@@ -67,9 +64,9 @@ def _census_patients() -> list[dict]:
 def _question_for(prompt: str) -> str:
     """The question a census command turn actually puts on the wire."""
     try:
-        return prompt_set.question_for(prompt)
+        return case_set.question_for(prompt)
     except Exception:  # noqa: BLE001 — fall back to the documented slash form
-        return prompt_set.SLASH_COMMANDS.get(prompt, f"/{prompt}")
+        return case_set.SLASH_COMMANDS.get(prompt, f"/{prompt}")
 
 
 def census_items(
@@ -90,11 +87,11 @@ def census_items(
     for patient in patients:
         hadm = int(patient["hadm_id"])
         manifest = manifests.get(hadm) or {}
-        for prompt in prompt_set.CENSUS_PROMPTS:
+        for prompt in case_set.CENSUS_PROMPTS:
             items.append(DatasetItemInput(
                 patient_id=str(hadm),
                 workflow_type="command_plus_followup",
-                turns=[_question_for(prompt), prompt_set.follow_up_for(prompt)],
+                turns=[_question_for(prompt), case_set.follow_up_for(prompt)],
                 patient_manifest=manifest,
                 command=prompt,
             ))

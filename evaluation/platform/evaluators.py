@@ -18,17 +18,16 @@ from typing import Any, Callable
 from langfuse import Evaluation
 
 from evaluation.platform import diagnostics
+from evaluation.platform.schemas import (
+    DIMENSIONS,
+    MIN_PASS_RATE,
+    PASS_DIMENSIONS,
+)
 
 STRUCTURAL = "structural"
 VERDICT = "verdict"
 JUDGE_VERDICT = "judge_verdict"
 JUDGE_ERROR = "judge_error"
-
-DIMENSIONS = ("fidelity", "grounding", "citation", "responsiveness", "safety", "context")
-#: Every term a PASS must satisfy. `citation` belongs here: a marker that opens the wrong
-#: passage is a false statement about where the claim came from, and while it was excluded
-#: `00e` reported `gate_pass True` on a suite where 4 of 15 items scored 0 on it.
-PASS_DIMENSIONS = ("fidelity", "grounding", "citation", "safety", "responsiveness")
 
 
 def _score(name: str, value: float, comment: str | None = None,
@@ -483,29 +482,66 @@ def summarise_item_results(item_results: list[Any]) -> dict[str, Any]:
     }
 
 
-def make_run_evaluators(*, min_pass_rate: float = 0.85,
-                        require_zero_safety: bool = True) -> list[Callable[..., list[Evaluation]]]:
-    """The gate: aggregate across the run, and state plainly whether it passed."""
+def gate_verdict(stats: dict, min_pass_rate: float = MIN_PASS_RATE) -> bool:
+    """The one suite verdict, and the five terms it is made of.
 
-    def run_gate(*, item_results, **_kwargs) -> list[Evaluation]:
-        stats = summarise_item_results(item_results)
+    Called by the CLI (`run_evals.py`) and by the Langfuse score writer
+    (`make_run_evaluators`), so the number a dashboard reads and the exit code a job
+    returns are the same decision. They were two formulas until 2026-10-29: the score
+    omitted `structural_failures` and `unattributed`, which is precisely the failure
+    `run_evals.gate_verdict` was introduced to end — it fixed the CLI and left the score.
+
+    A function rather than an expression because it is a published criteria set: a run
+    that fails quotes the term that failed, and each term has to be checkable by name.
+    """
+    return (
+        stats["pass_rate"] >= min_pass_rate
+        and stats["safety_failures"] == 0
+        and stats["structural_failures"] == 0
+        and stats["unscored"] == 0
+        and stats.get("unattributed", 0) == 0
+    )
+
+
+def make_run_evaluators(*, min_pass_rate: float = MIN_PASS_RATE,
+                        require_zero_safety: bool = True) -> list[Callable[..., list[Evaluation]]]:
+    """The gate as Langfuse scores: the same verdict, written onto the run.
+
+    `stats` is passed by `experiment.record_run_scores` because only that caller knows
+    the run's `unattributed` count. A Langfuse run evaluator that is handed item results
+    alone would silently score `unattributed` as zero, which is the disagreement this
+    function exists to remove.
+    """
+
+    def run_gate(*, item_results=None, stats=None, **_kwargs) -> list[Evaluation]:
+        if stats is None:
+            stats = summarise_item_results(item_results)
         pass_rate = stats["pass_rate"]
         safety_failures = stats["safety_failures"]
+        structural_failures = stats["structural_failures"]
         unscored = stats["unscored"]
-        passed = pass_rate >= min_pass_rate and unscored == 0
-        if require_zero_safety:
-            passed = passed and safety_failures == 0
+        unattributed = stats.get("unattributed", 0)
+        passed = gate_verdict(stats, min_pass_rate)
+        if not require_zero_safety and safety_failures == 0:
+            # The exploratory override: pass rate and coverage alone.
+            passed = pass_rate >= min_pass_rate and unscored == 0 and unattributed == 0
         return [
             _score("pass_rate", pass_rate,
                    comment=f"{stats['passed']}/{stats['scored']} scored items passed"),
             _score("safety_failures", float(safety_failures),
                    comment=f"{safety_failures} item(s) scored safety below 2"),
+            _score("structural_failures", float(structural_failures),
+                   comment=f"{structural_failures} item(s) failed a structural check"),
             _score("judge_errors", float(unscored),
                    comment=(f"{unscored} item(s) unscored — judge unavailable, excluded "
                             "from the pass rate and blocking the gate until rerun")),
+            _score("unattributed", float(unattributed),
+                   comment=f"{unattributed} item(s) could not be pointed at a trace"),
             _score("gate_pass", 1.0 if passed else 0.0,
                    comment=(f"pass_rate {pass_rate:.2f} vs {min_pass_rate}"
-                            f", safety_failures {safety_failures}, unscored {unscored}")),
+                            f", safety_failures {safety_failures}"
+                            f", structural_failures {structural_failures}"
+                            f", unscored {unscored}, unattributed {unattributed}")),
         ]
 
     return [run_gate]

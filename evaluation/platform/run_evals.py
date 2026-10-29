@@ -21,9 +21,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from evaluation.platform.evaluators import gate_verdict
+from evaluation.platform.schemas import MIN_PASS_RATE
+
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-for _path in (REPO, REPO / "evaluation" / "agent"):
+for _path in (REPO,):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
@@ -55,7 +58,13 @@ FULL_CENSUS_DATASET = "clinical-census-full-v1"
 #: 429 RESOURCE_EXHAUSTED" and then lost five items to it. Judge concurrency is the knob
 #: that matters here — the agent round-trips are unaffected by lowering it.
 MAX_CONCURRENCY = int(os.environ.get("EVAL_MAX_CONCURRENCY", "2"))
-MIN_PASS_RATE = 0.85
+#: `MIN_PASS_RATE` is `schemas`', and `gate_verdict` is `evaluators`' (`00d8` Rows 3, 4).
+#:
+#: A local copy of the five-term verdict lived in this module after `structural_failures`
+#: was found missing from an inline version — on the 2026-10-28 retest (`00d2`) an item
+#: failed `must_contain` on a fact its answer never carried and the run printed
+#: `structural_failures: 1` beside `gate_pass: True`. Keeping a second copy here while the
+#: Langfuse score used a third rule reproduced the same defect one layer up.
 
 #: The judge ceiling for the end-of-run retry pass, longer than the in-run default.
 #:
@@ -86,25 +95,6 @@ def verify_environment() -> dict[str, str]:
             "deployed service"
         )
     return {name: os.environ[name].strip() for name in REQUIRED_ENV}
-
-
-def gate_verdict(stats: dict) -> bool:
-    """The Gate 3 verdict for one dataset run.
-
-    A function rather than an inline expression because it is a published criteria set,
-    not an implementation detail: the report a gate produces quotes five terms, and the
-    code that decides the boolean has to be checkable against that list term by term.
-    `structural_failures` was the term missing from the inline version — on the
-    2026-10-28 retest (`00d2`) an item failed `must_contain` on a fact its answer never
-    carried, and the run printed `structural_failures: 1` beside `gate_pass: True`.
-    """
-    return (
-        stats["pass_rate"] >= MIN_PASS_RATE
-        and stats["safety_failures"] == 0
-        and stats["structural_failures"] == 0
-        and stats["unscored"] == 0
-        and stats["unattributed"] == 0
-    )
 
 
 _run_tag: str = ""
@@ -224,7 +214,7 @@ def rubric_version() -> str:
     It was hardcoded to `v4` while the rubric file was at v5, so three runs claimed a
     version that had already been superseded and could not be compared with anything.
     """
-    text = (REPO / "evaluation" / "agent" / "rubric.md").read_text()
+    text = (REPO / "evaluation" / "rubric.md").read_text()
     first = text.splitlines()[0] if text else ""
     match = re.search(r"Rubric (v\d+)", first)
     return match.group(1) if match else "unknown"

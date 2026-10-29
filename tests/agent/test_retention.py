@@ -159,40 +159,15 @@ def test_a_timestamp_without_a_zone_is_read_as_utc():
     assert retention._record_time({"at": "2026-09-18T12:00:00"}).tzinfo == timezone.utc
 
 
-def test_the_collector_writes_the_timestamp_it_will_be_pruned_by():
-    """The archive's lifetime is enforced through this field, so the writer and
-    the pruner are checked against each other rather than assumed to agree."""
-    source = (Path(__file__).resolve().parents[2] / "evaluation" / "agent"
-              / "collect_http.py").read_text(encoding="utf-8")
+def test_the_archive_retention_sweeps_is_inside_the_sweep_pattern():
+    """A window applied to a file the pattern misses is not a retention policy.
 
-    assert '"at": datetime.now(timezone.utc).isoformat()' in source
-    assert retention._record_time({"at": "2026-09-18T12:00:00+00:00"}) is not None
-
-
-def test_the_pruner_and_the_collector_point_at_the_same_file():
-    """A window applied to a file nobody writes is not a retention policy.
-
-    The collector computes its output path from its own location, and this
-    module keeps its own copy of that path rather than importing the collector
-    (which imports the agent graph to be read). That is a drift surface, and it
-    has now drifted twice: the collector's `parents[1]` resolved to a path that
-    did not exist after the file moved, and then the collector was replaced by an
-    HTTP-only one writing a different filename while this path stayed put. The
-    second drift is the harder one — the path remained valid, so nothing failed;
-    the window simply stopped covering the archive being written to.
+    This used to grep the collector's source to keep the writer and the pruner in
+    agreement. The collector was retired on 2026-10-29, so the writer is no longer a
+    module this suite can read — but the property that mattered is still checkable,
+    and it is the one that actually failed twice: the archive the pruner names must
+    fall inside the pattern it sweeps, and must not be exempt from it.
     """
-    source = (Path(__file__).resolve().parents[2] / "evaluation" / "agent"
-              / "collect_http.py").read_text(encoding="utf-8")
-
-    assert 'HERE = Path(__file__).resolve().parent' in source
-    assert 'RESULTS = HERE / "results"' in source
-    assert 'OUT = RESULTS / "traces_http.jsonl"' in source
-    assert retention.DEFAULT_TRACE_FILE == (
-        Path(__file__).resolve().parents[2] / "evaluation" / "agent" / "results"
-        / "traces_http.jsonl")
-    # And the file it writes is inside the swept set, which is the property that
-    # actually matters now that the window is applied by pattern: a collector
-    # writing a name the pattern misses is outside the window on the day it ships.
     assert fnmatch(retention.DEFAULT_TRACE_FILE.name, retention.TRACE_GLOB)
     assert retention.DEFAULT_TRACE_FILE.name not in retention.EXEMPT_TRACES
 

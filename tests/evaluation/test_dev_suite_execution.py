@@ -149,7 +149,7 @@ def test_an_item_without_a_scenario_id_falls_back_to_its_dataset_id():
 
 def test_the_run_stamps_the_rubric_version_it_is_graded_under():
     assert run_evals.rubric_version() == "v6"
-    header = (REPO / "evaluation" / "agent" / "rubric.md").read_text().splitlines()[0]
+    header = (REPO / "evaluation" / "rubric.md").read_text().splitlines()[0]
     assert run_evals.rubric_version() in header
 
 

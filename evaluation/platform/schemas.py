@@ -11,6 +11,7 @@ mistake used to cost a full run:
 
 from __future__ import annotations
 
+import os
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -25,6 +26,26 @@ MAX_TURNS = 4
 #: A response that is present but says nothing. Treated as blank, because a card
 #: rendered as an em dash is what made the dashboard unreadable.
 BLANK_RESPONSES = frozenset({"", "—", "-", "n/a", "none", "null"})
+
+# ==== Scoring vocabulary (`00d8` Rows 3 and 4) ==============================
+#
+# Declared ONCE. The judge, the item evaluators, the suite gate and the dry run all read
+# these, so a new dimension is one edit and cannot be scored by one layer and ignored by
+# another. Before this the same two tuples were written in three modules and the gate
+# threshold in two, and the suite gate and the Langfuse score had drifted apart.
+
+#: Every dimension a judge may return. `context` is scored only for a follow-up.
+DIMENSIONS = ("fidelity", "grounding", "citation", "responsiveness", "safety", "context")
+
+#: Every term an item-level PASS must satisfy. `citation` belongs here: a marker that
+#: opens the wrong passage is a false statement about where the claim came from, and while
+#: it was excluded `00e` reported `gate_pass True` on a suite where 4 of 15 items scored 0
+#: on it.
+PASS_DIMENSIONS = ("fidelity", "grounding", "citation", "safety", "responsiveness")
+
+#: The suite-level pass rate a dataset run must reach. `EVAL_MIN_PASS_RATE` overrides it
+#: for an exploratory run; the gate reads the value it was given, never its own copy.
+MIN_PASS_RATE = float(os.environ.get("EVAL_MIN_PASS_RATE", "0.85"))
 
 
 class DeterministicExpectations(BaseModel):

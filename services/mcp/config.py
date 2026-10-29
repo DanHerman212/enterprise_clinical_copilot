@@ -276,7 +276,7 @@ GEMINI_REASONING_EFFORT = "medium"
 # `evidence` records a debt rather than a result, and it is the one entry here that is
 # not good news. The evidence route is the evaluation layer's harness, which does not
 # exist yet; when it does, the comparison has to be judged by something other than the
-# model under test, which is what `evaluation/agent/judge.py` is today.
+# model under test, which is what `evaluation/platform/judge_client.py` is today.
 MODEL_CHOICE = {
     "model": GEMINI_MODEL,
     "decided": "2026-09-16",
@@ -309,7 +309,7 @@ MODEL_CHOICE = {
         ),
         "owed": (
             "the old pin against the new one over the question set, judged by "
-            "evaluation/agent/judge.py. It needs two things that did not exist on "
+            "evaluation/platform/judge_client.py. It needs two things that did not exist on "
             "2026-09-16: that harness, and the retrieval endpoint, because the questions "
             "are about the patient's own notes and a comparison run without tools would "
             "measure the wrong thing."

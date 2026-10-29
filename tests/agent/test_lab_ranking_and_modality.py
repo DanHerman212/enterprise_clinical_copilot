@@ -102,7 +102,7 @@ def test_a_quota_retry_waits_past_the_rolling_window(monkeypatch, capsys):
     The error string is printed WHOLE: it used to be cut to 120 characters, which hid the
     `quota_metric` field behind it and left the exhaustion undiagnosable.
     """
-    from evaluation.agent import judge as judge_mod
+    from evaluation.platform import judge_client
 
     class _Models:
         def generate_content(self, **kwargs):
@@ -114,9 +114,10 @@ def test_a_quota_retry_waits_past_the_rolling_window(monkeypatch, capsys):
         models = _Models()
 
     waits: list[int] = []
-    monkeypatch.setattr(judge_mod.time, "sleep", lambda seconds: waits.append(seconds))
+    monkeypatch.setattr(judge_client.time, "sleep",
+                        lambda seconds: waits.append(seconds))
 
-    result = judge_mod._judge(_Client(), "system", "user")
+    result = judge_client.judge(_Client(), "system", "user")
 
     assert "RESOURCE_EXHAUSTED" in result["error"]
     assert waits == [30, 60, 120, 120]

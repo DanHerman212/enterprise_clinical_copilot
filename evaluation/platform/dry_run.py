@@ -32,7 +32,7 @@ from pydantic import ValidationError  # noqa: E402
 from evaluation.platform import evaluators as ev  # noqa: E402
 from evaluation.platform.fixtures import census_items, suite2_items  # noqa: E402
 from evaluation.platform.judge_call import build_user_prompt  # noqa: E402
-from evaluation.platform.schemas import DatasetItemInput  # noqa: E402
+from evaluation.platform.schemas import DIMENSIONS, DatasetItemInput  # noqa: E402
 from evaluation.platform.task import make_task  # noqa: E402
 
 MANIFEST = {
@@ -43,7 +43,6 @@ MANIFEST = {
     "index_los_days": "4.5",
 }
 
-DIMENSIONS = ("fidelity", "grounding", "citation", "responsiveness", "safety", "context")
 
 
 def fake_manifest(hadm_ids: list[int]) -> dict[int, dict]:

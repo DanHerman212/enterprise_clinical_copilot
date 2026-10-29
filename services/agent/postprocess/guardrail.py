@@ -31,6 +31,8 @@ from __future__ import annotations
 import json
 import re
 
+from services.agent.postprocess import citations
+
 # --- Redacted age -----------------------------------------------------------
 
 # A redacted age in the source: "___ year old", "___ y/o", "___ yo", "___yo".
@@ -373,13 +375,17 @@ def check_citations(
 ) -> tuple[str, list[str]]:
     """Strip + flag markers that point at a citation this turn cannot resolve.
 
-    `slots` is how many numbered citations the presentation holds: one per retrieved note
-    passage, or one per retrieved article on a literature turn. Both are numbered from 1
-    in the order the model was given them, so this count is the whole of what a marker may
-    legally address by position. `pmids` are the identifiers a literature turn may name
-    instead: the model writes `^[PMID: ...]` often enough that refusing the form outright
-    serves it as literal text, and accepting it unchecked would let an invented identifier
-    read as evidence. A marker resolves if it names either.
+    `slots` is how many numbered citations the conversation has shown the model: one per
+    retrieved note passage AND one per laboratory analyte, across the replayed turns and
+    this one — the same array `graph._render_tool_result` numbers against, counted by
+    `_citation_slots`. A literature turn has no such units and passes its article count
+    instead. Every unit is numbered from 1 in the order the model was given it, so this
+    count is the whole of what a marker may legally address by position.
+
+    `pmids` are the identifiers a literature turn may name instead: the model writes
+    `^[PMID: ...]` often enough that refusing the form outright serves it as literal text,
+    and accepting it unchecked would let an invented identifier read as evidence. A marker
+    resolves if it names either.
 
     An out-of-range marker left in rendered as a citation to nothing — with zero slots an
     answer containing ^[1] was served intact (ECC-14). It is the same failure whether the
@@ -986,6 +992,44 @@ def verify_lab_values(
     return " ".join(kept).strip(), flags
 
 
+def _citation_slots(
+    tool_calls: list[dict],
+    conversation_calls: list[dict] | None,
+) -> int:
+    """How many numbered citations this conversation's answer may address.
+
+    The array the model was numbered against, and nothing else. `graph._render_tool_result`
+    advances the numbering with `citations.passage_total`, which counts one unit per note
+    passage AND one per laboratory analyte, over the replayed turns first and this one
+    second; `a2ui.compose_presentation` resolves markers against the same concatenation.
+
+    Counting `_passage_sections` here instead was the defect this replaces. That helper
+    answers a different question — which retrieved NOTE text the dose, age and lab guards
+    verify against — and it recognises only the three retrieval tools. A turn that
+    retrieved a laboratory panel therefore counted zero units however many analytes it
+    was shown, and every marker the model wrote against them was deleted as out of range.
+    Measured on the 2026-10-28 Gate 2 run (`pilot-verify-20261028-205050`):
+
+      * `dev_t1_05`, a first-turn `/labs`: nine correct analyte markers, `slots` 0, all
+        nine stripped;
+      * `dev_t5_02`: nine analytes numbered 4..12, three passage slots, all nine stripped;
+      * `dev_t6_01`: `^[8]` (potassium) and `^[14]` stripped, leaving the lone `^[3]` the
+        judge then read as the model citing one analyte for two;
+      * `dev_t4_01`: `^[11]` and `^[13]` stripped, `^[2]` and `^[5]` kept only because two
+        analyte numbers happened to fall below the passage count.
+
+    A literature turn contributes no citable unit here (an article is not a passage), so
+    it still falls back to `_literature_slots` in the caller. A PMID is not a position:
+    it names a record the reader can open, and the canvas draws this turn's search, so
+    articles are counted for this turn only.
+    """
+    return sum(
+        citations.passage_total(call.get("response"))
+        for call in (*(conversation_calls or []), *(tool_calls or []))
+        if isinstance(call, dict)
+    )
+
+
 def guard_answer(
     answer: str,
     tool_calls: list[dict],
@@ -1040,7 +1084,6 @@ def guard_answer(
     answer, f = normalise_factor_values(answer, evidence)
     flags += f
     flags += flag_invented_dates(answer, passages)
-    turn_passages, _ = _passage_sections(tool_calls)
     # Slots are the numbering the MODEL was shown, which since TF-10 runs across the
     # replayed turns and this one: `graph._render_tool_result` numbers every passage in
     # the conversation continuously, and `a2ui.compose_presentation` resolves against the
@@ -1049,16 +1092,18 @@ def guard_answer(
     # `agent-00175-ttr`, 2026-10-24, where a chip answer citing `^[6]` against six
     # passages (five replayed, one fresh) was served as `chart_synthesis_without_citations`
     # with `citation_out_of_range:^6`. The marker was correct; the count was not.
-    replayed_passages, _ = _passage_sections(conversation_calls or [])
-    # Passages for a note turn, articles for a literature turn: both are citation slots.
-    # A literature turn has no passages at all, so counting only passages stripped every
-    # marker out of a properly grounded summary (observed live 2026-10-13). The
-    # identifiers travel too, because the model cites by PMID as well as by position.
     #
-    # Only the passage count crosses turns. A PMID is not a position: it names a record
-    # the reader can open, and the canvas draws this turn's search, so a PMID from an
-    # earlier turn would be a link to a record this turn never showed.
-    slots = (len(turn_passages) + len(replayed_passages)
+    # The units themselves are `citations.passage_total`'s: a note passage AND a
+    # laboratory analyte each take a number, and the count spans both halves of the
+    # conversation (see `_citation_slots` for the four Gate 2 failures this replaced).
+    #
+    # Articles for a literature turn are the fallback, not an addition: a literature
+    # search contributes no citable unit, and counting only passages stripped every marker
+    # out of a properly grounded summary (observed live 2026-10-13). The identifiers
+    # travel too, because the model cites by PMID as well as by position. Articles are
+    # counted for THIS turn only — a PMID is not a position: it names a record the reader
+    # can open, and the canvas draws this turn's search.
+    slots = (_citation_slots(tool_calls, conversation_calls)
              or _literature_slots(tool_calls))
     answer, f = check_citations(answer, slots, _literature_pmids(tool_calls))
     flags += f

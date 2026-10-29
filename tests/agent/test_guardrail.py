@@ -991,3 +991,75 @@ def test_a_lab_value_carried_by_a_tool_payload_is_grounded():
     out = g.guard_answer(answer, note)
 
     assert out["answer"] == answer, out
+
+
+# --- citation slots count laboratory analytes (Gate 2, 2026-10-28) ------------
+#
+# `graph._render_tool_result` numbers one unit per note passage AND one per laboratory
+# analyte; `guard_answer` counted only `_passage_sections`, which recognises the three
+# retrieval tools. A turn that read a panel therefore offered no slot for its analytes,
+# and every marker the model wrote against them was deleted as out of range. Measured on
+# `pilot-verify-20261028-205050`: four of the five citation failures were this.
+
+_LAB_ANALYTES = ("rdw", "rbc", "hemoglobin", "sodium", "monocytes",
+                 "creatinine", "egfr", "potassium", "wbc")
+
+
+def _lab_panel(analytes=_LAB_ANALYTES):
+    return [{
+        "name": "get_lab_trends",
+        "args": {"hadm_id": 90000105},
+        "response": {
+            "hadm_id": 90000105,
+            "returned": len(analytes),
+            "trends": [{"key": key, "label": key, "unit": "", "series": []}
+                       for key in analytes],
+        },
+    }]
+
+
+def _retrieval(count):
+    passages = [{"section": "brief_hospital_course", "text": f"passage {index}"}
+                for index in range(count)]
+    return [{"name": "rag_search", "args": {"hadm_id": 90000105},
+             "response": {"passages": passages}}]
+
+
+def test_slots_count_analytes_and_passages_together():
+    """The count is `citations.passage_total` over the whole conversation."""
+    assert g._citation_slots(_lab_panel(), None) == 9
+    assert g._citation_slots(_retrieval(3), _lab_panel()) == 12
+    assert g._citation_slots([], None) == 0
+
+
+def test_a_first_turn_lab_panel_keeps_every_analyte_marker():
+    """`dev_t1_05`: nine correct analyte markers on a first-turn `/labs`, every one
+    stripped because the turn retrieved no note passage for the count to see."""
+    answer = ("RDW rose ^[1], red cells fell ^[2] and haemoglobin held ^[3]; "
+              "sodium drifted ^[4], monocytes moved ^[5] and creatinine climbed ^[6]; "
+              "eGFR fell ^[7], potassium held ^[8] and white cells moved ^[9].")
+
+    out = g.guard_answer(answer, _lab_panel(), [])
+
+    assert out["answer"] == answer, out
+    assert out["flags"] == [], out["flags"]
+
+
+def test_markers_survive_a_replayed_lab_panel_and_a_retrieval():
+    """`dev_t6_01`: the panel was replayed and the new turn retrieved notes, so the
+    analyte markers are 3 and 8 and the passage markers run 10..16."""
+    answer = ("Potassium was normal ^[8], haemoglobin was normal ^[3], and the hospital "
+              "course says so ^[10]; the last passage says it too ^[16].")
+
+    out = g.guard_answer(answer, _retrieval(7), _lab_panel())
+
+    assert out["answer"] == answer, out
+    assert out["flags"] == [], out["flags"]
+
+
+def test_a_marker_past_the_last_analyte_is_still_stripped():
+    """Widening the count must not accept a citation to nothing."""
+    out = g.guard_answer("Potassium held throughout ^[10].", _lab_panel(), [])
+
+    assert "^[10]" not in out["answer"], out
+    assert out["flags"] == ["citation_out_of_range:^10"], out["flags"]

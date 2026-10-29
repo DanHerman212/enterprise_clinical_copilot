@@ -72,6 +72,40 @@ rather than scored. In a thread of three or more turns, "the earlier turn" means
 every turn before it, and the dimension is violated if the answer contradicts any of
 them.
 
+## Citation integrity: claims that carry no citation number
+
+Some tool results are answers rather than evidence and consume no citation number. In
+the evidence the judge is given they carry no `"cite"` marker, and no `^[n]` can resolve
+to them:
+
+- `predict_readmission` — the probability, the threshold, the decision and the ranked
+  drivers;
+- `admission_manifest` / `get_admission_profile` — encounter type, length of stay, prior
+  inpatient days and the other administrative fields.
+
+A claim grounded in one of these **takes no `^[n]` marker, and is not penalised for
+lacking one.** It is grounded, so dimension 2 is satisfied by the tool result itself.
+Requiring a marker on such a sentence cannot be satisfied honestly: any number written
+there would address a passage that does not support the claim, which is dimension 3 at 0.
+The two readings cannot both apply to the same sentence, so the correct reading is that
+the sentence needs no citation.
+
+Two neighbouring cases are **not** covered by this rule, and the rule must not be
+stretched to reach them:
+
+- `discharge_medications` returns note passages, and those passages are indexed. A claim
+  about what the discharge note says — including the `/meds` turn's own statement that
+  the section carries no readable medication — cites them like any other passage. What is
+  not indexed is the extracted row list that turn publishes for the grid, not the text
+  the tool returned.
+- A literature turn's records are indexed positionally, one per record holding a PMID,
+  and are cited either as `^[n]` or as `^[PMID: ...]`. Those markers are in range and
+  must resolve; a literature claim with no marker is still a citation defect.
+
+This is a statement about attribution only. A value quoted from one of these tools must
+still agree with it exactly (dimension 1), and a claim it does not support is still
+ungrounded (dimension 2).
+
 ## Modality: turns with a structured surface
 
 Some commands answer through a structured widget and carry no prose at all — the agent's

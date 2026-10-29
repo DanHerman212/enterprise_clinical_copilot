@@ -278,87 +278,93 @@ async def ask_route(request: Request) -> JSONResponse:
     refusal = await _unserved_admission(parsed, trace)
     if refusal is not None:
         return JSONResponse(refusal)
-    try:
-        state = await _run_chain(parsed, on_event=log)
-    except TimeoutError:
-        logger.error("agent /ask timed out after %.0fs trace=%s", ASK_TIMEOUT_SECONDS, trace)
-        log.record(trace, parsed["question"], "timeout", error="timeout")
-        return JSONResponse(
-            {"error": "timeout",
-             "message": f"The agent did not answer within {ASK_TIMEOUT_SECONDS:.0f}s."},
-            status_code=504,
-        )
-    except Exception as exc:
-        # Never let an infrastructure failure surface as a plausible answer.
-        # The MCP SDK raises asyncio.ExceptionGroup when a transport task
-        # fails; unwrap it so the real cause is logged instead of hiding
-        # behind "unhandled errors in a TaskGroup".
-        cause = exc
-        if isinstance(exc, BaseExceptionGroup):
-            detail = " | ".join(str(e) for e in exc.exceptions)
-            cause = RuntimeError(f"{type(exc).__name__}: {detail}")
-            cause.__cause__ = exc  # keep the group as the logged root cause
-        # Detail stays server-side (ECC-06): exception text routinely embeds
-        # the private MCP URL, IAM/audience detail and table names. The caller
-        # gets a stable code + correlation id that pairs with the log line.
-        correlation_id = uuid.uuid4().hex[:12]
-        logger.error("agent /ask failed [%s] trace=%s", correlation_id, trace, exc_info=cause)
-        log.record(trace, parsed["question"], "error", error="agent_failed")
-        return JSONResponse(
-            {"error": "agent_failed",
-             "message": "The agent failed to answer. Please retry.",
-             "correlation_id": correlation_id},
-            status_code=502,
-        )
+    # The turn span: opened before the chain and closed after the composition,
+    # because the answer is not settled until the guardrails have run
+    # (`turn.compose_success`). It used to be opened inside `graph.ask`, which was
+    # right while the trace was written there; once the write moved to `turn.py`
+    # the span had already closed, and every trace row lost both columns.
+    with turn.turn_trace(parsed):
+        try:
+            state = await _run_chain(parsed, on_event=log)
+        except TimeoutError:
+            logger.error("agent /ask timed out after %.0fs trace=%s", ASK_TIMEOUT_SECONDS, trace)
+            log.record(trace, parsed["question"], "timeout", error="timeout")
+            return JSONResponse(
+                {"error": "timeout",
+                 "message": f"The agent did not answer within {ASK_TIMEOUT_SECONDS:.0f}s."},
+                status_code=504,
+            )
+        except Exception as exc:
+            # Never let an infrastructure failure surface as a plausible answer.
+            # The MCP SDK raises asyncio.ExceptionGroup when a transport task
+            # fails; unwrap it so the real cause is logged instead of hiding
+            # behind "unhandled errors in a TaskGroup".
+            cause = exc
+            if isinstance(exc, BaseExceptionGroup):
+                detail = " | ".join(str(e) for e in exc.exceptions)
+                cause = RuntimeError(f"{type(exc).__name__}: {detail}")
+                cause.__cause__ = exc  # keep the group as the logged root cause
+            # Detail stays server-side (ECC-06): exception text routinely embeds
+            # the private MCP URL, IAM/audience detail and table names. The caller
+            # gets a stable code + correlation id that pairs with the log line.
+            correlation_id = uuid.uuid4().hex[:12]
+            logger.error("agent /ask failed [%s] trace=%s", correlation_id, trace, exc_info=cause)
+            log.record(trace, parsed["question"], "error", error="agent_failed")
+            return JSONResponse(
+                {"error": "agent_failed",
+                 "message": "The agent failed to answer. Please retry.",
+                 "correlation_id": correlation_id},
+                status_code=502,
+            )
 
-    try:
-        payload = await _compose_success(
-            parsed["question"], state, trace,
-            want_follow_ups=parsed.get("follow_ups") is True,
-            outpatient=encounter.current_is_outpatient() is True,
-            asked=_asked_questions(parsed),
-            # The workflow this run went through, carried in the answer rather than
-            # only in the frames. A caller that never streamed (this route) has no other
-            # way to learn it, and a stored turn keeps it so a browser refresh does not
-            # take the run's own account with it.
-            steps=log.steps,
-        )
-    except AgentAnswerUnavailable as exc:
-        # The record says which of the three it was, in the code and in the
-        # model's own finish reason.
+        try:
+            payload = await _compose_success(
+                parsed["question"], state, trace,
+                want_follow_ups=parsed.get("follow_ups") is True,
+                outpatient=encounter.current_is_outpatient() is True,
+                asked=_asked_questions(parsed),
+                # The workflow this run went through, carried in the answer rather than
+                # only in the frames. A caller that never streamed (this route) has no other
+                # way to learn it, and a stored turn keeps it so a browser refresh does not
+                # take the run's own account with it.
+                steps=log.steps,
+            )
+        except AgentAnswerUnavailable as exc:
+            # The record says which of the three it was, in the code and in the
+            # model's own finish reason.
+            log.record(
+                trace, parsed["question"], "error",
+                error=exc.code, finish_reason=exc.finish_reason,
+                **_response_fields(state),
+            )
+            return JSONResponse(
+                {"error": exc.code, "message": str(exc)},
+                status_code=502,
+            )
         log.record(
-            trace, parsed["question"], "error",
-            error=exc.code, finish_reason=exc.finish_reason,
+            trace, parsed["question"], "ok",
+            finish_reason=_finish_reason(final_message(state)),
             **_response_fields(state),
+            tool_calls=[call["name"] for call in payload["tool_calls"]],
+            # The names, because which guard fired is the whole diagnostic: a count
+            # of 1 cannot distinguish a rewritten dose from a deleted citation.
+            guardrail_flags=payload["guardrail_flags"],
+            # The log line and the trace describe the same run, so the line carries
+            # the id that joins them: without it, "the answer looked wrong" is a
+            # question about a log line or about a trace, and never about both.
+            langfuse_trace_id=state.get("langfuse_trace_id") or "",
+            # The chips this turn offered, when the caller asked for them. They are
+            # chosen during composition, which a trace does not carry, so this line is
+            # where they are recorded against the run (see `followups`, Phase 05 §2).
+            follow_ups=state.get("follow_ups") or [],
         )
-        return JSONResponse(
-            {"error": exc.code, "message": str(exc)},
-            status_code=502,
-        )
-    log.record(
-        trace, parsed["question"], "ok",
-        finish_reason=_finish_reason(final_message(state)),
-        **_response_fields(state),
-        tool_calls=[call["name"] for call in payload["tool_calls"]],
-        # The names, because which guard fired is the whole diagnostic: a count
-        # of 1 cannot distinguish a rewritten dose from a deleted citation.
-        guardrail_flags=payload["guardrail_flags"],
-        # The log line and the trace describe the same run, so the line carries
-        # the id that joins them: without it, "the answer looked wrong" is a
-        # question about a log line or about a trace, and never about both.
-        langfuse_trace_id=state.get("langfuse_trace_id") or "",
-        # The chips this turn offered, when the caller asked for them. They are chosen
-        # after the turn's span closed, so this line is where they are recorded against
-        # the run rather than the trace (see `followups`, Phase 05 §2).
-        follow_ups=state.get("follow_ups") or [],
-    )
-    # The command a free-text question was routed to, when it was routed at all.
-    # Carried on the payload because the console draws it as a pill beside the turn:
-    # the reader is told which command answered them rather than left to infer it
-    # from the shape of the answer.
-    if parsed.get("routed_to"):
-        payload["routed_to"] = parsed["routed_to"]
-    return JSONResponse(payload)
+        # The command a free-text question was routed to, when it was routed at all.
+        # Carried on the payload because the console draws it as a pill beside the turn:
+        # the reader is told which command answered them rather than left to infer it
+        # from the shape of the answer.
+        if parsed.get("routed_to"):
+            payload["routed_to"] = parsed["routed_to"]
+        return JSONResponse(payload)
 
 
 # --- Progress streaming -----------------------------------------------------
@@ -502,6 +508,23 @@ def _prose_settled(announced: list[str], payload: dict, trace: str) -> str | Non
 
 
 async def _stream_chain(
+    parsed: dict,
+    trace: str,
+):
+    """The whole streamed turn, under one trace span.
+
+    The span is opened here rather than in `_stream_frames` so that it is current
+    before the chain task is created: a task copies the context it was made in, so a
+    span opened afterwards would not be the parent of anything the chain did. It also
+    stays open across the composition, which is where the answer is settled and where
+    `observability.set_trace_io` writes — the reason the span exists at all.
+    """
+    with turn.turn_trace(parsed):
+        async for frame in _stream_frames(parsed, trace):
+            yield frame
+
+
+async def _stream_frames(
     parsed: dict,
     trace: str,
 ):

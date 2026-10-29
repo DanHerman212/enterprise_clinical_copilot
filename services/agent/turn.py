@@ -42,6 +42,7 @@ from services.agent.engine.graph import (
     command_trace_output,
     final_message,
     final_text,
+    turn_scope,
 )
 from services.agent.postprocess.guardrail import guard_answer
 from services.agent.engine.mcp_client import MCP_TRANSPORT, MCP_URL, toolbox
@@ -49,6 +50,27 @@ from services.agent.engine.model import finish_reason
 from services.agent.ingress.contracts import is_served
 
 logger = logging.getLogger(__name__)
+
+
+def turn_trace(parsed: dict):
+    """Open the root span for one request: question in at the top, served answer out.
+
+    Opened by the route, wrapped around the model work AND the composition, because the
+    answer a reader wants at the root does not exist until `compose_success` has run the
+    guardrails and the citation layer. `graph.ask` used to open this span and close it
+    before returning, which was correct while the trace was written inside `ask`
+    (before 88d07bc) and became wrong the moment the write moved here: the trace then
+    had no open observation to write to, and every row in the trace table showed a dash
+    for both columns (Gate 2, 2026-10-29).
+
+    Both routes use it — `/ask` and `/ask/stream` — so a streamed turn and a blocking
+    turn produce the same shape of trace.
+    """
+    name, metadata = turn_scope(
+        parsed.get("kind"), parsed.get("hadm_id"), parsed.get("turns"),
+        parsed.get("run_tag"), parsed.get("intent"),
+    )
+    return observability.turn_span(name, trace_metadata=metadata)
 
 
 #: Served when a caller names an admission this deployment cannot open.

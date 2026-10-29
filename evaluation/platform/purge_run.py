@@ -24,7 +24,20 @@ REPO = HERE.parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-DATASETS = ("clinical-census-pilot-v2", "suite2-adversarial-v1")
+def _datasets() -> tuple[str, ...]:
+    """Every dataset a run can be on.
+
+    Imported rather than restated: the gated suites were added to `run_evals` and not
+    here, so a purge of a dev-suite run deleted the traces and left the dataset run
+    behind — half a deletion, reported as a success (2026-10-29).
+    """
+    from evaluation.platform.run_evals import (
+        DATASETS as DEFAULTS,
+        DEV_SUITE_DATASET,
+        HOLDOUT_SUITE_DATASET,
+    )
+
+    return (*DEFAULTS, DEV_SUITE_DATASET, HOLDOUT_SUITE_DATASET)
 
 
 def _run_item_trace_ids(run) -> list[str]:
@@ -84,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     print(f"purging run {args.run_name}")
-    counts = purge(args.run_name, DATASETS)
+    counts = purge(args.run_name, _datasets())
     print(f"  {counts}")
 
     from langfuse import Langfuse

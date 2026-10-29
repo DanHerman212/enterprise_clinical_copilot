@@ -21,13 +21,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from evaluation.platform.evaluators import gate_verdict
-from evaluation.platform.schemas import MIN_PASS_RATE
-
+# The repository root goes on `sys.path` before anything under `evaluation.` is imported,
+# because this file is run as a script (`python evaluation/platform/run_evals.py`), which
+# puts `evaluation/platform` — not the root — on the path. Importing the platform modules
+# above this point raised `ModuleNotFoundError: evaluation` on every run: the two imports
+# had been lifted to the top of the file while the bootstrap stayed below them, and the
+# unit suite could not see it because pytest supplies the root itself.
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
+
+from evaluation.platform.evaluators import gate_verdict  # noqa: E402
+from evaluation.platform.schemas import MIN_PASS_RATE  # noqa: E402
 
 #: Hardcoded targets (spec §5). Deliberately not a parameter.
 DATASETS = ("clinical-census-pilot-v2", "suite2-adversarial-v1")

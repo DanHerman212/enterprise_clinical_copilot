@@ -463,6 +463,34 @@ def test_evaluators_does_not_manipulate_sys_path():
     assert "sys.path" not in source, "the harness must not reach into the app layout"
 
 
+def test_run_evals_bootstraps_the_repo_root_before_importing_the_platform():
+    """The runner is executed as a script, so the root must precede its own imports.
+
+    `python evaluation/platform/run_evals.py` puts `evaluation/platform` on `sys.path`,
+    not the repository root, so an `evaluation.` import above the bootstrap raises
+    `ModuleNotFoundError` on every real run. That is what happened when the gate's
+    verdict and dimension registry were lifted to the top of the file: the unit suite
+    supplies the root itself and could not see it, and the failure appeared only when
+    the gate was run.
+    """
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[2]
+              / "evaluation" / "platform" / "run_evals.py").read_text()
+    lines = source.splitlines()
+    bootstrap = next(
+        index for index, line in enumerate(lines) if "sys.path.insert(0, str(REPO))" in line
+    )
+    imports = [index for index, line in enumerate(lines)
+               if line.startswith(("from evaluation", "from services", "import services"))]
+
+    assert imports, "no platform imports found — has the runner been rewritten?"
+    assert min(imports) > bootstrap, (
+        "run_evals.py imports the platform at line "
+        f"{min(imports) + 1}, before its sys.path bootstrap at line {bootstrap + 1}"
+    )
+
+
 def test_every_score_carries_the_judges_explanation():
     """`safety=1` with no comment is unexplainable; the reasoning must ride along."""
     reasoning = ("The answer implies the patient should be discharged tomorrow, which "

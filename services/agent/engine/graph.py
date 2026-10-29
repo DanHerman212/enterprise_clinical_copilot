@@ -821,6 +821,24 @@ def _trace_metadata(
     return meta
 
 
+def turn_scope(question_kind: str | None, hadm_id: int | None = None,
+               turns: list[dict[str, str]] | None = None,
+               run_tag: str | None = None, intent: str | None = None,
+               ) -> tuple[str, dict]:
+    """The trace's name and metadata for one turn — one definition, both routes.
+
+    `turn.py` opens the span (it owns the whole turn, including the guardrails that
+    settle the answer) but the name and the tags are a property of the ROUTE, and they
+    were written here. Rather than restating them above, the opener asks this function
+    for them: a second copy would drift the first time a tag was added, and the tag that
+    drifted would be the one a gate filters on.
+    """
+    metadata = _trace_metadata(hadm_id, question_kind, run_tag, turns, intent)
+    if routing.is_command(question_kind):
+        return f"command.{question_kind}", metadata
+    return f"free_text.turn{metadata.get('turn', 1)}", metadata
+
+
 async def ask(
     toolbox: MCPToolbox,
     question: str,
@@ -879,9 +897,18 @@ async def ask(
         # The span is also the ROOT TRACE, so the metadata goes on here rather than
         # only into the formatting model's config: `/risk` makes no LLM call at all,
         # so a trace whose tags depended on a model run carried none.
-        command_meta = _trace_metadata(hadm_id, question_kind, run_tag, turns, intent)
-        with observability.observation(f"command.{question_kind}",
-                                       trace_metadata=command_meta) as root_span:
+        #
+        # When the caller already opened the turn span (`turn.turn_span`, which the
+        # routes do), this one is its CHILD and the trace attributes are already set:
+        # re-declaring them here would put the trace name on an inner span, and the
+        # `tools:<n>` tag has to sit on whatever span is the root.
+        turn_root = observability.current_turn_span()
+        command_name, command_meta = turn_scope(
+            question_kind, hadm_id, turns, run_tag, intent)
+        with observability.observation(
+            command_name,
+            trace_metadata=None if turn_root is not None else command_meta,
+        ) as root_span:
             command_state = await run_command(
                 toolbox,
                 routing.command_for(question_kind),
@@ -900,7 +927,7 @@ async def ask(
             # `tools:<n>` cannot be known when the span opens. `tools:0` is the tag the
             # triage view filters on, so it is added here, once the count exists.
             observability.stamp_trace_tags(
-                root_span,
+                turn_root if turn_root is not None else root_span,
                 [*command_meta.get("langfuse_tags", []),
                  f"tools:{len(command_state.get('tool_calls') or [])}"],
             )
@@ -915,6 +942,7 @@ async def ask(
             # all), while the span always knows the trace it belongs to.
             command_state["langfuse_trace_id"] = (
                 observability.span_trace_id(root_span)
+                or observability.span_trace_id(turn_root)
                 or observability.current_trace_id()
             )
         return command_state
@@ -1003,8 +1031,14 @@ async def ask(
     # them off a model config, and `tools:<n>` can be appended once the turn is over.
     # `tools:0` is what the "Turn-2 evidence miss" view filters on, and a follow-up
     # answered from memory is exactly a turn that calls nothing.
+    #
+    # Nested under the turn span when the route opened one, for the reason the command
+    # path gives above: the root must be the turn, because the turn is what has an
+    # answer to record.
+    turn_root = observability.current_turn_span()
     with observability.observation(
-        f"free_text.turn{trace_meta.get('turn', 1)}", trace_metadata=trace_meta,
+        f"free_text.turn{trace_meta.get('turn', 1)}",
+        trace_metadata=None if turn_root is not None else trace_meta,
     ) as root_span:
         state = await graph.ainvoke(
             {
@@ -1028,12 +1062,14 @@ async def ask(
             config=config,
         )
         observability.stamp_trace_tags(
-            root_span,
+            turn_root if turn_root is not None else root_span,
             [*trace_meta.get("langfuse_tags", []),
              f"tools:{len(state.get('tool_calls') or [])}"],
         )
         state["langfuse_trace_id"] = (
-            observability.span_trace_id(root_span) or observability.current_trace_id()
+            observability.span_trace_id(root_span)
+            or observability.span_trace_id(turn_root)
+            or observability.current_trace_id()
         )
         # The settlement layer decides whether the answer was verified against the
         # patient record, and the manifest is one of the channels that make it so. It

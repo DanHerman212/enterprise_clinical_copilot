@@ -153,6 +153,47 @@ def observation(name: str, *, as_type: str = "span",
             yield span
 
 
+#: The span that covers a whole user turn, published while it is open.
+#:
+#: `input`/`output` can only be written while a span is CURRENT. The SDK skips the
+#: write on a closed observation — verified against langfuse 4.14.4 after the Gate 2
+#: run of 2026-10-29 shipped traces with an empty root — and `set_current_trace_io`
+#: has no trace to address once the context has gone. Since `88d07bc` the answer is
+#: not settled until the guardrails have run in `turn.py`, which is after `graph.ask`
+#: returns and therefore after that function's span closed, so the root span has to be
+#: opened above both and published here for the writer to find.
+_TURN_SPAN: contextvars.ContextVar[Any] = contextvars.ContextVar(
+    "turn_span", default=None
+)
+
+
+def current_turn_span() -> Any:
+    """The root span of the turn being served, or None (tracing off, or no turn)."""
+    return _TURN_SPAN.get()
+
+
+@contextlib.contextmanager
+def turn_span(name: str, *, trace_metadata: dict | None = None):
+    """The root span for one request: question in at the top, answer out at the bottom.
+
+    Opened by the route rather than by `engine.graph.ask`, because what a reader wants
+    at the root is the answer the caller was SERVED, and that does not exist until the
+    guardrails and the citation layer have run — which is in `turn.py`, after the model
+    work has returned. A span that closes when the model stops has nothing to record,
+    and a trace whose root is empty is the failure this exists to prevent.
+
+    Published in a context variable as well as yielded, so `set_trace_io` finds it
+    without every caller having to thread it through. Nested spans opened while this is
+    active are its children, which is the hierarchy Langfuse draws its graph from.
+    """
+    with observation(name, trace_metadata=trace_metadata) as span:
+        token = _TURN_SPAN.set(span)
+        try:
+            yield span
+        finally:
+            _TURN_SPAN.reset(token)
+
+
 def stamp_trace_tags(span, tags: list[str]) -> None:
     """Record the turn's outcome on the trace, best-effort.
 
@@ -206,6 +247,12 @@ def set_trace_io(user_input: str | None, output: str | None, span=None) -> None:
         )
     except Exception:  # noqa: BLE001 — rule 1
         logger.warning("could not set the langfuse trace input/output", exc_info=True)
+    # The ambient turn span is the default, because the caller that settles the answer
+    # (`turn.compose_success`) is not the caller that opened the span (the route) and
+    # should not have to carry the handle between them. Without this the trace row was
+    # written and the root observation was not — which is half the record, and the half
+    # that an exported span tree is read from.
+    span = span or current_turn_span()
     if span is None:
         return
     try:

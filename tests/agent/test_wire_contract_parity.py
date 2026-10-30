@@ -27,10 +27,14 @@ from services.agent.routing import routing as questions
 
 # The sibling repository, when it is checked out beside this one.
 SIBLING = Path(__file__).resolve().parents[3] / "danielmherman"
-SITE_VIEWS = SIBLING / "demo" / "views.py"
+# The request contract left `demo/views.py` in Phase 4: the question ceiling and the
+# approved field set are declared in `demo/ask/intent.py`, and `views.py` re-exports
+# them. Read the module that DECLARES them — a re-export proves the view can see the
+# names, not that the two repositories agree about the values.
+SITE_INTENT = SIBLING / "demo" / "ask" / "intent.py"
 SITE_CONVERSATIONS = SIBLING / "demo" / "conversations.py"
 
-HAS_SIBLING = SITE_VIEWS.exists()
+HAS_SIBLING = SITE_INTENT.exists()
 NO_SIBLING = "the site repository is not checked out beside this one"
 
 # One sendable body per declared field, written out rather than derived: the point
@@ -65,9 +69,9 @@ def _assignment(path, name):
 def _declared_names(path, name):
     """The string members of a `name = frozenset({...})` or a dict literal.
 
-    Read with `ast` rather than imported: `views.py` imports Django and this test
-    run has no settings module. The literal is the whole contract, so reading the
-    literal is the honest check.
+    Read with `ast` rather than imported: the module sits in a Django application and
+    this test run has no settings module. The literal is the whole contract, so reading
+    the literal is the honest check.
     """
     value = _assignment(path, name)
     if isinstance(value, ast.Call):  # frozenset({...})
@@ -132,7 +136,7 @@ def test_the_declared_intents_are_the_controls_a_surface_can_draw():
 def test_the_site_question_ceiling_is_this_service_s_ceiling():
     from services.agent.ingress.http import MAX_QUESTION_CHARS
 
-    assert ast.literal_eval(_assignment(SITE_VIEWS, "MAX_QUESTION_CHARS")) == (
+    assert ast.literal_eval(_assignment(SITE_INTENT, "MAX_QUESTION_CHARS")) == (
         MAX_QUESTION_CHARS)
 
 
@@ -149,7 +153,7 @@ def test_every_field_the_site_forwards_is_a_field_this_service_admits():
     """The browser-only names are subtracted rather than expected to be absent:
     `conversation_id` and `asked` are resolved in the site and never forwarded,
     and this service refuses both by design."""
-    approved = _declared_names(SITE_VIEWS, "APPROVED_REQUEST_FIELDS")
+    approved = _declared_names(SITE_INTENT, "APPROVED_REQUEST_FIELDS")
 
     assert approved - {"conversation_id", "asked"} <= (
         contracts.ACCEPTED_REQUEST_FIELDS)

@@ -906,6 +906,8 @@ def guard_answer(
     answer: str,
     tool_calls: list[dict],
     conversation_calls: list[dict] | None = None,
+    *,
+    literature_replay: bool = False,
 ) -> dict:
     """Apply all guardrails. Returns {'answer': str, 'flags': [str]}.
 
@@ -923,10 +925,18 @@ def guard_answer(
     guards read the notes the conversation retrieved, since a lab value quoted
     from an earlier turn's passage is still a quoted lab value.
 
-    Citations are the one exception, and they are scoped to `tool_calls` on
-    purpose: `^[n]` addresses a slot in THIS turn's presentation, which is
-    composed from this turn's calls, so a marker counted against the replayed
-    turn's passages would validate a citation the caller cannot resolve.
+    Citations are scoped to this turn's calls plus the replayed ones, because a marker
+    addresses the array of citable units the MODEL was shown, and since TF-10 that array
+    runs across the replayed turns and this one. A marker counted against this turn alone
+    deleted the marker a follow-up legitimately placed in an earlier turn's passage
+    (`agent-00175-ttr`, 2026-10-24).
+
+    `literature_replay` widens the PMID allowance to the replayed searches, and only for a
+    turn whose question is about published records. The badge is the one citation form
+    that names a record rather than a position, so a turn answering from the search in
+    its own transcript may cite those records; the flag is that fact, decided once in
+    `graph.ask` and stamped on the state. It is False for a chart turn, which is what
+    keeps 90000058 shut.
     """
     evidence = [*(tool_calls or []), *(conversation_calls or [])]
     passages, med_source = _passage_sections(evidence)
@@ -971,7 +981,9 @@ def guard_answer(
     answer, f = citations.enforce_citations(
         answer,
         citations.citation_bound(tool_calls, conversation_calls),
-        citations.literature_pmids(tool_calls),
+        citations.literature_pmids(
+            tool_calls, conversation_calls if literature_replay else None
+        ),
     )
     flags += f
 

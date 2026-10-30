@@ -231,7 +231,12 @@ async def compose_success(
     # addresses this turn's presentation, which is composed below from
     # `trimmed_calls`.
     guarded = guard_answer(
-        text, state["tool_calls"], state.get("replayed_tool_calls") or []
+        text, state["tool_calls"], state.get("replayed_tool_calls") or [],
+        # A badge may name a record the replay showed this turn, but only on a turn whose
+        # own question is about published records. The flag is stamped by the engine, so
+        # this is a read of the decision that let the search into the transcript rather
+        # than a second opinion about the question.
+        literature_replay=bool(state.get("wants_literature")),
     )
 
     # The trace records the answer the caller is SERVED, and it is written here, once,
@@ -297,6 +302,10 @@ async def compose_success(
         # may not reach into `routing.encounter`'s process-global `ContextVar`, so the
         # boolean arrives as an argument.
         is_outpatient=encounter.current_is_outpatient(),
+        # The literature surface this turn draws: its own search, or — when the turn is
+        # about published records and ran no search — the one already in the transcript.
+        # Same flag as the guardrail's, read from the same state field.
+        literature_replay=bool(state.get("wants_literature")),
     )
 
     # Chosen from the record this turn already holds, not proposed by a model: a chip

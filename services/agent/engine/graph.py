@@ -114,6 +114,12 @@ class AgentState(TypedDict):
     #: the demand one-shot: a model that twice answers without calling a tool would
     #: otherwise be asked a third time, and the third answer is no better than the second.
     retrieval_demanded: bool
+    # Whether this turn is about published records. Written before the run and read after
+    # it by the two layers that decide where a citation may come from — the badge
+    # allowance (`citations.literature_pmids`) and the composer (`a2ui.literature_payload`)
+    # — so a search replayed into this turn's transcript can be cited by this turn and by
+    # nothing else. See `turn_is_about_literature`.
+    wants_literature: bool
 
 
 # Spend bounds (ECC-02). One question is one tool call in every designed flow;
@@ -332,6 +338,22 @@ def _outbound_patient_identifier(
             "without them."
         ),
     }
+
+
+def turn_is_about_literature(question: str, question_kind: str | None) -> bool:
+    """Whether this turn is about published records: asked once, stamped, then read.
+
+    Three things depend on it and they must not disagree: which tools are bound
+    (`_freetext_allowed`), whether the earlier searches stay in the transcript
+    (`replay_messages`), and whether the citation layer and the composer read this turn's
+    literature from that transcript when the turn ran no search of its own. Two of them
+    asked the question independently and the third could not ask it at all, so the answer
+    is carried on the state now and every reader reads it from there.
+
+    The second half is the command route: `/pubmed` is a command, so its intent declares
+    the fact and the typed question need carry no cue of its own.
+    """
+    return routing.asks_for_literature(question) or question_kind == "literature"
 
 
 def _freetext_allowed(risk_driver_question: bool,
@@ -921,6 +943,12 @@ async def ask(
                 prose_stream=prose_stream,
                 trace_metadata=command_meta,
             )
+            # Stamped on both routes so every later reader sees the same field rather
+            # than a key that exists on one path and is missing on the other. `/pubmed`
+            # is a command, so it declares the fact through its intent: the question a
+            # clinician typed beside the slash need carry no literature cue of its own.
+            command_state["wants_literature"] = turn_is_about_literature(
+                question, question_kind)
             # The command's answer is settled before anything reads it: a marker removed
             # after the trace is written would still be in the record the judge scores.
             answer_text.sanitize_answer_markers(command_state)
@@ -951,11 +979,13 @@ async def ask(
         routing.asks_for_administrative_detail(question)
     )
 
-    # Whether this turn is about published records, asked once because two things depend
-    # on it and they must not disagree: which tools are bound (`_freetext_allowed`) and
+    # Whether this turn is about published records, asked once because THREE things depend
+    # on it and they must not disagree: which tools are bound (`_freetext_allowed`),
     # whether the replayed turns' OWN searches are carried into this one
-    # (`replay_messages`). A chart turn keeps neither.
-    wants_literature = routing.asks_for_literature(question)
+    # (`replay_messages`), and whether the citation layer and the composer read this turn's
+    # literature from that transcript when the turn runs no search of its own. A chart turn
+    # keeps none of the three.
+    wants_literature = turn_is_about_literature(question, question_kind)
 
     # Earlier turns' published-records searches are carried only into a turn that is
     # itself about published records. See `replay_messages`: a `search_literature`
@@ -1058,6 +1088,12 @@ async def ask(
                 # Cleared per run, so the demand below is made at most once per question
                 # rather than once per conversation.
                 "retrieval_demanded": False,
+                # Stamped rather than re-derived downstream. The citation layer and the
+                # composer need the same answer this line used to decide the replay, and
+                # a second `asks_for_literature` call further down would be a second
+                # opinion about one question (`turn_is_about_literature` explains why
+                # the three readers must agree).
+                "wants_literature": wants_literature,
             },
             config=config,
         )

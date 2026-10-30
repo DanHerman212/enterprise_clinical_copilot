@@ -207,6 +207,12 @@ _NUMERIC_BODY_RE = re.compile(r"\d+(?:\s*,\s*\d+)*|\d+\s*-\s*\d+")
 #: A marker that names a literature record rather than a position.
 _PMID_BODY_RE = re.compile(r"PMID:?\s*(\d+)", re.IGNORECASE)
 
+#: A badge naming literature records, one or several: `PMID: 35186616`, or the grouped
+#: `PMID: 39559360, 37028984, 36774746` the model writes when one sentence rests on
+#: three papers. `_KNOWN_MARKER_RE` already accepts both forms, so a group reaches
+#: enforcement; this is what recognises it once it is there.
+_PMID_LIST_BODY_RE = re.compile(r"PMID:?\s*\d+(?:\s*,\s*\d+)*", re.IGNORECASE)
+
 
 def enforce_citations(
     answer: str,
@@ -231,10 +237,10 @@ def enforce_citations(
     Three outcomes per marker:
 
       * **resolvable** — left exactly as written;
-      * **partly resolvable** — a multi-number marker (`^[1, 9]`, `^[2-6]`) keeps its
-        valid numbers and loses the rest, emitted as one single-number marker each,
-        because a single number is the only shape the browser's marker regex can turn
-        into a control;
+      * **partly resolvable** — a multi-unit marker (`^[1, 9]`, `^[2-6]`,
+        `^[PMID: 39559360, 37028984]`) keeps its valid units and loses the rest, emitted
+        as one single-unit marker each, because a single unit is the only shape the
+        browser's marker regex can turn into a control;
       * **unresolvable** — removed whole.
 
     A removal takes the run of spaces in front of the marker with it, so no gap is left
@@ -271,7 +277,10 @@ def enforce_citations(
         kept, found = conclusion
         flags.extend(found)
         if kept:
-            out.append(lead + " ".join(f"^[{number}]" for number in kept))
+            # A body rather than a bare number: a note position is `1`, a literature
+            # badge is `PMID: 35186616`, and both are written the same way here so one
+            # marker per unit reaches the browser in the one shape it can draw.
+            out.append(lead + " ".join(f"^[{marker}]" for marker in kept))
         last = match.end()
     out.append(answer[last:])
     return _tidy_removed_markers("".join(out)), flags
@@ -279,23 +288,20 @@ def enforce_citations(
 
 def _conclude(
     body: str, limit: int, allowed: "set[str]",
-) -> "tuple[list[int], list[str]] | None":
+) -> "tuple[list[int | str], list[str]] | None":
     """What to do with one marker body. None means leave the marker exactly as written.
 
-    Returns the numbers to emit and the flags to report; an empty number list means the
-    marker is unresolvable and goes.
+    Returns the marker bodies to emit and the flags to report; an empty body list means
+    the marker is unresolvable and goes. A body is a bare number (`1`) or a labelled
+    literature badge (`PMID: 35186616`); the caller writes both into a marker.
     """
     if not body:
         return [], ["citation_out_of_range:^[]"]
     # A record identifier, in either form the model writes it: the labelled
     # `^[PMID: 35186616]`, or the bare `^[35186616]` it produces when it has been told
     # twice not to label one. Both name the same record, so both resolve the same way.
-    pmid = _PMID_BODY_RE.fullmatch(body)
-    if pmid is not None:
-        number = pmid.group(1)
-        if number in allowed:
-            return None
-        return [], [f"citation_out_of_range:^{number}"]
+    if _PMID_LIST_BODY_RE.fullmatch(body):
+        return _conclude_pmids(body, allowed)
     if not _NUMERIC_BODY_RE.fullmatch(body):
         # A section name or other invention: `_drop_unknown_markers` decides its fate.
         return None
@@ -317,6 +323,45 @@ def _conclude(
     # A cluster is expanded whether or not any of it is out of range: one number per
     # marker is the only shape the browser can turn into a control.
     return valid, flags
+
+
+def _conclude_pmids(body: str, allowed: "set[str]") -> "tuple[list[str], list[str]] | None":
+    """Resolve a badge naming literature records, one or several.
+
+    The grouped form is one marker standing for several records, and it was the one
+    marker shape this layer neither resolved, split nor deleted. `_PMID_BODY_RE` is a
+    `fullmatch` on a single identifier, so `PMID: 39559360, 37028984, 36774746` failed
+    here, failed the numeric test as well, and fell through to "leave the marker exactly
+    as written" — unresolved, unverified and unflagged. The browser could not draw it
+    either (`MARKER` is one number and one closing bracket), so the reader got the raw
+    badge in the middle of a clinical sentence while every machine check reported the
+    turn as clean. Seen live on 2026-10-30, on a declared literature follow-up that cited
+    three records from the turn before.
+
+    Split here rather than in the browser, for the reason the numeric branch splits
+    `^[1, 9]` here: one marker per unit is the only shape the console can turn into a
+    control, and only this layer knows which identifiers name records the turn may cite.
+    """
+    # Every digit run in the body is an identifier. `_PMID_BODY_RE` cannot be used for
+    # this: it requires the `PMID:` prefix, which only the first number in a group
+    # carries, so `findall` over a group returns one identifier and the other two vanish
+    # — which is how a split that looked right still left the badge whole.
+    found = re.findall(r"\d+", body)
+    if len(found) == 1:
+        # A single badge is left byte-for-byte when it resolves. Anything else would
+        # rewrite a correct citation's own spacing, and a passing answer is the thing
+        # a rewrite damages first.
+        if found[0] in allowed:
+            return None
+        return [], [f"citation_out_of_range:^{found[0]}"]
+    unique = list(dict.fromkeys(found))
+    kept = [f"PMID: {number}" for number in unique if number in allowed]
+    flags = [
+        f"citation_out_of_range:^{number}"
+        for number in unique
+        if number not in allowed
+    ]
+    return kept, flags
 
 
 def _tidy_removed_markers(answer: str) -> str:
@@ -677,12 +722,48 @@ def citation_bound(
     return units or literature_slots(tool_calls)
 
 
+def literature_call(
+    tool_calls: list[dict] | None,
+    conversation_calls: list[dict] | None = None,
+) -> dict | None:
+    """The `search_literature` call a turn's answer rests on, or None.
+
+    This turn's own search first: a turn that looked something up answers from what it
+    looked up. Failing that, the NEWEST search in the replayed turns — the last one the
+    model was shown — because a declared follow-up binds no literature tool
+    (`graph._freetext_allowed` withholds it precisely because that result is already in
+    the transcript), so the turn that cites those records ran no search of its own.
+
+    `conversation_calls` is the replayed turns', and ONLY a turn that is itself about
+    published records may pass it. A chart turn that reads a previous search is 90000058:
+    `^[1]` bound to a PubMed record the reader was not being shown, and a medication
+    answer badged General Medical Evidence. The gate is `wants_literature`, decided once
+    per turn in `graph.ask` and stamped on the state.
+
+    First match for this turn's own calls, matching `literature_slots` and the reason
+    `a2ui.literature_payload` gives: a run normally makes one search, and if the model
+    made two the answer was written against the first.
+    """
+    for call in tool_calls or []:
+        if isinstance(call, dict) and call.get("name") in routing.LITERATURE_TOOLS:
+            return call
+    for call in reversed(list(conversation_calls or [])):
+        if isinstance(call, dict) and call.get("name") in routing.LITERATURE_TOOLS:
+            return call
+    return None
+
+
 def literature_slots(tool_calls: list[dict] | None) -> int:
     """How many articles a literature turn can cite: the records holding a PMID.
 
     Matched to the canvas, which drops a record with no pmid because it cannot be cited
     or linked (`a2ui._usable_articles`), so the numbered citations a reader can open are
     exactly these records.
+
+    Read from this turn's own search only. The numbered form addresses positions in the
+    array the model was numbered against, and a turn that ran no search was handed no
+    such array; widening this one would validate a `^[1]` that resolves to nothing the
+    caller can open.
     """
     for call in tool_calls or []:
         if call.get("name") not in routing.LITERATURE_TOOLS:
@@ -696,22 +777,38 @@ def literature_slots(tool_calls: list[dict] | None) -> int:
     return 0
 
 
-def literature_pmids(tool_calls: list[dict] | None) -> frozenset[str]:
+def literature_pmids(
+    tool_calls: list[dict] | None,
+    conversation_calls: list[dict] | None = None,
+) -> frozenset[str]:
     """The PMIDs a literature turn may name instead of a position.
 
     The companion to `literature_slots`, read from the same call, so the identifiers
     `enforce_citations` accepts and the records the canvas draws are the same set.
+
+    `conversation_calls` carries the replayed turns' calls, and is passed only by a turn
+    whose question is about published records — the same `wants_literature` that let the
+    replay keep the earlier search in the first place (`graph.replay_messages`). Read
+    against this turn alone, a declared follow-up that cites the records it was shown has
+    an empty allowance, so every PMID in it is an identifier nobody retrieved. That is
+    the live defect of 2026-10-30: a chip answer citing three PMIDs from the turn before
+    carried no resolvable citation and an empty references drawer, while the model was
+    doing exactly what the replay invited.
+
+    Not widened for `literature_slots`: see the note there. A badge names a record, and a
+    record may be cited from the transcript; a position names a slot in this turn's own
+    array, and there is no such array when this turn ran no search.
     """
-    for call in tool_calls or []:
-        if call.get("name") not in routing.LITERATURE_TOOLS:
-            continue
-        articles = (call.get("response") or {}).get("articles")
-        if isinstance(articles, list):
-            return frozenset(
-                str(article["pmid"]) for article in articles
-                if isinstance(article, dict) and article.get("pmid")
-            )
-    return frozenset()
+    call = literature_call(tool_calls, conversation_calls)
+    if call is None:
+        return frozenset()
+    articles = (call.get("response") or {}).get("articles")
+    if not isinstance(articles, list):
+        return frozenset()
+    return frozenset(
+        str(article["pmid"]) for article in articles
+        if isinstance(article, dict) and article.get("pmid")
+    )
 
 
 def citation_header(number: int, modality: str) -> str:

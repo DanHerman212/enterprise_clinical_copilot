@@ -41,6 +41,7 @@ from services.agent.postprocess.citations import (
     citation_remap,
     first_citation,
     intent_sections,
+    literature_call,
     renumber_citations,
 )
 from services.agent.presentation.domain import (
@@ -157,8 +158,28 @@ def lab_trend_payload(tool_calls: list[dict]) -> dict | None:
     return None
 
 
-def literature_payload(tool_calls: list[dict]) -> dict | None:
-    """The `search_literature` response for this run, or None.
+def literature_payload(
+    tool_calls: list[dict],
+    replay_calls: "list[dict] | None" = None,
+) -> dict | None:
+    """The `search_literature` response this turn answers from, or None.
+
+    This turn's own search first, and the newest replayed one only when the caller passes
+    `replay_calls` — which a turn does only when its own question is about published
+    records. `citations.literature_call` makes that choice, so the response the composer
+    draws and the PMIDs the enforcement accepts are read from one call.
+
+    A declared follow-up is exactly that case. `graph._freetext_allowed` withholds
+    `search_literature` from it because the earlier search is already in the transcript,
+    so the turn cites records it was shown while holding no call of its own. Read from
+    this turn alone the payload was None, the records reached neither `sources` nor
+    `references`, and the drawer came up empty under a correctly cited answer (live,
+    2026-10-30).
+
+    A chart turn must not reach the replay: that is 90000058, where a search from three
+    turns earlier bound `^[1]` to a record the reader was not being shown and badged a
+    medication answer as General Medical Evidence. `replay_calls` defaults to None so a
+    caller that says nothing gets the behaviour every turn had before this parameter.
 
     First match rather than last, unlike `predict_payload`: a run normally makes one
     search, and if a model made two the answer was written against the first.
@@ -168,10 +189,8 @@ def literature_payload(tool_calls: list[dict]) -> dict | None:
     statement from "nothing was found" — and dropping it here would collapse the
     two into the same empty canvas.
     """
-    for call in tool_calls or []:
-        if call.get("name") == "search_literature":
-            return call.get("response") or None
-    return None
+    call = literature_call(tool_calls, replay_calls)
+    return (call.get("response") or None) if call is not None else None
 
 
 #: What a turn's answer rested on. The console labels the turn with this, so a reader
@@ -277,7 +296,8 @@ def compose_presentation(question: str, answer: str,
                          command: str | None = None,
                          context_grounded: bool = False,
                          evidence: list[dict] | None = None,
-                         *, is_outpatient: bool | None = None) -> dict:
+                         *, is_outpatient: bool | None = None,
+                         literature_replay: bool = False) -> dict:
     """The full presentation contract for an answered question.
 
     One call produces every field the browser consumes, so the answer's
@@ -308,6 +328,13 @@ def compose_presentation(question: str, answer: str,
     cannot change what it draws, but it does change whether the answer was checked
     against the record.
 
+    `literature_replay` is the caller saying this turn is about published records AND ran
+    no search of its own, which is what a declared follow-up is: `graph._freetext_allowed`
+    withholds `search_literature` because the earlier search is already in the transcript.
+    The records it cites are then the replayed ones, so they are the ones drawn — in
+    `sources`, in `references`, and in the scope badge. Defaults to False, which is the
+    rule that a search belongs to the turn that made it (90000058).
+
     Pure — no I/O, no clock, no randomness — so it is fully testable without
     a browser or a live endpoint.
     """
@@ -321,15 +348,26 @@ def compose_presentation(question: str, answer: str,
     # marker that pointed at nothing (TF-10, 2026-10-23).
     evidence_calls = list(evidence) if evidence is not None else tool_calls
     rag = rag_payload(evidence_calls)
-    # The literature surface is THIS turn's search and nothing else.
+    # The literature surface is the search THIS turn answers from: its own, or — for a
+    # turn whose question is about published records — the newest search in the replay.
     #
-    # Read from the conversation, a `search_literature` call made three turns ago came
-    # back on every turn after it: `resolve_sources` bound `^[1]` to a PubMed record the
-    # reader was not being shown, the badge flipped to General Medical Evidence over an
-    # answer about the discharge note, and `LiteratureList` re-rendered under medication
-    # instructions (90000058, 2026-10-26). A search is an event, not a state: what this
-    # turn answers from is what this turn looked up.
-    literature = literature_payload(tool_calls)
+    # Read from the conversation unconditionally, a `search_literature` call made three
+    # turns ago came back on every turn after it: `resolve_sources` bound `^[1]` to a
+    # PubMed record the reader was not being shown, the badge flipped to General Medical
+    # Evidence over an answer about the discharge note, and `LiteratureList` re-rendered
+    # under medication instructions (90000058, 2026-10-26). A search is an event, not a
+    # state.
+    #
+    # Read from this turn alone, the opposite failure: a declared follow-up holds no
+    # search — `graph._freetext_allowed` withholds the tool because the earlier result is
+    # already in the transcript — so the records it cites reached neither `sources` nor
+    # `references`, and a `/pubmed` answer followed by its own chip lost both its pills
+    # and its drawer (live, 2026-10-30). `literature_replay` is the caller saying the two
+    # facts together: this turn is about published records, and it ran no search of its
+    # own. It is the same `wants_literature` gate that let the replay keep the search, so
+    # what the model was shown and what the reader is shown cannot drift apart.
+    literature = literature_payload(
+        tool_calls, evidence_calls if literature_replay else None)
     # The lab card reads THIS turn's calls, not the conversation's. `evidence_calls` is
     # the right array for what the answer rests on and for how its markers are numbered
     # (TF-10, 2026-10-23), but a chart is not a provenance statement — it is a drawing

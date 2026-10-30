@@ -47,6 +47,7 @@ import re
 from collections.abc import Sequence
 from typing import Any
 
+from services.agent.postprocess.citations import literature_call
 from services.agent.routing import routing
 from shared.labels import humanize
 
@@ -436,10 +437,17 @@ def _literature_topic(state: dict[str, Any], question: str) -> str:
     hyperglycemia. For admission 90000067?" (reported from the live turn, 2026-10-26).
     Both wrappers are stripped: the command's own sentence, and the admission the request
     is scoped to.
+
+    A declared follow-up holds no search of its own — it answers from the one already in
+    its transcript — so the call is read through `citations.literature_call`, which looks
+    at this turn and then at the replay. Without that, the topic came from the whole
+    question and the chip repeated it verbatim: "What else does the published literature
+    report on What else does the published literature report on bladder cancer?" (found
+    on 2026-10-30 while repairing the same turn).
     """
-    for call in state.get("tool_calls") or []:
-        if not isinstance(call, dict) or call.get("name") not in routing.LITERATURE_TOOLS:
-            continue
+    call = literature_call(
+        state.get("tool_calls"), state.get("replayed_tool_calls"))
+    if call is not None:
         query = str((call.get("args") or {}).get("query") or "").strip()
         if query:
             return query.strip(" ?.")[:120]
@@ -732,7 +740,11 @@ def suggest(
         if not _literature_articles(state):
             # Nothing was found, so there is nothing to ask next about the evidence.
             return []
-        return _fit(_candidates(state=_view(state, replayed=False), scope=scope,
+        # The replayed calls are in this view only so the chip can name the topic the
+        # search was actually about. Nothing else reads them: the literature branch
+        # returns before any chart signal is consulted, so a replayed `/ehr` call cannot
+        # put a chart chip under an answer about published evidence.
+        return _fit(_candidates(state=_view(state, replayed=True), scope=scope,
                                 question=question, outpatient=outpatient,
                                 literature=on_literature),
                     asked=asks, scope=scope, taken=[], literature=on_literature)

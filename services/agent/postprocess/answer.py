@@ -207,7 +207,17 @@ def sanitize_answer_markers(state: dict) -> None:
     bound = citations.citation_bound(
         state.get("tool_calls") or [], state.get("replayed_tool_calls") or [],
     )
-    pmids = citations.literature_pmids(state.get("tool_calls") or [])
+    # The badge allowance follows the same rule the bound does, on the one axis where it
+    # may: a turn that is itself about published records can cite the records the replay
+    # showed it. `wants_literature` is stamped once by `graph.ask` — the decision that let
+    # the earlier search stay in the transcript in the first place — so this stays a read
+    # of that decision rather than a second opinion about the question, and a chart turn
+    # still cites nothing it was not shown.
+    pmids = citations.literature_pmids(
+        state.get("tool_calls") or [],
+        (state.get("replayed_tool_calls") or None)
+        if state.get("wants_literature") else None,
+    )
     message = _final_message(state)
     if message is not None and isinstance(message.content, str):
         cleaned, _ = citations.enforce_citations(message.content, bound, pmids)

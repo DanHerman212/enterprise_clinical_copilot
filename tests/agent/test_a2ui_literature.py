@@ -571,21 +571,31 @@ def test_a_record_with_no_pmid_is_not_cited():
     assert [c["index"] for c in citations] == [1]
 
 
-def test_a_literature_summary_is_cited_to_its_articles_not_to_the_note():
-    """The turn read no note passage. Resolving its markers against note passages
-    left every marker in a properly grounded summary unbacked — which the component
-    draws as a disabled control, on the summary that was the one thing working
-    (live defect, 2026-10-13)."""
+def test_a_literature_marker_is_cited_to_its_article_even_beside_the_note():
+    """Each marker opens its own record when a turn rests on both kinds of evidence.
+
+    The live defect of 2026-10-13 was a literature summary whose markers resolved
+    against note passages, leaving every one of them unbacked — a disabled control on
+    the summary that was the one thing working. The fix then cited the articles
+    INSTEAD of the note, which broke the reverse case on 2026-10-30: a chart marker
+    beside an article went grey and the drawer lost the records. Both channels are
+    cited now, each under its own number, and the record numbers continue after the
+    note's.
+    """
     sources = [{"cite": 1, "section": "hospital_course", "text": "a note passage"}]
 
-    narrative = _narrative("Day-case surgery had lower odds ^[1].", sources, _search())
+    narrative = _narrative(
+        "Day-case surgery had lower odds ^[PMID: 31234567] and he recovered ^[1].",
+        sources, _search(), literature_start=2)
 
     # The eyebrow is the citation line now; the article title is the heading the card
     # shows, and the identifier is still what the marker resolves against.
-    assert [c["subtitle"] for c in narrative["citations"]] == [
-        "N Engl J Med. 2025. · PMID 31234567"]
-    assert narrative["citations"][0]["title"] == ARTICLE["title"]
-    assert narrative["citations"][0]["pmid"] == ARTICLE["pmid"]
+    article = next(c for c in narrative["citations"] if c.get("pmid"))
+    assert article["subtitle"] == "N Engl J Med. 2025. · PMID 31234567"
+    assert article["title"] == ARTICLE["title"]
+    # And the note's own marker is still a note citation, not the article in disguise.
+    assert [c["source"] for c in narrative["citations"] if not c.get("pmid")] == [
+        "Discharge note"]
 
 
 def test_a_note_turn_still_cites_the_note():

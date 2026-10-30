@@ -47,7 +47,7 @@ import re
 from collections.abc import Sequence
 from typing import Any
 
-from services.agent.postprocess.citations import literature_call
+from services.agent.postprocess.citations import literature_calls
 from services.agent.routing import routing
 from shared.labels import humanize
 
@@ -439,15 +439,19 @@ def _literature_topic(state: dict[str, Any], question: str) -> str:
     is scoped to.
 
     A declared follow-up holds no search of its own — it answers from the one already in
-    its transcript — so the call is read through `citations.literature_call`, which looks
+    its transcript — so the call is read through `citations.literature_calls`, which looks
     at this turn and then at the replay. Without that, the topic came from the whole
     question and the chip repeated it verbatim: "What else does the published literature
     report on What else does the published literature report on bladder cancer?" (found
     on 2026-10-30 while repairing the same turn).
+
+    The LAST search's query, not the first: a model that refines its query three times
+    searched three different things, and the question worth asking next follows from the
+    records the answer rests on (2026-10-30, again — the first and last queries of that
+    turn described different searches).
     """
-    call = literature_call(
-        state.get("tool_calls"), state.get("replayed_tool_calls"))
-    if call is not None:
+    for call in reversed(literature_calls(
+            state.get("tool_calls"), state.get("replayed_tool_calls"))):
         query = str((call.get("args") or {}).get("query") or "").strip()
         if query:
             return query.strip(" ?.")[:120]

@@ -722,35 +722,74 @@ def citation_bound(
     return units or literature_slots(tool_calls)
 
 
+def literature_calls(
+    tool_calls: list[dict] | None,
+    conversation_calls: list[dict] | None = None,
+) -> list[dict]:
+    """Every `search_literature` call this turn's answer may rest on, in call order.
+
+    ALL of this turn's searches, not the first. A model that rephrases its query
+    searched four times in one turn on 2026-10-30 and wrote its answer against the
+    records the LAST of them returned, while every reader here took the first — so the
+    two records it cited were not in the allowance, the composer had no articles, and
+    the answer came back with a stripped citation and an empty references drawer.
+
+    Failing that, the newest search in the replayed turns, for the reason
+    `literature_call` gives: a declared follow-up binds no literature tool because the
+    earlier result is already in the transcript. The replay is a fallback, never an
+    addition — a turn with its own searches answers from those.
+    """
+    found = [
+        call for call in (tool_calls or [])
+        if isinstance(call, dict) and call.get("name") in routing.LITERATURE_TOOLS
+    ]
+    if found:
+        return found
+    replayed = [
+        call for call in reversed(list(conversation_calls or []))
+        if isinstance(call, dict) and call.get("name") in routing.LITERATURE_TOOLS
+    ]
+    return replayed[:1]
+
+
 def literature_call(
     tool_calls: list[dict] | None,
     conversation_calls: list[dict] | None = None,
 ) -> dict | None:
-    """The `search_literature` call a turn's answer rests on, or None.
+    """The first call `literature_calls` returns, or None.
 
-    This turn's own search first: a turn that looked something up answers from what it
-    looked up. Failing that, the NEWEST search in the replayed turns — the last one the
-    model was shown — because a declared follow-up binds no literature tool
-    (`graph._freetext_allowed` withholds it precisely because that result is already in
-    the transcript), so the turn that cites those records ran no search of its own.
-
-    `conversation_calls` is the replayed turns', and ONLY a turn that is itself about
-    published records may pass it. A chart turn that reads a previous search is 90000058:
-    `^[1]` bound to a PubMed record the reader was not being shown, and a medication
-    answer badged General Medical Evidence. The gate is `wants_literature`, decided once
-    per turn in `graph.ask` and stamped on the state.
-
-    First match for this turn's own calls, matching `literature_slots` and the reason
-    `a2ui.literature_payload` gives: a run normally makes one search, and if the model
-    made two the answer was written against the first.
+    Kept for the callers that want one call rather than all of them — the provenance a
+    caption names, the arguments a record was fetched with. Anything deciding what the
+    answer may CITE has to use `literature_articles` over `literature_calls`, or it
+    reads one search and calls it the turn's literature.
     """
-    for call in tool_calls or []:
-        if isinstance(call, dict) and call.get("name") in routing.LITERATURE_TOOLS:
-            return call
-    for call in reversed(list(conversation_calls or [])):
-        if isinstance(call, dict) and call.get("name") in routing.LITERATURE_TOOLS:
-            return call
-    return None
+    calls = literature_calls(tool_calls, conversation_calls)
+    return calls[0] if calls else None
+
+
+def literature_articles(calls: list[dict] | None) -> list[dict]:
+    """Every record those searches returned, once each, in the order first seen.
+
+    Deduplicated by pmid and keyed by it: two searches for the same condition usually
+    overlap, and a record listed twice would be two drawer rows and two numbers for one
+    paper. A record with no pmid is dropped, which is the rule everywhere downstream —
+    a record that cannot be linked or cited cannot be shown (`a2ui._usable_articles`).
+    """
+    seen: set[str] = set()
+    articles: list[dict] = []
+    for call in calls or []:
+        response = (call or {}).get("response")
+        if not isinstance(response, dict):
+            continue
+        for article in response.get("articles") or []:
+            if not isinstance(article, dict):
+                continue
+            pmid = str(article.get("pmid") or "").strip()
+            if not pmid or pmid in seen:
+                continue
+            seen.add(pmid)
+            articles.append(article)
+    return articles
 
 
 def literature_slots(tool_calls: list[dict] | None) -> int:
@@ -760,21 +799,12 @@ def literature_slots(tool_calls: list[dict] | None) -> int:
     or linked (`a2ui._usable_articles`), so the numbered citations a reader can open are
     exactly these records.
 
-    Read from this turn's own search only. The numbered form addresses positions in the
-    array the model was numbered against, and a turn that ran no search was handed no
-    such array; widening this one would validate a `^[1]` that resolves to nothing the
-    caller can open.
+    Every search of this turn counts, because the prompt numbers the records the model
+    was shown and the model was shown all of them. Read from this turn's own calls only:
+    the numbered form addresses positions in the array the model was numbered against,
+    and a turn that ran no search was handed no such array.
     """
-    for call in tool_calls or []:
-        if call.get("name") not in routing.LITERATURE_TOOLS:
-            continue
-        articles = (call.get("response") or {}).get("articles")
-        if isinstance(articles, list):
-            return sum(
-                1 for article in articles
-                if isinstance(article, dict) and article.get("pmid")
-            )
-    return 0
+    return len(literature_articles(literature_calls(tool_calls)))
 
 
 def literature_pmids(
@@ -783,8 +813,12 @@ def literature_pmids(
 ) -> frozenset[str]:
     """The PMIDs a literature turn may name instead of a position.
 
-    The companion to `literature_slots`, read from the same call, so the identifiers
+    The companion to `literature_slots`, read from the same records, so the identifiers
     `enforce_citations` accepts and the records the canvas draws are the same set.
+
+    Every search of the turn contributes, not the first: a model that refined its query
+    cited a record from its third search, and an allowance built from the first deleted
+    the citation from a sentence that was correct.
 
     `conversation_calls` carries the replayed turns' calls, and is passed only by a turn
     whose question is about published records — the same `wants_literature` that let the
@@ -795,19 +829,13 @@ def literature_pmids(
     carried no resolvable citation and an empty references drawer, while the model was
     doing exactly what the replay invited.
 
-    Not widened for `literature_slots`: see the note there. A badge names a record, and a
-    record may be cited from the transcript; a position names a slot in this turn's own
-    array, and there is no such array when this turn ran no search.
+    Not widened for the numbered form: see `literature_slots`. A badge names a record,
+    and a record may be cited from the transcript; a position names a slot in this turn's
+    own array, and there is no such array when this turn ran no search.
     """
-    call = literature_call(tool_calls, conversation_calls)
-    if call is None:
-        return frozenset()
-    articles = (call.get("response") or {}).get("articles")
-    if not isinstance(articles, list):
-        return frozenset()
     return frozenset(
-        str(article["pmid"]) for article in articles
-        if isinstance(article, dict) and article.get("pmid")
+        str(article["pmid"]) for article in literature_articles(
+            literature_calls(tool_calls, conversation_calls))
     )
 
 

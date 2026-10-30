@@ -201,6 +201,31 @@ def _passage_count(recorded: list[RecordedToolCall]) -> int:
     )
 
 
+def _retrieved_records(recorded: list[RecordedToolCall]) -> list[Any]:
+    """Everything the turn retrieved that a reader can read on the page.
+
+    A note passage or a published record. Asked in one place because the answer needs a
+    yes/no — may the withheld-summary sentence point at records? — and the log line wants
+    a count, and two implementations of "what counts as a record" would eventually
+    disagree about a tool that returns neither (`predict_readmission`, a medication
+    extraction) and quietly blame the model for an empty result.
+    """
+    records: list[Any] = []
+    for call in recorded or []:
+        response = (call or {}).get("response")
+        if not isinstance(response, dict):
+            continue
+        records.extend(
+            passage for passage in response.get("passages") or []
+            if isinstance(passage, dict)
+        )
+        records.extend(
+            article for article in response.get("articles") or []
+            if isinstance(article, dict)
+        )
+    return records
+
+
 def _ordered_summary_payload(name: str, payload: dict[str, Any]) -> dict[str, Any]:
     """A summary's passages in `SUMMARY_SECTIONS` order, before anyone reads them.
 
@@ -577,11 +602,32 @@ async def run_command(
         # empty answer wrote the turn's trace row as a dash — the one record an audit
         # opens first (TF-6, 2026-10-23). The wording is the same one the envelope
         # would have served, so the answer itself is unchanged.
-
-        state["deterministic_answer"] = (
-            answer_text.OUTPATIENT_SILENT_TURN_SENTENCE if outpatient_record
-            else answer_text.SILENT_TURN_SENTENCE
-        )
+        #
+        # Empty has two causes and they are not the same statement. A model that finished
+        # cleanly and said nothing has no answer; a model whose reply was withheld by a
+        # provider filter never got to say one, and the records it retrieved are sitting
+        # under the sentence. `/pubmed Hypothermia` on 2026-10-30 was the second case and
+        # was served as the first: three PMIDs in the drawer beneath "I don't have an
+        # answer for that", with `finish_reason=SAFETY` and
+        # `HARM_CATEGORY_DANGEROUS_CONTENT` in the trace the whole time.
+        withheld = model_turn.finish_reason(response) == "SAFETY" or bool(
+            model_turn.blocked_reason(response))
+        if withheld and _retrieved_records(recorded):
+            logger.warning(
+                "command.%s: the formatting reply was withheld (%s%s); serving the %d "
+                "retrieved record(s) without a summary",
+                command.wire,
+                model_turn.finish_reason(response) or "unreported",
+                "".join(f", {category}"
+                        for category in model_turn.filtered_categories(response) or []),
+                len(_retrieved_records(recorded)),
+            )
+            state["deterministic_answer"] = answer_text.SAFETY_WITHHELD_SUMMARY
+        else:
+            state["deterministic_answer"] = (
+                answer_text.OUTPATIENT_SILENT_TURN_SENTENCE if outpatient_record
+                else answer_text.SILENT_TURN_SENTENCE
+            )
 
     if command.wire == "meds":
         source = _source_text(recorded)

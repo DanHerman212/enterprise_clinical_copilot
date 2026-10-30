@@ -71,6 +71,25 @@ OUTPATIENT_SILENT_TURN_SENTENCE = (
     "I'll answer from the record."
 )
 
+#: Served when the provider's own filter withheld the reply and records were retrieved.
+#:
+#: `/pubmed Hypothermia` on 2026-10-30 retrieved three records and then answered with
+#: `SILENT_TURN_SENTENCE`: the formatting reply came back `finish_reason=SAFETY` with
+#: `HARM_CATEGORY_DANGEROUS_CONTENT` flagged, the text was empty, and the empty-text branch
+#: served the sentence written for a model that said nothing. So the page showed a refusal
+#: above three records it had just fetched, and the reader was told the service had no
+#: answer when the truth was that the model's answer had been taken away.
+#:
+#: The sentence states the mechanism and points at what survived. It promises nothing
+#: about a retry — the same input is filtered the same way — and it does not name a
+#: provider, because which filter responded is an implementation detail to the clinician.
+SAFETY_WITHHELD_SUMMARY = (
+    "The language model's safety filter withheld its summary of these records, which it "
+    "does for some clinical subject matter. The records themselves were retrieved and "
+    "are listed with this answer, so they can be read directly; the filter acts on the "
+    "model's reply, not on the search."
+)
+
 #: `/ehr` on an outpatient record whose record-wide search returned nothing. The
 #: formatter had abstained with the silent-turn sentence, which named neither the
 #: encounter nor its consequence. The notice says what the record is, what it therefore
@@ -219,15 +238,25 @@ def sanitize_answer_markers(state: dict) -> None:
         if state.get("wants_literature") else None,
     )
     message = _final_message(state)
+    removed: list[str] = []
     if message is not None and isinstance(message.content, str):
-        cleaned, _ = citations.enforce_citations(message.content, bound, pmids)
+        cleaned, found = citations.enforce_citations(message.content, bound, pmids)
+        removed.extend(found)
         if cleaned != message.content:
             message.content = cleaned
     deterministic = state.get("deterministic_answer")
     if isinstance(deterministic, str) and deterministic:
-        cleaned, _ = citations.enforce_citations(deterministic, bound, pmids)
+        cleaned, found = citations.enforce_citations(deterministic, bound, pmids)
+        removed.extend(found)
         if cleaned != deterministic:
             state["deterministic_answer"] = cleaned
+    if removed:
+        # This pass ran AFTER `guard_answer`, so its verdicts used to be thrown away:
+        # the answer a reader was served could be missing a citation while
+        # `guardrail_flags` said the turn was clean (2026-10-30, a turn whose two PMID
+        # badges were removed at settlement and reported as `guardrail_flags: []`).
+        # Recorded on the state, where `turn` merges it into the payload.
+        state["guardrail_flags"] = [*(state.get("guardrail_flags") or []), *removed]
 
 
 def no_evidence_answer(

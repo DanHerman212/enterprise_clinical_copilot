@@ -350,6 +350,14 @@ async def compose_success(
     # swap as visible rather than silent, which is the honest reading of a settled
     # answer that no longer claims the chart.
     flags = list(guarded["flags"])
+    # And the settlement pass's own verdicts. `answer.sanitize_answer_markers` runs before
+    # this function — it is what settles the text these guardrails then read — so its
+    # deletions were the one judgement on a citation that reached no telemetry. Merged
+    # here rather than concatenated blindly: the same marker can be reported by both
+    # passes, and the payload should name each fact once.
+    for flag in state.get("guardrail_flags") or []:
+        if flag not in flags:
+            flags.append(flag)
     if presentation.get("scope_suppressed"):
         flags.append("chart_synthesis_without_citations")
 

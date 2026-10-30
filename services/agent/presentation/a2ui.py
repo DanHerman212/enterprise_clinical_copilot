@@ -39,9 +39,11 @@ together.
 
 from services.agent.postprocess.citations import (
     citation_remap,
+    citable_passages,
     first_citation,
     intent_sections,
-    literature_call,
+    literature_articles,
+    literature_calls,
     renumber_citations,
 )
 from services.agent.presentation.domain import (
@@ -162,35 +164,55 @@ def literature_payload(
     tool_calls: list[dict],
     replay_calls: "list[dict] | None" = None,
 ) -> dict | None:
-    """The `search_literature` response this turn answers from, or None.
+    """The records this turn's literature searches returned, as ONE payload.
 
-    This turn's own search first, and the newest replayed one only when the caller passes
-    `replay_calls` — which a turn does only when its own question is about published
-    records. `citations.literature_call` makes that choice, so the response the composer
-    draws and the PMIDs the enforcement accepts are read from one call.
+    EVERY search the turn made, unioned by pmid in call order. It used to be the first
+    match alone, on the reasoning that "a run normally makes one search, and if the
+    model made two the answer was written against the first". On 2026-10-30 a turn made
+    four — the model refining its query — and wrote its answer against the last, so the
+    composer drew no articles, `sources` carried no published records, and a correct
+    citation was removed at settlement for naming a record nobody had retrieved.
 
-    A declared follow-up is exactly that case. `graph._freetext_allowed` withholds
-    `search_literature` from it because the earlier search is already in the transcript,
-    so the turn cites records it was shown while holding no call of its own. Read from
-    this turn alone the payload was None, the records reached neither `sources` nor
-    `references`, and the drawer came up empty under a correctly cited answer (live,
-    2026-10-30).
+    `citations.literature_calls` and `citations.literature_articles` make the choice and
+    the union, so the payload here, the PMIDs enforcement accepts and the count the
+    numbered channel uses are one set of records.
 
-    A chart turn must not reach the replay: that is 90000058, where a search from three
-    turns earlier bound `^[1]` to a record the reader was not being shown and badged a
-    medication answer as General Medical Evidence. `replay_calls` defaults to None so a
-    caller that says nothing gets the behaviour every turn had before this parameter.
+    `replay_calls` is the replayed turns' calls, passed only by a turn whose own
+    question is about published records — the case a declared follow-up is, since
+    `graph._freetext_allowed` withholds `search_literature` from it because the earlier
+    search is already in the transcript. A chart turn must not reach the replay: that is
+    90000058. Defaults to None, which is the behaviour every turn had before this
+    parameter.
 
-    First match rather than last, unlike `predict_payload`: a run normally makes one
-    search, and if a model made two the answer was written against the first.
-
-    A failed search is returned as it stands. Its `error` key is what tells the
-    composer and the caption that the tool did not answer, which is a different
-    statement from "nothing was found" — and dropping it here would collapse the
-    two into the same empty canvas.
+    No records means the first payload is returned as it stands, because its `error` key
+    is what tells the composer and the caption that the tool did not answer — a
+    different statement from "nothing was found", and dropping it here would collapse
+    the two into the same empty canvas.
     """
-    call = literature_call(tool_calls, replay_calls)
-    return (call.get("response") or None) if call is not None else None
+    calls = literature_calls(tool_calls, replay_calls)
+    if not calls:
+        return None
+    payloads = [(call.get("response") or {}) for call in calls]
+    articles = literature_articles(calls)
+    if not articles:
+        return payloads[0] or None
+
+    merged = {key: value for key, value in payloads[0].items() if key != "error"}
+    merged["articles"] = articles
+    merged["returned"] = len(articles)
+    # The LAST query, because that is the one the answer was written against and the
+    # caption states what was searched. An earlier refinement's wording would describe
+    # a search whose records may not be on the screen at all. Read from the payload's own
+    # `query` where the tool reported one — that is what was actually searched, and the
+    # arguments are the request rather than the result.
+    for call in reversed(calls):
+        response = call.get("response") or {}
+        query = str(response.get("query")
+                    or (call.get("args") or {}).get("query") or "").strip()
+        if query:
+            merged["query"] = query
+            break
+    return merged
 
 
 #: What a turn's answer rested on. The console labels the turn with this, so a reader
@@ -347,6 +369,17 @@ def compose_presentation(question: str, answer: str,
     # against this turn's calls alone left a follow-up that quoted the chart with a
     # marker that pointed at nothing (TF-10, 2026-10-23).
     evidence_calls = list(evidence) if evidence is not None else tool_calls
+    # Where the published records start in the numbering. A marker's number is the
+    # POSITION of its unit in the array the conversation handed the model, so the
+    # records continue after every citable unit of that array — not after the number of
+    # passages whose markers survived. A turn that cited passages 4 and 7 has used up to
+    # 7 while only two rows resolve, and numbering the records from 3 gave a published
+    # record the same number as note passage 4 (2026-10-30: a drawer listing one note row
+    # and no records, from a list where two sources claimed the same number).
+    literature_start = sum(
+        len(citable_passages((call or {}).get("response")))
+        for call in evidence_calls
+    ) + 1
     rag = rag_payload(evidence_calls)
     # The literature surface is the search THIS turn answers from: its own, or — for a
     # turn whose question is about published records — the newest search in the replay.
@@ -389,7 +422,8 @@ def compose_presentation(question: str, answer: str,
     # later edit that adds a channel.
     record_sources = resolve_sources(renumbered, remap, rag, intent,
                                      evidence=evidence_calls)
-    narrative = _narrative(renumbered, record_sources, literature)
+    narrative = _narrative(renumbered, record_sources, literature,
+                           literature_start=literature_start)
 
     scope = turn_scope(evidence_calls)
 
@@ -549,7 +583,7 @@ def compose_presentation(question: str, answer: str,
     # inline pill had nothing to address and the reference list did not exist on that
     # surface at all. They are registered here so a marker, a hover card and a drawer row
     # name one record — the same treatment `/ehr` and `/meds` citations already had.
-    published_sources = literature_sources(articles)
+    published_sources = literature_sources(articles, start=literature_start)
     sources = record_sources + published_sources
 
     benchmark_sources, benchmark_references = register_benchmark_sources(
@@ -1133,12 +1167,18 @@ def _article_record(article: dict, index: int) -> dict:
     }
 
 
-def literature_citations(articles: list[dict]) -> list[dict]:
+def literature_citations(articles: list[dict], start: int = 1) -> list[dict]:
     """One citation per retrieved article, shaped like every other citation.
 
-    `index` is the 1-based position in the record order the model was given, which is
+    `index` is the article's position in the record order the model was given, which is
     exactly what the formatting instruction tells it to cite — the marker in the prose and
     the record beneath it are the same record by construction.
+
+    `start` is where this turn's note citations end. A turn resting on both the chart and
+    the literature publishes one `sources` array — note passages first, then the records
+    — and `literature_sources` numbers the records to continue it. The citation list has
+    to use the same numbers or the pill and the drawer row disagree; from 1 always, the
+    third article of a mixed turn shared the number of the third note passage.
 
     The marker's DISPLAY is the number, the journal and the year; the identifier stays the
     link target so a reader who wants the paper is one click from the card's title. That
@@ -1152,7 +1192,7 @@ def literature_citations(articles: list[dict]) -> list[dict]:
     article, so the eyebrow is the citation line itself.
     """
     citations = []
-    for position, article in enumerate(articles, start=1):
+    for position, article in enumerate(articles, start=start):
         record = _article_record(article, position)
         citation = {
             "index": record["index"],
@@ -1211,24 +1251,35 @@ def literature_sources(articles: list[dict], start: int = 1) -> list[dict]:
     return sources
 
 
-def _narrative(answer: str, sources: list[dict], literature: dict | None) -> dict | None:
+def _narrative(answer: str, sources: list[dict], literature: dict | None,
+               *, literature_start: int = 1) -> dict | None:
     """The narrative surface for this answer, or None when there is no prose.
 
-    Citations come from whichever evidence the turn rests on. A literature turn cites its
-    articles and nothing else: those records ARE the evidence, and resolving the markers
-    against note passages would leave every marker in a summary unbacked — which the
-    component draws as a disabled control, on a summary that was properly grounded.
+    Citations come from every kind of evidence the turn rests on, and a mixed turn
+    carries BOTH channels. `sources` holds the resolved note passages and `literature`
+    the retrieved records; on a turn that summarised an article and then the admission,
+    the article's badge and the note badges address the same `sources` array, which is
+    why the record numbers continue after the note numbers (`literature_sources(start=…)`
+    and `literature_citations(start=…)` agree by the same argument).
+
+    This chose one channel or the other until 2026-10-30, on the reasoning that a
+    literature turn cites its articles "and nothing else". That holds for a turn whose
+    answer is only about the literature; on a mixed answer it handed the component an
+    article-only citation list, and every note marker in the second paragraph became an
+    unresolvable control — the grey badges a reader saw and could not click.
 
     The turn is only a literature turn when it produced RECORDS. An empty search result
     is a `dict`, so a bare `is not None` test made every chart answer that happened to
     carry a fruitless PubMed call cite zero articles: the note passages had already been
     resolved, and this function threw them away in favour of an empty list. The reader
     then had a `^[1]` that resolved to nothing beside a card saying no literature was
-    found (2026-10-22). Records or note sources — never an empty list over a full one.
+    found (2026-10-22).
     """
     if not answer.strip():
         return None
+    notes = note_citations(sources)
     articles = _usable_articles(literature or {})
-    if articles and literature is not None:
-        return narrative_surface(answer, literature_citations(articles))
-    return narrative_surface(answer, note_citations(sources))
+    if not articles or literature is None:
+        return narrative_surface(answer, notes)
+    return narrative_surface(
+        answer, notes + literature_citations(articles, start=literature_start))

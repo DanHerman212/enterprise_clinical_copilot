@@ -593,6 +593,62 @@ def citation_remap(answer: str) -> dict[str, int]:
     return {str(new): old for old, new in old_to_new.items()}
 
 
+def compact_display_numbers(answer: str) -> tuple[str, dict[str, int]]:
+    """Renumber the answer's markers to the order they first appear: `1..K`.
+
+    Returns the prose and the map the client needs to resolve what it now shows:
+    `{display_number: position in the conversation's array}`.
+
+    Two numberings, one owner. A marker's position in the conversation's evidence array
+    is stable and cumulative by design — that is what lets a follow-up cite a passage an
+    earlier turn retrieved (`test_cite_offset`, TF-10) — but it is not what a reader
+    should be asked to read. Turn 2 of a real thread showed `^[5]` and `^[8]` for its own
+    two passages and Turn 3 showed `^[14]` and `^[15]`, because four note sections and
+    nine passages came before them. The gaps are the array working correctly; the reader
+    sees a document with holes in it.
+
+    So the array keeps its numbering and the PAGE gets 1..K. This runs at settlement,
+    inside the citation owner, before the trace is written, so the served prose, the
+    trace and the judge read one string (Charter 13 Law 5) and `sources[].cite` — which
+    `resolve_sources` derives from `cited_numbers(answer)` — follows the same numbers
+    automatically.
+
+    Only numeric markers are rewritten. A `^[PMID: …]` badge names a record rather than a
+    position, so it addresses the same thing whoever reads it and is left alone.
+
+    A marker the enforcement kept is a marker whose unit exists, so a body that is not a
+    number after `enforce_citations` has already been expanded to one marker per unit; a
+    cluster arriving here is compacted number by number in place.
+    """
+    if not answer:
+        return answer, {}
+    display: dict[str, int] = {}
+    out: list[str] = []
+    last = 0
+    for match in _ANY_MARKER_RE.finditer(answer):
+        body = match.group(1).strip()
+        if not _NUMERIC_BODY_RE.fullmatch(body):
+            continue
+        numbers = _expand_citations(body)
+        shown: list[str] = []
+        for number in numbers:
+            key = next((k for k, original in display.items() if original == number), None)
+            if key is None:
+                key = str(len(display) + 1)
+                display[key] = number
+            if key not in shown:
+                shown.append(key)
+        out.append(answer[last:match.start()])
+        # Written exactly as `_renumber_citations` writes one: `MARKER_OPEN` is a pattern
+        # fragment (it carries the backslashes), not the token a reader sees.
+        out.append(" ".join(f"^[{number}]" for number in shown))
+        last = match.end()
+    if not display:
+        return answer, {}
+    out.append(answer[last:])
+    return "".join(out), display
+
+
 # Discharge-note sections a question can target, in preference order, with the
 # words that reveal the intent. A question maps to a SECTION SET because the
 # content can live in different sections across MTSamples notes: the meds
@@ -818,6 +874,66 @@ class EvidenceLedger:
         if 1 <= number <= len(self.units):
             return self.units[number - 1]
         return None
+
+
+#: A sentence that says it is reporting the note. The complement is what the laboratory
+#: check below is for: a marker into the series beside a claim about the chart.
+_NOTE_CLAIM_RE = re.compile(
+    r"\b(?:notes?|chart|record|documented|documentation|discharge summary)\b",
+    re.IGNORECASE,
+)
+
+#: Sentences end at punctuation the prose actually uses. Deliberately crude: this splits
+#: to attribute markers to a sentence, and an over-long sentence only widens the window a
+#: flag is raised over — it cannot invent a mismatch.
+_SENTENCE_RE = re.compile(r"[^.!?\n]+[.!?]?")
+
+
+def evidence_kind_mismatches(
+    answer: str,
+    tool_calls: list[dict] | None,
+    conversation_calls: list[dict] | None = None,
+) -> list[str]:
+    """Markers that cite laboratory series beside a claim about the note.
+
+    `enforce_citations` checks that a marker resolves; it cannot check that it resolves
+    to the right KIND of evidence, because it never sees what the unit is. The prompt
+    states the rule the check is about — "never attach a laboratory-trend index to a
+    narrative claim and never attach a note-section index to a laboratory value"
+    (`engine/prompts.py`) — and on 2026-10-31 turn 3 of the 90000023 thread attached two
+    laboratory series (`^[14]`, `^[15]`) to "The discharge notes for this admission do
+    not provide a clinical prioritization", and nothing objected: both numbers were in
+    range, so the range check passed a sentence whose evidence is the wrong kind.
+
+    Reported, not rewritten. Deleting or replacing the sentence needs a claim classifier
+    this system does not have, and guessing at one is how a working answer gets damaged;
+    a flag is what makes the defect visible to the reader and countable by the harness.
+    """
+    if not answer:
+        return []
+    ledger = EvidenceLedger.of(conversation_calls, tool_calls)
+    if not ledger.units:
+        return []
+    flags: list[str] = []
+    for sentence in _SENTENCE_RE.findall(answer):
+        cited: list[int] = []
+        for match in _ANY_MARKER_RE.finditer(sentence):
+            body = match.group(1).strip()
+            if _NUMERIC_BODY_RE.fullmatch(body):
+                cited.extend(_expand_citations(body))
+        if not cited:
+            continue
+        units = [ledger.unit(number) for number in cited]
+        # Every marker in the sentence must land on a laboratory series. A sentence
+        # resting on both kinds is the mixed case the prompt allows, and flagging it
+        # would flag correct prose.
+        if not all(unit is not None and unit.get("section") == LAB_SECTION
+                   for unit in units):
+            continue
+        if not _NOTE_CLAIM_RE.search(sentence):
+            continue
+        flags.extend(f"citation_kind_mismatch:^{number}" for number in cited)
+    return flags
 
 
 def citation_bound(

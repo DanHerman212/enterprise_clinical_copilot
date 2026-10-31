@@ -218,6 +218,53 @@ def stamp_trace_tags(span, tags: list[str]) -> None:
                        exc_info=True)
 
 
+def record_turn_tools(tool_calls: list[dict] | None, *, replayed: int = 0,
+                      span=None) -> None:
+    """Record what this turn ASKED the tools for, on the root span's metadata.
+
+    The trace's input and output are the question and the served prose, and nothing else
+    (Charter 13 Law 5). What the turn *did* had no record on the trace row at all: a
+    free-text turn opens no tool spans — the reasoning loop's trace belongs to
+    LangChain's callback handler, and a span opened beside it becomes its own root
+    instead of a child (`mcp_client._execute_tool_calls`, 2026-10-17) — so the only place
+    the calls exist is the callback tree, which is not the row an operator triages from.
+    Reading turn 3 of a real thread therefore showed prose citing `^[14]` and `^[15]` with
+    nothing on the trace to say a laboratory panel had been read first.
+
+    What travels is the call's own terms: the tool, its arguments, how many units came
+    back, or the error. Not the payload — a trace is not a second store of note text, and
+    the arguments are the caller's own question and admission, the two fields that already
+    cross this boundary.
+
+    Written to the same place `stamp_trace_tags` puts the count, because langfuse 4.14.4
+    has no trace-level updater (audited: `get_current_trace_id`, `score_current_trace`,
+    `set_current_trace_io`, no metadata writer). Never raises — rule 1.
+    """
+    span = span or current_turn_span()
+    if span is None or not tool_calls:
+        return
+    try:
+        summary = []
+        for call in tool_calls:
+            if not isinstance(call, dict):
+                continue
+            response = call.get("response")
+            entry = {"name": call.get("name"), "args": call.get("args") or {}}
+            if isinstance(response, dict):
+                if response.get("error"):
+                    entry["error"] = str(response.get("error"))[:80]
+                elif isinstance(response.get("returned"), int):
+                    entry["returned"] = response["returned"]
+                elif isinstance(response.get("passages"), list):
+                    entry["returned"] = len(response["passages"])
+                elif isinstance(response.get("trends"), list):
+                    entry["returned"] = len(response["trends"])
+            summary.append(entry)
+        span.update(metadata={"tool_calls": summary, "replayed_calls": replayed})
+    except Exception:  # noqa: BLE001 — rule 1
+        logger.warning("could not record the turn's tool calls", exc_info=True)
+
+
 def set_trace_io(user_input: str | None, output: str | None, span=None) -> None:
     """Put the question and the answer on the trace, and on the root span too.
 

@@ -65,3 +65,49 @@ def humanize(feature: str) -> str:
     spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", feature)
     words = [word for word in re.split(r"[\s_\-]+", spaced) if word]
     return " ".join(word.capitalize() for word in words) if words else feature
+
+
+# --- The analyte vocabulary ------------------------------------------------
+#
+# The names a clinician uses for the values a laboratory series can report. One list,
+# because two layers ask the same question of it: `routing` decides whether
+# `get_lab_trends` may be bound, and the presentation layer decides whether a turn that
+# read the series should draw it. It lived in `routing/`, which presentation may not
+# import (Charter 13 §5) — the second caller would have had to keep a copy, and a
+# duplicated vocabulary drifts exactly the way duplicated tool registries do.
+#
+# The words are the model's feature language and the panel's labels, which is why most
+# carry five-letter singular stems. `\b` after a singular stem has no boundary before
+# the plural "s", so every word is compiled with an optional plural: on 2026-10-25 a
+# `/labs` follow-up reading "Red blood cells (3.47 x10^6/uL)" was not recognised, and
+# eight of the panel's ten labels could not satisfy a singular-only pattern.
+LAB_ANALYTE_WORDS = (
+    # The five the model scores on, whose driver drill-downs are the other caller.
+    "hemoglobin", "haemoglobin", "hgb", "hb",
+    "sodium",
+    "red blood cell", "rbc", "erythrocyte",
+    "rdw", "red cell distribution width",
+    "monocyte",
+    # The clinical panel: carried by the series, never model inputs.
+    "creatinine",
+    "egfr", "gfr",
+    "potassium",
+    "white blood cell", "wbc", "leukocyte",
+    "nt-probnp", "bnp",
+)
+
+_LAB_ANALYTE = re.compile(
+    r"\b(?:" + "|".join(re.escape(word) + r"s?" for word in LAB_ANALYTE_WORDS) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def names_an_analyte(text: str) -> bool:
+    """Whether this text names a laboratory measurement rather than a count.
+
+    Negative for anything that names no analyte, which is the safe direction in both
+    callers: a tool is withheld rather than bound, and a card is not drawn rather than
+    drawn unasked.
+    """
+    return bool(_LAB_ANALYTE.search(text or ""))
+

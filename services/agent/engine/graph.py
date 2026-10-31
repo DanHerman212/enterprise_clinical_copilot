@@ -120,6 +120,11 @@ class AgentState(TypedDict):
     # — so a search replayed into this turn's transcript can be cited by this turn and by
     # nothing else. See `turn_is_about_literature`.
     wants_literature: bool
+    #: Set once the run has told the model what the transcript already holds
+    #: (`prompts.TRANSCRIPT_NOTICE`). One shot, because it describes the replay and the
+    #: replay does not change mid-run; repeating it every round would spend the context it
+    #: is trying to save.
+    transcript_notice_sent: bool
 
 
 # Spend bounds (ECC-02). One question is one tool call in every designed flow;
@@ -609,16 +614,37 @@ def build_graph(
             answering_llm = chat_model
         else:
             answering_llm = bound_for(state)
+        # Say once what the transcript already holds, when the bound set is short of the
+        # standing one. A withdrawn tool is absent rather than refused — that is the right
+        # bound — but it leaves the model asking for a tool it cannot see, and asking
+        # again after a refusal it cannot learn from. Measured 2026-10-31, turn 2 of the
+        # 90000023 thread: four model rounds, three of them requesting unavailable tools,
+        # one executed call, and the answer's evidence already in the transcript.
+        conversation = list(state["messages"])
+        notice: list[BaseMessage] = []
+        if not state.get("transcript_notice_sent"):
+            withdrawn = sorted(allowed - _still_bound(allowed, state))
+            if withdrawn:
+                notice = [HumanMessage(content=prompts.TRANSCRIPT_NOTICE.format(
+                    contents=", ".join(
+                        routing.RESULT_NOUNS.get(name, name) for name in withdrawn
+                    ).lower(),
+                ))]
+                conversation.extend(notice)
         if prose_stream and on_event is not None:
-            response = await _streamed_turn(answering_llm, state["messages"], on_event)
+            response = await _streamed_turn(answering_llm, conversation, on_event)
         else:
-            response = await answering_llm.ainvoke(state["messages"])
+            response = await answering_llm.ainvoke(conversation)
         if spent >= MAX_TOOL_CALLS_PER_TURN:
             # This turn has no tools left and no further round to spend them in, so
             # whatever it asked for cannot happen. Settle it as an answer now: the
             # alternative is an empty turn that reads to the caller as a crash.
             response = _budget_exhausted_turn(response)
-        return {"messages": [response], "tool_calls": []}
+        return {
+            "messages": [*notice, response],
+            "tool_calls": [],
+            "transcript_notice_sent": True,
+        }
 
     async def tool_node(state: AgentState) -> dict:
         last = state["messages"][-1]
@@ -1091,6 +1117,10 @@ async def ask(
                 # opinion about one question (`turn_is_about_literature` explains why
                 # the three readers must agree).
                 "wants_literature": wants_literature,
+                # The notice about what the replay already holds is said once, on the
+                # first model turn (`agent_node`), and this is the flag that keeps it
+                # one-shot. Seeded per run like `retrieval_demanded`.
+                "transcript_notice_sent": False,
             },
             config=config,
         )

@@ -256,6 +256,14 @@ async def compose_success(
         question,
         (guarded["answer"] or "").strip() or command_trace_output(state),
     )
+    # And what the turn asked the tools for. The trace's output stays the served prose
+    # (Law 5); this is the other half of why that prose reads as it does, and on a
+    # free-text turn it is the only place the calls are recorded — the reasoning loop
+    # opens no tool spans of its own.
+    observability.record_turn_tools(
+        state.get("tool_calls") or [],
+        replayed=len(state.get("replayed_tool_calls") or []),
+    )
 
     # tool_calls carry name, arguments, response and whether the response can be
     # produced again. The arguments used to be dropped here on the grounds that
@@ -312,6 +320,12 @@ async def compose_success(
         # about published records and ran no search — the one already in the transcript.
         # Same flag as the guardrail's, read from the same state field.
         literature_replay=bool(state.get("wants_literature")),
+        # Settlement compacted the served markers to the order they are cited (`^[1]`,
+        # `^[2]` …) while the evidence array kept its cumulative numbering. This is the
+        # map between the two, computed once by `citations` in `sanitize_answer_markers`;
+        # presentation resolves through it so a pill, a drawer row and the answer all
+        # name the same passage (Charter 13 Law 1 — presentation does not renumber).
+        citation_map=state.get("citation_display_map") or {},
     )
 
     # Chosen from the record this turn already holds, not proposed by a model: a chip

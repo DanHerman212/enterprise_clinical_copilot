@@ -64,6 +64,10 @@ from services.agent.presentation.domain import (
     is_matrix_eligible,
     resolve_phenotype,
 )
+# The analyte vocabulary, from the shared leaf rather than from `routing/`: this layer
+# may not import the routing package (Charter 13 §5), and the answer it needs — "did the
+# question name a measurement?" — is a label question, not a routing decision.
+from shared.labels import names_an_analyte
 
 # The citation records live in `note_presentation`. Imported by name here because
 # this is where the rest of the package — and the tests — reach for them:
@@ -333,7 +337,9 @@ def compose_presentation(question: str, answer: str,
                          context_grounded: bool = False,
                          evidence: list[dict] | None = None,
                          *, is_outpatient: bool | None = None,
-                         literature_replay: bool = False) -> dict:
+                         literature_replay: bool = False,
+                         citation_map: dict[str, int] | None = None,
+                         question_names_analyte: bool = False) -> dict:
     """The full presentation contract for an answered question.
 
     One call produces every field the browser consumes, so the answer's
@@ -420,7 +426,15 @@ def compose_presentation(question: str, answer: str,
     # `/labs` turn from three turns ago, and each extra `/labs` turn in the thread added
     # another one (reported from the production UI, 2026-10-25). The comparative matrix
     # beside it is gated the same way and for the same reason (see `_draws_matrix`).
-    labs = lab_trend_payload(tool_calls)
+    #
+    # And it is drawn only when the turn ASKED for it: `/labs`, or a question that names
+    # an analyte. A free-text turn that read the panel to answer something else — "which
+    # issue should be treated first?" — kept the panel out of an answer that never
+    # discussed it, one column wide and out of context (2026-10-31, turn 3 of the
+    # 90000023 thread). The evidence is not lost: the series is still in `evidence_calls`,
+    # so a marker into it resolves and the scope still reads the chart.
+    labs = (lab_trend_payload(tool_calls)
+            if command == "labs" or names_an_analyte(question) else None)
     # Resolved against the conversation's evidence, and against EVERY kind of it. A marker
     # addresses one array — the citable units the model was shown, numbered continuously
     # across the replayed turns and this one — and that array now holds laboratory
@@ -431,7 +445,7 @@ def compose_presentation(question: str, answer: str,
     # patient's chart. What the turn publishes in `sources` is a wider list (see below);
     # what `verified` is decided from is this one, and the two must not be confused by a
     # later edit that adds a channel.
-    record_sources = resolve_sources(answer, {}, rag, intent,
+    record_sources = resolve_sources(answer, citation_map or {}, rag, intent,
                                      evidence=evidence_calls)
     narrative = _narrative(answer, record_sources, literature,
                            literature_start=literature_start)
@@ -612,11 +626,12 @@ def compose_presentation(question: str, answer: str,
 
     return {
         "answer": answer,
-        # The marker numbers are not reassigned, so this is the identity over the numbers
-        # the prose actually cites. Kept because the client translates a clicked pill
-        # through it, and because "no renumbering happened" is a fact worth publishing
-        # rather than a client assumption (Charter 13 Law 5).
-        "citation_map": {str(n): n for n in cited_numbers(answer)},
+        # The marker numbers are not reassigned here, so this is the identity over the
+        # numbers the prose actually cites — unless settlement compacted them, in which
+        # case it published the map and this is that map. Kept because the client
+        # translates a clicked pill through it (Charter 13 Law 5).
+        "citation_map": (dict(citation_map) if citation_map
+                         else {str(n): n for n in cited_numbers(answer)}),
         "intent_sections": list(intent),
         # Note passages and laboratory trajectories first, then the published records the
         # search returned, then the cohorts the comparison table draws. Each group is

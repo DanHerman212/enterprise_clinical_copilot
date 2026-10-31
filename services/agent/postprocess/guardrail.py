@@ -1022,6 +1022,14 @@ def guard_answer(
     )
     flags += f
 
+    # Whether each marker points at the KIND of evidence its sentence is about. The pass
+    # above decides that a marker resolves; it cannot decide that it resolves to the right
+    # thing, because a laboratory analyte and a note passage are both in range. Reported
+    # as a flag, never rewritten: an answer that cites a series beside a claim about the
+    # chart is a defect a reader must be able to see and a run must be able to count, and
+    # replacing it needs a claim classifier this module does not have.
+    flags += citations.evidence_kind_mismatches(answer, tool_calls, conversation_calls)
+
     if not answer.strip() and (original or "").strip():
         # Every claim the model made was unsupported, and what is left is nothing.
         # Serving an empty answer would look like a rendering failure; serving the

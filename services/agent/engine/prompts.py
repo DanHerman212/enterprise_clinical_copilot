@@ -893,6 +893,26 @@ score, or a discharge medication list — then answer it exactly as you just did
 the command that produces it and stopping."""
 
 
+#: What the transcript already holds, said once when the turn's bound set is short.
+#:
+#: A tool withdrawn by `graph._still_bound` is absent rather than refused, which is the
+#: right bound — a refusal is something a model retries — but it leaves the model with no
+#: account of why the tool it just asked for is not there. Measured on 2026-10-31, turn 2
+#: of the 90000023 thread: four model rounds, three of them asking for a note-section read,
+#: a prediction and a repeat search that were all unavailable, and one executed call. The
+#: transcript held the answer the whole time.
+#:
+#: The wording says what is ABOVE and that the tool will not run again, and it does not
+#: name the rules — a model told "the transcript cap" learns a term, a model told "the
+#: sections are above" learns where to look.
+TRANSCRIPT_NOTICE = """\
+The transcript above already holds this: {contents}. Those tools will not run again for
+this question — asking for one is refused, not repeated.
+
+Answer from what is above. If it genuinely does not cover the question, say plainly what
+you could not determine rather than searching again for the same thing."""
+
+
 #: The formatting instruction for one command's formatter turn.
 #:
 #: `routing/` decides *what* to run and no longer holds any instruction text, so the

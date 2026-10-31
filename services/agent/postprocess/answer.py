@@ -344,6 +344,28 @@ def sanitize_answer_markers(state: dict) -> None:
         removed.extend(found)
         if cleaned != deterministic:
             state["deterministic_answer"] = cleaned
+
+    # The page's numbering, last and separate from the array's. A marker's number is the
+    # position of its unit in the conversation's evidence array — cumulative across
+    # turns, which is what makes a follow-up citable at all — and a reader should not be
+    # shown the gaps that produces (`^[5]`, `^[8]`, then `^[14]`, `^[15]` on one real
+    # thread). `citations.compact_display_numbers` renumbers the served prose to the order
+    # it cites, and the map it returns is what the presentation layer resolves the new
+    # numbers through, so a pill, a drawer row and an evaluation source keep naming the
+    # same passage. Recorded on the state because presentation may not recompute it and
+    # the trace must record what the caller was served (Charter 13 Law 5).
+    display: dict[str, int] = {}
+    if message is not None and isinstance(message.content, str) and message.content:
+        message.content, display = citations.compact_display_numbers(message.content)
+    deterministic_display = state.get("deterministic_answer")
+    if isinstance(deterministic_display, str) and deterministic_display:
+        compacted, deterministic_map = citations.compact_display_numbers(
+            deterministic_display)
+        state["deterministic_answer"] = compacted
+        display = display or deterministic_map
+    if display:
+        state["citation_display_map"] = display
+
     if removed:
         # This pass ran AFTER `guard_answer`, so its verdicts used to be thrown away:
         # the answer a reader was served could be missing a citation while

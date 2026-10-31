@@ -56,6 +56,10 @@ from services.agent.routing import encounter
 # 2026-10-26). What decides the comparison now is `a2ui`/`risk_canvas`, from the chart the
 # turn read; this module answers only "which tools run".
 from services.mcp.retrieval.sections import SUMMARY_SECTIONS
+# The analyte vocabulary is a shared label map, not a routing predicate: the presentation
+# layer needs the same answer and may not import this module (Charter 13 §5). Re-exported
+# through this namespace because this is where the tests and `graph` have always read it.
+from shared.labels import LAB_ANALYTE_WORDS, names_an_analyte  # noqa: F401 — re-exported
 
 class UnknownCommand(ValueError):
     """An intent arrived that this table does not define."""
@@ -602,29 +606,11 @@ def asks_for_risk_score(question: str) -> bool:
 #: False: `\b` after "cell" has no boundary before the plural "s". Eight of the ten
 #: labels the series can produce could not satisfy it. A test now holds this list to
 #: `synthetic.PANEL`, so an analyte cannot be added without a name here.
-_LAB_ANALYTE_WORDS = (
-    # The five the model scores on, whose driver drill-downs are the other caller.
-    "hemoglobin", "haemoglobin", "hgb", "hb",
-    "sodium",
-    "red blood cell", "rbc", "erythrocyte",
-    "rdw", "red cell distribution width",
-    "monocyte",
-    # The clinical panel: carried by the series, never model inputs.
-    "creatinine",
-    "egfr", "gfr",
-    "potassium",
-    "white blood cell", "wbc", "leukocyte",
-    "nt-probnp", "bnp",
-)
-
-#: Every word above, and its plural. The series labels are written in the plural that
-#: clinicians use ("Red blood cells"), so a singular-only stem is the bug this prevents.
-_LAB_ANALYTE = re.compile(
-    r"\b(?:" + "|".join(re.escape(word) + "s?" for word in _LAB_ANALYTE_WORDS) + r")\b",
-    re.IGNORECASE,
-)
-
-
+#:
+#: The words themselves moved to `shared/labels.py` when the presentation layer needed
+#: the same question answered — it may not import `routing/`, and a second copy is the
+#: duplication Charter 13 Law 4 forbids. `LAB_ANALYTE_WORDS` is re-exported here so the
+#: test that holds it to the panel still reads it from the module that owns the decision.
 def asks_about_a_lab_analyte(question: str) -> bool:
     """Whether this question is about a laboratory measurement rather than a count.
 
@@ -639,8 +625,11 @@ def asks_about_a_lab_analyte(question: str) -> bool:
 
     Negative for anything that names no analyte, which is the safe direction: the tool
     is withheld, and a note search still answers what the record says.
+
+    The vocabulary is `shared/labels.py`'s. This asks it, so the routing decision and the
+    presentation surface cannot disagree about whether a question named an analyte.
     """
-    return bool(_LAB_ANALYTE.search(question or ""))
+    return names_an_analyte(question)
 
 
 def _templated_arguments(args: dict, hadm_id: int | None,

@@ -289,3 +289,82 @@ def _component_kinds(envelope: dict) -> list[str]:
         for component in (message.get("updateComponents") or {}).get("components") or []:
             kinds.append(str(component.get("component") or ""))
     return kinds
+
+
+# --------------------------------------------------------------------------- #
+# Contract 5 — the reader gets 1..K; the array keeps its numbering
+# --------------------------------------------------------------------------- #
+
+REPLAY = [
+    {"name": "rag_search_sections", "args": {}, "response": {"passages": [
+        {"section": "brief_hospital_course", "text": "Course."},
+        {"section": "discharge_diagnosis", "text": "Diagnosis."},
+        {"section": "discharge_medications", "text": "Meds."},
+        {"section": "discharge_instructions", "text": "Instructions."},
+    ]}},
+    {"name": "rag_search", "args": {}, "response": {"passages": [
+        {"section": f"section_{i}", "text": f"passage {i}"} for i in range(9)
+    ]}},
+]
+LAB_PANEL = {"name": "get_lab_trends", "args": {}, "response": {"trends": [
+    {"label": "RDW", "series": [{"day": 0, "value": 12.0}]},
+    {"label": "Sodium", "series": [{"day": 0, "value": 140.0}]},
+]}}
+LATER_PASSAGE = {"name": "rag_search", "args": {}, "response": {"passages": [
+    {"section": "discharge_instructions", "text": "Follow up in one week."},
+]}}
+
+
+def test_settlement_compacts_the_markers_while_the_array_keeps_its_positions():
+    """Charter 13 Law 1 and Law 5, from the reader's side.
+
+    Turn 3 of the 90000023 thread was served `^[14]` and `^[15]`: the positions of two
+    laboratory series in a conversation array 13 units deep. The numbers were correct and
+    unreadable. Settlement now renumbers the served prose to the order it cites, and
+    publishes the map back to the array so a pill, a drawer row and an evaluation source
+    keep naming the same unit.
+
+    Both halves are asserted. A fix that compacted the prose without the map would point
+    every pill at the wrong passage — the failure this contract exists to prevent.
+    """
+    from services.agent.postprocess import answer as answer_text
+
+    state = {
+        "messages": [_ai_message("Notes do not rank them ^[14], ^[15].")],
+        "tool_calls": [LAB_PANEL, LATER_PASSAGE],
+        "replayed_tool_calls": REPLAY,
+        "deterministic_answer": None,
+    }
+
+    # The array is 16 units, so the two cited ones are the panel's analytes at 14 and 15.
+    assert citations.citation_bound(state["tool_calls"],
+                                    state["replayed_tool_calls"]) == 16
+
+    answer_text.sanitize_answer_markers(state)
+
+    assert state["messages"][-1].content == "Notes do not rank them ^[1], ^[2]."
+    assert state["citation_display_map"] == {"1": 14, "2": 15}
+
+
+def test_a_free_text_turn_that_read_the_panel_does_not_draw_it():
+    """The card answers "show me the course"; a question about something else did not ask.
+
+    Turn 3 read the panel and drew it under an answer that never discussed it. The tool
+    stays bound — the prompt prefers a series for every quantitative value, so withholding
+    it would trade one defect for a worse one — and the SURFACE is what is scoped.
+    """
+    drawn = compose_presentation(
+        "which issue should be treated first?",
+        "The record does not rank the conditions.^[1]",
+        [LAB_PANEL],
+    )
+    assert "LabTrendCard" not in _component_kinds(drawn["a2ui"])
+
+    # The baseline that must survive: a question that names an analyte still gets it.
+    named = compose_presentation(
+        "how did her sodium move?",
+        "Sodium rose.^[1]",
+        [LAB_PANEL],
+    )
+    assert "LabTrendCard" in _component_kinds(named["a2ui"])
+

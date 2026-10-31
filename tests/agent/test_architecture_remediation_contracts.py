@@ -368,3 +368,50 @@ def test_a_free_text_turn_that_read_the_panel_does_not_draw_it():
     )
     assert "LabTrendCard" in _component_kinds(named["a2ui"])
 
+
+# --------------------------------------------------------------------------- #
+# Contract 6 — settlement acts on prose, not on the message's container
+# --------------------------------------------------------------------------- #
+
+def test_settlement_settles_a_streamed_answer_whose_content_is_blocks():
+    """Charter 13 Law 1: the bound applies to every served answer, whatever its shape.
+
+    A model message's `content` is not always a string. Gemini answers in content blocks,
+    so the streamed free-text turn accumulates `[{'type': 'text', 'text': '…'}]` — the
+    shape `engine/model.text_of` exists to unwrap. Settlement gated every step on
+    `isinstance(content, str)`, so on every streamed turn it enforced nothing: markers
+    past the end of the array were served, and no numbering was applied. Patient 90000023
+    turn 3 was served `^[23]` against a shorter array (`agent-00227-n7g`, 2026-10-31).
+
+    Both halves are asserted: the in-range marker is renumbered for the reader, and the
+    out-of-range one is removed and reported. A test that only checked the first would
+    pass against a settlement that still did no enforcement.
+    """
+    import asyncio
+    from unittest.mock import patch
+
+    from services.agent.engine import graph as graph_module
+
+    replay = [{"name": "rag_search_sections", "args": {}, "response": {"passages": [
+        {"section": f"s{i}", "text": f"section {i}"} for i in range(4)
+    ]}}]
+    this_turn = [{"name": "rag_search", "args": {}, "response": {"passages": [
+        {"section": f"p{i}", "text": f"passage {i}"} for i in range(5)
+    ]}}]
+    blocks = [{"type": "text", "text": "The notes do not rank them ^[5]. "
+                                      "The record lists them ^[99]."}]
+
+    class _Stub:
+        async def ainvoke(self, *_args, **_kwargs):
+            return {"messages": [_ai_message(blocks)], "tool_calls": this_turn,
+                    "replayed_tool_calls": replay}
+
+    with patch.object(graph_module, "build_graph", lambda *_a, **_k: _Stub()):
+        state = asyncio.run(graph_module.ask(
+            object(), "which issue first? For admission 90000023."))
+
+    assert state["messages"][-1].content == (
+        "The notes do not rank them ^[1]. The record lists them.")
+    assert state["citation_display_map"] == {"1": 5}
+    assert state["guardrail_flags"] == ["citation_out_of_range:^99"]
+

@@ -974,7 +974,11 @@ async def ask(
                 question, question_kind)
             # The command's answer is settled before anything reads it: a marker removed
             # after the trace is written would still be in the record the judge scores.
-            answer_text.sanitize_answer_markers(command_state)
+            # The PROSE is passed rather than left to be read off the message, because a
+            # model message's content is a list of blocks on any Gemini turn and the
+            # settlement works on text — see `answer.settle_answer`. Applied here rather
+            # than by `postprocess`, which may not edit this state (Charter 13 §3).
+            _settle(command_state, prose=final_text(command_state))
             # `tools:<n>` cannot be known when the span opens. `tools:0` is the tag the
             # triage view filters on, so it is added here, once the count exists.
             observability.stamp_trace_tags(
@@ -1173,7 +1177,12 @@ async def ask(
     # A marker that addresses no citable unit is not a citation. Removed here, where the
     # answer is settled, so the guardrails and the presentation see the same text — and so
     # the trace `turn.py` writes afterwards records the answer that was actually served.
-    answer_text.sanitize_answer_markers(state)
+    #
+    # `final_text` is what makes this work on the free-text route: the streamed turn
+    # returns an `AIMessageChunk` whose content is a list of content blocks, so a
+    # settlement that read `message.content` as a string found nothing to settle and
+    # enforced nothing (`agent-00227-n7g`, 2026-10-31).
+    _settle(state, prose=final_text(state))
 
     # The trace id leaves with the state so the layers that need to point back at
     # a run can: `collect.py` stores it per case, and `judge.py` attaches rubric
@@ -1308,6 +1317,41 @@ async def replay_messages(
             })
         messages.append(AIMessage(content=turn["answer"]))
     return messages, calls
+
+
+def _settle(state: dict, *, prose: str | None) -> None:
+    """Apply settlement to this state — the engine's half of the boundary.
+
+    `postprocess` decides what the answer's markers become and returns it as a value
+    (`answer.settle_answer`); writing it back belongs here, because this layer owns the
+    state and Charter 13 §3 forbids `postprocess` from editing LangGraph state directly.
+    The two halves used to be one function, which meant the package that decides was also
+    the package that wrote.
+
+    `prose` is the answer as TEXT, unwrapped from the message's content blocks by the
+    caller — a settlement that read `message.content` itself found nothing to settle on
+    every streamed turn.
+    """
+    settled = answer_text.settle_answer(
+        prose=prose,
+        deterministic=state.get("deterministic_answer"),
+        tool_calls=state.get("tool_calls") or [],
+        replayed_tool_calls=state.get("replayed_tool_calls") or [],
+        wants_literature=bool(state.get("wants_literature")),
+    )
+    message = final_message(state)
+    if message is not None and settled.prose is not None:
+        # Written back as text. Anything that read the blocks reads `final_text`, so the
+        # narrowing is invisible to them; the finish reason, the content-filter verdict
+        # and token usage live on `response_metadata` / `usage_metadata`.
+        message.content = settled.prose
+    if settled.deterministic is not None:
+        state["deterministic_answer"] = settled.deterministic
+    if settled.display:
+        state["citation_display_map"] = dict(settled.display)
+    if settled.flags:
+        state["guardrail_flags"] = [*(state.get("guardrail_flags") or []),
+                                    *settled.flags]
 
 
 def final_message(state: dict) -> AIMessage | None:

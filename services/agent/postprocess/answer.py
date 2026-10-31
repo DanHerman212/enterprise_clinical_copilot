@@ -26,6 +26,7 @@ the first place.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from typing import Any
 
 from langchain_core.messages import AIMessage
@@ -290,24 +291,52 @@ def _asked_about(question: str) -> str:
     return (head if marker else (question or "")).strip()
 
 
-def sanitize_answer_markers(state: dict) -> None:
-    """Apply the citation bound to the answer this turn will serve.
+@dataclass(frozen=True)
+class Settlement:
+    """The settled answer, as a value rather than as a set of edits.
 
-    Applied at settlement — the one point both routes pass through — rather than in the
-    presentation layer, because the trace, the judge and the browser read the answer from
-    three different places and only the state is common to all three.
-
-    Both answer channels are cleaned: the model's prose, and a command's
-    `deterministic_answer` (which for `/meds` is written in code and carries its own
-    `^[1]`).
-
-    The bound and the enforcement are `citations`'. This function only decides *which
-    string* is the turn's answer; it does not decide what a citation is, and it holds no
-    regex.
+    Charter 13 §3 forbids this package from mutating LangGraph state directly, and the
+    served path now does not: `settle_answer` takes plain data and returns this, and the
+    engine applies it. The two channels are separate fields because a command carries its
+    answer in `deterministic_answer` while a free-text turn carries it in the model's
+    message, and a settlement that collapsed them would have to know which one won.
     """
-    bound = citations.citation_bound(
-        state.get("tool_calls") or [], state.get("replayed_tool_calls") or [],
-    )
+
+    #: The prose to serve, already swept, bounded and renumbered for the reader.
+    prose: str | None = None
+    #: A command's own answer, settled by the same rules.
+    deterministic: str | None = None
+    #: `{display_number: position in the conversation's evidence array}`, or empty.
+    display: dict[str, int] = field(default_factory=dict)
+    #: What settlement removed, for `guardrail_flags`.
+    flags: tuple[str, ...] = ()
+
+
+def settle_answer(
+    *,
+    prose: str | None,
+    deterministic: str | None,
+    tool_calls: list[dict] | None,
+    replayed_tool_calls: list[dict] | None,
+    wants_literature: bool = False,
+) -> Settlement:
+    """Decide the answer's markers: vocabulary, bound, then the reader's numbering.
+
+    Pure. It reads the turn's calls and the two strings and returns what to serve; it
+    takes no state object, so it cannot edit one — which is what makes the boundary a
+    contract rather than a convention, and what lets the whole decision be tested without
+    a graph.
+
+    `prose` must be TEXT. A model message's `content` is not reliably a string: Gemini
+    answers in content blocks, so the streamed path accumulates
+    `[{'type': 'text', 'text': '…'}]`. Settlement used to gate every step on
+    `isinstance(content, str)`, which made it a silent no-op on every streamed free-text
+    turn — no vocabulary sweep, no bound, no numbering, and markers past the end of the
+    array reached the reader (`agent-00227-n7g`, patient 90000023 turn 3, 2026-10-31).
+    The caller unwraps (`graph.final_text`) because the engine owns the container and this
+    module owns the prose.
+    """
+    bound = citations.citation_bound(tool_calls or [], replayed_tool_calls or [])
     # The badge allowance follows the same rule the bound does, on the one axis where it
     # may: a turn that is itself about published records can cite the records the replay
     # showed it. `wants_literature` is stamped once by `graph.ask` — the decision that let
@@ -315,64 +344,84 @@ def sanitize_answer_markers(state: dict) -> None:
     # of that decision rather than a second opinion about the question, and a chart turn
     # still cites nothing it was not shown.
     pmids = citations.literature_pmids(
-        state.get("tool_calls") or [],
-        (state.get("replayed_tool_calls") or None)
-        if state.get("wants_literature") else None,
+        tool_calls or [], (replayed_tool_calls or None) if wants_literature else None,
     )
-    message = _final_message(state)
-    removed: list[str] = []
-    # The marker VOCABULARY first, then the bound. A marker that is neither a number nor
-    # a PMID badge is not a citation, and it is not this pass's arithmetic to delete —
-    # but this pass is the last one before the prose is read by three different consumers
-    # (the trace, the judge, the browser), and the presentation layer no longer rewrites
-    # what it publishes (Charter 13 Law 5). So the sweep `renumber_citations` used to do
-    # on the way to the canvas happens here, on the answer itself.
-    if message is not None and isinstance(message.content, str):
-        message.content = citations.drop_unknown_markers(message.content)
-    deterministic_marker = state.get("deterministic_answer")
-    if isinstance(deterministic_marker, str) and deterministic_marker:
-        state["deterministic_answer"] = citations.drop_unknown_markers(
-            deterministic_marker)
-    if message is not None and isinstance(message.content, str):
-        cleaned, found = citations.enforce_citations(message.content, bound, pmids)
-        removed.extend(found)
-        if cleaned != message.content:
-            message.content = cleaned
-    deterministic = state.get("deterministic_answer")
+
+    flags: list[str] = []
+    settled_prose: str | None = None
+    if prose:
+        # The marker VOCABULARY first, then the bound. A marker that is neither a number
+        # nor a PMID badge is not a citation, and this pass is the last one before three
+        # consumers read the prose (the trace, the judge, the browser), while the
+        # presentation layer no longer rewrites what it publishes (Charter 13 Law 5). So
+        # the sweep `renumber_citations` used to do on the way to the canvas happens here.
+        swept = citations.drop_unknown_markers(prose)
+        settled_prose, found = citations.enforce_citations(swept, bound, pmids)
+        flags.extend(found)
+
+    settled_deterministic: str | None = None
     if isinstance(deterministic, str) and deterministic:
-        cleaned, found = citations.enforce_citations(deterministic, bound, pmids)
-        removed.extend(found)
-        if cleaned != deterministic:
-            state["deterministic_answer"] = cleaned
+        swept = citations.drop_unknown_markers(deterministic)
+        settled_deterministic, found = citations.enforce_citations(swept, bound, pmids)
+        flags.extend(found)
+    else:
+        settled_deterministic = deterministic
 
     # The page's numbering, last and separate from the array's. A marker's number is the
     # position of its unit in the conversation's evidence array — cumulative across
     # turns, which is what makes a follow-up citable at all — and a reader should not be
     # shown the gaps that produces (`^[5]`, `^[8]`, then `^[14]`, `^[15]` on one real
-    # thread). `citations.compact_display_numbers` renumbers the served prose to the order
-    # it cites, and the map it returns is what the presentation layer resolves the new
-    # numbers through, so a pill, a drawer row and an evaluation source keep naming the
-    # same passage. Recorded on the state because presentation may not recompute it and
-    # the trace must record what the caller was served (Charter 13 Law 5).
+    # thread). `compact_display_numbers` renumbers the served prose to the order it cites
+    # and returns the map the presentation layer resolves the new numbers through, so a
+    # pill, a drawer row and an evaluation source keep naming the same passage.
     display: dict[str, int] = {}
-    if message is not None and isinstance(message.content, str) and message.content:
-        message.content, display = citations.compact_display_numbers(message.content)
-    deterministic_display = state.get("deterministic_answer")
-    if isinstance(deterministic_display, str) and deterministic_display:
+    if settled_prose:
+        settled_prose, display = citations.compact_display_numbers(settled_prose)
+    if settled_deterministic:
         compacted, deterministic_map = citations.compact_display_numbers(
-            deterministic_display)
-        state["deterministic_answer"] = compacted
+            settled_deterministic)
+        settled_deterministic = compacted
         display = display or deterministic_map
-    if display:
-        state["citation_display_map"] = display
 
-    if removed:
-        # This pass ran AFTER `guard_answer`, so its verdicts used to be thrown away:
+    return Settlement(prose=settled_prose, deterministic=settled_deterministic,
+                      display=display, flags=tuple(flags))
+
+
+def sanitize_answer_markers(state: dict, text: str | None = None) -> None:
+    """Apply `settle_answer` to a state dict. Kept for callers that hold one.
+
+    This is the state-shaped form and it edits the state it is given, which is why the
+    served path no longer goes through it: `graph.ask` calls `settle_answer` and writes the
+    result itself, so the engine owns its own state and this package owns prose only
+    (Charter 13 §3). The adapter stays because it is the documented entry point for
+    settlement and because existing callers assert against a state — the two are the only
+    reason it exists, and keeping the decision in `settle_answer` means there is still one
+    implementation of it.
+    """
+    message = _final_message(state)
+    prose = text
+    if prose is None and message is not None and isinstance(message.content, str):
+        prose = message.content
+    settled = settle_answer(
+        prose=prose,
+        deterministic=state.get("deterministic_answer"),
+        tool_calls=state.get("tool_calls") or [],
+        replayed_tool_calls=state.get("replayed_tool_calls") or [],
+        wants_literature=bool(state.get("wants_literature")),
+    )
+    if message is not None and settled.prose is not None:
+        message.content = settled.prose
+    if settled.deterministic is not None:
+        state["deterministic_answer"] = settled.deterministic
+    if settled.display:
+        state["citation_display_map"] = dict(settled.display)
+    if settled.flags:
+        # Settlement runs AFTER `guard_answer`, so its verdicts used to be thrown away:
         # the answer a reader was served could be missing a citation while
         # `guardrail_flags` said the turn was clean (2026-10-30, a turn whose two PMID
         # badges were removed at settlement and reported as `guardrail_flags: []`).
-        # Recorded on the state, where `turn` merges it into the payload.
-        state["guardrail_flags"] = [*(state.get("guardrail_flags") or []), *removed]
+        state["guardrail_flags"] = [*(state.get("guardrail_flags") or []),
+                                    *settled.flags]
 
 
 def no_evidence_answer(

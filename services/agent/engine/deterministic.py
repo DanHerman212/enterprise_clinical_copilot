@@ -503,7 +503,7 @@ async def run_command(
             "tool_calls": recorded,
             "replayed_tool_calls": replayed_calls or [],
             "command": command.wire,
-            "deterministic_answer": answer_text.OUTPATIENT_EHR_NOTICE,
+            "deterministic_answer": answer_text.outpatient_ehr_notice(),
         }
 
     # `/meds` cites with one marker, so the passages it cites have to be one passage.
@@ -610,9 +610,12 @@ async def run_command(
         # was served as the first: three PMIDs in the drawer beneath "I don't have an
         # answer for that", with `finish_reason=SAFETY` and
         # `HARM_CATEGORY_DANGEROUS_CONTENT` in the trace the whole time.
-        withheld = model_turn.finish_reason(response) == "SAFETY" or bool(
-            model_turn.blocked_reason(response))
-        if withheld and _retrieved_records(recorded):
+        withheld = answer_text.reply_withheld(
+            model_turn.finish_reason(response),
+            blocked=bool(model_turn.blocked_reason(response)),
+        )
+        records = _retrieved_records(recorded)
+        if withheld and records:
             logger.warning(
                 "command.%s: the formatting reply was withheld (%s%s); serving the %d "
                 "retrieved record(s) without a summary",
@@ -620,14 +623,17 @@ async def run_command(
                 model_turn.finish_reason(response) or "unreported",
                 "".join(f", {category}"
                         for category in model_turn.filtered_categories(response) or []),
-                len(_retrieved_records(recorded)),
+                len(records),
             )
-            state["deterministic_answer"] = answer_text.SAFETY_WITHHELD_SUMMARY
-        else:
-            state["deterministic_answer"] = (
-                answer_text.OUTPATIENT_SILENT_TURN_SENTENCE if outpatient_record
-                else answer_text.SILENT_TURN_SENTENCE
-            )
+        # Which sentence that is, and why, is `postprocess.answer`'s decision: this route
+        # knows the facts of the turn and nothing about the wording or the reader's
+        # situation. It is invoked rather than selected (Charter 13 Law 2).
+        state["deterministic_answer"] = answer_text.empty_turn_sentence(
+            finish_reason=model_turn.finish_reason(response),
+            blocked=bool(model_turn.blocked_reason(response)),
+            records_retrieved=len(records),
+            outpatient=outpatient_record,
+        )
 
     if command.wire == "meds":
         source = _source_text(recorded)

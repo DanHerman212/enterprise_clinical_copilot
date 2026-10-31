@@ -304,6 +304,17 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
     # contradicting what it was handed.
     lab_caption = ""
     lab_trends = (labs or {}).get("trends") if isinstance(labs, dict) else None
+    # A turn that draws the literature does not also draw a chart (Phase 6; audit §2.2).
+    #
+    # The card used to be appended before the search was consulted, so a turn that both
+    # searched and read a laboratory panel carried the sparkline panel under a literature
+    # answer — reachable exactly while a literature question could keep `get_lab_trends`
+    # bound (Contract 2). One surface claims the column: the records ARE the answer here,
+    # and a chart beside them says the reader's question was about the course, which it
+    # was not. A chart turn still draws its card — see `command="labs"`.
+    literature_view = _literature_view(literature)
+    if literature_view is not None and isinstance(lab_trends, list) and lab_trends:
+        lab_trends = []
     if isinstance(lab_trends, list) and lab_trends:
         count = len(lab_trends)
         lab_caption = (
@@ -320,7 +331,6 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
         })
 
     estimate = _usable_estimate(predict)
-    literature_view = _literature_view(literature)
     if literature_view is not None:
         articles, note, degraded = literature_view
     else:

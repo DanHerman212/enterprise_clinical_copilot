@@ -90,10 +90,7 @@ from services.mcp.contracts import LiteratureArticle, LiteratureResult  # noqa: 
 # gains nothing by holding on to them. It is also the one tool with no admission
 # attached, so there is no note text among its results for the store to be careful
 # with in the first place.
-RE_DERIVABLE_TOOLS = frozenset(
-    {"rag_search", "rag_search_sections", "discharge_medications",
-     "search_literature"}
-)
+RE_DERIVABLE_TOOLS = routing.PASSAGE_TOOLS | routing.LITERATURE_TOOLS
 #: Results a caller must keep if it wants to replay a turn cheaply.
 #:
 #: `predict_readmission` was alone here until Phase 5C. `get_lab_trends` joined it on
@@ -106,7 +103,11 @@ RE_DERIVABLE_TOOLS = frozenset(
 #: series is values, intervals and flags, generated from the admission's own feature
 #: row — it carries no note prose — so keeping it in the site's database costs nothing
 #: the memory policy protects, and it stops the round trip.
-RESULT_KEPT_TOOLS = frozenset({"predict_readmission", "get_lab_trends"})
+#:
+#: The set itself is declared in `routing` (Charter 13 Law 4) and re-exported here,
+#: because this module is where callers have always found it and a rename should be a
+#: one-line change rather than a search.
+RESULT_KEPT_TOOLS = routing.RESULT_KEPT_TOOLS
 
 
 class AgentSuccess(TypedDict):

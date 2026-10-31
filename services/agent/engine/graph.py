@@ -174,14 +174,7 @@ RECURSION_LIMIT = 25
 #:
 #: `rag_search` is deliberately NOT here: a follow-up asks a new question, and the
 #: recorded search answered the old one.
-ONCE_PER_TRANSCRIPT: frozenset[str] = frozenset({
-    "rag_search_sections", "get_lab_trends", "discharge_medications",
-    # A Turn 2 follow-up that re-asks the score would re-run the model and re-draw the
-    # driver bars under an answer that is supposed to reuse the estimate it already
-    # has. `_transcript_carries_attribution` reads the same replay for the narrative
-    # path; this closes the binding path, so the tool is absent rather than refused.
-    "predict_readmission",
-})
+ONCE_PER_TRANSCRIPT: frozenset[str] = routing.ONCE_PER_TRANSCRIPT_TOOLS
 
 #: Tools whose transcript allowance depends on WHAT was fetched rather than that it was.
 #:
@@ -189,7 +182,7 @@ ONCE_PER_TRANSCRIPT: frozenset[str] = frozenset({
 #: panel, and every later lab question is answerable from the payload already in the
 #: transcript; called with one it draws that analyte alone, so the rest of the panel is
 #: still unread and a follow-up about a different analyte has somewhere to go.
-FULL_FETCH_UNFILTERED: frozenset[str] = frozenset({"get_lab_trends"})
+FULL_FETCH_UNFILTERED: frozenset[str] = routing.FULL_FETCH_UNFILTERED_TOOLS
 
 # What a turn says when its lookup budget is gone and the model still wants to look
 # something up. A turn that has spent its budget is given no tools, but a model can
@@ -409,7 +402,11 @@ def _freetext_allowed(risk_driver_question: bool,
     """
     allowed = set(routing.FREETEXT_TOOLS)
     if wants_literature and not declared_follow_up:
-        allowed |= routing.LITERATURE_TOOLS
+        # Literature PLUS the record retrieval the question is asked against — not the
+        # union of literature and the whole standing set. `routing` owns which tools
+        # those are; the reason it is a narrowing rather than a widening is in
+        # `LITERATURE_QUESTION_TOOLS`'s own comment (Phase 4; audit §2.1).
+        allowed = set(routing.LITERATURE_QUESTION_TOOLS)
     if (risk_driver_question or risk_score_question) and not declared_follow_up:
         allowed.add("predict_readmission")
     if risk_driver_question:
@@ -1119,7 +1116,7 @@ async def ask(
     # prose. A reply that is not the envelope is left exactly as it arrived.
     reply = read_evidence_reply(final_text(state))
     if reply.text != final_text(state):
-        answer_text.replace_final_text(state, reply.text)
+        answer_text.apply_model_reply(state, reply.text)
 
     # A question the notes did not answer is answered here rather than by the model,
     # which has already written something plausible that nobody will see (see
@@ -1141,7 +1138,7 @@ async def ask(
             ",".join(call.get("name") or "?" for call in state.get("tool_calls") or [])
             or "none",
         )
-        answer_text.replace_final_text(state, "")
+        answer_text.reject_model_reply(state)
 
     # A marker that addresses no citable unit is not a citation. Removed here, where the
     # answer is settled, so the guardrails and the presentation see the same text — and so

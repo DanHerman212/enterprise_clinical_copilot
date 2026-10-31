@@ -229,10 +229,19 @@ def test_an_outpatient_turn_carries_the_encounter_notice():
 
 
 def test_an_outpatient_record_is_not_comparable_against_a_cohort():
-    """The comparative table needs a stay; a visit has nothing to compare."""
+    """The comparative table needs a stay; a visit has nothing to compare.
+
+    The encounter is passed as an ARGUMENT, which is where it moved in `f070bb6`:
+    `is_matrix_eligible` no longer reads `routing.encounter` itself, because that module
+    is not the authority on which records are visits — it is told. The `set_current` calls
+    are kept beside the argument so the test still states the encounter of the turn it is
+    describing, and a future change that makes the function read the context again would
+    have to answer for both.
+    """
     for hadm_id in sorted(OUTPATIENT):
         encounter.set_current(encounter.OUTPATIENT)
-        assert admission_phenotypes.is_matrix_eligible(hadm_id) is False, hadm_id
+        assert admission_phenotypes.is_matrix_eligible(
+            hadm_id, is_outpatient=True) is False, hadm_id
     # The control: an inpatient admission is eligible.
     encounter.set_current(encounter.INPATIENT)
     assert admission_phenotypes.is_matrix_eligible(90000023) is True

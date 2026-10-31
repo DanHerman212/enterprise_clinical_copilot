@@ -18,10 +18,11 @@ Three rules this module exists to enforce:
    version drifts, the caller still has something true to show. A demo that
    renders nothing is worse than one that renders plainly.
 
-3. **The model's citation numbers are advisory.** They are renumbered
-   deterministically (first appearance order) and the SourceCard resolves its
-   passage by section intent, not by the model's numbering — see
-   `services/agent/citations.py`.
+3. **The model's citation numbers are the numbering.** This layer resolves a
+   marker against the array the model was shown and draws the evidence it points
+   at; it does not rewrite the prose. The SourceCard resolves its passage by
+   section intent, not by the model's numbering — see
+   `services/agent/postprocess/citations.py`.
 
 The payload shape is v0.9, which is *not* backward compatible with the v0.8
 examples that dominate search results. In v0.9 `component` is a string and
@@ -38,12 +39,22 @@ together.
 """
 
 from services.agent.postprocess.citations import (
-    citation_remap,
+    RETRIEVAL_TOOLS,
+    EvidenceLedger,
+    cited_numbers,
     citable_passages,
     first_citation,
     intent_sections,
     literature_articles,
     literature_calls,
+)
+# The two numbering helpers stay importable from here, and are NOT used by this module:
+# callers that keep an answer in the expanded form — a stored transcript, a replayed
+# `resolve_sources` call in the tests — need to ask the same question of the same module
+# the answer was settled in. This layer no longer calls them (Charter 13 Law 1; audit
+# L1-1): a marker is resolved and drawn here, never rewritten.
+from services.agent.postprocess.citations import (  # noqa: F401 — re-exported
+    citation_remap,
     renumber_citations,
 )
 from services.agent.presentation.domain import (
@@ -119,10 +130,13 @@ def rag_payload(tool_calls: list[dict]) -> dict | None:
 
     A single call is returned untouched, which is every command turn and most free-text
     ones — the merge only exists for the multi-call turn it was always wrong for.
+
+    Which tools are retrieval tools is `routing.PASSAGE_TOOLS`'s fact, imported rather
+    than restated: this module held the only other copy of that grouping outside
+    `routing/` (Charter 13 Law 4).
     """
     rag_calls = [call for call in tool_calls or []
-                 if call.get("name") in ("rag_search", "rag_search_sections",
-                                         "discharge_medications")
+                 if call.get("name") in RETRIEVAL_TOOLS
                  and isinstance(call.get("response"), dict)]
     if not rag_calls:
         return None
@@ -326,8 +340,8 @@ def compose_presentation(question: str, answer: str,
     evidence semantics are decided in exactly one place (here) and the BFF is
     a pass-through:
 
-      - answer: the guarded answer with citations renumbered to
-        first-appearance order
+      - answer: the settled answer, VERBATIM — this layer resolves its citations
+        and draws them, and does not rewrite the prose the trace recorded
       - sources: one resolved {cite, section, text, query} per citation in
         the answer — the browser looks a clicked footnote up by number
       - scope: what the answer rested on, or None when it rested on nothing —
@@ -360,8 +374,11 @@ def compose_presentation(question: str, answer: str,
     Pure — no I/O, no clock, no randomness — so it is fully testable without
     a browser or a live endpoint.
     """
-    renumbered = renumber_citations(answer)
-    remap = citation_remap(answer)
+    # The answer is published unchanged. Rewriting it here — expanding `^[4, 5]` into
+    # `^[4] ^[5]`, or reassigning numbers — meant the prose `turn.py` recorded on the
+    # trace and the prose the browser rendered were produced by two layers, and they
+    # disagreed about the text of one turn (Charter 13 Law 5; audit L1-1/L5). A marker is
+    # this layer's to RESOLVE and DRAW, not to rewrite.
     intent = intent_sections(question)
     # `evidence` is every call the conversation has shown the model — the replayed turns
     # first, then this one — because that is the array the answer's markers are numbered
@@ -369,17 +386,11 @@ def compose_presentation(question: str, answer: str,
     # against this turn's calls alone left a follow-up that quoted the chart with a
     # marker that pointed at nothing (TF-10, 2026-10-23).
     evidence_calls = list(evidence) if evidence is not None else tool_calls
-    # Where the published records start in the numbering. A marker's number is the
-    # POSITION of its unit in the array the conversation handed the model, so the
-    # records continue after every citable unit of that array — not after the number of
-    # passages whose markers survived. A turn that cited passages 4 and 7 has used up to
-    # 7 while only two rows resolve, and numbering the records from 3 gave a published
-    # record the same number as note passage 4 (2026-10-30: a drawer listing one note row
-    # and no records, from a list where two sources claimed the same number).
-    literature_start = sum(
-        len(citable_passages((call or {}).get("response")))
-        for call in evidence_calls
-    ) + 1
+    # One array, one count, one place the published records start (Phase 4; audit §2.3).
+    # Both were derived here before — `sum(len(citable_passages(...)))` — which made the
+    # presentation layer a second slot counter beside the guardrail's.
+    ledger = EvidenceLedger.of(evidence_calls)
+    literature_start = ledger.literature_start
     rag = rag_payload(evidence_calls)
     # The literature surface is the search THIS turn answers from: its own, or — for a
     # turn whose question is about published records — the newest search in the replay.
@@ -420,9 +431,9 @@ def compose_presentation(question: str, answer: str,
     # patient's chart. What the turn publishes in `sources` is a wider list (see below);
     # what `verified` is decided from is this one, and the two must not be confused by a
     # later edit that adds a channel.
-    record_sources = resolve_sources(renumbered, remap, rag, intent,
+    record_sources = resolve_sources(answer, {}, rag, intent,
                                      evidence=evidence_calls)
-    narrative = _narrative(renumbered, record_sources, literature,
+    narrative = _narrative(answer, record_sources, literature,
                            literature_start=literature_start)
 
     scope = turn_scope(evidence_calls)
@@ -478,7 +489,7 @@ def compose_presentation(question: str, answer: str,
     # citations" against an empty sentence describes an omission that did not happen:
     # the canvas is the answer, and the reader was never shown a claim needing
     # attribution.
-    no_prose = not (renumbered or "").strip()
+    no_prose = not (answer or "").strip()
     scope_suppressed = (scope == SCOPE_PATIENT and not record_sources
                         and not lab_evidenced and not payload_evidenced
                         and not no_prose)
@@ -543,7 +554,7 @@ def compose_presentation(question: str, answer: str,
     canvas = compose_risk_canvas(
         predict_payload(tool_calls),
         rag,
-        cite=first_citation(renumbered),
+        cite=first_citation(answer),
         sections=intent,
         source=record_sources[0] if record_sources else None,
         literature=drawn_literature,
@@ -600,8 +611,12 @@ def compose_presentation(question: str, answer: str,
     references = reference_rows(published)
 
     return {
-        "answer": renumbered,
-        "citation_map": remap,
+        "answer": answer,
+        # The marker numbers are not reassigned, so this is the identity over the numbers
+        # the prose actually cites. Kept because the client translates a clicked pill
+        # through it, and because "no renumbering happened" is a fact worth publishing
+        # rather than a client assumption (Charter 13 Law 5).
+        "citation_map": {str(n): n for n in cited_numbers(answer)},
         "intent_sections": list(intent),
         # Note passages and laboratory trajectories first, then the published records the
         # search returned, then the cohorts the comparison table draws. Each group is

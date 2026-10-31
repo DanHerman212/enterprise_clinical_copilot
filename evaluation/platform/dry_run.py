@@ -169,11 +169,21 @@ def main() -> int:
         detail[key] = {e.name: e.value for e in result["evaluations"]
                        if e.name in ("structural", "verdict", "safety", "responsiveness")}
 
-    # card-only turn produced readable output rather than a blank
-    risk_out = task(item={"input": next(i for i in items
-                                        if i.command == "risk").model_dump()})
-    check("a card-only turn yields non-blank output",
-          "16.7%" in risk_out["turn_1_response"])
+    # A turn whose answer the canvas draws must still yield readable prose rather than a
+    # blank. `/risk` was that turn until it was retired on 2026-10-26 (`015f7eb`), when
+    # `/ehr` took its place in `CENSUS_PROMPTS`; `FakeAgent` lost its `/risk` branch in
+    # the same commit, so this lookup selected nothing and the run died of `StopIteration`
+    # before it could report. `/ehr` is the surviving turn that draws a card
+    # (`SummaryCard`) and carries the sentence beside it, which is the property the check
+    # is about — and it is asserted against the prose, not a score, because the sentence
+    # is what a client without the renderer would show.
+    ehr_out = task(item={"input": next(i for i in items
+                                       if i.command == "ehr").model_dump()})
+    check("a card turn yields readable output rather than a blank",
+          bool(str(ehr_out.get("turn_1_response") or "").strip()),
+          str(ehr_out.get("turn_1_response")))
+    check("the card turn's prose is the summary it drew",
+          "Summary of the admission" in str(ehr_out.get("turn_1_response") or ""))
 
     # structural failure short-circuited: judge not called for that item
     probe = [r for i, r in zip(items, item_results) if i.workflow_type == "single_probe"]

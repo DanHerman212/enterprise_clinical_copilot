@@ -224,9 +224,14 @@ def test_presentation_does_not_alter_the_answer_it_is_given():
     assert presentation["answer"] == settled, (
         "presentation must publish the settled prose unchanged (Charter 13 Law 5; "
         "audit L1-1/L5): the trace records the input, the caller reads the output")
-    # Baseline that must survive the fix: the two markers still reach the client, in
-    # the one shape its renderer can draw.
-    assert presentation["answer"].count("^[") == 2
+    # Baseline that must survive the fix: the marker cluster reaches the client
+    # unaltered. It is ONE marker here — `^[4, 5]` is a single cluster, and the count is
+    # one. Expanding it to `^[4] ^[5]` is the rewrite the assertion above forbids, and it
+    # is already done before this layer sees the text: `citations.enforce_citations`
+    # emits one marker per unit, so a cluster never survives settlement. What this pins
+    # is that the cluster form itself is not mistaken for two markers and rewritten.
+    assert presentation["answer"].count("^[") == 1
+    assert "^[4, 5]" in presentation["answer"]
 
 
 # --------------------------------------------------------------------------- #
@@ -245,9 +250,16 @@ def test_a_literature_turn_does_not_draw_a_lab_card():
     The payloads are the tool RESPONSES, which is what the composer takes: a call
     record would silently satisfy every `isinstance(x, dict)` test in here and prove
     nothing. The first run of this test passed the call records and measured nothing.
+
+    `narrative` is supplied because `compose_presentation` always supplies one, and the
+    records reach the reader through it: a literature turn publishes its articles as
+    numbered pills in the prose, so with prose present the canvas draws `CitedNarrative`
+    and no second copy of the list (Phase F). The fixture has to be the call the product
+    makes, or it measures a shape no caller produces.
     """
     envelope = compose_risk_canvas(
         None, None, literature=SEARCH["response"], labs=LABS,
+        narrative={"text": "One record supports this.^[1]", "citations": []},
         command="literature")
     kinds = _component_kinds(envelope)
 

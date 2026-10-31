@@ -33,6 +33,7 @@ from starlette.testclient import TestClient  # noqa: E402
 from services.agent.ingress import http as srv  # noqa: E402
 from services.agent.telemetry import stages  # noqa: E402
 from services.agent.engine.graph import MAX_TOOL_CALLS_PER_TURN, _execute_tool_calls  # noqa: E402
+from services.agent.engine.mcp_client import PER_TOOL_CALL_LIMIT  # noqa: E402
 
 
 class _StubToolbox:
@@ -202,19 +203,29 @@ def test_a_refused_call_announces_nothing():
 
     The calls are distinct on purpose. Identical ones are refused earlier, by the
     repeat rule, which would let this pass without the budget being the thing
-    that stopped them. They are `search_literature` rather than `get_lab_trends` since
-    Phase E (2026-10-26): the chart tools — note reads, the lab panel, the discharge
-    medication list — are each capped at one call per turn (`graph.ONCE_PER_TURN`), so a
-    hunger for those is stopped by the cap and would leave the budget untested here. A
-    literature search takes the clinician's own words and has no such cap, which makes it
-    the one tool a turn can legitimately spend its budget on.
+    that stopped them.
+
+    The fixture is shaped by the two caps that now sit under the budget. Every tool
+    except `search_literature` is capped at one call per turn (`graph.ONCE_PER_TURN`),
+    and every tool is capped at `PER_TOOL_CALL_LIMIT` calls (Phase 3, audit §2.1), so
+    the budget can only be reached by spreading the calls: two searches, which is the
+    per-tool allowance and the one tool a turn may legitimately repeat, and three
+    different chart tools. The sixth call is then a tool that has NOT been called and is
+    well inside its own allowance, so nothing but the turn budget can refuse it — which
+    is what keeps this a test of the budget rather than of whichever cap fired first.
     """
     box = _StubToolbox()
     events = []
     calls = [
-        {"name": "search_literature", "args": {"query": f"topic {i}"}, "id": str(i)}
-        for i in range(MAX_TOOL_CALLS_PER_TURN + 2)
+        {"name": "search_literature", "args": {"query": "topic one"}, "id": "1"},
+        {"name": "search_literature", "args": {"query": "topic two"}, "id": "2"},
+        {"name": "rag_search", "args": {"query": "a"}, "id": "3"},
+        {"name": "rag_search_sections", "args": {"section": "b"}, "id": "4"},
+        {"name": "discharge_medications", "args": {}, "id": "5"},
+        {"name": "get_lab_trends", "args": {"analyte": "creatinine"}, "id": "6"},
     ]
+    assert len(calls) - 1 == MAX_TOOL_CALLS_PER_TURN
+    assert len([c for c in calls if c["name"] == "search_literature"]) <= PER_TOOL_CALL_LIMIT
 
     _run(_execute_tool_calls(box, calls, events.append))
 
@@ -222,6 +233,8 @@ def test_a_refused_call_announces_nothing():
     # refused call contributes none of either.
     assert len(events) == MAX_TOOL_CALLS_PER_TURN * 2
     assert len(box.calls) == MAX_TOOL_CALLS_PER_TURN
+    # And the refused one is the sixth call, not one of the first five.
+    assert "get_lab_trends" not in [name for name, _ in box.calls]
 
 
 def test_a_spent_tool_is_refused_without_announcing_anything():

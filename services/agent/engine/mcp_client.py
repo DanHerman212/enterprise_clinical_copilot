@@ -40,6 +40,7 @@ from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
 from services.agent.postprocess import citations
+from services.agent.routing import routing
 from shared.labels import humanize
 from services.agent.telemetry import observability, stages
 from services.agent.telemetry.stages import emit as _emit
@@ -61,7 +62,7 @@ MCP_TRANSPORT = os.environ.get("MCP_TRANSPORT", "stdio")  # "stdio" | "http"
 # Named rather than derived, because what makes it special is where its arguments
 # GO, and a second tool that talks to a third party should acquire the same
 # treatment deliberately rather than by inheriting it.
-EXTERNAL_TOOL = "search_literature"
+EXTERNAL_TOOL = routing.EXTERNAL_TOOL
 
 
 def _external_argument_refusal(name: str, arguments: dict, tool) -> dict | None:
@@ -400,16 +401,25 @@ MAX_TOOL_CALLS_PER_TURN = 5
 
 
 
-ONCE_PER_TURN: frozenset[str] = frozenset({
-    "rag_search", "rag_search_sections", "get_lab_trends", "discharge_medications",
-    # The estimate is a fact about the admission, not about the request, so a second
-    # call in the same turn can only return what the first one returned. It is here
-    # because `/ehr` already runs it as its supplementary call: a free-text turn that
-    # could bind it a second time would spend a call of the five on a score already in
-    # the transcript, and re-render the driver bars beside an answer that did not ask
-    # for them.
-    "predict_readmission",
-})
+#: How many times ONE tool may run in one turn.
+#:
+#: The turn budget above is a total, and a total cannot tell a turn that read five
+#: different things from a turn that asked one tool five questions. The second is what
+#: happened: a literature question on 2026-10-30
+#: (`079be88f…`) made one `rag_search` and four `search_literature` calls with
+#: reworded queries, and four refinements of one search are a loop that the model
+#: describes as thoroughness. Two is the allowance for a genuine second attempt — the
+#: first search that comes back empty or off-target — and no more.
+#:
+#: A per-tool cap rather than a literature-specific one: `get_lab_trends` and
+#: `rag_search` are already held to one call each by `ONCE_PER_TURN`, and the tool that
+#: is not capped is the one whose arguments are free text, which is every tool that can
+#: be re-asked in different words.
+PER_TOOL_CALL_LIMIT = 2
+
+
+
+ONCE_PER_TURN: frozenset[str] = routing.ONCE_PER_TURN_TOOLS
 
 
 
@@ -745,10 +755,18 @@ async def _execute_tool_calls(
     # can ask for the same tool twice, and the cap is a property of the turn rather than
     # of one iteration of the loop around it.
     spent = set(used_up)
+    # Calls already made per tool, this turn's own and the ones `already_called` reported.
+    # A dict rather than a counter of the batch: the allowance belongs to the turn, and a
+    # single model turn can emit the same tool twice.
+    per_tool: dict[str, int] = {}
+    for made in prior:
+        made_name = str(made.get("name"))
+        per_tool[made_name] = per_tool.get(made_name, 0) + 1
     for index, call in enumerate(calls):
         arguments = dict(call.get("args") or {})
         key = _call_key(str(call.get("name")), arguments)
         spent_count = len(prior) + index
+        name = str(call["name"])
         # Whether this call was turned away rather than run. A refusal must not consume a
         # capped tool's allowance: the model gets one honest call, not that call minus the
         # attempts nothing was ever dispatched for.
@@ -772,6 +790,20 @@ async def _execute_tool_calls(
                     f"This turn has already made {spent_count} tool calls and its budget is "
                     f"{MAX_TOOL_CALLS_PER_TURN}. Answer from the results you have, or say "
                     "plainly what you could not determine."
+                ),
+            }
+        elif per_tool.get(name, 0) >= PER_TOOL_CALL_LIMIT:
+            # The total budget could still be unspent here, which is why this is its own
+            # refusal: the turn has room and this tool does not, and telling the model it
+            # is out of budget would send it looking for a different tool to loop.
+            payload = {
+                "error": "tool_call_limit_per_tool",
+                "message": (
+                    f"{name} has already been called {per_tool.get(name, 0)} times for "
+                    f"this question and its limit is {PER_TOOL_CALL_LIMIT}. Its results "
+                    "are above: answer from them, and if they do not cover the question, "
+                    "say plainly what you could not determine rather than searching "
+                    "again in different words."
                 ),
             }
         elif key in done:
@@ -821,8 +853,10 @@ async def _execute_tool_calls(
                 # ran: a refused call announces nothing, result included (rule 3).
                 _emit(on_event, stages.result_event(call["name"], payload))
         done.add(key)
-        if not refused and call["name"] in ONCE_PER_TURN:
-            spent.add(call["name"])
+        if not refused:
+            per_tool[name] = per_tool.get(name, 0) + 1
+            if name in ONCE_PER_TURN:
+                spent.add(name)
         # `order` rewrites the payload BEFORE the model is shown it and before it is
         # recorded, so one order governs both. Doing it afterwards reordered the
         # citation layer while the formatter kept reading retrieval order, and the

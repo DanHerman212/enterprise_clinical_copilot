@@ -196,6 +196,88 @@ def replace_final_text(state: dict, text: str) -> None:
         message.content = text
 
 
+def apply_model_reply(state: dict, text: str) -> None:
+    """Serve the model's reply unwrapped, in place of the envelope it arrived in.
+
+    A decision, not a rewrite: the reply was written by the model and this only says
+    which part of it is the answer. It lives here because the engine may not edit prose
+    (Charter 13 Law 2) — the same rule that keeps the fallback sentences here — and the
+    call site in `engine/graph.py` is a line of invocation.
+    """
+    replace_final_text(state, text)
+
+
+def reject_model_reply(state: dict) -> None:
+    """Withdraw an answer the turn may not serve.
+
+    A declined reply with no absence to report is not an answer: the model declined, and
+    nothing was retrieved for it to decline against, so any sentence served here would be
+    a claim the record does not support. The turn carries no text and the routes report an
+    unavailable answer rather than a fabricated one.
+
+    Recorded by editing the message rather than by raising, so the finish reason and the
+    content-filter verdict stay readable on the turn the caller was refused.
+    """
+    replace_final_text(state, "")
+
+
+def reply_withheld(finish_reason: str | None, *, blocked: bool = False) -> bool:
+    """Whether the provider took the model's reply away rather than the model stopping.
+
+    `SAFETY` and a blocked prompt are the two forms measured live, and they are the two
+    this answers for. It is deliberately not every refusal reason: a truncation is the
+    model running out of room, which is a different statement about the turn, and a turn
+    that stopped for an unlisted reason has no reply to explain.
+
+    The reason is read by whoever holds the response; this function is the one place that
+    decides what the reason means, so the two routes cannot disagree about it.
+    """
+    return blocked or finish_reason == "SAFETY"
+
+
+def silent_turn_sentence(*, outpatient: bool = False) -> str:
+    """The sentence for a turn that finished with no answer of its own.
+
+    `outpatient` picks the wording that is true of the record. It is a property of the
+    admission, not of the model's answer, which is why it is passed in rather than
+    inferred from anything here.
+    """
+    return OUTPATIENT_SILENT_TURN_SENTENCE if outpatient else SILENT_TURN_SENTENCE
+
+
+def outpatient_ehr_notice() -> str:
+    """The `/ehr` notice for a record that was never an admission."""
+    return OUTPATIENT_EHR_NOTICE
+
+
+def empty_turn_sentence(
+    *,
+    finish_reason: str | None = None,
+    blocked: bool = False,
+    records_retrieved: int = 0,
+    outpatient: bool = False,
+) -> str:
+    """What to serve when the turn has no reply to serve.
+
+    Three cases, and they are not the same statement:
+
+    * the provider's filter withheld the reply and records were retrieved — the reader
+      gets `SAFETY_WITHHELD_SUMMARY`, because there IS something to read and the sentence
+      has to point at it rather than deny it exists;
+    * the provider's filter withheld the reply and nothing was retrieved — nothing
+      survived, so the turn is silent rather than offering records that are not there;
+    * the model finished cleanly and said nothing — `SILENT_TURN_SENTENCE`, which is a
+      statement about the question rather than about the service.
+
+    Served on the state rather than left to the envelope's empty-answer branch, because
+    the trace's output is read off the state (`graph.command_trace_output`) and an empty
+    answer wrote the turn's trace row as a dash — the one record an audit opens first.
+    """
+    if reply_withheld(finish_reason, blocked=blocked) and records_retrieved:
+        return SAFETY_WITHHELD_SUMMARY
+    return silent_turn_sentence(outpatient=outpatient)
+
+
 def _asked_about(question: str) -> str:
     """The caller's own question, without the admission the contract appends.
 
@@ -239,6 +321,18 @@ def sanitize_answer_markers(state: dict) -> None:
     )
     message = _final_message(state)
     removed: list[str] = []
+    # The marker VOCABULARY first, then the bound. A marker that is neither a number nor
+    # a PMID badge is not a citation, and it is not this pass's arithmetic to delete —
+    # but this pass is the last one before the prose is read by three different consumers
+    # (the trace, the judge, the browser), and the presentation layer no longer rewrites
+    # what it publishes (Charter 13 Law 5). So the sweep `renumber_citations` used to do
+    # on the way to the canvas happens here, on the answer itself.
+    if message is not None and isinstance(message.content, str):
+        message.content = citations.drop_unknown_markers(message.content)
+    deterministic_marker = state.get("deterministic_answer")
+    if isinstance(deterministic_marker, str) and deterministic_marker:
+        state["deterministic_answer"] = citations.drop_unknown_markers(
+            deterministic_marker)
     if message is not None and isinstance(message.content, str):
         cleaned, found = citations.enforce_citations(message.content, bound, pmids)
         removed.extend(found)

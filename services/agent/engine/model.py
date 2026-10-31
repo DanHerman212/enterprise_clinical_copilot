@@ -349,8 +349,7 @@ def silent_refusal(message: Any, *, outpatient: bool = False) -> str | None:
         return None
     if blocked_reason(message) is not None:
         return None
-    return (answer.OUTPATIENT_SILENT_TURN_SENTENCE if outpatient
-            else answer.SILENT_TURN_SENTENCE)
+    return answer.silent_turn_sentence(outpatient=outpatient)
 
 
 def classify(message: Any) -> tuple[str, str, str | None]:

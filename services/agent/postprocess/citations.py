@@ -30,6 +30,7 @@ as bounding headers. One vocabulary, one drift surface (S7-02 / ECC-33).
 
 import re
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from typing import Any
 
 from services.agent.routing import routing
@@ -108,17 +109,39 @@ def extract_section(note_text: str, section: str) -> str | None:
     return note_text[start:end].strip()
 
 
+#: The token a citation marker opens with, and the one that closes it.
+#:
+#: Named once. The marker language is the thing that drifts when it grows a form — the
+#: PMID badge did, and a cluster of records after it — and every pattern below is built
+#: from these two strings rather than restating the escape. `re.compile` is never handed
+#: a marker literal: the opening token has exactly one spelling in this repository, and
+#: the harness reads it from here too (Charter 13 Law 1; audit L1-4).
+MARKER_OPEN = r"\^\["
+MARKER_CLOSE = r"\]"
+
+
+def _marker_re(body: str, flags: int = 0) -> "re.Pattern[str]":
+    """Compile a marker pattern from its BODY: everything between the two tokens."""
+    return re.compile(MARKER_OPEN + body + MARKER_CLOSE, flags)
+
+
+#: A marker's number, or the first number of a cluster or a range. Read without the
+#: closing token on purpose: this is the "did the answer cite anything at all, and with
+#: what" question, and a marker whose bracket was lost in transit still names a unit.
+_FIRST_CITATION_RE = re.compile(MARKER_OPEN + r"(\d+)")
+
+
 def first_citation(answer: str) -> int:
     """The first citation number in the answer prose (^[n]), or 1 if none.
 
     The canvas's SourceCard mirrors the agent's own citation: whichever passage
     the answer cites first is the one the canvas shows.
     """
-    m = re.search(r"\^\[(\d+)", answer or "")
+    m = _FIRST_CITATION_RE.search(answer or "")
     return int(m.group(1)) if m else 1
 
 
-_CITATION_RE = re.compile(r"\^\[(\d+(?:\s*,\s*\d+)*|\d+\s*-\s*\d+)\]")
+_CITATION_RE = _marker_re(r"(\d+(?:\s*,\s*\d+)*|\d+\s*-\s*\d+)")
 
 
 def _expand_citations(inner: str) -> list[int]:
@@ -187,17 +210,30 @@ def _renumber_citations(answer: str) -> tuple[str, dict[int, int]]:
     return "".join(out), numbers
 
 
+#: The retrieval tools, re-exported for the presentation layer.
+#:
+#: The grouping is `routing.PASSAGE_TOOLS`'s and stays there (Charter 13 Law 4). It is
+#: re-exported here because `presentation/` may import this module and may not import
+#: `routing/`, and a second literal in `a2ui.rag_payload` was the fifth copy of a
+#: tool regrouping nobody could find.
+RETRIEVAL_TOOLS: frozenset[str] = routing.PASSAGE_TOOLS
+
+
 #: Any `^[...]` marker at all, valid or not, with its body captured. The one regex every
 #: pass in this module scans with: `_drop_unknown_markers` decides which non-numeric forms
 #: survive, and `enforce_citations` decides which numeric and PMID forms do.
-_ANY_MARKER_RE = re.compile(r"\^\[([^\]]*)\]")
+_ANY_MARKER_RE = _marker_re(r"([^\]]*)")
+
+#: The same pattern for readers outside this module — the presentation layer and the
+#: evaluation harness both scan prose for markers, and both used to spell the token out.
+MARKER_PATTERN = _ANY_MARKER_RE
 
 #: What a marker must look like to be KEPT: a note-passage number or set of them,
 #: or a literature PMID badge. Everything else is a model invention and is dropped.
 #: The PMID form is here deliberately — it is a citation the interface draws as its
 #: own badge, and a filter that only knew about numbers would delete it.
-_KNOWN_MARKER_RE = re.compile(
-    r"\^\[\s*(?:\d+(?:\s*,\s*\d+)*|\d+\s*-\s*\d+|PMID:\s*\d+(?:\s*,\s*\d+)*)\s*\]",
+_KNOWN_MARKER_RE = _marker_re(
+    r"\s*(?:\d+(?:\s*,\s*\d+)*|\d+\s*-\s*\d+|PMID:\s*\d+(?:\s*,\s*\d+)*)\s*",
     re.IGNORECASE,
 )
 
@@ -412,11 +448,26 @@ def _drop_unknown_markers(answer: str) -> str:
     )
 
 
+def drop_unknown_markers(answer: str) -> str:
+    """The vocabulary rule, for the settlement pass.
+
+    Named publicly because `answer.sanitize_answer_markers` applies it at settlement —
+    the one point the trace, the judge and the browser all read the answer from — and
+    that pass may not reach for a private name. It lived only inside
+    `renumber_citations`, which the presentation layer called; that layer publishes the
+    settled prose verbatim now (Charter 13 Law 5), so the sweep has to happen before the
+    prose is published rather than on the way to the browser.
+    """
+    return _drop_unknown_markers(answer)
+
+
 #: A markdown list item — a bullet or an ordinal, its indent, and its marker.
 _LIST_ITEM_RE = re.compile(r"^(\s*)(?:[-*+]|\d+[.)])\s+")
 
 #: A citation marker closing a line, with whatever punctuation followed it.
-_TRAILING_MARKER_RE = re.compile(r"\s*\^\[\s*(\d+)\s*\](?P<tail>[.,;:]?)\s*$")
+_TRAILING_MARKER_RE = re.compile(
+    r"\s*" + MARKER_OPEN + r"\s*(\d+)\s*" + MARKER_CLOSE + r"(?P<tail>[.,;:]?)\s*$"
+)
 
 
 def dedupe_list_citations(answer: str) -> str:
@@ -698,6 +749,77 @@ def passage_total(payload: object) -> int:
     return len(citable_passages(payload))
 
 
+@dataclass(frozen=True)
+class EvidenceLedger:
+    """One turn's citable units, in the order the model was shown them.
+
+    The audit's §2.3: four modules resolved the same evidence and each counted it its own
+    way — this module counted it, `engine` numbered it for the model, `presentation`
+    re-counted it, and `evaluation` re-derived it. A number that means one thing in the
+    transcript and another in the drawer is a reader clicking a citation and landing on
+    an unrelated passage.
+
+    So the array is built once, here, and everything positional is asked of it:
+
+      * `units` — every citable unit the conversation produced, note passages and
+        laboratory analytes, in rendering order. That is the array a marker's number
+        indexes, so a marker and the record it opens are the same position by
+        construction.
+      * `passage_count` — its length, and the ONLY count of it. `citation_bound` and
+        the presentation layer both read this one.
+      * `literature_start` — where the published records begin: after every citable
+        unit, not after the units the answer happened to cite. A turn that cited
+        passages 4 and 7 has consumed up to 7 while only two rows resolve, and numbering
+        the records from 3 gave a published record the same number as note passage 4
+        (2026-10-30).
+
+    Immutable and cheap: it holds references to the tool calls, not to copied prose.
+    """
+
+    #: The calls whose results it was built from, in the order the model received them:
+    #: the replayed turns first, then this one.
+    calls: tuple[dict, ...] = ()
+    #: Every citable unit those calls contributed, concatenated in the same order.
+    units: tuple[dict, ...] = ()
+
+    @classmethod
+    def of(cls, *call_groups: "list[dict] | None") -> "EvidenceLedger":
+        """Build a ledger from call groups, in the order the model was shown them.
+
+        The order is the caller's, because two callers ask two different questions.
+        `citation_bound` is asked what the answer may address and passes the replayed
+        turns first, then this one — the numbering the model was given. The presentation
+        layer is asked the same and passes the same.
+        """
+        calls = tuple(
+            call for group in call_groups for call in (group or [])
+            if isinstance(call, dict)
+        )
+        return cls(
+            calls=calls,
+            units=tuple(
+                unit for call in calls
+                for unit in citable_passages(call.get("response"))
+            ),
+        )
+
+    @property
+    def passage_count(self) -> int:
+        """How many numbered positions the tool results consumed."""
+        return len(self.units)
+
+    @property
+    def literature_start(self) -> int:
+        """The number the first published record takes, after every citable unit."""
+        return self.passage_count + 1
+
+    def unit(self, number: int) -> dict | None:
+        """The citable unit at a 1-based marker number, or None when it addresses nothing."""
+        if 1 <= number <= len(self.units):
+            return self.units[number - 1]
+        return None
+
+
 def citation_bound(
     tool_calls: list[dict] | None,
     conversation_calls: list[dict] | None = None,
@@ -712,14 +834,12 @@ def citation_bound(
 
     The one counter. Two existed until 2026-10-29 — this sum and a passages-only count in
     `guardrail` — and their disagreement deleted nine correct analyte markers from a
-    first-turn `/labs` answer (`pilot-verify-20261028-205050`).
+    first-turn `/labs` answer (`pilot-verify-20261028-205050`). It is now asked of the
+    ledger rather than summed here, so there is one array and one length (Phase 4;
+    audit §2.3).
     """
-    units = sum(
-        passage_total(call.get("response"))
-        for call in (*(conversation_calls or []), *(tool_calls or []))
-        if isinstance(call, dict)
-    )
-    return units or literature_slots(tool_calls)
+    ledger = EvidenceLedger.of(conversation_calls, tool_calls)
+    return ledger.passage_count or literature_slots(tool_calls)
 
 
 def literature_calls(

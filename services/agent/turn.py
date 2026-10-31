@@ -237,6 +237,12 @@ async def compose_success(
         # this is a read of the decision that let the search into the transcript rather
         # than a second opinion about the question.
         literature_replay=bool(state.get("wants_literature")),
+        # Why the reply stopped, so a reply the provider's filter took away is resolved
+        # here rather than in the engine: replacement is prose work and it has to happen
+        # on both routes (Charter 13 Law 2; Phase 3 Contract 1). Read off the turn's own
+        # message, which is where the provider put it.
+        finish_reason=finish_reason(final_message(state)) if final_message(state) else None,
+        state=state,
     )
 
     # The trace records the answer the caller is SERVED, and it is written here, once,

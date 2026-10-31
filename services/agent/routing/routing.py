@@ -879,6 +879,69 @@ PASSAGE_TOOLS: frozenset[str] = frozenset(
     {"rag_search", "rag_search_sections", "discharge_medications"}
 )
 
+#: The toolset a free-text question about PUBLISHED EVIDENCE may use.
+#:
+#: Literature plus the record retrieval the question is asked against, and nothing
+#: else. A literature question used to bind the whole standing free-text set, so the
+#: model could spend its five calls on a laboratory panel and a medication list while
+#: answering a PubMed question: measured live on 2026-10-30, one such turn made five
+#: calls — a chart read and four literature searches — and drew a lab sparkline under
+#: the literature answer.
+#:
+#: `discharge_medications` goes even though it is a passage tool: it answers a
+#: different question, and its payload draws a second surface beside the records.
+LITERATURE_QUESTION_TOOLS: frozenset[str] = frozenset(
+    set(LITERATURE_TOOLS) | set(PASSAGE_TOOLS)
+) - {"discharge_medications"}
+
+#: Results a caller must keep if it wants to replay a turn cheaply, because the tool
+#: cannot be re-run to the same value (an estimate) or is not reproducible offline.
+#:
+#: Declared here rather than in `ingress/contracts.py`, which is where it lived: the
+#: wire contract and the retry policy are two readers of one fact, and a second copy is
+#: a place a tool rename has to be found twice.
+RESULT_KEPT_TOOLS: frozenset[str] = frozenset({"predict_readmission", "get_lab_trends"})
+
+#: The one tool whose arguments leave our system: a search string goes to NCBI.
+#:
+#: Named rather than derived, because what makes it special is where its arguments GO,
+#: and a second tool that talks to a third party should acquire the same treatment
+#: deliberately rather than by inheriting it from a capability group.
+EXTERNAL_TOOL: str = "search_literature"
+
+#: Tools whose result is spent by the first call in the TURN.
+ONCE_PER_TURN_TOOLS: frozenset[str] = frozenset({
+    "rag_search", "rag_search_sections", "get_lab_trends", "discharge_medications",
+    # The estimate is a fact about the admission, not about the request, so a second
+    # call in the same turn can only return what the first one returned. It is here
+    # because `/ehr` already runs it as its supplementary call: a free-text turn that
+    # could bind it a second time would spend a call of the five on a score already in
+    # the transcript, and re-render the driver bars beside an answer that did not ask
+    # for them.
+    "predict_readmission",
+})
+
+#: Tools whose result is spent by the first call in the CONVERSATION.
+#:
+#: `rag_search` is deliberately NOT here: a follow-up asks a new question, and the
+#: recorded search answered the old one.
+ONCE_PER_TRANSCRIPT_TOOLS: frozenset[str] = frozenset({
+    "rag_search_sections", "get_lab_trends", "discharge_medications",
+    # A Turn 2 follow-up that re-asks the score would re-run the model and re-draw the
+    # driver bars under an answer that is supposed to reuse the estimate it already
+    # has. `_transcript_carries_attribution` reads the same replay for the narrative
+    # path; this closes the binding path, so the tool is absent rather than refused.
+    "predict_readmission",
+})
+
+#: Tools whose transcript allowance depends on WHAT was fetched rather than that it was.
+#:
+#: `get_lab_trends` takes an optional `analyte`. Called without one it draws the whole
+#: panel, and every later lab question is answerable from the payload already in the
+#: transcript; called with one it draws that analyte alone, so the rest of the panel is
+#: still unread and a follow-up about a different analyte has somewhere to go.
+FULL_FETCH_UNFILTERED_TOOLS: frozenset[str] = frozenset({"get_lab_trends"})
+
 # One label per tool the MCP server advertises (`services/mcp/server.py`).
 # Each is phrased as the action the call performs, so it stays true even when
 # the call fails. A test walks the live tool list and fails if a tool is added

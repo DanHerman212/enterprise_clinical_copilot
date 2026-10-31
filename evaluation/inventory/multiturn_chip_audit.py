@@ -56,6 +56,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from evaluation.platform.run import DEFAULT_AGENT, _identity_token, make_ask  # noqa: E402
+from services.agent.postprocess.citations import MARKER_PATTERN  # noqa: E402
 
 #: §5.2.1/§5.2.2: the five inpatient Dev archetypes. Outpatients (90000051/90000073)
 #: are out of scope here — they have no note sections, so a chip row is the one thing
@@ -90,7 +91,7 @@ ABSENT_MARKERS = (
     "not mentioned",
 )
 
-_CITE = re.compile(r"\^\[\d+\]")
+_CITE = MARKER_PATTERN
 
 
 def _turn_payload(asked: str, answer: str, calls: list[dict]) -> dict:

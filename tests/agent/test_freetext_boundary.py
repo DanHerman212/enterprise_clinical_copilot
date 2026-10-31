@@ -161,12 +161,15 @@ def test_the_loop_is_bound_with_the_allow_list():
         ({*routing.FREETEXT_TOOLS, "predict_readmission"} - {"get_lab_trends"}))
     assert graph._freetext_allowed(True, False, True) == frozenset(
         {*routing.FREETEXT_TOOLS, "predict_readmission"})
-    # Published evidence is bound only when the question asked for it (Phase 02.5).
-    assert graph._freetext_allowed(False, True) == frozenset(
-        {*routing.FREETEXT_TOOLS, "search_literature"})
+    # Published evidence is bound only when the question asked for it (Phase 02.5), and it
+    # is bound WITH the record retrieval the question is answered against and nothing else
+    # (Phase 4; audit §2.1). The union with the whole standing set is what the audit
+    # measured: one literature question kept `get_lab_trends` and `discharge_medications`
+    # bound and spent its five calls on a chart read and four searches, then drew a lab
+    # sparkline under a literature answer. `routing` owns the set.
+    assert graph._freetext_allowed(False, True) == routing.LITERATURE_QUESTION_TOOLS
     assert graph._freetext_allowed(True, True) == frozenset(
-        {*routing.FREETEXT_TOOLS, "predict_readmission", "search_literature"} - {
-            "get_lab_trends"})
+        {*routing.LITERATURE_QUESTION_TOOLS, "predict_readmission"})
 
 
 # --- what an empty search becomes --------------------------------------------

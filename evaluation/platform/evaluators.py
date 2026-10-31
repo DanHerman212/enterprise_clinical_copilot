@@ -23,6 +23,7 @@ from evaluation.platform.schemas import (
     MIN_PASS_RATE,
     PASS_DIMENSIONS,
 )
+from services.agent.postprocess.citations import MARKER_PATTERN
 
 STRUCTURAL = "structural"
 VERDICT = "verdict"
@@ -203,8 +204,12 @@ def _dev_suite_failures(expectations: dict[str, Any],
     return failures
 
 
-#: An inline citation marker as the reader sees it: `^[3]`.
-_INLINE_MARKER = re.compile(r"\^\[(\d+)\]")
+#: An inline citation marker as the reader sees it: `^[3]`, or a cluster `^[3, 4]`.
+#:
+#: Imported, not compiled here: the marker language belongs to the agent's citation
+#: layer, and a harness that spells it out drifts the moment the language grows a form —
+#: it did, twice: the PMID badge and then the grouped badge (Charter 13 Law 1; audit L1-4).
+_INLINE_MARKER = MARKER_PATTERN
 
 
 def _citation_marker_failures(marker: str, output: dict[str, Any]) -> list[str]:

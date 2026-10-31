@@ -29,11 +29,14 @@ verifies it does not modify the 265 passing answers (no regression on passes).
 from __future__ import annotations
 
 import json
+import logging
 import re
 
 from services.agent.postprocess import answer as answer_text
 from services.agent.postprocess import citations
 from services.agent.routing import routing
+
+logger = logging.getLogger(__name__)
 
 # --- Redacted age -----------------------------------------------------------
 
@@ -908,6 +911,8 @@ def guard_answer(
     conversation_calls: list[dict] | None = None,
     *,
     literature_replay: bool = False,
+    finish_reason: str | None = None,
+    state: dict | None = None,
 ) -> dict:
     """Apply all guardrails. Returns {'answer': str, 'flags': [str]}.
 
@@ -937,8 +942,38 @@ def guard_answer(
     its own transcript may cite those records; the flag is that fact, decided once in
     `graph.ask` and stamped on the state. It is False for a chart turn, which is what
     keeps 90000058 shut.
+
+    `finish_reason` is why the reply stopped, as the provider reported it, and `state` is
+    the turn the reply came from. They exist here because a withheld reply is prose that
+    must be REPLACED rather than checked, and replacement is this layer's job (Charter 13
+    Law 2). The engine used to make that decision — `engine/deterministic.py` read
+    `finish_reason == "SAFETY"` and served the withheld summary itself — which meant the
+    free-text route never got it: it had the fragment, the reason and no branch. Contract
+    1 of the Phase 3 remediation sends the decision here, where both routes already meet.
+
+    A withheld reply is resolved before any guard runs, because the fragment is discarded
+    whole: there is nothing left to verify against the record, and running the clinical
+    checks over prose nobody will read can only produce flags about a sentence that is not
+    served.
     """
     evidence = [*(tool_calls or []), *(conversation_calls or [])]
+    if answer_text.reply_withheld(finish_reason):
+        # `state` is read for the tools it holds when the caller passed them separately:
+        # the count is what decides whether there is anything for the reader to open.
+        retrieved = len(state.get("tool_calls") or []) if state else 0
+        withheld = answer_text.empty_turn_sentence(
+            finish_reason=finish_reason,
+            records_retrieved=max(len(evidence), retrieved),
+        )
+        logger.warning(
+            "reply withheld by the provider (%s); serving the withheld summary over %d "
+            "tool call(s)",
+            finish_reason, max(len(evidence), retrieved),
+        )
+        # The flag is not optional. `_prose_settled` reads it to decide whether the swap
+        # from streamed prose to this sentence was visible, and a swap with no flag is a
+        # silent withdrawal of text the reader already watched arrive.
+        return {"answer": withheld, "flags": ["safety_withheld"]}
     passages, med_source = _passage_sections(evidence)
     full_text = "\n".join(p.get("text") or "" for p in passages)
     flags: list[str] = []

@@ -287,11 +287,8 @@ def test_law1_only_citations_defines_a_marker_regex():
     the other existed.
     """
     owner = pathlib.Path("postprocess", "citations.py")
-    offenders = [
-        str(path.relative_to(root))
-        for path, _ in []
-    ]
     root = pathlib.Path(SERVICES, "agent")
+    offenders = []
     for path, source in _shipped_sources():
         if path.relative_to(root) == owner:
             continue
@@ -372,6 +369,224 @@ def test_law5_the_trace_is_written_once_in_turn():
     ]
     assert offenders == [], (
         "set_trace_io outside turn.py/observability.py: " + ", ".join(offenders)
+    )
+
+
+# --- the Phase 2 governance lock --------------------------------------------
+#
+# Four blind spots measured in `docs/architecture_alignment/01a-audit_report.md` §3:
+# the law tests above pin the VOCABULARY (a constant is not defined twice, a registry
+# exists) and nothing pinned the BEHAVIOUR those laws are about. These gates read the
+# AST instead of the text, and every one of them fails against the un-remediated code,
+# which is the point: a gate that passes before the remediation cannot prove it happened.
+#
+# They are expected to fail until Phases 4 and 5 land. `git stash` of those phases is
+# the way to see them pass.
+
+def _call_name(node):
+    """The bare name of a Call's function, whether it was written `f(...)` or `m.f(...)`."""
+    return getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+
+
+def _dotted(node):
+    """`a.b.c` for an Attribute chain, or the bare name."""
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        parts.append(node.id)
+    return ".".join(reversed(parts))
+
+
+#: The presentation modules Charter 13 §5 lets READ the citation owner, and no more.
+PRESENTATION_MODULES = ("a2ui.py", "canvas.py", "domain.py")
+
+#: The transforms that CHANGE a marker rather than resolve one.
+CITATION_TRANSFORMS = frozenset({"renumber_citations", "citation_remap"})
+
+#: The four sentences `postprocess/answer.py` owns, by name.
+FALLBACK_CONSTANTS = frozenset({
+    "SILENT_TURN_SENTENCE",
+    "OUTPATIENT_SILENT_TURN_SENTENCE",
+    "SAFETY_WITHHELD_SUMMARY",
+    "OUTPATIENT_EHR_NOTICE",
+    "GUARDED_ABSTENTION",
+})
+
+
+def _engine_modules():
+    root = pathlib.Path(SERVICES, "agent", "engine")
+    for path in sorted(root.rglob("*.py")):
+        if "__pycache__" in str(path) or path.name == "prompts.py":
+            continue
+        yield path, path.read_text()
+
+
+def _presentation_modules():
+    root = pathlib.Path(SERVICES, "agent", "presentation")
+    for name in PRESENTATION_MODULES:
+        path = root / name
+        if path.is_file():
+            yield path, path.read_text()
+
+
+def _citation_unit_counts(source):
+    """`lineno` of every `len(citable_passages(...))` in one module.
+
+    A read of the passages array is not a count of it. `resolve_sources` iterates the
+    array to find the unit a marker points at, which Charter 13 §5 allows; `len(...)`
+    over the same array is a slot counter, and a second slot counter is what these
+    modules must not have (audit L1-2).
+    """
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call) or _call_name(node) != "len" or not node.args:
+            continue
+        inner = node.args[0]
+        if isinstance(inner, ast.Call) and _call_name(inner) == "citable_passages":
+            yield node.lineno
+
+
+def test_law1_presentation_never_transforms_a_citation_marker():
+    """Law 1, behaviourally: the presentation layer resolves markers, it does not rewrite them.
+
+    `compose_presentation` calls `renumber_citations` and `citation_remap` and publishes
+    the result as the answer (audit L1-1). That is a marker transformation outside the
+    owner, and it means the prose the trace records and the prose the browser renders are
+    produced by different layers — the Law 5 caveat in the same finding.
+    """
+    offenders = []
+    for path, source in _presentation_modules():
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.Call) and _call_name(node) in CITATION_TRANSFORMS:
+                offenders.append(f"presentation/{path.name}:{node.lineno} {_call_name(node)}")
+
+    assert offenders == [], (
+        "the presentation layer must not transform citation markers "
+        "(Charter 13 Law 1; audit L1-1): " + "; ".join(offenders)
+    )
+
+
+def test_law1_presentation_never_counts_citable_units():
+    """Law 1, behaviourally: one slot counter, and it is `citations.citation_bound`'s."""
+    offenders = [
+        f"presentation/{path.name}:{lineno} len(citable_passages(...))"
+        for path, source in _presentation_modules()
+        for lineno in _citation_unit_counts(source)
+    ]
+
+    assert offenders == [], (
+        "a citable-unit count outside postprocess/citations.py "
+        "(Charter 13 Law 1; audit L1-2): " + "; ".join(offenders)
+    )
+
+
+def test_law1_no_module_compiles_an_inline_marker_regex():
+    """Law 1, extended to every tree that reads the marker language (audit L1-4).
+
+    The gate above scans `services/agent` for the substring; this one compiles nothing
+    itself and reads `re.compile(<literal containing a marker>)` in ALL shipped trees —
+    the harness included. `evaluation/platform/evaluators.py` and
+    `evaluation/inventory/multiturn_chip_audit.py` each hold one, and a marker regex is
+    the thing that drifts when the marker language grows a form (the PMID badge did).
+    """
+    repo = pathlib.Path(SERVICES).parents[0]
+    trees = [pathlib.Path(SERVICES), repo / "evaluation"]
+    offenders = []
+    for tree in trees:
+        for path in sorted(tree.rglob("*.py")):
+            if "__pycache__" in str(path):
+                continue
+            for node in ast.walk(ast.parse(path.read_text())):
+                if not isinstance(node, ast.Call) or _call_name(node) != "compile":
+                    continue
+                if not node.args or not isinstance(node.args[0], ast.Constant):
+                    continue
+                literal = node.args[0].value
+                if isinstance(literal, str) and "\\^\\[" in literal:
+                    offenders.append(f"{path.relative_to(repo)}:{node.lineno}")
+
+    assert offenders == [], (
+        "an inline citation-marker regex outside postprocess/citations.py "
+        "(Charter 13 Law 1; audit L1-4): " + "; ".join(offenders)
+    )
+
+
+def test_law2_the_engine_never_selects_a_fallback_sentence():
+    """Law 2, behaviourally: the engine returns the model's output; it does not replace it.
+
+    Three shapes, all measured in the audit: the engine names a fallback constant
+    (`deterministic.py:506,625-629`, `model.py:352-353` — L2-1/L2-2), or it calls
+    `replace_final_text` to blank an answer (`graph.py:1122,1144` — L2-3). The strings
+    themselves live in `postprocess/answer.py`, which is why the `hasattr` gate above
+    passes; the DECISION is what belongs to postprocessing.
+    """
+    offenders = []
+    for path, source in _engine_modules():
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.Attribute) and node.attr in FALLBACK_CONSTANTS:
+                offenders.append(f"engine/{path.name}:{node.lineno} {_dotted(node)}")
+            elif isinstance(node, ast.Name) and node.id in FALLBACK_CONSTANTS:
+                offenders.append(f"engine/{path.name}:{node.lineno} {node.id}")
+            elif isinstance(node, ast.Call) and _call_name(node) == "replace_final_text":
+                offenders.append(f"engine/{path.name}:{node.lineno} replace_final_text")
+
+    assert offenders == [], (
+        "the engine must not select a fallback sentence or rewrite the answer "
+        "(Charter 13 Law 2; audit L2-1..L2-3): " + "; ".join(offenders)
+    )
+
+
+def _string_literals(node):
+    """The string constants directly inside a Tuple/Set/List literal."""
+    return {
+        element.value
+        for element in node.elts
+        if isinstance(element, ast.Constant) and isinstance(element.value, str)
+    }
+
+
+def test_law4_no_duplicate_tool_registry_literals():
+    """Law 4, behaviourally: a tool grouping is declared in `routing/` and imported.
+
+    The gate above pins that the canonical registries exist and that `telemetry` shares
+    them by identity. It cannot see a SECOND registry: five modules hold their own tuple
+    or set of two or more wire names (audit L4 — `ingress/contracts.py:94-95,109`,
+    `engine/graph.py:178-192`, `engine/mcp_client.py:64,404-411`,
+    `presentation/a2ui.py:121-123`). Each is a place a tool rename has to be found.
+
+    A single name in a comparison is not a registry — `call.get("name") == \"x\"` is
+    how a module asks what it was given — so only literals of two or more names count.
+    """
+    from services.agent.routing import routing
+
+    canonical = set(routing.PASSAGE_TOOLS) | set(routing.LITERATURE_TOOLS)
+    for command in routing.COMMANDS:
+        tool = getattr(command, "tool", None)
+        if isinstance(tool, str):
+            canonical.add(tool)
+        for spec in getattr(command, "supplementary", ()) or ():
+            spec_tool = getattr(spec, "tool", None)
+            if isinstance(spec_tool, str):
+                canonical.add(spec_tool)
+
+    offenders = []
+    for path, source in _shipped_sources():
+        parts = path.relative_to(pathlib.Path(SERVICES, "agent")).parts
+        if parts[0] == "routing":
+            continue
+        for node in ast.walk(ast.parse(source)):
+            if not isinstance(node, (ast.Tuple, ast.Set, ast.List)):
+                continue
+            names = _string_literals(node) & canonical
+            if len(names) >= 2:
+                offenders.append(
+                    f"{path.relative_to(pathlib.Path(SERVICES, 'agent'))}:{node.lineno} "
+                    + ",".join(sorted(names)))
+
+    assert offenders == [], (
+        "a second tool registry outside routing/ (Charter 13 Law 4; audit L4): "
+        + "; ".join(offenders)
     )
 
 

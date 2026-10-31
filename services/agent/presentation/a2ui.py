@@ -42,6 +42,7 @@ from services.agent.postprocess.citations import (
     RETRIEVAL_TOOLS,
     EvidenceLedger,
     cited_numbers,
+    cited_pmids,
     citable_passages,
     first_citation,
     intent_sections,
@@ -386,6 +387,10 @@ def compose_presentation(question: str, answer: str,
     # disagreed about the text of one turn (Charter 13 Law 5; audit L1-1/L5). A marker is
     # this layer's to RESOLVE and DRAW, not to rewrite.
     intent = intent_sections(question)
+    # Which published records this answer names. Read here, beside the answer, because the
+    # reference list is built much further down and the answer is the only thing that says
+    # which of the retrieved records were used.
+    cited_numbers_of_records = cited_pmids(answer)
     # `evidence` is every call the conversation has shown the model — the replayed turns
     # first, then this one — because that is the array the answer's markers are numbered
     # against (`graph._render_tool_result` counts continuously across both). Resolving
@@ -608,7 +613,12 @@ def compose_presentation(question: str, answer: str,
     # inline pill had nothing to address and the reference list did not exist on that
     # surface at all. They are registered here so a marker, a hover card and a drawer row
     # name one record — the same treatment `/ehr` and `/meds` citations already had.
-    published_sources = literature_sources(articles, start=literature_start)
+    #
+    # Only the records this answer NAMES (`citations.cited_pmids`). A search returns three
+    # and the answer rests on one; publishing all three told the reader two papers had been
+    # used (patient 90000069, turn 3, 2026-10-31 — two rows nothing pointed at).
+    published_sources = literature_sources(
+        articles, start=literature_start, cited=cited_numbers_of_records)
     sources = record_sources + published_sources
 
     benchmark_sources, benchmark_references = register_benchmark_sources(
@@ -1242,7 +1252,8 @@ def literature_citations(articles: list[dict], start: int = 1) -> list[dict]:
     return citations
 
 
-def literature_sources(articles: list[dict], start: int = 1) -> list[dict]:
+def literature_sources(articles: list[dict], start: int = 1,
+                       *, cited: list[str] | None = None) -> list[dict]:
     """The retrieved records as `sources` entries, numbered from `start`.
 
     A literature turn had no `sources` at all: the records lived in the `literature`
@@ -1254,10 +1265,26 @@ def literature_sources(articles: list[dict], start: int = 1) -> list[dict]:
     They are `kind="Literature"` for the same reason the comparison table's cohorts are:
     a published record was not retrieved from THIS patient's note, so it carries the
     identifier and the link a reader can open instead of a retrieval query.
+
+    `cited` filters the list to the records the answer actually names (see
+    `citations.cited_pmids`). A search returns what it returns; a reference list is what
+    the answer rests on, and publishing three rows over an answer that cites one tells the
+    reader two papers were used when they were not (patient 90000069, turn 3,
+    2026-10-31). The NUMBER is kept as the record's position in the array, so a surviving
+    record still carries the number its pill shows; dropping the neighbours leaves a gap,
+    which is a smaller falsehood than a row nothing points at.
+
+    An empty `cited` publishes every record. That is not the same statement as "the answer
+    cited none of these": a turn that names no record at all still read what the search
+    returned, and deleting the whole list would say nothing was retrieved.
     """
+    wanted = {str(pmid) for pmid in cited or ()}
     sources = []
     for offset, article in enumerate(articles):
-        record = _article_record(article, start + offset)
+        number = start + offset
+        if wanted and str((article or {}).get("pmid") or "") not in wanted:
+            continue
+        record = _article_record(article, number)
         sources.append({
             "cite": record["index"],
             "kind": record["kind"],

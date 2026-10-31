@@ -84,8 +84,43 @@ def _indexes(presentation):
 class TestTheNumbering:
     def test_the_records_are_numbered_after_the_note_passages(self):
         """The live drawer listed `4.` and no record. Numbering records from 1 would
-        have given two different sources the same number and one of them no row."""
+        have given two different sources the same number and one of them no row.
+
+        The number is the record's position in the array, not its position in the drawer:
+        two records were retrieved and one was cited, so the cited one keeps `8` and the
+        drawer is not renumbered around it. Renumbering the survivor to `1` would break
+        the marker that points at it (`literature_sources`, 2026-10-31).
+        """
         presentation = _presented()
+        published = [row for row in presentation["references"] if row.get("pmid")]
+
+        assert [row["index"] for row in published] == [8]
+
+    def test_a_retrieved_record_the_answer_does_not_name_is_not_a_reference(self):
+        """A reference list is what the answer rests on, not what the search returned.
+
+        Two records came back and the answer cited one. Publishing both told the reader a
+        paper had been used when nothing pointed at it — patient 90000069 turn 3, two rows
+        with no marker (2026-10-31).
+        """
+        presentation = _presented()
+        titles = [row["title"] for row in presentation["references"]]
+
+        assert "Accidental hypothermia" in titles
+        assert "Rewarming strategies" not in titles, (
+            "a record nothing cites must not be listed as a reference")
+
+    def test_an_answer_that_names_no_record_keeps_the_list(self):
+        """The other side of that rule, and a different statement.
+
+        A turn that restates the literature without naming a paper has still read what
+        the search returned. Emptying the drawer would claim nothing was retrieved; the
+        caption already reports what was.
+        """
+        presentation = compose_presentation(
+            "what does the literature say about hypothermia?",
+            "Rewarming is the priority, and the evidence is consistent.",
+            [CHART, SEARCH])
         published = [row for row in presentation["references"] if row.get("pmid")]
 
         assert [row["index"] for row in published] == [8, 9]
@@ -98,12 +133,16 @@ class TestTheNumbering:
 
     def test_the_drawer_lists_the_records_and_the_note_passages_together(self):
         """Both channels, in one list: a reader checking a claim finds the row whichever
-        kind of source it was."""
+        kind of source it was.
+
+        "The records" means the record this answer cites. The turn retrieved two and named
+        one, so the drawer carries that one and the note passages — the second record is
+        covered by `test_a_retrieved_record_the_answer_does_not_name_is_not_a_reference`.
+        """
         presentation = _presented()
         titles = [row["title"] for row in presentation["references"]]
 
         assert "Accidental hypothermia" in titles
-        assert "Rewarming strategies" in titles
         assert "Brief hospital course" in titles
 
 

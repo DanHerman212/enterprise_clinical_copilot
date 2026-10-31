@@ -150,7 +150,10 @@ class TestTheRecordedTurn:
         assert flags == []
         assert settled.endswith("^[PMID: 35010760]")
         published = [row for row in out["references"] if row.get("pmid")]
-        # Union order — the first search's record, then the later ones — because that is
-        # the order the model was shown them in.
-        assert [row["pmid"] for row in published] == [
-            "37797337", "35010760", "33485655"]
+        # Only the record the answer names. The turn's four searches returned several, and
+        # a reference list is what the answer rests on rather than what retrieval offered
+        # (2026-10-31). Its number is still its position in the union order the model was
+        # shown — the second record is `2` — so the badge and the row name one paper; the
+        # survivors are not renumbered around the omissions.
+        assert [row["pmid"] for row in published] == ["35010760"]
+        assert published[0]["index"] == 2

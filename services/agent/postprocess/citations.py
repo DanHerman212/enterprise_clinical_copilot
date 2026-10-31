@@ -1075,6 +1075,30 @@ def literature_pmids(
     )
 
 
+def cited_pmids(answer: str) -> list[str]:
+    """The PMIDs the ANSWER names, in the order it first names them.
+
+    The complement of `literature_pmids`, which says what the turn may cite. This says
+    what it did, and the two are not the same question: a search returns three records and
+    an answer rests on one, which is what the reader's reference list should reflect.
+
+    Read off the badges, because a published record is addressed by identifier rather than
+    by position (`citation_header` asks the model to copy the badge). A turn that cites no
+    record returns an empty list, and the caller must decide what that means for its
+    reference list — it is not the same statement as "this turn cited none of the
+    retrieved records", which is what this function can tell apart.
+    """
+    found: list[str] = []
+    for match in _ANY_MARKER_RE.finditer(answer or ""):
+        body = match.group(1).strip()
+        if not _PMID_LIST_BODY_RE.fullmatch(body):
+            continue
+        for number in re.findall(r"\d+", body):
+            if number not in found:
+                found.append(number)
+    return found
+
+
 def citation_header(number: int, modality: str) -> str:
     """The literal marker the model is asked to copy, printed beside the evidence.
 

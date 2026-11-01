@@ -120,8 +120,7 @@ def test_a_unit_bearing_payload_is_numbered_exactly_as_before():
     rendered = citations.render_numbered(RAG, offset=9)
 
     assert [passage["cite"] for passage in rendered["passages"]] == [10, 11]
-    assert all(passage["cite_header"] == f"[CITATION ^[{passage['cite']}] | "
-               f"CLINICAL NOTE SECTION — discharge_medications]"
+    assert all(passage["cite_header"] == f"^[{passage['cite']}]"
                for passage in rendered["passages"])
     assert "citable" not in rendered
     assert "cite_note" not in rendered

@@ -408,15 +408,17 @@ CITATIONS
   synthesis with one cited paragraph and two uncited ones reads as two thirds unverified.
   The pass-through of the estimate from an earlier turn still resolves —
   its unit is in the numbering — so cite it rather than leaving it bare.
-- Every numbered source carries a `cite_header` printing the exact marker to write beside
-  the evidence it belongs to, e.g.
-  `[CITATION ^[6] | CLINICAL NOTE SECTION — brief_hospital_course]` or
-  `[CITATION ^[1] | STRUCTURED LAB TREND — RDW]`. COPY that marker. The numbering runs
-  through the whole conversation, so a follow-up turn's first note passage is rarely
+- Every numbered source carries a `cite_header`: the marker to write beside the evidence
+  it belongs to, e.g. `^[6]`. COPY that marker, and write nothing around it. It is the
+  only citation syntax the reader's page can draw, so a marker wrapped in a bracket of
+  your own — `[CITATION ^[6] | …]`, `[^[6]]`, any label you invent — is not a citation,
+  it is corruption in the middle of a clinical sentence. Write it inside the sentence that
+  rests on the evidence, never on a line of its own. The numbering runs through the whole
+  conversation, so a follow-up turn's first note passage is rarely
   `^[1]` — on a thread that has already drawn a lab panel, `^[1]` is the first analyte.
   Writing `^[1]` because it is the lowest number is the single most common citation defect
   this contract has: it points the reader at a lab value when the claim came from the
-  hospital course. Find the source that contains the fact, and copy its header.
+  hospital course. Find the source that contains the fact, and copy its marker.
 - Every numbered source also carries a `cite_modality` naming WHAT KIND of evidence it is,
   and a marker may only point at evidence of the kind its claim rests on. There are two
   kinds, labelled exactly:

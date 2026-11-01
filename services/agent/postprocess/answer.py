@@ -350,18 +350,24 @@ def settle_answer(
     flags: list[str] = []
     settled_prose: str | None = None
     if prose:
-        # The marker VOCABULARY first, then the bound. A marker that is neither a number
-        # nor a PMID badge is not a citation, and this pass is the last one before three
-        # consumers read the prose (the trace, the judge, the browser), while the
-        # presentation layer no longer rewrites what it publishes (Charter 13 Law 5). So
-        # the sweep `renumber_citations` used to do on the way to the canvas happens here.
-        swept = citations.drop_unknown_markers(prose)
+        # The constructs we PRINT first, then the marker VOCABULARY, then the bound. The
+        # model copies what it is shown and generalises what it can copy, so a bracket
+        # this package printed for the prompt reached two served answers on 2026-11-01 —
+        # one copied whole, one extended with labels no code path prints — while every
+        # check below called the turn clean. `strip_printed_constructs` is the rule that
+        # does not depend on the model complying; it lives in the citation owner because
+        # that module is what prints the artifact it removes.
+        stripped, printed = citations.strip_printed_constructs(prose)
+        flags.extend(printed)
+        swept = citations.drop_unknown_markers(stripped)
         settled_prose, found = citations.enforce_citations(swept, bound, pmids)
         flags.extend(found)
 
     settled_deterministic: str | None = None
     if isinstance(deterministic, str) and deterministic:
-        swept = citations.drop_unknown_markers(deterministic)
+        stripped, printed = citations.strip_printed_constructs(deterministic)
+        flags.extend(printed)
+        swept = citations.drop_unknown_markers(stripped)
         settled_deterministic, found = citations.enforce_citations(swept, bound, pmids)
         flags.extend(found)
     else:

@@ -21,6 +21,10 @@ only layer where the answer, the guardrails, and the retrieved evidence meet:
      numbering.
   5. `extract_section` pulls a section body out of a (possibly whole-note)
      passage, so a citation click shows the cited section, not the whole note.
+  6. `strip_printed_constructs` removes, from the served prose, the constructs
+     this package PRINTS into a tool result for the model to read. The model copies
+     what it is shown and generalises what it can copy, so the guarantee is "no string
+     we print reaches the reader undrawn" and it is kept beside the printer.
 
 The alias vocabulary is derived from the canonical `KNOWN_HEADINGS` used by
 index build and serving (services/mcp/retrieval/sections.py), with a small set
@@ -1100,15 +1104,29 @@ def cited_pmids(answer: str) -> list[str]:
 
 
 def citation_header(number: int, modality: str) -> str:
-    """The literal marker the model is asked to copy, printed beside the evidence.
+    """The token the model is asked to copy, printed beside the evidence: `^[6]`.
 
-    `cite` says which number a unit carries, and it was not enough: six multi-turn items
-    scored `citation <= 1` with the same judge language — the claim is supported by one
-    kind of evidence and cited to another. The numbering runs across turns, and a bare
-    `"cite": 1` beside a JSON object is a fact the model has to remember rather than a
-    token it can copy.
+    `cite` alone says which number a unit carries, and that was not enough — six
+    multi-turn items scored `citation <= 1` — so a copyable token was printed beside the
+    evidence. The token was `[CITATION ^[6] | CLINICAL NOTE SECTION — report]`, and that
+    was the defect: on 2026-11-01 the served answer of an `/ehr` chip follow-up ended
+    with the bracket verbatim, drawn around a resolved pill, and a risk-chip follow-up
+    carried two of them with labels no code path prints (`ADMISSION METADATA`,
+    `PREDICT_READMISSION`). A grammar is a thing that can be generalised; a token cannot.
+
+    So the printed artifact is now the marker and NOTHING else — the one string the
+    browser can draw. Whatever the model copies is drawable by construction, there is no
+    bracket to over-copy, and no per-modality syntax to extend onto evidence that owns no
+    citation at all. `modality` stays in the signature because the label still travels in
+    `cite_modality`, which the prompt reads and `evidence_kind_mismatches` checks; it is
+    deliberately not interpolated into the token.
+
+    A copy of the OLD form still reaching an answer is handled by
+    `strip_printed_constructs`, which is the half of this contract that does not depend on
+    the model complying.
     """
-    return f"[CITATION ^[{number}] | {modality}]"
+    del modality  # carried by `cite_modality`; never interpolated into the token
+    return f"^[{number}]"
 
 
 def citation_fields(number: int, modality: str) -> dict[str, Any]:
@@ -1155,6 +1173,170 @@ def zero_unit_fields() -> dict[str, Any]:
     counts zero — the numbering of every later unit is unchanged.
     """
     return {"cite": None, "citable": False, "cite_note": ZERO_UNIT_NOTE}
+
+
+#: Every construct this package prints FOR the model, by name. The normaliser below
+#: handles each one and the flag it raises names the form, so an answer that served one
+#: records WHICH. A form added to a printer without an entry here is a leak no test can
+#: see, which is why `tests/agent/test_printed_constructs.py` walks this tuple and fails
+#: until the form has a sample the normaliser removes.
+PRINTED_FORMS = ("cite_header", "admission_metadata", "zero_unit_note")
+
+#: Spans this package prints FOR the model, recognised by the word they open with and
+#: never by their contents. The contents are the model's to fill in — it invented
+#: `ADMISSION METADATA` and `PREDICT_READMISSION` on 2026-11-01 — so a rule written
+#: against the labels would need one entry per label the model has not invented yet.
+_PRINTED_SPAN_TAGS = ("citation", "cite")
+
+_PRINTED_SPAN_RE = re.compile(
+    r"\s*(?:" + "|".join(_PRINTED_SPAN_TAGS) + r")\b", re.IGNORECASE
+)
+
+#: The annotated block the admission row arrives in
+#: (`routing.admission_context.render`). Printed into the prompt, so it is copyable.
+_ADMISSION_BLOCK_RE = re.compile(
+    r"<admission_metadata\b[^>]*>.*?</admission_metadata>|<admission_metadata\b[^>]*/?>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _marker_mask(text: str) -> list[bool]:
+    """Which characters of `text` belong to a citation marker.
+
+    A marker is itself bracketed — `^[1]` — so a scan that pairs brackets has to step
+    over the marker WHOLE, or the marker's own bracket is read as the wrapper it is
+    nested inside and every marker in the answer looks like machine syntax.
+    """
+    mask = [False] * len(text)
+    for match in _ANY_MARKER_RE.finditer(text):
+        for index in range(match.start(), match.end()):
+            mask[index] = True
+    return mask
+
+
+def _span_end(text: str, start: int, mask: list[bool]) -> int | None:
+    """The index just past the `]` closing the bracket opened at `start`, or None."""
+    depth = 0
+    cursor = start
+    while cursor < len(text):
+        if mask[cursor]:
+            cursor += 1
+            continue
+        if text[cursor] == "[":
+            depth += 1
+        elif text[cursor] == "]":
+            depth -= 1
+            if depth == 0:
+                return cursor + 1
+        cursor += 1
+    return None
+
+
+def _tidy_printed_constructs(answer: str) -> str:
+    """Close up what a removed construct left behind.
+
+    A construct that stood on its own line leaves a paragraph break, and — when it carried
+    a marker the answer had not already used — a marker starting a line. That marker
+    belongs to the sentence above it, because that is the claim the construct was
+    annotating, so it is pulled up onto that line and the break is closed.
+
+    Only reached when something was removed, so a clean answer never passes through it.
+    """
+    text = re.sub(r"[ \t]*(?:\n[ \t]*)+(?=" + MARKER_OPEN + r")", " ", answer)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r"[ \t]+(?=\n)", "", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def strip_printed_constructs(answer: str) -> tuple[str, list[str]]:
+    """Remove the constructs this package prints for the model from the served prose.
+
+    The served answer is a rendered document, and the only machine syntax it may carry is
+    syntax the renderer can draw: `^[n]`, `^[PMID: …]`. Everything else this package
+    prints is a fact about the prompt, and the reader must never see it.
+
+    Two mechanisms produced the defect this closes. A model told to "copy that marker"
+    copied the whole bracket (`[CITATION ^[1] | CLINICAL NOTE SECTION —
+    discharge_instructions]`, trailing the answer, 2026-11-01); and a model shown a
+    grammar wrote new instances of it, labelling a note passage `PREDICT_READMISSION` and
+    the admission row `ADMISSION METADATA` — strings no code path prints. `citation_header`
+    no longer prints a bracket, so the first cannot recur by compliance; this pass is what
+    does not depend on compliance at all.
+
+    Three rules, and they are the print vocabulary rather than a list of sightings:
+
+      * a span that OPENS with one of `_PRINTED_SPAN_TAGS` is machine syntax, whatever
+        label follows — so an invented label costs nothing to handle;
+      * a bracketed span that CONTAINS a marker is machine syntax, because a marker is a
+        pivot that stands alone in a sentence and never sits inside a bracketed phrase;
+      * the two annotated blocks — `<admission_metadata>` and `ZERO_UNIT_NOTE` — are
+        removed by name, from the same module that prints them.
+
+    A removed span keeps the markers it carried, unless the answer already cited that
+    passage: the prompt allows one citation per passage, so a second copy of the same
+    number is annotation rather than support. This is why the trailing
+    `[CITATION ^[1] | …]` of a fully-cited answer disappears instead of leaving a stray
+    pill on its own line.
+
+    Returns (prose, flags). The flags reach `guardrail_flags` through
+    `answer.settle_answer`, because the defect this repairs was invisible for a day: a
+    model that ignored its instructions produced a turn every check called clean.
+    """
+    if not answer:
+        return answer, []
+
+    flags: list[str] = []
+    text = answer
+
+    if _ADMISSION_BLOCK_RE.search(text):
+        text = _ADMISSION_BLOCK_RE.sub("", text)
+        flags.append("citation_printed_construct:admission_metadata")
+    if ZERO_UNIT_NOTE in text:
+        text = text.replace(ZERO_UNIT_NOTE, "")
+        flags.append("citation_printed_construct:zero_unit_note")
+
+    mask = _marker_mask(text)
+    spans: list[tuple[int, int]] = []
+    index = 0
+    while index < len(text):
+        if not mask[index] and text[index] == "[":
+            end = _span_end(text, index, mask)
+            if end is not None:
+                inner = text[index + 1:end - 1]
+                if _PRINTED_SPAN_RE.match(inner) or any(mask[index:end]):
+                    spans.append((index, end))
+                    index = end
+                    continue
+        index += 1
+
+    if not spans:
+        if not flags:
+            return answer, []
+        return _tidy_printed_constructs(text), list(dict.fromkeys(flags))
+
+    out: list[str] = []
+    seen: set[str] = set()
+    last = 0
+    for start, end in spans:
+        plain = text[last:start]
+        out.append(plain)
+        for match in _ANY_MARKER_RE.finditer(plain):
+            seen.add(match.group(1).strip())
+        kept: list[str] = []
+        for match in _ANY_MARKER_RE.finditer(text[start:end]):
+            body = match.group(1).strip()
+            if not body or body in seen:
+                continue
+            seen.add(body)
+            kept.append(match.group(0))
+        if kept:
+            out.append(" ".join(kept))
+        flags.append("citation_printed_construct:cite_header")
+        last = end
+    out.append(text[last:])
+
+    return _tidy_printed_constructs("".join(out)), list(dict.fromkeys(flags))
 
 
 def note_modality(section: Any) -> str:

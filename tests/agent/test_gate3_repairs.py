@@ -98,19 +98,24 @@ def _rendered(payload):
 
 
 def test_a_note_passage_prints_the_marker_to_copy():
+    """The token printed for the model is the marker alone: `^[1]`.
+
+    It was `[CITATION ^[1] | CLINICAL NOTE SECTION — brief_hospital_course]` until
+    2026-11-01, and the served answers of two chip follow-ups ended with that bracket
+    verbatim while every check called the turn clean. What is printed is now exactly what
+    the browser can draw, so a compliant copy cannot be undrawable syntax.
+    """
     rendered = _rendered({"passages": [{"id": "p1", "section": "brief_hospital_course",
                                         "text": "text"}]})
 
     assert rendered["passages"][0]["cite"] == 1
-    assert rendered["passages"][0]["cite_header"] == (
-        "[CITATION ^[1] | CLINICAL NOTE SECTION — brief_hospital_course]")
+    assert rendered["passages"][0]["cite_header"] == "^[1]"
 
 
 def test_an_analyte_prints_the_marker_to_copy():
     rendered = _rendered({"trends": [{"label": "RDW", "series": []}]})
 
-    assert rendered["trends"][0]["cite_header"] == (
-        "[CITATION ^[1] | STRUCTURED LAB TREND — RDW]")
+    assert rendered["trends"][0]["cite_header"] == "^[1]"
 
 
 def test_the_header_number_is_the_number_the_citation_layer_resolves():
@@ -126,7 +131,7 @@ def test_the_header_number_is_the_number_the_citation_layer_resolves():
                                          "text": "text"}]})
 
     assert rendered["passages"][0]["cite"] == 1
-    assert continued["passages"][0]["cite_header"].startswith("[CITATION ^[1]")
+    assert continued["passages"][0]["cite_header"] == "^[1]"
 
 
 def test_a_live_turn_and_a_replayed_turn_print_the_same_header():
@@ -138,7 +143,7 @@ def test_a_live_turn_and_a_replayed_turn_print_the_same_header():
     replayed = _render_tool_result(_presented_for_model("rag_search", payload), offset=5)
 
     assert live == replayed
-    assert "[CITATION ^[6] | CLINICAL NOTE SECTION — history_of_present_illness]" in live
+    assert '"cite_header": "^[6]"' in live
 
 
 # --- 3. the manifest states the row's digits ---------------------------------------

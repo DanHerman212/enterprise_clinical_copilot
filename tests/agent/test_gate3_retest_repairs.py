@@ -103,7 +103,7 @@ def test_a_passage_carries_no_local_identifier():
     passage = rendered["passages"][0]
     assert "id" not in passage
     assert passage["cite"] == 1
-    assert passage["cite_header"].startswith("[CITATION ^[1] |")
+    assert passage["cite_header"] == "^[1]"
 
 
 def test_the_global_number_survives_the_offset_of_a_later_turn():
@@ -114,7 +114,7 @@ def test_the_global_number_survives_the_offset_of_a_later_turn():
         offset=2))
 
     assert rendered["passages"][0]["cite"] == 3
-    assert "[CITATION ^[3] |" in rendered["passages"][0]["cite_header"]
+    assert rendered["passages"][0]["cite_header"] == "^[3]"
 
 
 def test_the_prompt_requires_a_marker_on_every_synthesis_paragraph():

@@ -141,9 +141,10 @@ def test_the_prompt_places_the_estimate_against_the_cohorts():
 
 
 def test_the_prompt_forbids_a_comparison_when_there_is_no_block():
-    text = _ehr_prompt()
+    text = " ".join(_ehr_prompt().split())
 
-    assert "Where no <verified_comparators> block is given, write NO comparison" in text
+    assert "Where an input block of published cohorts is NOT given" in text
+    assert "do not write a sentence about the comparison at all" in text
     assert "Do not reach for a rate you know from training" in text
 
 

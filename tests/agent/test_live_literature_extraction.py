@@ -134,40 +134,51 @@ def _row(**overrides) -> dict:
     return row
 
 
-# --- the alignment gate ------------------------------------------------------
+# --- what this layer still decides about the pool ------------------------------
+#
+# The anchor gate that used to live here — a record refused unless its abstract repeated
+# one of the patient's phrases — is deleted (2026-11-02). It was a token test standing in
+# for a clinical judgement, and it refused correct cohorts that said the same thing in
+# other words. Which cohort describes this patient is decided by the model that reads the
+# abstract; the extraction turn refuses the rest and says why. What survives here is the
+# one population rule that is structural rather than clinical: an abstract naming children
+# is a cohort of children, and this admission is not one.
 
 
-def test_a_knee_arthroplasty_cohort_is_not_a_hip_fracture_cohort():
-    """The substitution the static table was capable of, refused deterministically."""
-    accepted, rejected = deterministic.split_by_clinical_anchor(
-        [KNEE_ARTHROPLASTY], FEMORAL_NECK)
+def test_the_pool_keeps_a_cohort_from_another_condition_and_leaves_it_to_the_model():
+    """No token gate: a knee cohort in a hip admission's pool is the model's to refuse.
 
-    assert accepted == []
-    assert rejected[0]["pmid"] == "30000002"
-    assert "condition anchors" in rejected[0]["reason"]
-
-
-def test_a_lumbar_cohort_is_not_a_cervical_cohort():
-    accepted, rejected = deterministic.split_by_clinical_anchor([LUMBAR_DUROTOMY], CERVICAL)
-
-    assert accepted == []
-    assert rejected[0]["pmid"] == "30000003"
-
-
-def test_a_copd_cohort_is_not_a_pleural_effusion_admission():
-    accepted, rejected = deterministic.split_by_clinical_anchor([COPD_EXACERBATION],
-                                                                PLEURAL_AFIB)
-
-    assert accepted == []
-    assert rejected[0]["pmid"] == "30000004"
-
-
-def test_the_patients_own_cohort_is_kept():
-    accepted, rejected = deterministic.split_by_clinical_anchor(
+    The refusals in this test's predecessor were invisible to the reader — they happened
+    before the abstract was read — so a synonym ("arthroplasty" for "replacement") looked
+    exactly like an empty search.
+    """
+    kept, refused = deterministic.adult_cohorts(
         [HEMIARTHROPLASTY, KNEE_ARTHROPLASTY], FEMORAL_NECK)
 
-    assert [article["pmid"] for article in accepted] == ["30000001"]
-    assert [entry["pmid"] for entry in rejected] == ["30000002"]
+    assert [article["pmid"] for article in kept] == ["30000001", "30000002"]
+    assert refused == []
+
+
+def test_a_paediatric_cohort_is_removed_before_the_pool_is_ranked():
+    kept, refused = deterministic.adult_cohorts(
+        [PEDIATRIC_EFFUSION, ADULT_EFFUSION], PLEURAL_AFIB)
+
+    assert [article["pmid"] for article in kept] == ["30000031"]
+    assert refused[0]["pmid"] == PEDIATRIC_EFFUSION["pmid"]
+    assert "paediatric" in refused[0]["reason"]
+
+
+def test_the_paediatric_rule_turns_itself_off_for_a_paediatric_admission():
+    child = deterministic.ClinicalTarget(
+        condition="paediatric complicated pleural effusion",
+        procedure="thoracentesis",
+        anchors=("pleural effusion",),
+    )
+
+    kept, refused = deterministic.adult_cohorts([PEDIATRIC_EFFUSION], child)
+
+    assert kept == [PEDIATRIC_EFFUSION]
+    assert refused == []
 
 
 def test_a_single_anatomical_word_is_not_an_anchor():
@@ -571,19 +582,23 @@ def test_an_adult_age_band_is_not_a_population_mismatch():
         "Patients over 80 years old undergoing total hip arthroplasty", "NSQIP")
 
 
-def test_the_paediatric_cohort_is_removed_before_the_pool_is_ranked():
-    kept = deterministic.compatible_cohorts(
+def test_the_paediatric_cohort_never_reaches_the_model():
+    kept, refused = deterministic.adult_cohorts(
         [PEDIATRIC_EFFUSION, ADULT_EFFUSION], PLEURAL_AFIB)
 
     assert [article["pmid"] for article in kept] == ["30000031"]
+    assert refused[0]["pmid"] == PEDIATRIC_EFFUSION["pmid"]
 
 
-def test_the_guard_turns_itself_off_for_a_paediatric_admission():
+def test_the_rule_turns_itself_off_for_a_paediatric_admission():
     child = deterministic.ClinicalTarget(
         condition="pediatric pleural effusion", anchors=("pleural effusion",))
 
     assert deterministic.is_pediatric_target(child) is True
-    assert len(deterministic.compatible_cohorts([PEDIATRIC_EFFUSION], child)) == 1
+    kept, refused = deterministic.adult_cohorts([PEDIATRIC_EFFUSION], child)
+
+    assert kept == [PEDIATRIC_EFFUSION]
+    assert refused == []
 
 
 # --- F4: a two-arm result is a comparison, not a point estimate -------------
@@ -638,7 +653,14 @@ def test_the_comparator_prompt_refuses_a_different_population_and_rules_on_two_a
     assert "never write \"and\" where the study says \"versus\"" in prompt
 
 
-# --- procedure intensity: a needle is not a thoracotomy ---------------------
+# --- procedure intensity: no longer a keyword rule --------------------------
+#
+# A decortication cohort was once refused for a thoracentesis admission by matching
+# procedure nouns against a hand-kept list of bedside operations. The list is deleted: it
+# encoded a surgical judgement as vocabulary, and it could not tell decortication from
+# chest drain insertion in a paper that mentions both. Establishing that the cohort is the
+# same operation is the model's job, stated as `clinical_match`, and the layer only
+# carries out that answer.
 
 DECORTICATION = dict(
     PEDIATRIC_EFFUSION,
@@ -652,23 +674,27 @@ DECORTICATION = dict(
 )
 
 
-def test_a_surgical_cohort_is_refused_for_a_bedside_procedure():
-    """Measured 2026-11-02: a decortication cohort was served for a thoracentesis."""
+def test_the_models_refusal_is_what_stops_a_different_operation():
+    verified, reason = deterministic.verify_comparator(
+        _row(pmid="30000040", clinical_match=False, reported_rate="50.0%",
+             rate_sentence="Among patients with complicated pleural effusion undergoing "
+                           "decortication, the 30-day readmission rate was 50.0%."),
+        {"30000040": DECORTICATION}, PLEURAL_AFIB)
+
+    assert verified is None
+    assert "declined" in reason
+
+
+def test_a_verbatim_surgical_cohort_is_published_when_the_model_calls_it_a_match():
+    """No second opinion: the layer does not re-try the model's clinical judgement."""
     verified, reason = deterministic.verify_comparator(
         _row(pmid="30000040", reported_rate="50.0%",
              rate_sentence="Among patients with complicated pleural effusion undergoing "
                            "decortication, the 30-day readmission rate was 50.0%."),
         {"30000040": DECORTICATION}, PLEURAL_AFIB)
 
-    assert verified is None
-    assert "bedside one" in reason
-
-
-def test_the_guard_is_one_directional():
-    """A surgical admission against a non-operative cohort is a real comparison."""
-    assert deterministic.procedure_intensity_mismatch(FEMORAL_NECK, "decortication") is False
-    assert deterministic.procedure_intensity_mismatch(
-        PLEURAL_AFIB, "patients undergoing decortication") is True
+    assert reason == ""
+    assert verified is not None
 
 
 # --- D2: the second pass is decided on verified rows ------------------------
@@ -709,7 +735,7 @@ def _payload(rows: list[dict]) -> str:
 def _candidates(count: int, **overrides) -> list[dict]:
     """`count` records that name this admission's condition, with distinct PMIDs.
 
-    Used to fill the model's budget without inventing a second fixture: the policy under
+    Used to fill the model's budget without inventing another fixture: the policy under
     test turns on how many candidates align, not on what any of them says.
     """
     articles = []
@@ -720,80 +746,78 @@ def _candidates(count: int, **overrides) -> list[dict]:
     return articles
 
 
-def test_a_thin_first_pass_pools_both_queries_into_one_extraction():
-    """The latency fix, stated as behaviour (measured 2026-11-02).
+def test_one_query_and_one_extraction_per_turn():
+    """Measured 2026-11-02: a `/ehr` turn searched twice and extracted twice, 25.6s.
 
-    A pass that aligns four candidates cannot fill the model's budget, and a wide pass
-    will add records — so the searches both run (500ms each) and the model reads the union
-    ONCE. It used to read the thin pool, be judged starved, and then read the wide pool:
-    two five-second calls to learn what the candidate count had already said.
+    The workflow showed `Searching the Literature` twice and the trace showed two
+    five-second extraction gaps, because the second pass ran whenever the first verified
+    fewer than two rows — which was most admissions. One query with the broadened outcome
+    clause and one extraction over its ranked pool is what that turn needed.
     """
-    seen: list[bool] = []
+    searched: list[tuple] = []
 
-    async def search(anchors, wide):
-        seen.append(wide)
-        articles = [HEMIARTHROPLASTY] if wide else [NINETY_DAY_ARTICLE]
-        return {"query": "wide" if wide else "narrow", "articles": articles}
+    async def search(terms, wide):
+        searched.append((terms, wide))
+        return {"query": "pooled", "articles": _candidates(6)}
 
-    llm = _FakeLLM([_payload([_row()])])
+    llm = _FakeLLM([_payload([_row(pmid="30000100")])])
 
     result = asyncio.run(deterministic.extract_comparators(llm, FEMORAL_NECK, search=search))
 
-    assert seen == [False, True]
-    assert llm.calls == 1, "one extraction over the pooled candidates"
-    assert [row["pmid"] for row in result.rows] == ["30000001"]
-    # Two passes reported, one read: the wide pass's record is the one that verified, and
-    # both passes are marked as having been read together.
-    assert [(entry.wide, entry.aligned, entry.verified, entry.pooled)
-            for entry in result.passes] == [
-        (False, 1, 0, True), (True, 1, 1, True)]
+    assert len(searched) == 1, "one retrieval per turn"
+    assert llm.calls == 1, "one extraction per turn"
+    assert [row["pmid"] for row in result.rows] == ["30000100"]
+    assert len(result.passes) == 1
 
 
-def test_a_first_pass_that_fills_the_budget_is_extracted_alone():
-    """A full budget of condition-naming candidates leaves no room for the wide pass.
+def test_the_one_query_asks_for_the_condition_and_its_anchors():
+    """The OR the two passes were approximating, asked once.
 
-    Ten aligned records is the most the model will read, so a second query could only
-    displace one of them. The wide search is not issued and the extraction happens once.
+    The condition leads and the anchors follow it: `search_literature` turns them into an
+    OR of quoted phrases against the broadened outcome clause, which is the query a record
+    saying "readmission within 30 days" can actually match.
     """
-    seen: list[bool] = []
+    searched: list[tuple] = []
 
-    async def search(anchors, wide):
-        seen.append(wide)
-        return {"query": "narrow", "articles": _candidates(10)}
+    async def search(terms, wide):
+        searched.append((terms, wide))
+        return {"query": "pooled", "articles": []}
 
-    llm = _FakeLLM([_payload([_row(pmid="30000100"),
-                              _row(pmid="30000101")])])
+    asyncio.run(deterministic.extract_comparators(
+        _FakeLLM([_payload([])]), FEMORAL_NECK, search=search))
+
+    (terms, wide), = searched
+    assert wide is True, "the broadened outcome clause, because the exact phrases miss"
+    assert list(terms)[0] == FEMORAL_NECK.condition
+    assert set(FEMORAL_NECK.anchors) <= set(terms)
+
+
+def test_a_pool_about_another_condition_is_put_to_the_model_which_refuses_it():
+    """The pool is read, and the refusal is the model's, with a stated reason.
+
+    This used to cost nothing: the anchor gate emptied the pool before the extraction turn
+    ran, so a synonym in a good cohort looked identical to an empty search. One record is
+    now read and declined, and the decline is a rationale a reader could argue with.
+    """
+    async def search(terms, wide):
+        return {"query": "pooled", "articles": [KNEE_ARTHROPLASTY]}
+
+    llm = _FakeLLM([_payload([_row(
+        pmid="30000002", clinical_match=False,
+        rationale="Total knee arthroplasty, not a femoral neck fracture.",
+        reported_rate="3.4%",
+        rate_sentence="Among 12,450 primary total knee arthroplasties the 30-day "
+                      "readmission rate was 3.4%.",
+    )])])
 
     result = asyncio.run(deterministic.extract_comparators(llm, FEMORAL_NECK, search=search))
 
-    assert seen == [False], "a full first pass must not spend a second query"
     assert llm.calls == 1
-    assert [row["pmid"] for row in result.rows] == ["30000100", "30000101"]
-
-
-def test_a_full_first_pass_that_verifies_nothing_still_spends_the_retry():
-    """The case the retry exists for, preserved.
-
-    Six records naming the condition, every one reporting a ninety-day rate: the budget
-    was full and the model correctly verified none of them. Filling the budget is a
-    necessary condition for skipping the wide pass, not a sufficient one.
-    """
-    seen: list[bool] = []
-
-    async def search(anchors, wide):
-        seen.append(wide)
-        if wide:
-            return {"query": "wide", "articles": [HEMIARTHROPLASTY]}
-        return {"query": "narrow", "articles": _candidates(10)}
-
-    llm = _FakeLLM([_payload([]), _payload([_row()])])
-
-    result = asyncio.run(deterministic.extract_comparators(llm, FEMORAL_NECK, search=search))
-
-    assert seen == [False, True]
-    assert llm.calls == 2
-    assert [row["pmid"] for row in result.rows] == ["30000001"]
-    assert [(entry.wide, entry.verified) for entry in result.passes] == [(False, 0), (True, 1)]
+    assert result.rows == []
+    assert result.passes[0].candidates == 1
+    assert result.passes[0].aligned == 1, "the pool reached the model; nothing pre-refused it"
+    assert [entry["pmid"] for entry in result.rejected] == ["30000002"]
+    assert "declined" in result.rejected[0]["reason"]
 
 
 # --- the retrieval layer -----------------------------------------------------

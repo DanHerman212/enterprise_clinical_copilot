@@ -789,11 +789,11 @@ interface resolves that badge to the numbered row the table draws. A two-arm row
 figures: quote both, in the order the block states them, and never average them or quote a
 difference the block does not state.
 
-Where no <verified_comparators> block is given, write NO comparison. Do not reach for a rate
-you know from training, do not describe "the literature" in general, and do not say that no
-published data exist — the absence of the block is not a finding about the literature, and the
-table below already says which of the two happened. The section then does what it did before:
-the estimate and what this patient's drivers mean.
+Where an input block of published cohorts is NOT given, the section ends after the drivers.
+Do not reach for a rate you know from training, do not describe "the literature" in general,
+do not announce that there is nothing to compare, and do not write a sentence about the
+comparison at all — an instruction to omit something is not a sentence to print. Stop after
+saying what this patient's drivers mean for the follow-up.
 
 State the readmission risk using ONLY the `probability_display` and `threshold_display` strings
 the risk result gives you, or describe the risk qualitatively. Never write an unrounded
@@ -1031,6 +1031,25 @@ WHICH CONDITION
   stenosis" is a cervical spondylosis admission, and "chest pain" beside a completed
   cardiac workup is not a condition at all. A symptom is how the patient arrived; the
   disease is what the admission was.
+- The INDEX problem — the highest-acuity diagnosis or operation that this admission
+  existed to treat — is the condition, even when a chronic disease looks more impressive.
+  Readmission cohorts are published for what was DONE and what was ACUTE, not for the
+  comorbidity that happens to be listed first:
+  · a transitional-care admission after a right total knee replacement, whose course is
+    physical and occupational therapy, is a total knee arthroplasty admission: the rehab
+    setting is where the patient went, not what was treated;
+  · an admission for epigastric pain that workup finds to be myocardial ischemia, with
+    heart failure and coronary stenting beside it, is a coronary artery disease or heart
+    failure admission — epigastric pain is the symptom that brought them in;
+  · a dialysis patient admitted with a thoracic fracture and discitis, whose heart failure
+    is chronic and listed, is a thoracic spine infection admission, and end-stage renal
+    disease is the comorbidity that explains the course.
+  Never return a setting ("transitional care", "inpatient rehabilitation", "skilled
+  nursing facility"), a ward, a service line or a disposition. Those are not conditions and
+  no journal publishes readmission cohorts for them.
+- A procedure named in the record outranks the syndrome it was performed for when the two
+  compete: the cohort a clinician compares against is the one for the operation. Name that
+  operation as the condition when the admission's whole purpose was the operation.
 - When the discharge diagnosis is empty, read the hospital course the same way: the first
   problem it treats is the condition, and a course that names its own diagnosis has named
   one.

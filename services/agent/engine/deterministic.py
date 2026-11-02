@@ -493,14 +493,25 @@ async def _readmission_comparators(
     counter = {"calls": 0}
 
     async def search(terms, wide: bool) -> dict:
+        # One query, however many terms it was given: the condition leads and the anchors
+        # follow as synonyms, which is the one call `search_literature` turns into an OR of
+        # quoted phrases against the broadened outcome clause. Duplicates are dropped
+        # because the condition is usually one of its own anchors.
+        ordered: list[str] = []
+        for term in [terms] if isinstance(terms, str) else list(terms or []):
+            cleaned = " ".join(str(term or "").split())
+            if cleaned and cleaned.lower() not in {entry.lower() for entry in ordered}:
+                ordered.append(cleaned)
+        if not ordered:
+            return {}
         counter["calls"] += 1
         args: dict[str, Any] = {
-            "query": terms if isinstance(terms, str) else terms[0],
+            "query": ordered[0],
             "max_results": 10,
             "scope": "readmission",
         }
-        if wide:
-            args["synonyms"] = list(terms) if not isinstance(terms, str) else [terms]
+        if len(ordered) > 1:
+            args["synonyms"] = ordered[1:]
         call = {
             "name": "search_literature",
             "args": args,
@@ -986,45 +997,6 @@ def names_pediatric_population(*parts: Any) -> bool:
     return any(_PEDIATRIC_MARKERS.search(f" {str(part or '')} ") for part in parts)
 
 
-#: Words that mark an admission's index procedure as bedside or minimally invasive.
-#: Structural, like the population vocabulary: these are route-of-access words, not diseases
-#: and not studies, and they can never admit or refuse a cohort on clinical grounds alone.
-_BEDSIDE_PROCEDURE = re.compile(
-    r"\b(?:thoracentesis|thoracocentesis|paracentesis|catheteri[sz]ation|catheter|"
-    r"drainage|aspiration|endoscopy|endoscopic|bronchoscopy|biopsy|percutaneous|"
-    r"bedside|tap)\b",
-    re.IGNORECASE,
-)
-
-#: Words that mark a cohort as having had an OPERATION rather than a ward procedure.
-_MAJOR_OPERATION = re.compile(
-    r"\b(?:decortication|lobectomy|pneumonectomy|segmentectomy|resection|thoracotomy|"
-    r"sternotomy|laparotomy|colectomy|gastrectomy|hysterectomy|craniotomy|"
-    r"amputation|transplant)\b",
-    re.IGNORECASE,
-)
-
-
-def procedure_intensity_mismatch(
-    target: ClinicalTarget, *cohort_text: Any,
-) -> bool:
-    """Whether this cohort had an operation where the admission had a bedside procedure.
-
-    Measured 2026-11-02: `90000081` was managed with thoracentesis and accepted an adult
-    cohort of patients undergoing decortication for complicated effusion and empyema. The
-    population was right, the organ was right, and the readmission risk of a thoracotomy is
-    not the readmission risk of a needle.
-
-    One direction only, deliberately: a surgical admission compared against a cohort treated
-    conservatively is a real comparison — the literature reports it as the non-operative arm —
-    while the reverse compares a needle against a thoracotomy. The guard therefore fires only
-    when the admission's own procedure reads as bedside AND the cohort reads as an operation.
-    """
-    if not _BEDSIDE_PROCEDURE.search(f" {target.procedure} "):
-        return False
-    return any(_MAJOR_OPERATION.search(f" {str(part or '')} ") for part in cohort_text)
-
-
 def is_pediatric_target(target: ClinicalTarget) -> bool:
     """Whether this admission says of itself that it is a child's.
 
@@ -1035,26 +1007,39 @@ def is_pediatric_target(target: ClinicalTarget) -> bool:
     return names_pediatric_population(target.condition, target.procedure, *target.anchors)
 
 
-def compatible_cohorts(articles: list[dict] | None,
-                       target: ClinicalTarget) -> list[dict]:
+def adult_cohorts(articles: list[dict] | None,
+                  target: ClinicalTarget) -> tuple[list[dict], list[dict]]:
     """The pool without cohorts of a population this admission is not in.
 
-    Applied to the 25-record pool BEFORE ranking and before the truncation to the ten the
-    model reads, because that is the only place the exclusion can do its job: a paediatric
-    cohort ranked above the adult one would otherwise take its slot.
+    The one population rule this layer keeps. It is structural rather than clinical — an
+    abstract naming children is a cohort of children — and it is applied to the whole pool
+    before ranking so a paediatric cohort cannot take a slot from an adult one.
 
-    The filter lives here rather than in the PubMed query because this layer is the one
-    that knows what the chart said, and a query clause would be a second spelling of the
-    same rule in a module that cannot see the admission.
+    What used to sit beside it here, and no longer does, was a gate that refused any record
+    whose abstract did not repeat one of the patient's anchor phrases. That is a token test
+    pretending to be a clinical one: an orthopaedic paper that writes "arthroplasty" where
+    the chart wrote "replacement" is the right cohort and was refused, and the refusal was
+    invisible to the reader because it happened before the model ever saw the abstract.
+    Which cohort describes this patient is a judgement, and the model that reads the
+    abstract is the layer entitled to make it.
     """
     pool = [article for article in articles or [] if isinstance(article, dict)]
     if is_pediatric_target(target):
-        return pool
-    return [
-        article for article in pool
-        if not names_pediatric_population(
-            article.get("title"), article.get("journal"), article.get("abstract"))
-    ]
+        return pool, []
+    kept: list[dict] = []
+    refused: list[dict] = []
+    for article in pool:
+        if names_pediatric_population(
+            article.get("title"), article.get("journal"), article.get("abstract")
+        ):
+            refused.append({
+                "pmid": str(article.get("pmid") or "").strip(),
+                "reason": "cohort is a paediatric population and this admission is not",
+            })
+            continue
+        kept.append(article)
+    return kept, refused
+
 
 
 @dataclass(frozen=True)
@@ -1360,47 +1345,6 @@ async def derive_target(llm, sections: dict | None, *,
     )
 
 
-def names_target(article: dict, anchors: tuple[str, ...] | list[str]) -> bool:
-    """Whether this record's title or abstract contains one of the patient's anchors.
-
-    The deterministic alignment gate. It is deliberately a presence test and not a
-    similarity score: a cohort for another condition is recognised by the absence of the
-    words that name this one, and a threshold would make the same abstract a match on one
-    run and not the next.
-    """
-    haystack = _normalise_text(
-        f"{article.get('title') or ''} {article.get('abstract') or ''}")
-    if not haystack:
-        return False
-    return any(anchor for anchor in anchors if anchor and anchor in haystack)
-
-
-def split_by_clinical_anchor(articles: list[dict] | None,
-                             target: ClinicalTarget) -> tuple[list[dict], list[dict]]:
-    """The records that name this patient's condition, and the ones that do not.
-
-    Rejections carry a reason because the empty case has to be explicable: a reader told
-    "the literature offers nothing for this condition" is owed the difference between a
-    search that found nothing and a search whose records were all about something else.
-    """
-    accepted: list[dict] = []
-    rejected: list[dict] = []
-    for article in articles or []:
-        if not isinstance(article, dict):
-            continue
-        if names_target(article, target.anchors):
-            accepted.append(article)
-        else:
-            rejected.append({
-                "pmid": str(article.get("pmid") or "").strip(),
-                "reason": (
-                    "abstract names none of the patient's condition anchors "
-                    f"({', '.join(target.anchors)})"
-                ),
-            })
-    return accepted, rejected
-
-
 def verify_comparator(row: dict | None, articles: dict[str, dict],
                       target: ClinicalTarget) -> tuple[dict | None, str]:
     """One proposed row, verified against the record it claims to come from.
@@ -1413,11 +1357,22 @@ def verify_comparator(row: dict | None, articles: dict[str, dict],
     The checks, and each one has caught something:
 
       * the PMID is one this turn retrieved;
-      * the abstract names the patient's condition;
       * the model did not itself decline the match;
+      * the cohort is a population this admission is not locked out of — children;
       * the horizon is 30 days, and the quoted sentence says so;
       * `rate_sentence` appears in the abstract character for character;
       * `reported_rate` is the figure that sentence states.
+
+    What is NOT checked here any more is whether the abstract names one of the patient's
+    anchor phrases, and whether its operation was as major as this admission's. Both were
+    token tests over clinical prose, and both refused correct cohorts for saying the same
+    thing in other words: an orthopaedic cohort that wrote "arthroplasty" where the target
+    wrote "replacement", a spine cohort whose operation was named by approach rather than
+    by procedure. The question "is this the right cohort for this patient" is a clinical
+    judgement, it belongs to the model that reads the abstract, and the parts of it this
+    layer CAN check without reading are the ones left: a paediatric population is a
+    population this admission is not in, a horizon is a number, and a sentence either
+    appears in its abstract or it does not.
     """
     if not isinstance(row, dict):
         return None, "row is not an object"
@@ -1425,20 +1380,11 @@ def verify_comparator(row: dict | None, articles: dict[str, dict],
     article = articles.get(pmid)
     if article is None:
         return None, f"pmid {pmid or '(none)'} is not one this search retrieved"
-    if not names_target(article, target.anchors):
-        return None, f"pmid {pmid} does not name this patient's condition"
     if not is_pediatric_target(target) and names_pediatric_population(
         article.get("title"), article.get("journal"),
         row.get("cohort_summary"), article.get("abstract"),
     ):
         return None, f"pmid {pmid} is a cohort of children and this admission is not"
-    if procedure_intensity_mismatch(
-        target, article.get("title"), row.get("cohort_summary"), article.get("abstract")
-    ):
-        return None, (
-            f"pmid {pmid} is a cohort of patients who had an operation, and this "
-            "admission's procedure was a bedside one"
-        )
     if row.get("clinical_match") is False:
         declined = " ".join(str(row.get("rationale") or "").split())[:160]
         return None, f"pmid {pmid} was declined: {declined or 'no rationale given'}"
@@ -1614,89 +1560,49 @@ async def extract_comparators(
     llm, target: ClinicalTarget, *, search, config: dict | None = None,
     max_rows: int = MAX_COMPARATORS,
 ) -> ComparatorResult:
-    """Comparator rows for this patient, from ONE extraction over a pooled candidate set.
+    """Comparator rows for this patient: ONE retrieval, ONE extraction.
 
-    `search(anchors, wide)` is the caller's retrieval callable — the tool function, or a
-    fake in a test — and it is passed in rather than imported so that this module keeps no
+    `search(terms, wide)` is the caller's retrieval callable — the tool function, or a fake
+    in a test — and it is passed in rather than imported so that this module keeps no
     dependency on the tool surface and the policy can be exercised without NCBI.
 
-    Two queries, and at most one model call.
+    ONE query and ONE model call, which is a reversal of the two-pass design and worth
+    stating plainly. That design asked the condition alone first, with the exact-phrase
+    outcome clause, and only asked the broadened question if the narrow pass failed to
+    produce two rows. It was built for precision and it cost the reader time: measured
+    2026-11-02, a `/ehr` turn showed `Searching the Literature` twice in the workflow and
+    two five-second extraction gaps in the trace, 25.6s for a briefing that had already
+    done its chart work.
 
-    Pass 1 asks for the condition with the exact-phrase outcome clause. Pass 2 asks again
-    with the wider clause: a record that says "readmission within 30 days" matches none of
-    the four exact phrases, and on 2026-11-02 that is why the femoral-neck admission came
-    back with six records and not one of them at the horizon being compared.
+    The precision the narrow pass bought is now bought by `rank_by_specificity`, which was
+    the actual fix for the dilution that motivated the split: the pool from one broadened
+    query is ordered so that a record naming this admission's condition comes first, and
+    only the top `MAX_CANDIDATES_FOR_MODEL` reach the model. What the reader gets is the
+    union the two passes were trying to approximate, read once.
 
-    What changed on 2026-11-02 (second measurement): the two passes used to be two
-    SEQUENTIAL model calls, the second made only after reading the first one's verdict.
-    The searches cost ~500ms each and the extraction costs ~5s, so a `/ehr` turn that
-    needed both passes spent ten seconds deciding what to draw — and almost every turn
-    needed both, because pass 1 aligns few candidates on most admissions (4 of 18 on
-    90000069) and the trigger was "fewer than two verified rows". So the retry is now
-    decided from the CANDIDATES rather than from the verdict:
-
-    * Pass 1 fills the model's budget (`MAX_CANDIDATES_FOR_MODEL` records that name this
-      admission's condition): extract once. A second extraction runs only if that full
-      budget still yields fewer than `MIN_COMPARATORS` rows — the case the retry was built
-      for, and now rare.
-    * Pass 1 cannot fill the budget: the wide search runs immediately, the two aligned
-      pools are merged in specificity order, and the model reads the union ONCE. A thin
-      pass 1 is exactly the condition under which the wide pass adds records, so asking
-      the model what it makes of the thin pool first spends five seconds to learn what the
-      candidate count already said.
-
-    The merge is pass 1 first, then pass 2's new records, because `rank_by_specificity`
-    puts a record that names the condition above one that names only an anchor and the
-    budget should not be spent against that order. PMIDs already inspected are excluded
-    from the wide search, so the second query cannot re-buy the same records and call it
-    recall.
+    Empty stays a real answer at every stage: a query that returns nothing, a pool that is
+    all another population, and a pool that names none of this admission's anchors are three
+    different facts, and each is reported rather than collapsed into "no rows".
     """
-    inspected: set[str] = set()
-    first = await candidate_pass(search, target, wide=False, inspected=inspected)
-    inspected |= first.pmids
-    rows: list[dict] = []
-    rejected: list[dict] = [*first.refused]
-    passes: list[ComparatorPass] = []
-
-    if len(first.aligned) >= MAX_CANDIDATES_FOR_MODEL:
-        rows, refused_rows = await _extract_pass(llm, target, first.aligned, config)
-        rejected.extend(refused_rows)
-        passes.append(first.report(verified=len(rows), rejected=first.refused))
-        if len(rows) >= MIN_COMPARATORS:
-            return ComparatorResult(rows=rows[:max_rows], rejected=rejected,
-                                    passes=passes)
-        second = await candidate_pass(search, target, wide=True, inspected=inspected)
-        inspected |= second.pmids
-        added, refused_rows = await _extract_pass(llm, target, second.aligned, config)
-        known = {row["pmid"] for row in rows}
-        added = [row for row in added if row["pmid"] not in known]
-        rejected.extend([*second.refused, *refused_rows])
-        rows.extend(added)
-        passes.append(second.report(verified=len(added), rejected=second.refused))
-        return ComparatorResult(rows=rows[:max_rows], rejected=rejected, passes=passes)
-
-    second = await candidate_pass(search, target, wide=True, inspected=inspected)
-    pooled = [*first.aligned, *second.aligned][:MAX_CANDIDATES_FOR_MODEL]
-    verified, refused_rows = await _extract_pass(llm, target, pooled, config)
-    rejected.extend([*second.refused, *refused_rows])
-    rows.extend(verified)
-    from_first = {article.get("pmid") for article in first.aligned}
-    passes.append(first.report(
-        verified=sum(1 for row in verified if row["pmid"] in from_first),
-        rejected=first.refused, pooled=True))
-    passes.append(second.report(
-        verified=sum(1 for row in verified if row["pmid"] not in from_first),
-        rejected=second.refused, pooled=True))
-    return ComparatorResult(rows=rows[:max_rows], rejected=rejected, passes=passes)
+    candidates = await candidate_pass(search, target)
+    verified, refused_rows = await _extract_pass(
+        llm, target, candidates.aligned, config)
+    rejected = [*candidates.refused, *refused_rows]
+    return ComparatorResult(
+        rows=verified[:max_rows], rejected=rejected,
+        passes=[candidates.report(verified=len(verified),
+                                  rejected=candidates.refused)],
+    )
 
 
 @dataclass(frozen=True)
 class CandidatePass:
     """One query's contribution to the pool the model reads, before it has read it.
 
-    Split out of `extract_comparators` because the decision the latency fix made is about
-    this record and not about the model: whether a pass can fill the budget is a fact
-    about the candidates, and it is answered before any extraction call exists.
+    A record rather than a dict because the retrieval facts and the model's verdict are
+    reported together and must not be confused: `candidates` is what PubMed returned,
+    `aligned` is what named this admission's condition, `verified` is what the extraction
+    turn could quote a sentence for, and `excluded` is what the population filter refused.
     """
 
     query: str
@@ -1705,64 +1611,43 @@ class CandidatePass:
     aligned: tuple[dict, ...]
     refused: tuple[dict, ...]
     excluded: int
-    #: Every PMID this query returned, aligned or not. The wide search excludes these so
-    #: it cannot re-buy records that were already read and already refused — a refusal is
-    #: a decision about the abstract, and a second query does not change it.
-    seen: frozenset[str] = frozenset()
-    #: Whether this pass's records were merged with another's into ONE model call. Carried
-    #: so a report can say "ten candidates read together" rather than implying two reads.
-    pooled: bool = False
 
-    @property
-    def pmids(self) -> set[str]:
-        return set(self.seen)
-
-    def report(self, *, verified: int, rejected: tuple[dict, ...],
-               pooled: bool | None = None) -> ComparatorPass:
+    def report(self, *, verified: int, rejected: tuple[dict, ...]) -> ComparatorPass:
         return ComparatorPass(
             query=self.query, wide=self.wide, candidates=self.candidates,
             aligned=len(self.aligned), verified=verified,
             rejected=tuple(rejected), excluded=self.excluded,
-            pooled=self.pooled if pooled is None else pooled,
         )
 
 
-async def candidate_pass(
-    search, target: ClinicalTarget, *, wide: bool, inspected: set[str],
-) -> CandidatePass:
-    """Run one query and align what it returned to this admission's condition.
+async def candidate_pass(search, target: ClinicalTarget) -> CandidatePass:
+    """The one readmission query this turn runs, and what it left to read.
 
-    Empty is a real answer at every stage: a query that returns nothing, a pool that is
-    all another population, and a pool that names none of this admission's anchors are
-    three different facts, and each is reported rather than collapsed into "no rows".
+    The clinical half is the condition OR its anchors, which is what the tool builds from
+    a query plus its synonyms; the outcome half is the broadened clause, because a record
+    that says "readmission within 30 days" matches none of the four exact phrases and the
+    reader is owed the record that says it. One query rather than two: the second existed to
+    catch what the first missed, and asking once with the broader clause and ranking the
+    result catches it without a second round trip.
+
+    Nothing here decides whether a record is ABOUT this patient's condition. Ordering does
+    — `rank_by_specificity` puts the records that name it first — and the extraction turn
+    decides the rest by reading the abstract. A token gate used to refuse records before
+    the model saw them, which turned a synonym into a silent refusal.
     """
-    terms = target.anchors if wide else target.condition
-    result = await search(terms, wide)
+    result = await search([target.condition, *target.anchors], True)
     result = result if isinstance(result, dict) else {}
     query = str(result.get("query") or "")
-    articles = [
-        article for article in (result.get("articles") or [])
-        if isinstance(article, dict)
-        and str(article.get("pmid") or "").strip() not in inspected
-    ]
-    compatible = compatible_cohorts(articles, target)
-    kept = {id(article) for article in compatible}
-    incompatible = [article for article in articles if id(article) not in kept]
-    refused = [
-        {"pmid": str(article.get("pmid") or "").strip(),
-         "reason": "cohort is a paediatric population and this admission is not"}
-        for article in incompatible
-    ]
-    aligned, refused_by_anchor = split_by_clinical_anchor(
-        rank_by_specificity(compatible, target), target)
+    articles = [article for article in (result.get("articles") or [])
+                if isinstance(article, dict)]
+    pool, refused = adult_cohorts(articles, target)
     return CandidatePass(
-        query=query, wide=wide, candidates=len(articles),
-        aligned=tuple(aligned[:MAX_CANDIDATES_FOR_MODEL]),
-        refused=tuple([*refused, *refused_by_anchor]),
-        excluded=len(incompatible),
-        seen=frozenset(str(article.get("pmid") or "").strip()
-                       for article in articles),
+        query=query, wide=True, candidates=len(articles),
+        aligned=tuple(rank_by_specificity(pool, target)[:MAX_CANDIDATES_FOR_MODEL]),
+        refused=tuple(refused),
+        excluded=len(refused),
     )
+
 
 
 async def _extract_pass(

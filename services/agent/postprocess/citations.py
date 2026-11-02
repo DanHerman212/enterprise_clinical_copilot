@@ -232,6 +232,12 @@ _ANY_MARKER_RE = _marker_re(r"([^\]]*)")
 #: evaluation harness both scan prose for markers, and both used to spell the token out.
 MARKER_PATTERN = _ANY_MARKER_RE
 
+#: What separates one paragraph from the next. Used by `collapse_repeated_citations`,
+#: which compares a marker only with the marker before it IN THE SAME PARAGRAPH: a section
+#: opened two paragraphs later is a new citation, however recently the same source was
+#: cited.
+_PARAGRAPH_BREAK = re.compile(r"\n[ \t]*\n")
+
 #: What a marker must look like to be KEPT: a note-passage number or set of them,
 #: or a literature PMID badge. Everything else is a model invention and is dropped.
 #: The PMID form is here deliberately — it is a citation the interface draws as its
@@ -323,7 +329,62 @@ def enforce_citations(
             out.append(lead + " ".join(f"^[{marker}]" for marker in kept))
         last = match.end()
     out.append(answer[last:])
+    kept, collapse_flags = collapse_repeated_citations(
+        _tidy_removed_markers("".join(out)))
+    return kept, flags + collapse_flags
+
+
+def collapse_repeated_citations(answer: str) -> tuple[str, list[str]]:
+    """Drop a marker that repeats the one immediately before it in the same paragraph.
+
+    Reported from a printed `/ehr` (2026-11-02): one paragraph carried the same section's
+    pill three times, once per sentence, so the evidence markers rather than the prose
+    were what the paragraph looked like. The rule lives here, not in the renderer, because
+    this module is the single owner of what a marker is and of whether it survives
+    settlement — a browser that decides not to draw one has taken a citation decision and
+    left the prose and the evidence disagreeing on the server.
+
+    Narrow on purpose. A marker is dropped only when the marker immediately before it in
+    the same paragraph names the SAME citation — compared after expansion, so `^[1]` and
+    `^[1]` collapse and `^[1, 2]` does not collapse into `^[1]`. A paragraph that
+    alternates two sources keeps every marker, and one that leaves a source and returns to
+    it keeps the return: the rule is about repetition, not about how often a source may be
+    cited.
+
+    The reference list is unaffected — it is built from `sources`, not from the prose — so
+    the row is still there to be opened, and the marker beside the first sentence is still
+    the way to it. Each removal is flagged, because a silent deletion of a citation is the
+    kind of change this layer exists to make visible.
+    """
+    if "^[" not in (answer or ""):
+        return answer, []
+    flags: list[str] = []
+    out: list[str] = []
+    last = 0
+    # The body of the last marker that survived, where it ended, and whether a paragraph
+    # break has fallen since. A repeat is only a repeat inside one paragraph.
+    previous: str | None = None
+    previous_end = 0
+    for match in _ANY_MARKER_RE.finditer(answer):
+        if _PARAGRAPH_BREAK.search(answer, previous_end, match.start()):
+            previous = None
+        body = " ".join(match.group(1).split())
+        if body and body == previous:
+            start = match.start()
+            while start > last and answer[start - 1] in " \t":
+                start -= 1
+            out.append(answer[last:start])
+            last = match.end()
+            previous_end = match.end()
+            flags.append(f"citation_repeat_collapsed:^{body}")
+            continue
+        previous = body
+        previous_end = match.end()
+        out.append(answer[last:match.end()])
+        last = match.end()
+    out.append(answer[last:])
     return _tidy_removed_markers("".join(out)), flags
+
 
 
 def _conclude(

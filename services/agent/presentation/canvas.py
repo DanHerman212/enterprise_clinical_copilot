@@ -109,6 +109,16 @@ def _literature_view(literature) -> tuple[list[dict], str, bool] | None:
 _BASELINE_SOURCE = "Enterprise Clinical Copilot"
 
 
+#: The horizon this table compares at, for a row that arrives without one.
+#:
+#: Every verified row is stamped with its horizon by the engine — the extraction turn
+#: refuses a rate it cannot date — so this is the fallback for a payload from an agent
+#: that predates the field, and it matches the column heading the component prints. It is
+#: named here rather than imported from `engine/`, which this layer may not reach, and the
+#: number is the same one the table's own header says.
+_COMPARISON_HORIZON_DAYS = 30
+
+
 def _source_label(comparator: dict) -> str:
     """`Journal · Year` — what the table calls a row. The pill's label, not a citation."""
     journal = str(comparator.get("journal") or "").strip()
@@ -142,6 +152,11 @@ def _matrix_row(comparator: dict) -> dict:
         "rate_kind": str(comparator.get("rate_kind") or "point").strip(),
         "cohort_summary": str(comparator.get("cohort_summary") or "").strip(),
         "evidence_tier": str(comparator.get("evidence_tier") or "").strip(),
+        # The horizon the rate was VERIFIED at, carried from the engine rather than
+        # assumed here. It was dropped from this shape, and the table prints it under the
+        # rate: the reader saw `3.7%` over a blank where `30-day` belonged, because the
+        # component renders `${row.horizon_days}-day` and had nothing to render.
+        "horizon_days": int(comparator.get("horizon_days") or _COMPARISON_HORIZON_DAYS),
         "excerpt": str(comparator.get("rate_sentence") or "").strip(),
         "url": str(comparator.get("url") or "").strip(),
     }

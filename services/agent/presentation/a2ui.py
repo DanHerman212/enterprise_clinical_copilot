@@ -540,6 +540,10 @@ def compose_presentation(question: str, answer: str,
         canvas, start=len(sources) + 1,
         existing_pmids=[entry.get("pmid") for entry in sources],
     )
+    # And the prose is told they exist. The narrative was composed before the table was,
+    # so its citation list cannot have anticipated these rows; a badge the briefing writes
+    # for a cohort resolves against this array, and without them it had nothing to draw.
+    add_comparator_citations(canvas, comparator_sources)
     # One array, one builder (Phase F.1, 2026-10-26). Every source this turn publishes is
     # converted to its reference row here, in the same order and under the same number, so
     # `sources` and `references` are two views of one list rather than two lists that
@@ -719,6 +723,53 @@ def _surface_components(canvas: dict | None):
                 yield component
 
 
+def add_comparator_citations(canvas: dict | None, sources: list[dict]) -> None:
+    """Give the prose the cohorts it is now allowed to cite.
+
+    The prose's citation list is resolved before the comparison table is composed, because
+    the table needs the narrative to put it under. The table's cohorts are registered after
+    that, so a `^[PMID: …]` badge the briefing writes in `Readmission risk & trajectory`
+    had no record to resolve against: the number was accepted by settlement (the allowance
+    knows the rows), the browser could not draw it, and the reader saw a cohort named in
+    prose with no control beside it (reported 2026-11-02).
+
+    So the citations arrive with the sources rather than being anticipated by them: a
+    source registered as citable belongs in the array the prose resolves against, under the
+    number it was given. One numbering — `cite` — read by the list, the popover and the
+    marker.
+
+    Silent when the turn drew no prose: a surface-only answer has no narrative component to
+    extend, and nothing is owed.
+    """
+    if not sources:
+        return
+    for component in _surface_components(canvas):
+        if component.get("component") != "CitedNarrative":
+            continue
+        citations = component.setdefault("citations", [])
+        known = {int(entry.get("index") or 0) for entry in citations}
+        for source in sources:
+            index = int(source.get("cite") or 0)
+            if not index or index in known:
+                continue
+            citations.append({
+                "index": index,
+                "source": str(source.get("subtitle") or ""),
+                "title": str(source.get("title") or ""),
+                "label": str(source.get("label") or ""),
+                "pill_label": str(source.get("pill_label") or ""),
+                "kind": "literature",
+                "subtitle": str(source.get("subtitle") or ""),
+                "authors": str(source.get("authors") or ""),
+                "journal_citation": str(source.get("journal_citation") or ""),
+                "excerpt": str(source.get("text") or ""),
+                **({"pmid": str(source["pmid"])} if source.get("pmid") else {}),
+                **({"url": str(source["url"])} if source.get("url") else {}),
+            })
+            known.add(index)
+        return
+
+
 def register_comparator_sources(canvas: dict | None, start: int,
                               existing_pmids=()) -> tuple[list[dict], list[dict]]:
     """Give the comparison table's published cohorts a citation identity.
@@ -803,6 +854,9 @@ def register_comparator_sources(canvas: dict | None, start: int,
                 "title": title,
                 "authors": authors,
                 "label": label,
+                # The inline form: the journal and the year the table prints, without the
+                # number that belongs to the references list.
+                "pill_label": citation,
                 "subtitle": subtitle,
                 "journal_citation": journal_citation,
                 "section": citation,
@@ -951,6 +1005,36 @@ def _section_label(section: object) -> str:
     return _SECTION_LABELS.get(name, name.replace("_", " ") or "Note passage")
 
 
+#: What a chart section's INLINE pill says, as opposed to what the references list calls it.
+#:
+#: Two vocabularies, because they are read in two places. The list has room for
+#: "History of present illness"; a pill sits inside a sentence, and a reader scanning a
+#: paragraph of five of them was reading the pills rather than the prose (reported from a
+#: printed `/ehr`, 2026-11-02). These are the abbreviations a clinician already uses on a
+#: ward round, resolved here so the browser prints a string and does not decide one.
+#:
+#: A section this map has not caught falls back to `_section_label`, because a new section
+#: arriving as an empty pill is worse than one arriving long.
+_PILL_SECTION_LABELS = {
+    "history_of_present_illness": "HPI",
+    "brief_hospital_course": "Hospital course",
+    "discharge_diagnosis": "Discharge dx",
+    "discharge_medications": "Discharge meds",
+    "medications_on_transfer": "Transfer meds",
+    "discharge_instructions": "Discharge instr",
+    "discharge_condition": "Discharge condition",
+    "discharge_disposition": "Discharge disposition",
+    "followup_instructions": "Follow-up",
+    "laboratory_trends": "Labs",
+}
+
+
+def _pill_section_label(section: object) -> str:
+    name = str(section or "")
+    return _PILL_SECTION_LABELS.get(name) or _section_label(section)
+
+
+
 def narrative_surface(answer: str, citations: list[dict]) -> dict:
     """The prose, and the evidence its markers point at, as one component.
 
@@ -1001,7 +1085,17 @@ def note_citations(sources: list[dict]) -> list[dict]:
             # keeps the section vocabulary in the one module that already owns it
             # (`_SECTION_LABELS`), rather than a second copy in the client that would
             # drift the first time a section is renamed.
+            #
+            # `label` is the REFERENCES LIST's line, number and all. `pill_label` is what
+            # the inline control prints: the section name alone, in its short form, because
+            # the sentence already tells the reader which source it is a footnote to and
+            # the number lives one line below in the list.
             "label": f"{int(source['cite'])} · {title}",
+            "pill_label": _pill_section_label(source.get("section")),
+            # Which channel the pill belongs to, so the surface can colour a chart source
+            # differently from a published one. Decided here: a browser that classifies
+            # its own evidence has taken a citation decision.
+            "kind": "chart",
             "excerpt": str(source.get("text") or ""),
         })
     return citations
@@ -1102,6 +1196,11 @@ def _article_record(article: dict, index: int) -> dict:
     # the same budget the comparative table's pill uses.
     label = f"{index} · " + " · ".join(part for part in (
         _short_source(journal) or "PubMed", year) if part)
+    # What the INLINE pill prints: the journal and the year, no number. Two strings
+    # because they are read in two places — the references list is a numbered
+    # bibliography, and a pill is a footnote marker inside a sentence.
+    pill_label = " · ".join(part for part in (
+        _short_source(journal) or "PubMed", year) if part)
     return {
         "index": index,
         "kind": "Literature",
@@ -1111,6 +1210,7 @@ def _article_record(article: dict, index: int) -> dict:
         "year": year,
         "authors": authors,
         "label": label,
+        "pill_label": pill_label,
         "subtitle": subtitle,
         "journal_citation": journal_citation,
         # The passage: what the record reports. A reference that opens onto a title and
@@ -1154,6 +1254,12 @@ def literature_citations(articles: list[dict], start: int = 1) -> list[dict]:
             "source": record["subtitle"],
             "title": record["title"],
             "label": record["label"],
+            # The inline control prints the journal and the year, without the number: the
+            # number is the references list's, and a pill inside a sentence is not the
+            # place to repeat it. `kind` is what the surface colours it by — a published
+            # cohort and a note section are weighed differently.
+            "pill_label": record["pill_label"],
+            "kind": "literature",
             "subtitle": record["subtitle"],
             "authors": record["authors"],
             "journal_citation": record["journal_citation"],

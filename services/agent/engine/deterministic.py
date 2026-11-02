@@ -322,7 +322,8 @@ _NO_READMISSION = OUTPATIENT_ENCOUNTER_NOTICE
 
 
 def _formatter_input(tool_messages: list[Any], outpatient: bool,
-                     question: str | None = None) -> str:
+                     question: str | None = None,
+                     comparators: list[dict] | None = None) -> str:
     """What the formatting turn reads: the question, the tool results, the caveat.
 
     The QUESTION goes first, and it is not decoration. Until Phase 01 this turn could be
@@ -336,12 +337,71 @@ def _formatter_input(tool_messages: list[Any], outpatient: bool,
 
     `question` defaults to None so the shape this function had before the question was
     threaded through is still expressible, and a turn without one formats exactly as it did.
+
+    `comparators` is the half of the comparison the note passages cannot contain: the
+    published cohorts retrieval offered and an extraction turn verified. The table draws
+    them under this answer and the references list numbers them, and until 2026-11-02 the
+    prose between the two had no idea they existed — the briefing stated this patient's
+    estimate and stopped, beside a table comparing it against published rates (UX gap 3).
     """
     text = "\n\n".join(str(m.content) for m in tool_messages)
     if outpatient:
         text = f"{text}\n\n{_NO_READMISSION}"
+    block = comparator_block(comparators)
+    if block:
+        text = f"{text}\n\n{block}"
     asked = (question or "").strip()
     return f"Question asked: {asked}\n\n{text}" if asked else text
+
+
+def comparator_block(comparators: list[dict] | None) -> str:
+    """The verified cohorts as the formatting turn reads them, or "".
+
+    One line per row, with everything the prose needs and nothing it does not: the PMID
+    it must cite, the journal and year the table prints, the rate with its shape, and the
+    cohort the rate belongs to. The `rate_sentence` is left out on purpose — it is the
+    evidence the row was verified against, not a sentence to be quoted at a reader who
+    has not opened the record.
+
+    Empty when there are no rows, and then nothing is appended at all. A header saying
+    "no published cohorts" would invite the model to explain the absence, and the prompt
+    already says what to write when the block is missing.
+
+    Stated here rather than sent as a tool result because no tool returned these rows:
+    retrieval returned twenty-five candidates and an extraction turn verified these.
+    """
+    rows = [row for row in comparators or [] if isinstance(row, dict)]
+    if not rows:
+        return ""
+    lines = [
+        "<verified_comparators>",
+        "Published 30-day readmission cohorts for this admission's condition. Retrieval "
+        "found these candidates and each row was checked against the abstract it was read "
+        "from. Cite a row with its PMID, written ^[PMID: <pmid>], immediately after the "
+        "sentence that draws on it. These are POPULATION benchmarks, not predictions "
+        "about this patient.",
+    ]
+    for row in rows:
+        pmid = str(row.get("pmid") or "").strip()
+        if not pmid:
+            continue
+        journal = str(row.get("journal") or "").strip()
+        year = str(row.get("year") or "").strip()
+        source = " · ".join(part for part in (journal, year) if part) or "record"
+        rate = str(row.get("reported_rate") or "").strip()
+        kind = str(row.get("rate_kind") or "").strip()
+        cohort = str(row.get("cohort_summary") or "").strip()
+        tier = str(row.get("evidence_tier") or "").strip()
+        shape = {
+            "comparison": "two arms, published as two figures — quote both",
+            "range": "a range, quote it as stated",
+        }.get(kind, "a single figure")
+        detail = f" · {tier}" if tier else ""
+        lines.append(f"- PMID {pmid} · {source} · {rate} ({shape}){detail}")
+        if cohort:
+            lines.append(f"  cohort: {cohort}")
+    lines.append("</verified_comparators>")
+    return "\n".join(lines)
 
 
 async def _formatting_turn(
@@ -672,7 +732,9 @@ async def run_command(
         llm,
         [
             SystemMessage(content=f"{FORMATTER_PREAMBLE}\n\n{formatting_for(command.wire)}"),
-            HumanMessage(content=_formatter_input(tool_messages, outpatient, question)),
+            HumanMessage(content=_formatter_input(
+                tool_messages, outpatient, question,
+                command_extras.get("comparators"))),
         ],
         config=config,
         announce=_announce if streams and command.prose_is_model_output else None,
@@ -1533,6 +1595,10 @@ class ComparatorPass:
     #: half its records to the population filter is thin for a different reason than a pool
     #: whose records were all about another condition.
     excluded: int = 0
+    #: Whether this pass's records were merged with another's before the model read them.
+    #: Two passes, one extraction: without this a report showing two passes and one call
+    #: would read as a lost pass.
+    pooled: bool = False
 
 
 @dataclass(frozen=True)
@@ -1548,98 +1614,184 @@ async def extract_comparators(
     llm, target: ClinicalTarget, *, search, config: dict | None = None,
     max_rows: int = MAX_COMPARATORS,
 ) -> ComparatorResult:
-    """Comparator rows for this patient, in up to two live passes.
+    """Comparator rows for this patient, from ONE extraction over a pooled candidate set.
 
     `search(anchors, wide)` is the caller's retrieval callable — the tool function, or a
     fake in a test — and it is passed in rather than imported so that this module keeps no
-    dependency on the tool surface and the two-pass policy can be exercised without NCBI.
+    dependency on the tool surface and the policy can be exercised without NCBI.
 
-    Pass 1 asks for the condition with the exact-phrase outcome clause. Pass 2 runs only
-    when pass 1 produced fewer than `MIN_COMPARATORS` rows, and it asks again with the
-    wider clause: a record that says "readmission within 30 days" matches none of the four
-    exact phrases, and on 2026-11-02 that is why the femoral-neck admission came back with
-    six records and not one of them at the horizon being compared.
+    Two queries, and at most one model call.
 
-    The trigger is the VERIFIED row count, not the candidate count. Pass 1 on that
-    admission returned six candidates, all with a percentage, and every one of them
-    reported a 90-day rate — a precondition on "how many abstracts have a number in them"
-    would have refused the retry that was needed.
+    Pass 1 asks for the condition with the exact-phrase outcome clause. Pass 2 asks again
+    with the wider clause: a record that says "readmission within 30 days" matches none of
+    the four exact phrases, and on 2026-11-02 that is why the femoral-neck admission came
+    back with six records and not one of them at the horizon being compared.
 
-    PMIDs already inspected in pass 1 are excluded from pass 2, so the second query cannot
-    re-buy the same six records and call it recall.
+    What changed on 2026-11-02 (second measurement): the two passes used to be two
+    SEQUENTIAL model calls, the second made only after reading the first one's verdict.
+    The searches cost ~500ms each and the extraction costs ~5s, so a `/ehr` turn that
+    needed both passes spent ten seconds deciding what to draw — and almost every turn
+    needed both, because pass 1 aligns few candidates on most admissions (4 of 18 on
+    90000069) and the trigger was "fewer than two verified rows". So the retry is now
+    decided from the CANDIDATES rather than from the verdict:
+
+    * Pass 1 fills the model's budget (`MAX_CANDIDATES_FOR_MODEL` records that name this
+      admission's condition): extract once. A second extraction runs only if that full
+      budget still yields fewer than `MIN_COMPARATORS` rows — the case the retry was built
+      for, and now rare.
+    * Pass 1 cannot fill the budget: the wide search runs immediately, the two aligned
+      pools are merged in specificity order, and the model reads the union ONCE. A thin
+      pass 1 is exactly the condition under which the wide pass adds records, so asking
+      the model what it makes of the thin pool first spends five seconds to learn what the
+      candidate count already said.
+
+    The merge is pass 1 first, then pass 2's new records, because `rank_by_specificity`
+    puts a record that names the condition above one that names only an anchor and the
+    budget should not be spent against that order. PMIDs already inspected are excluded
+    from the wide search, so the second query cannot re-buy the same records and call it
+    recall.
     """
-    rows: list[dict] = []
-    rejected: list[dict] = []
-    passes: list[ComparatorPass] = []
     inspected: set[str] = set()
+    first = await candidate_pass(search, target, wide=False, inspected=inspected)
+    inspected |= first.pmids
+    rows: list[dict] = []
+    rejected: list[dict] = [*first.refused]
+    passes: list[ComparatorPass] = []
 
-    for wide in (False, True):
-        if wide and len(rows) >= MIN_COMPARATORS:
-            break
-        # Pass 1 asks for the condition alone, unquoted, and lets PubMed rank it. Pass 2
-        # ORs the synonyms and widens the outcome clause. Stuffing the synonyms into pass
-        # 1 is what diluted the ranking on 2026-11-02; they belong in the retry, where a
-        # broader query is the point.
-        terms = target.anchors if wide else target.condition
-        result = await search(terms, wide)
-        result = result if isinstance(result, dict) else {}
-        query = str(result.get("query") or "")
-        articles = [
-            article for article in (result.get("articles") or [])
-            if isinstance(article, dict)
-            and str(article.get("pmid") or "").strip() not in inspected
-        ]
-        inspected.update(str(article.get("pmid") or "").strip() for article in articles)
-        compatible = compatible_cohorts(articles, target)
-        kept = {id(article) for article in compatible}
-        incompatible = [article for article in articles if id(article) not in kept]
-        refused = [
-            {"pmid": str(article.get("pmid") or "").strip(),
-             "reason": "cohort is a paediatric population and this admission is not"}
-            for article in incompatible
-        ]
-        aligned, refused_by_anchor = split_by_clinical_anchor(
-            rank_by_specificity(compatible, target), target)
-        refused.extend(refused_by_anchor)
-        aligned = aligned[:MAX_CANDIDATES_FOR_MODEL]
-        if not aligned:
-            rejected.extend(refused)
-            passes.append(ComparatorPass(
-                query=query, wide=wide, candidates=len(articles), aligned=0,
-                verified=0, rejected=tuple(refused), excluded=len(incompatible)))
-            continue
-
-        payload, why = await _structured_reply(
-            llm,
-            prompts.LITERATURE_COMPARATOR_PROMPT,
-            prompts.literature_comparator_input(target, aligned),
-            config,
-        )
-        if payload is None:
-            rejected.append({"pmid": "", "reason": f"the extraction reply {reply_problem(why)}"})
-            passes.append(ComparatorPass(
-                query=query, wide=wide, candidates=len(articles),
-                aligned=len(aligned), verified=0, rejected=tuple(refused),
-                excluded=len(incompatible)))
-            continue
-
-        verified, rejected_rows = verify_comparators(
-            payload.get("comparators"), aligned, target)
-        for item in payload.get("rejected") or []:
-            if isinstance(item, dict):
-                rejected_rows.append({
-                    "pmid": str(item.get("pmid") or "").strip(),
-                    "reason": " ".join(str(item.get("reason") or "").split())[:200],
-                })
+    if len(first.aligned) >= MAX_CANDIDATES_FOR_MODEL:
+        rows, refused_rows = await _extract_pass(llm, target, first.aligned, config)
+        rejected.extend(refused_rows)
+        passes.append(first.report(verified=len(rows), rejected=first.refused))
+        if len(rows) >= MIN_COMPARATORS:
+            return ComparatorResult(rows=rows[:max_rows], rejected=rejected,
+                                    passes=passes)
+        second = await candidate_pass(search, target, wide=True, inspected=inspected)
+        inspected |= second.pmids
+        added, refused_rows = await _extract_pass(llm, target, second.aligned, config)
         known = {row["pmid"] for row in rows}
-        added = [row for row in verified if row["pmid"] not in known]
+        added = [row for row in added if row["pmid"] not in known]
+        rejected.extend([*second.refused, *refused_rows])
         rows.extend(added)
-        rejected.extend([*refused, *rejected_rows])
-        passes.append(ComparatorPass(
-            query=query, wide=wide, candidates=len(articles),
-            aligned=len(aligned), verified=len(added),
-            rejected=tuple([*refused, *rejected_rows]),
-            excluded=len(incompatible),
-        ))
+        passes.append(second.report(verified=len(added), rejected=second.refused))
+        return ComparatorResult(rows=rows[:max_rows], rejected=rejected, passes=passes)
 
+    second = await candidate_pass(search, target, wide=True, inspected=inspected)
+    pooled = [*first.aligned, *second.aligned][:MAX_CANDIDATES_FOR_MODEL]
+    verified, refused_rows = await _extract_pass(llm, target, pooled, config)
+    rejected.extend([*second.refused, *refused_rows])
+    rows.extend(verified)
+    from_first = {article.get("pmid") for article in first.aligned}
+    passes.append(first.report(
+        verified=sum(1 for row in verified if row["pmid"] in from_first),
+        rejected=first.refused, pooled=True))
+    passes.append(second.report(
+        verified=sum(1 for row in verified if row["pmid"] not in from_first),
+        rejected=second.refused, pooled=True))
     return ComparatorResult(rows=rows[:max_rows], rejected=rejected, passes=passes)
+
+
+@dataclass(frozen=True)
+class CandidatePass:
+    """One query's contribution to the pool the model reads, before it has read it.
+
+    Split out of `extract_comparators` because the decision the latency fix made is about
+    this record and not about the model: whether a pass can fill the budget is a fact
+    about the candidates, and it is answered before any extraction call exists.
+    """
+
+    query: str
+    wide: bool
+    candidates: int
+    aligned: tuple[dict, ...]
+    refused: tuple[dict, ...]
+    excluded: int
+    #: Every PMID this query returned, aligned or not. The wide search excludes these so
+    #: it cannot re-buy records that were already read and already refused — a refusal is
+    #: a decision about the abstract, and a second query does not change it.
+    seen: frozenset[str] = frozenset()
+    #: Whether this pass's records were merged with another's into ONE model call. Carried
+    #: so a report can say "ten candidates read together" rather than implying two reads.
+    pooled: bool = False
+
+    @property
+    def pmids(self) -> set[str]:
+        return set(self.seen)
+
+    def report(self, *, verified: int, rejected: tuple[dict, ...],
+               pooled: bool | None = None) -> ComparatorPass:
+        return ComparatorPass(
+            query=self.query, wide=self.wide, candidates=self.candidates,
+            aligned=len(self.aligned), verified=verified,
+            rejected=tuple(rejected), excluded=self.excluded,
+            pooled=self.pooled if pooled is None else pooled,
+        )
+
+
+async def candidate_pass(
+    search, target: ClinicalTarget, *, wide: bool, inspected: set[str],
+) -> CandidatePass:
+    """Run one query and align what it returned to this admission's condition.
+
+    Empty is a real answer at every stage: a query that returns nothing, a pool that is
+    all another population, and a pool that names none of this admission's anchors are
+    three different facts, and each is reported rather than collapsed into "no rows".
+    """
+    terms = target.anchors if wide else target.condition
+    result = await search(terms, wide)
+    result = result if isinstance(result, dict) else {}
+    query = str(result.get("query") or "")
+    articles = [
+        article for article in (result.get("articles") or [])
+        if isinstance(article, dict)
+        and str(article.get("pmid") or "").strip() not in inspected
+    ]
+    compatible = compatible_cohorts(articles, target)
+    kept = {id(article) for article in compatible}
+    incompatible = [article for article in articles if id(article) not in kept]
+    refused = [
+        {"pmid": str(article.get("pmid") or "").strip(),
+         "reason": "cohort is a paediatric population and this admission is not"}
+        for article in incompatible
+    ]
+    aligned, refused_by_anchor = split_by_clinical_anchor(
+        rank_by_specificity(compatible, target), target)
+    return CandidatePass(
+        query=query, wide=wide, candidates=len(articles),
+        aligned=tuple(aligned[:MAX_CANDIDATES_FOR_MODEL]),
+        refused=tuple([*refused, *refused_by_anchor]),
+        excluded=len(incompatible),
+        seen=frozenset(str(article.get("pmid") or "").strip()
+                       for article in articles),
+    )
+
+
+async def _extract_pass(
+    llm, target: ClinicalTarget, aligned: tuple[dict, ...] | list[dict],
+    config: dict | None,
+) -> tuple[list[dict], list[dict]]:
+    """One model call over `aligned`, verified against the abstracts it came from.
+
+    Returns `(rows, rejections)`. A withheld or malformed reply is a rejection with its
+    reason, never an exception and never an empty success: "the model declined" and "the
+    literature stated nothing" are different statements to the reader.
+    """
+    if not aligned:
+        return [], []
+    payload, why = await _structured_reply(
+        llm,
+        prompts.LITERATURE_COMPARATOR_PROMPT,
+        prompts.literature_comparator_input(target, aligned),
+        config,
+    )
+    if payload is None:
+        return [], [{"pmid": "", "reason": f"the extraction reply {reply_problem(why)}"}]
+    verified, rejected_rows = verify_comparators(
+        payload.get("comparators"), aligned, target)
+    for item in payload.get("rejected") or []:
+        if isinstance(item, dict):
+            rejected_rows.append({
+                "pmid": str(item.get("pmid") or "").strip(),
+                "reason": " ".join(str(item.get("reason") or "").split())[:200],
+            })
+    return verified, rejected_rows
+

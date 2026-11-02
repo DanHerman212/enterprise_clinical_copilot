@@ -123,14 +123,7 @@ def _predict(hadm_id: int) -> dict[str, Any]:
         hadm_id, _model_identity(pred, deployed_model_id), deployed_model_id or "unknown",
     )
 
-    factors = [
-        {
-            "feature": f["feature"],
-            "contribution": round(float(f["attribution"]), 4),
-            "direction": "increases" if float(f["attribution"]) > 0 else "decreases",
-        }
-        for f in pred.get("top_factors", [])[:MAX_FACTORS]
-    ]
+    factors = [_scored_factor(f, row) for f in pred.get("top_factors", [])[:MAX_FACTORS]]
 
     return {
         "hadm_id": hadm_id,
@@ -142,6 +135,56 @@ def _predict(hadm_id: int) -> dict[str, Any]:
         "model_version": _model_identity(pred, deployed_model_id),
         "feature_source": FEATURE_SOURCE,
     }
+
+
+def _row_value(row: dict, feature: str) -> float | None:
+    """The value this admission's row carries for one feature, or None.
+
+    The row arrives from BigQuery with every column as a string, so the value that needs
+    care is usually `"15.2"` rather than 15.2. A column that is absent, null or not a
+    number returns None — never 0, which is a value the model read.
+
+    Only a RAW column resolves. Some attributions name an aggregated parent
+    (`discharge_location`, which is thirteen one-hot columns), and those have no single
+    value to state; the manifest block says them in words and this says nothing rather
+    than picking one column out of the encoding.
+    """
+    raw = row.get(feature)
+    if isinstance(raw, bool) or raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    try:
+        return float(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _scored_factor(factor: dict, row: dict) -> dict:
+    """One attribution, with the patient's own value for the feature beside it.
+
+    The attribution says how much a feature moved this admission's estimate; it says
+    nothing about what this admission's value OF that feature was, and until this existed
+    nothing else did either for a laboratory feature. Asked "what in this patient's chart
+    explains red cell distribution width as a readmission risk driver", the agent could
+    reach the attribution and the note text and neither held the number, so it answered
+    that the chart did not document the laboratory value — which was true of everything it
+    had been given (reported 2026-11-02).
+
+    The value is the row's own, not a summary of it: `rdw_max` is stated as the row holds
+    it, because that is the number the booster scored. Nothing is rounded here; the
+    rounding a reader sees is a presentation decision made once, at the layer that writes
+    prose.
+    """
+    entry: dict[str, Any] = {
+        "feature": factor["feature"],
+        "contribution": round(float(factor["attribution"]), 4),
+        "direction": "increases" if float(factor["attribution"]) > 0 else "decreases",
+    }
+    value = _row_value(row, str(factor["feature"]))
+    if value is not None:
+        entry["value"] = value
+    return entry
 
 
 async def predict_readmission(hadm_id: int) -> PredictionResult | ToolError:

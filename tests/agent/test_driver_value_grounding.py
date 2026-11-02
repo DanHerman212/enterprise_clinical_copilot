@@ -1,0 +1,253 @@
+"""A driver question must reach the patient's own value for the factor.
+
+Reported 2026-11-02. Clicking a driver bar in the risk widget asks "What in this patient's
+chart explains red cell distribution width (RDW) as a readmission risk driver?" — and the
+agent answered that the chart did not document the laboratory value, and that nothing
+explained the attribution.
+
+All three statements were true of what it had been given. `predict_readmission` named the
+factor, its direction and its contribution, and nothing else; the `<admission_metadata>`
+block renders eleven administrative fields and no clinical input; and a discharge summary
+does not contain the words "red cell distribution width", so a note search for the feature's
+name returned nothing. The value existed in the scored row and stopped there.
+
+The fix states it, once, where the attribution already is: each `top_factors` entry carries
+the row's own value for that feature. These tests pin the whole path — the payload, the copy
+the model reads, the guard that must let the number survive into prose, and the prompt rules
+that say what to do with it.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import patch
+
+import services.mcp.tools.prediction as pr
+from services.agent.engine import graph
+from services.agent.engine import mcp_client
+from services.agent.engine import prompts
+from services.agent.postprocess.guardrail import (
+    normalise_factor_values,
+    verify_risk_numbers,
+)
+from services.mcp.contracts import validate_prediction_result
+
+#: The row an admission is scored on: administrative columns, the laboratory anchors the
+#: booster consumes, and one aggregated parent that has no column of its own.
+ROW = {
+    "age": "80",
+    "prior_inpatient_days": "23.5417",
+    "rdw_max": "15.5",
+    "rbc_last": "3.47",
+    "monocytes_min": "0.21",
+    "oncology_flag": 0.0,
+    "medication_order_count": "17",
+}
+
+
+class _Source:
+    def fetch(self, hadm_id):
+        return dict(ROW)
+
+
+def _reply(**overrides):
+    payload = {
+        "probability": 0.34,
+        "threshold": 0.11,
+        "prediction": 1,
+        "base_value": 0.05,
+        "top_factors": [
+            {"feature": "rdw_max", "attribution": 0.2592},
+            {"feature": "prior_inpatient_days", "attribution": 0.245},
+            {"feature": "discharge_location", "attribution": 0.0896},
+            {"feature": "monocytes_min", "attribution": -0.0836},
+        ],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _predict():
+    with patch.object(pr, "feature_order", lambda: ["age", "rdw_max"]), \
+         patch.object(pr, "_source", lambda: _Source()), \
+         patch.object(pr, "predict_one", lambda instance: (_reply(), "model-1")):
+        return pr._predict(90000012)
+
+
+# --- the payload ---------------------------------------------------------------
+
+def test_every_attributed_feature_carries_the_rows_own_value():
+    factors = {factor["feature"]: factor for factor in _predict()["top_factors"]}
+
+    assert factors["rdw_max"]["value"] == 15.5
+    assert factors["prior_inpatient_days"]["value"] == 23.5417
+    assert factors["monocytes_min"]["value"] == 0.21
+
+
+def test_a_count_is_a_number_rather_than_the_string_bigquery_returned():
+    """Every column arrives from BigQuery as a string, so a copy would be `"17"`.
+
+    The payload is read by a model and by the widget; a string where a number belongs is
+    the kind of shape that silently fails a comparison one layer down.
+    """
+    with patch.object(pr, "feature_order", lambda: ["medication_order_count"]), \
+         patch.object(pr, "_source", lambda: _Source()), \
+         patch.object(pr, "predict_one", lambda instance: (
+             _reply(top_factors=[{"feature": "medication_order_count",
+                                  "attribution": -0.129}]), "model-1")):
+        (factor,) = pr._predict(90000012)["top_factors"]
+
+    assert factor["value"] == 17
+    assert isinstance(factor["value"], float)
+
+
+def test_a_parent_feature_carries_no_value_rather_than_a_guessed_one():
+    """`discharge_location` is thirteen one-hot columns, so it has no single value.
+
+    The manifest states it in words. Picking one column out of the encoding would be an
+    invented fact, and stating 0 would be worse: the model would read a value the record
+    never recorded.
+    """
+    factors = {factor["feature"]: factor for factor in _predict()["top_factors"]}
+
+    assert "value" not in factors["discharge_location"]
+
+
+def test_the_payload_still_satisfies_its_contract():
+    """`value` is declared on `PredictionFactor` — an undeclared key is dropped."""
+    validate_prediction_result(_predict())
+
+
+# --- the copy the model reads --------------------------------------------------
+
+def test_the_model_is_shown_the_value_beside_the_direction():
+    presented = mcp_client._presented_factor(
+        {"feature": "rdw_max", "direction": "increases", "contribution": 0.2592,
+         "value": 15.5})
+
+    assert presented["feature"] == "red cell distribution width (RDW)"
+    assert presented["direction"] == "increases"
+    assert presented["value"] == 15.5
+    # The magnitude is still withheld: it is the one field that is not the model's to
+    # state, and the widget draws it.
+    assert "contribution" not in presented
+
+
+def test_a_factor_with_no_value_states_none():
+    presented = mcp_client._presented_factor(
+        {"feature": "discharge_location", "direction": "increases"})
+
+    assert "value" not in presented
+
+
+# --- the guard that decides whether the number reaches the reader ---------------
+
+def _calls(*, value=15.5):
+    return [{
+        "name": "predict_readmission",
+        "args": {"hadm_id": 90000012},
+        "response": {
+            "probability": 0.34, "threshold": 0.11,
+            "top_factors": [{"feature": "rdw_max", "direction": "increases",
+                             "value": value}],
+        },
+    }]
+
+
+def test_a_served_percentage_reaches_the_reader_intact():
+    """RDW is reported in percent, so the value is written as one.
+
+    The guard compares a percentage token against the score as a decimal, so 15.5% became
+    0.155 against a probability of 0.34 and was stripped — the answer served as "her RDW
+    of". A value the turn was served is supported in its own units.
+    """
+    answer = "Her red cell distribution width peaked at 15.5%, which the estimate weighs "
+    out, flags = verify_risk_numbers(answer + "upward.", _calls())
+
+    assert out == answer + "upward."
+    assert flags == []
+
+
+def test_a_served_decimal_reaches_the_reader_intact():
+    """A monocyte count of 0.21 is risk-shaped and is not a risk claim."""
+    calls = [{
+        "name": "predict_readmission", "args": {"hadm_id": 90000012},
+        "response": {"probability": 0.34, "threshold": 0.11,
+                     "top_factors": [{"feature": "monocytes_min",
+                                      "direction": "decreases", "value": 0.21}]},
+    }]
+
+    out, flags = verify_risk_numbers("Her lowest monocyte count was 0.21.", calls)
+
+    assert out == "Her lowest monocyte count was 0.21."
+    assert flags == []
+
+
+def test_a_number_the_payload_never_stated_is_still_stripped():
+    """The rule this must not weaken: an unsupported risk number is removed."""
+    out, flags = verify_risk_numbers("Her RDW of 18.4% predicts readmission.", _calls())
+
+    assert "18.4" not in out
+    assert flags == ["risk_number_unsupported:18.4%"]
+
+
+def test_a_served_value_is_written_the_way_a_clinician_would_write_it():
+    """The precision rule now has a value to act on, which it never had before.
+
+    `_factor_values` reads `top_factors[].value`; the predictor did not return one, so
+    this pass had been dead in production since it was written.
+    """
+    out, flags = normalise_factor_values("She had 23.5417 prior inpatient days.",
+                                         _calls(value=23.5417))
+
+    assert "23.5 prior inpatient days" in out
+    assert flags == ["factor_value_rounded:23.5417"]
+
+
+# --- the turn ------------------------------------------------------------------
+
+def test_the_question_the_widget_asks_binds_the_value_and_the_series():
+    """The label the bar sends names the analyte, so the drill-down keeps its tools."""
+    question = ("What in this patient's chart explains red cell distribution width "
+                "(RDW) as a readmission risk driver?")
+    lab_driver = __import__(
+        "services.agent.routing.routing", fromlist=["asks_about_a_lab_analyte"]
+    ).asks_about_a_lab_analyte(question)
+    allowed = graph._freetext_allowed(True, False, lab_driver)
+
+    assert lab_driver is True
+    assert "predict_readmission" in allowed
+    assert "get_lab_trends" in allowed
+    assert "rag_search" in allowed
+
+
+# --- the instructions ----------------------------------------------------------
+
+def _prompt() -> str:
+    """The system prompt with its line wrapping removed.
+
+    Asserted this way rather than against the raw constant because a prompt is prose: its
+    lines are wrapped for the file, and a rule that survives re-wrapping is the rule worth
+    pinning. (The charts that assert exact substrings do so for phrases short enough to
+    sit on one line; these are sentences.)
+    """
+    return " ".join(prompts.SYSTEM_PROMPT.split())
+
+
+def test_the_prompt_states_the_payloads_value_as_the_factor_s_own_number():
+    text = _prompt()
+
+    assert "one `value` per `top_factors` entry" in text
+    assert "the chart does not document the value" in text
+
+
+def test_the_prompt_stops_the_note_search_for_the_feature_name():
+    """A discharge summary does not write "red cell distribution width"."""
+    text = _prompt()
+
+    assert "no discharge summary contains the words" in text
+    assert "search for what the value means clinically" in text
+    assert "is not the chart's account of the correlate" not in text
+
+
+def test_the_prompt_keeps_the_structured_value_and_the_note_apart():
+    assert "the value, its trend and its flag come from the structured record" in _prompt()

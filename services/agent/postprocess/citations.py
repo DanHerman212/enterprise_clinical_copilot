@@ -1110,6 +1110,32 @@ def literature_pmids(
     )
 
 
+def comparator_pmids(comparators: "list[dict] | None") -> frozenset[str]:
+    """The PMIDs of the published cohorts this turn verified and drew.
+
+    A third channel beside the note passages and the answer's own literature, because a
+    cohort row is neither: it is a record retrieval offered, an extraction turn checked
+    against the abstract, and the comparison table published. Its PMID is on screen in the
+    table and in the references list, so the narrative that explains the comparison has to
+    be able to name it — and a `^[PMID: …]` badge naming a record the turn did not verify
+    is exactly the invented identifier `enforce_citations` exists to delete.
+
+    Read from the VERIFIED rows rather than from the retrieval pool. Twenty-five
+    candidates come back and at most two survive; allowing the pool would let the answer
+    cite a cohort the table refused, and the pill would resolve to nothing because
+    `register_comparator_sources` registers only the rows that were drawn.
+
+    Empty for every turn that is not `/ehr`, and for `/ehr` on an admission whose
+    condition the literature could not answer for: no rows, nothing citable, and the prose
+    says so in its own words rather than in a marker.
+    """
+    return frozenset(
+        str(row.get("pmid") or "").strip()
+        for row in comparators or []
+        if isinstance(row, dict) and str(row.get("pmid") or "").strip()
+    )
+
+
 def cited_pmids(answer: str) -> list[str]:
     """The PMIDs the ANSWER names, in the order it first names them.
 

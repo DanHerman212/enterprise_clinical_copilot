@@ -15,6 +15,14 @@ class PredictionFactor(TypedDict):
     feature: str
     contribution: float
     direction: str
+    # The patient's own value for the feature, read from the row that was scored. Absent
+    # when the attribution names an aggregated parent (`discharge_location`) or the row
+    # has no value for it — absence is a fact, so it is left out rather than stated as 0.
+    #
+    # Declared here because an undeclared key is dropped from the structured payload the
+    # client receives, and this one is the difference between an answer that states what
+    # moved the estimate and one that says the chart does not document the value.
+    value: NotRequired[float]
 
 
 class PredictionResult(TypedDict):

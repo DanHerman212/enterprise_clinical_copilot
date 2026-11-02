@@ -606,18 +606,31 @@ def _is_number(value: Any) -> bool:
 
 
 def _presented_factor(factor: Any) -> Any:
-    """One risk driver, named and directed, with no magnitude to quote.
+    """One risk driver, named and directed, with the patient's own value beside it.
 
     Rebuilt field by field rather than copied and edited, because the field that has to
-    go is the one a `{**factor}` spread would keep. The magnitude is not withheld for
-    want of a use — the widget draws it as a bar length — but because it is not this
-    turn's to state.
+    go is the one a `{**factor}` spread would keep: the contribution magnitude. It is not
+    withheld for want of a use — the widget draws it as a bar length — but because it is
+    not this turn's to state, and a raw contribution is quotable.
 
-    Two fields and no more: the humanized feature name, which is the name both the prose
-    and the bars use, and the direction the model attached to it. The patient's own value
-    for the feature is deliberately NOT copied in here. It is already stated in the
-    `<admission_metadata>` block, which is the row the model scored, and a second copy
-    inside the factor is a second thing that can disagree with the first.
+    Three fields at most: the humanized feature name, which is the name both the prose and
+    the bars use; the direction the model attached to it; and the patient's own value for
+    that feature, exactly as the scored row holds it.
+
+    The value used to be left out of here, on the argument that it was "already stated in
+    the `<admission_metadata>` block". That was true of the eleven fields the manifest
+    renders — age, admission type, prior utilisation — and false of every clinical input
+    the booster is scored on. `rdw_max`, the eight laboratory anchors, the procedure and
+    medication counts and `oncology_flag` are attributed by the model and stated by
+    nothing: not the manifest, not a note passage, and not this payload. Asked what in the
+    chart explained an RDW driver, the agent searched the notes for a feature name no
+    discharge summary writes, found nothing, and answered — correctly, of the three things
+    it had been given — that the chart did not document the value (reported 2026-11-02).
+
+    Stated rather than omitted, and stated as the record's number. `prior_inpatient_days`
+    arrives as 16.0417 because that is the encoded row; the prompt asks for it verbatim and
+    `guardrail.normalise_factor_values` rewrites it to the number a clinician would write,
+    which is the same rule the manifest's own values have always been under.
     """
     if not isinstance(factor, dict):
         return factor
@@ -626,6 +639,9 @@ def _presented_factor(factor: Any) -> Any:
     }
     if isinstance(factor.get("direction"), str):
         presented["direction"] = factor["direction"]
+    value = factor.get("value")
+    if _is_number(value):
+        presented["value"] = float(value)
     return presented
 
 
@@ -659,18 +675,20 @@ def _presented_prediction(name: str, payload: Any) -> Any:
     model wrote "33.0%" beside a widget drawing 33.2%, which is why the rounding was
     removed in the first place. Given "33.2%" there is no digit to lose.
 
-    The drivers keep their names and their direction and lose their magnitudes. The
-    narrative says which factors led and what they mean; the widget draws how much. A raw
+    The drivers keep their names, their direction and the patient's own value for the
+    feature; what they lose is the magnitude. The narrative says which factors led, what
+    this admission recorded for them, and what they mean; the widget draws how much. A raw
     contribution was quotable too, and a number the guardrail does not recognise as the
     score is stripped and shown as a safety swap — so withholding it also removes a way
     for a good answer to be visibly withdrawn from a reader mid-sentence.
 
-    The patient's own values are not here either, and that is a change from an earlier
-    shape of this function. Direction is not evidence that the patient has the factor —
-    it is measured against a population baseline, so a record whose `<admission_metadata>`
-    reads `recent_ed_visits: 0` can be told the factor increased its estimate. What the
-    row actually records is stated in that block and nowhere else, so it is one fact in
-    one place rather than two copies that can disagree.
+    The value is stated here because for a clinical feature this is the only place that
+    could state it: `direction` is measured against a population baseline, so it is not
+    evidence that the patient has the factor, and the manifest block carries the
+    administrative row rather than the scored laboratory inputs. A record whose
+    `<admission_metadata>` reads `recent_ed_visits: 0` can still be told the factor
+    increased its estimate, and with the value beside the direction the prose can say both
+    things about one factor without guessing at either.
 
     `EHR_FORMATTING` names both display strings, and the guardrail still checks the prose
     against the SERVED value, because it reads the recorded call and not this copy. It

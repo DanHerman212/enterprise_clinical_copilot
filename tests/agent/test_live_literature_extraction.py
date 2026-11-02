@@ -706,8 +706,28 @@ def _payload(rows: list[dict]) -> str:
     return json.dumps({"comparators": rows, "rejected": []})
 
 
-def test_a_second_pass_runs_when_the_first_pass_verifies_no_rows():
-    """Six candidates with a percentage and none at 30 days is what must trigger the retry."""
+def _candidates(count: int, **overrides) -> list[dict]:
+    """`count` records that name this admission's condition, with distinct PMIDs.
+
+    Used to fill the model's budget without inventing a second fixture: the policy under
+    test turns on how many candidates align, not on what any of them says.
+    """
+    articles = []
+    for index in range(count):
+        pmid = f"300001{index:02d}"
+        articles.append({**HEMIARTHROPLASTY, "pmid": pmid,
+                         "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/", **overrides})
+    return articles
+
+
+def test_a_thin_first_pass_pools_both_queries_into_one_extraction():
+    """The latency fix, stated as behaviour (measured 2026-11-02).
+
+    A pass that aligns four candidates cannot fill the model's budget, and a wide pass
+    will add records — so the searches both run (500ms each) and the model reads the union
+    ONCE. It used to read the thin pool, be judged starved, and then read the wide pool:
+    two five-second calls to learn what the candidate count had already said.
+    """
     seen: list[bool] = []
 
     async def search(anchors, wide):
@@ -715,32 +735,65 @@ def test_a_second_pass_runs_when_the_first_pass_verifies_no_rows():
         articles = [HEMIARTHROPLASTY] if wide else [NINETY_DAY_ARTICLE]
         return {"query": "wide" if wide else "narrow", "articles": articles}
 
+    llm = _FakeLLM([_payload([_row()])])
+
+    result = asyncio.run(deterministic.extract_comparators(llm, FEMORAL_NECK, search=search))
+
+    assert seen == [False, True]
+    assert llm.calls == 1, "one extraction over the pooled candidates"
+    assert [row["pmid"] for row in result.rows] == ["30000001"]
+    # Two passes reported, one read: the wide pass's record is the one that verified, and
+    # both passes are marked as having been read together.
+    assert [(entry.wide, entry.aligned, entry.verified, entry.pooled)
+            for entry in result.passes] == [
+        (False, 1, 0, True), (True, 1, 1, True)]
+
+
+def test_a_first_pass_that_fills_the_budget_is_extracted_alone():
+    """A full budget of condition-naming candidates leaves no room for the wide pass.
+
+    Ten aligned records is the most the model will read, so a second query could only
+    displace one of them. The wide search is not issued and the extraction happens once.
+    """
+    seen: list[bool] = []
+
+    async def search(anchors, wide):
+        seen.append(wide)
+        return {"query": "narrow", "articles": _candidates(10)}
+
+    llm = _FakeLLM([_payload([_row(pmid="30000100"),
+                              _row(pmid="30000101")])])
+
+    result = asyncio.run(deterministic.extract_comparators(llm, FEMORAL_NECK, search=search))
+
+    assert seen == [False], "a full first pass must not spend a second query"
+    assert llm.calls == 1
+    assert [row["pmid"] for row in result.rows] == ["30000100", "30000101"]
+
+
+def test_a_full_first_pass_that_verifies_nothing_still_spends_the_retry():
+    """The case the retry exists for, preserved.
+
+    Six records naming the condition, every one reporting a ninety-day rate: the budget
+    was full and the model correctly verified none of them. Filling the budget is a
+    necessary condition for skipping the wide pass, not a sufficient one.
+    """
+    seen: list[bool] = []
+
+    async def search(anchors, wide):
+        seen.append(wide)
+        if wide:
+            return {"query": "wide", "articles": [HEMIARTHROPLASTY]}
+        return {"query": "narrow", "articles": _candidates(10)}
+
     llm = _FakeLLM([_payload([]), _payload([_row()])])
 
     result = asyncio.run(deterministic.extract_comparators(llm, FEMORAL_NECK, search=search))
 
     assert seen == [False, True]
+    assert llm.calls == 2
     assert [row["pmid"] for row in result.rows] == ["30000001"]
     assert [(entry.wide, entry.verified) for entry in result.passes] == [(False, 0), (True, 1)]
-
-
-def test_the_second_pass_is_skipped_when_the_first_verifies_enough_rows():
-    seen: list[bool] = []
-
-    async def search(anchors, wide):
-        seen.append(wide)
-        return {"query": "narrow", "articles": [HEMIARTHROPLASTY, RANGE_RATE_ARTICLE]}
-
-    second = dict(_row(), pmid="30000005", reported_rate="1.0% to 1.4%",
-                  rate_sentence="Readmission rates of 1.0% to 1.4% were observed within "
-                                "30 days.")
-    llm = _FakeLLM([_payload([_row(), second])])
-
-    result = asyncio.run(deterministic.extract_comparators(llm, FEMORAL_NECK, search=search))
-
-    assert seen == [False], "a first pass with two verified rows must not spend a retry"
-    assert len(result.rows) == 2
-    assert llm.calls == 1
 
 
 # --- the retrieval layer -----------------------------------------------------

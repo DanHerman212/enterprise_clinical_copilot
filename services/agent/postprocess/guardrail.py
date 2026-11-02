@@ -503,10 +503,21 @@ def verify_risk_numbers(
     """
     flags: list[str] = []
     values = _predict_values(tool_calls)
+    # The patient's own drivers' values, in their OWN units. A separate comparison for
+    # the reason `_factor_values` gives: `values` holds the score and the threshold as
+    # decimals, and these are days, counts and measurements. Without them a value the turn
+    # was served and asked to explain is stripped out of the sentence explaining it:
+    # "her RDW of 15.5%" is a percentage token compared against a probability of 0.34, and
+    # the answer is served as "her RDW of". Measured 2026-11-02 — a driver question that
+    # reached its value and then had it removed.
+    measurements = _factor_values(tool_calls)
     spans: list[tuple[int, int]] = []
 
     def supported(x: float, tol: float) -> bool:
         return any(abs(x - v) <= tol + 1e-12 for v in values)
+
+    def measured(x: float, tol: float) -> bool:
+        return any(abs(x - v) <= tol + 1e-12 for v in measurements)
 
     for m in _RISK_DECIMAL.finditer(answer):
         token = m.group(0)
@@ -519,7 +530,8 @@ def verify_risk_numbers(
         if lab_text and token in lab_text:
             continue
         decimals = len(token.split(".")[1])
-        if not supported(float(token), 0.5 * 10 ** -decimals):
+        if not (supported(float(token), 0.5 * 10 ** -decimals)
+                or measured(float(token), 0.5 * 10 ** -decimals)):
             flags.append(f"risk_number_unsupported:{token}")
             spans.append((m.start(), m.end()))
     for m in _RISK_PERCENT.finditer(answer):
@@ -537,7 +549,9 @@ def verify_risk_numbers(
         if lab_text and (f"{num}%" in lab_text or f"{num} %" in lab_text):
             continue
         decimals = len(num.split(".")[1]) if "." in num else 0
-        if not supported(float(num) / 100.0, 0.5 * 10 ** -decimals / 100.0):
+        tolerance = 0.5 * 10 ** -decimals
+        if not (supported(float(num) / 100.0, tolerance / 100.0)
+                or measured(float(num), tolerance)):
             flags.append(f"risk_number_unsupported:{m.group(0)}")
             spans.append((m.start(), m.end()))
     if not spans:
@@ -1018,7 +1032,12 @@ def guard_answer(
         citations.citation_bound(tool_calls, conversation_calls),
         citations.literature_pmids(
             tool_calls, conversation_calls if literature_replay else None
-        ),
+        )
+        # And the verified cohorts the comparison table published. `/ehr`'s narrative
+        # explains the comparison those rows are half of, so it has to be able to name
+        # them; the allowance is the rows that were DRAWN, not the retrieval pool, so a
+        # PMID the table refused is still an identifier nobody verified.
+        | citations.comparator_pmids((state or {}).get("comparators")),
     )
     flags += f
 

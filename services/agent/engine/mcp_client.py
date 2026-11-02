@@ -54,7 +54,21 @@ from services.mcp.runtime import timeout_chain
 
 _LOG = logging.getLogger(__name__)
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+#: The repository root — the directory `services` and `shared` are importable from.
+#:
+#: Three levels up from this file: `engine` → `agent` → `services` → the root. It was
+#: `parents[2]` (the `services` directory) while this module lived directly under
+#: `services/agent/`, and the constant was not re-read when the module moved into
+#: `engine/` (Phase 7). The child's `cwd` is what makes `python -m services.mcp.server`
+#: importable, so with the wrong value the stdio transport died before the session
+#: initialised — twice, in two different ways: "No module named 'services'" from inside
+#: `services/`, then, once PYTHONPATH papered over that, `services/mcp/server.py`
+#: shadowing the installed `mcp` SDK and importing itself.
+#:
+#: Measured 2026-11-02 while wiring Stage Gate 2's live verification. Nothing caught it
+#: earlier because no test and no deployed route starts the stdio child: the demo runs
+#: over `http`, and the live gate scripts call the retrieval layer directly.
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 MCP_TRANSPORT = os.environ.get("MCP_TRANSPORT", "stdio")  # "stdio" | "http"
 

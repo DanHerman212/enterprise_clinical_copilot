@@ -265,6 +265,111 @@ def record_turn_tools(tool_calls: list[dict] | None, *, replayed: int = 0,
         logger.warning("could not record the turn's tool calls", exc_info=True)
 
 
+def record_presentation(presentation: dict | None, span=None) -> None:
+    """Record what this turn RENDERED, on the root span's metadata.
+
+    `record_turn_tools` says what the turn asked for; this says what the reader was
+    shown. They are not the same record and the gap between them is where the defects
+    live: a turn that retrieved twenty-five candidate cohorts and drew a table with no
+    rows in it looks identical, from the tool calls alone, to a turn that drew two — and
+    the sentence explaining the empty table ("no published rate for this condition was
+    stated in the abstracts retrieved") was, until this writer, the only evidence
+    anywhere that verification had run and rejected everything.
+
+    What travels: the component names the canvas composed, the comparative matrix
+    exactly as it was handed to the renderer (`baseline`, `rows`, `baseline_note`), the
+    numbered sources and the drawer rows. No note text, no abstracts — the matrix's rows
+    carry a PMID, a rate and a cohort, which is the claim, not the evidence behind it.
+
+    Written here rather than derived from the stored turn because the trace is read when
+    the store is not: an operator triaging a run needs the rendered surface on the row.
+
+    Best-effort like everything here (rule 1). Never raises.
+    """
+    span = span or current_turn_span()
+    if span is None or not isinstance(presentation, dict):
+        return
+    try:
+        span.update(metadata={
+            "presentation": {
+                "components": _canvas_components(presentation.get("a2ui")),
+                "matrix": _comparative_matrix(presentation.get("a2ui")),
+                "sources": _source_index(presentation.get("sources")),
+                "references": _reference_index(presentation.get("references")),
+                "scope": presentation.get("scope"),
+                "verified": bool(presentation.get("verified")),
+            },
+        })
+    except Exception:  # noqa: BLE001 — rule 1
+        logger.warning("could not record the turn's presentation", exc_info=True)
+
+
+def _canvas_components(a2ui: Any) -> list[str]:
+    """The component names the surface drew, in composition order."""
+    names: list[str] = []
+    for message in (a2ui or {}).get("messages") or []:
+        update = (message or {}).get("updateComponents") or {}
+        for component in update.get("components") or []:
+            name = (component or {}).get("component")
+            if isinstance(name, str) and name:
+                names.append(name)
+    return names
+
+
+def _comparative_matrix(a2ui: Any) -> dict | None:
+    """The cohort table exactly as the renderer was handed it, or None.
+
+    Read off the composed surface rather than off the state that produced it: whether the
+    table drew at all is the question, and only the canvas answers it.
+    """
+    for message in (a2ui or {}).get("messages") or []:
+        update = (message or {}).get("updateComponents") or {}
+        for component in update.get("components") or []:
+            if (component or {}).get("component") != "ComparativeRiskMatrix":
+                continue
+            return {
+                "baseline": component.get("baseline"),
+                "rows": [
+                    {
+                        "pmid": row.get("pmid"),
+                        "source": row.get("source"),
+                        "reported_rate": row.get("reported_rate"),
+                        "rate_kind": row.get("rate_kind"),
+                        "cohort_summary": row.get("cohort_summary"),
+                        "evidence_tier": row.get("evidence_tier"),
+                        "excerpt": row.get("excerpt"),
+                    }
+                    for row in component.get("rows") or [] if isinstance(row, dict)
+                ],
+                "baseline_note": component.get("baseline_note") or "",
+            }
+    return None
+
+
+def _source_index(sources: Any) -> list[dict]:
+    """The numbered channel, as the marker addresses it: number, kind, label."""
+    return [
+        {
+            "cite": source.get("cite"),
+            "kind": source.get("kind"),
+            "label": source.get("label") or source.get("section") or source.get("pmid"),
+        }
+        for source in sources or [] if isinstance(source, dict)
+    ]
+
+
+def _reference_index(references: Any) -> list[dict]:
+    """The drawer's rows, by number and identity — not their passages."""
+    return [
+        {
+            "index": reference.get("index"),
+            "source": reference.get("source"),
+            "pmid": reference.get("pmid"),
+        }
+        for reference in references or [] if isinstance(reference, dict)
+    ]
+
+
 def set_trace_io(user_input: str | None, output: str | None, span=None) -> None:
     """Put the question and the answer on the trace, and on the root span too.
 

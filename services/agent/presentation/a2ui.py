@@ -58,13 +58,7 @@ from services.agent.postprocess.citations import (  # noqa: F401 — re-exported
     citation_remap,
     renumber_citations,
 )
-from services.agent.presentation.domain import (
-    GENERAL_INPATIENT,
-    NON_ADMISSION,
-    _usable_articles,
-    is_matrix_eligible,
-    resolve_phenotype,
-)
+from services.agent.presentation.domain import _usable_articles, is_matrix_eligible
 # The analyte vocabulary, from the shared leaf rather than from `routing/`: this layer
 # may not import the routing package (Charter 13 §5), and the answer it needs — "did the
 # question name a measurement?" — is a label question, not a routing decision.
@@ -90,23 +84,19 @@ from services.agent.presentation import (  # noqa: F401 — re-exported
 )
 
 
-def admission_eligible(tool_calls: list[dict]) -> bool:
+def admission_eligible(tool_calls: list[dict], *,
+                       is_outpatient: bool | None = None) -> bool:
     """Whether the record this turn is about is an admission at all.
 
-    Narrow on purpose: this is *not* `is_matrix_eligible`, which additionally requires a
-    curated phenotype bucket before the comparative table may be drawn. Using that wider
-    rule suppressed the risk widget for every admission whose condition had not been
-    curated — most of the real corpus — which is a different question from whether an
-    inpatient readmission estimate applies to the record.
+    The encounter, not a table: the orchestrator reads whether this record is a stay and
+    passes it in. Until Stage Gate 2 this asked whether the admission id appeared in a
+    hand-maintained frozenset of non-admissions — a corpus fact compiled into the
+    presentation layer, which is exactly the kind of map the gate removed.
 
-    Defaults to True when no admission is named: a literature or free-text turn without a
-    `hadm_id` is not making an inpatient claim, so there is nothing to suppress.
+    Defaults to True when the caller has no encounter: a literature or free-text turn that
+    names no admission is not making an inpatient claim, so there is nothing to suppress.
     """
-    for call in tool_calls or []:
-        hadm = (call.get("args") or {}).get("hadm_id")
-        if isinstance(hadm, int) and not isinstance(hadm, bool):
-            return hadm not in NON_ADMISSION
-    return True
+    return is_matrix_eligible(is_outpatient=is_outpatient)
 
 
 def predict_payload(tool_calls: list[dict]) -> dict | None:
@@ -261,76 +251,6 @@ def turn_scope(tool_calls: list[dict]) -> str | None:
     return SCOPE_GENERAL
 
 
-def _note_sections(tool_calls: list[dict]) -> dict[str, str]:
-    """Every note section the evidence carries, section name -> its text.
-
-    Read off the retrieval payloads rather than fetched: this is the chart the turn
-    actually read, which is the only chart the composer is entitled to describe a patient
-    from. A passage labelled with a section is that section; two passages labelled alike
-    are joined, because a whole-note chunk and a sectioned one can both land on the same
-    retrieval and the classifier should see the text once.
-    """
-    sections: dict[str, str] = {}
-    for call in tool_calls or []:
-        if not isinstance(call, dict):
-            continue
-        response = call.get("response")
-        if not isinstance(response, dict):
-            continue
-        for passage in response.get("passages") or []:
-            if not isinstance(passage, dict):
-                continue
-            name = str(passage.get("section") or "").strip()
-            text = str(passage.get("text") or "").strip()
-            if not name or not text:
-                continue
-            sections[name] = f"{sections[name]} {text}".strip() if name in sections else text
-    return sections
-
-
-def turn_phenotype(tool_calls: list[dict],
-                   evidence: list[dict] | None = None,
-                   *, is_outpatient: bool | None = None) -> str:
-    """The condition this turn's patient has, resolved from the chart it read.
-
-    Read from the note sections the evidence carries, in the order a clinician reads a
-    discharge summary (see `admission_phenotypes.resolve_phenotype`), and NOT from the
-    admission's identifier. The reviewed map answered that question for the 84 rows it
-    carried and answered nothing for any other admission — and "nothing" reached the
-    surface as a table that was simply absent, which no reader can tell apart from a
-    patient who cannot be compared at all. A patient admitted tomorrow has a note, so a
-    patient admitted tomorrow resolves.
-
-    `evidence` is the whole conversation's calls, because a `/pubmed` turn reads no chart
-    of its own and a question about the patient's condition is still about this patient.
-    What it must not be is the answer to a different question: a condition asserted from
-    an identifier is exactly the hardcoded claim this replaces, so a turn with no chart
-    anywhere in reach resolves nothing and draws no comparison. That is a real cost — a
-    literature turn opened on a fresh thread shows records alone — and it is the honest
-    one: without a chart there is no evidence for whose condition the cohorts are.
-
-    An unresolved INPATIENT resolves to `GENERAL_INPATIENT` rather than to nothing, and
-    the difference matters: the vocabulary failing to name a condition is a limit of the
-    vocabulary, while a stay is still a stay and the all-cause hospital-wide rate is still
-    the right thing to hold it against. A record that was never a stay resolves nothing,
-    because a readmission rate does not describe it.
-    """
-    calls = [*(evidence or []), *(tool_calls or [])]
-    hadm_id = next(
-        (int((call.get("args") or {})["hadm_id"]) for call in calls
-         if isinstance(call, dict)
-         and isinstance((call.get("args") or {}).get("hadm_id"), int)
-         and not isinstance((call.get("args") or {}).get("hadm_id"), bool)),
-        None,
-    )
-    if hadm_id is not None and not is_matrix_eligible(hadm_id, is_outpatient=is_outpatient):
-        return ""
-    return resolve_phenotype(
-        _note_sections(calls),
-        fallback=GENERAL_INPATIENT if hadm_id is not None else "",
-    )
-
-
 def compose_presentation(question: str, answer: str,
                          tool_calls: list[dict],
                          command_payload: dict | None = None,
@@ -340,7 +260,8 @@ def compose_presentation(question: str, answer: str,
                          *, is_outpatient: bool | None = None,
                          literature_replay: bool = False,
                          citation_map: dict[str, int] | None = None,
-                         question_names_analyte: bool = False) -> dict:
+                         question_names_analyte: bool = False,
+                         comparators: list[dict] | None = None) -> dict:
     """The full presentation contract for an answered question.
 
     One call produces every field the browser consumes, so the answer's
@@ -582,18 +503,12 @@ def compose_presentation(question: str, answer: str,
         # The narrative chooses its citations from this turn's evidence: the
         # articles for a literature turn, the resolved note passages otherwise.
         narrative=narrative,
-        # The patient's own condition selects the cohort rows, whatever the
-        # question was about (see `turn_phenotype`), and `command` decides whether
-        # this turn is one that carries the table at all (see `_draws_matrix`).
-        # Resolved from the chart the conversation has read, so a follow-up and a
-        # `/pubmed` turn that came after an `/ehr` still know whose condition the
-        # cohorts are being compared against.
-        phenotype=turn_phenotype(tool_calls, evidence_calls, is_outpatient=is_outpatient),
-        eligible=admission_eligible(tool_calls),
-        # The clinician's own words, when the turn had any: the other half of the
-        # condition-lock, so a question about a condition this patient does not have
-        # is answered with records and no comparison.
-        query=str((literature or {}).get("query") or "") if isinstance(literature, dict) else "",
+        # The verified comparator rows, settled and traced by the engine during the
+        # `/ehr` turn. This layer draws them and never chooses them: a row here was read
+        # from an abstract that this turn retrieved, and the reading was checked against
+        # that abstract before it arrived.
+        comparators=comparators,
+        eligible=admission_eligible(tool_calls, is_outpatient=is_outpatient),
         command=command,
     )
 
@@ -621,7 +536,7 @@ def compose_presentation(question: str, answer: str,
         articles, start=literature_start, cited=cited_numbers_of_records)
     sources = record_sources + published_sources
 
-    benchmark_sources, benchmark_references = register_benchmark_sources(
+    comparator_sources, comparator_references = register_comparator_sources(
         canvas, start=len(sources) + 1,
         existing_pmids=[entry.get("pmid") for entry in sources],
     )
@@ -631,7 +546,7 @@ def compose_presentation(question: str, answer: str,
     # happen to agree. `/pubmed` shipped with three numbered pills and no rows at all
     # because this used to be assembled from the narrative's citations plus the table's
     # cohorts, and a literature turn's records were in neither of those two builders.
-    published = sources + benchmark_sources
+    published = sources + comparator_sources
     references = reference_rows(published)
 
     return {
@@ -804,7 +719,7 @@ def _surface_components(canvas: dict | None):
                 yield component
 
 
-def register_benchmark_sources(canvas: dict | None, start: int,
+def register_comparator_sources(canvas: dict | None, start: int,
                               existing_pmids=()) -> tuple[list[dict], list[dict]]:
     """Give the comparison table's published cohorts a citation identity.
 

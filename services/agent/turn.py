@@ -245,25 +245,13 @@ async def compose_success(
         state=state,
     )
 
-    # The trace records the answer the caller is SERVED, and it is written here, once,
-    # after the guardrails and before anything composes from the result. The charter's
-    # Law 5. It used to be written in `graph.ask`, on both routes, before this point:
-    # the command route stamped pre-guardrail text and the free-text route stamped
-    # pre-settlement text, so the two disagreed with each other and neither was the
-    # answer a reader saw. A turn that carries no prose (`/risk`) records the structured
-    # surface instead, which is what the widget draws and the honest record of the turn.
-    observability.set_trace_io(
-        question,
-        (guarded["answer"] or "").strip() or command_trace_output(state),
-    )
-    # And what the turn asked the tools for. The trace's output stays the served prose
-    # (Law 5); this is the other half of why that prose reads as it does, and on a
-    # free-text turn it is the only place the calls are recorded — the reasoning loop
-    # opens no tool spans of its own.
-    observability.record_turn_tools(
-        state.get("tool_calls") or [],
-        replayed=len(state.get("replayed_tool_calls") or []),
-    )
+    # The trace records the answer the caller is SERVED, and it is written below, once,
+    # after the presentation composes from the guarded text. The charter's Law 5 — the
+    # trace's output is the answer a reader saw. It used to be written here, before
+    # composition, and then in `graph.ask` before the guardrails: three writers, and the
+    # last two stamped text that was not the served answer. A turn that carries no prose
+    # (`/risk`) records the structured surface instead, which is what the widget draws and
+    # the honest record of the turn.
 
     # tool_calls carry name, arguments, response and whether the response can be
     # produced again. The arguments used to be dropped here on the grounds that
@@ -326,7 +314,33 @@ async def compose_success(
         # presentation resolves through it so a pill, a drawer row and the answer all
         # name the same passage (Charter 13 Law 1 — presentation does not renumber).
         citation_map=state.get("citation_display_map") or {},
+        # The cohort rows the engine verified for this admission on this turn. Passed
+        # whole: which of them may be drawn, and in what order, was decided by
+        # `deterministic.extract_comparators` against the records it retrieved. An empty
+        # list is a real answer — verification can reject every candidate — and the canvas
+        # says so rather than borrowing a cohort for a different condition.
+        comparators=state.get("comparators") or [],
     )
+
+    # The trace, written once, now that the answer is settled AND composed. Two records,
+    # and the order between them is the contract: what the turn asked for, and what the
+    # reader was shown. Both go on the root span, and `set_trace_io` puts the question and
+    # the served prose on the trace row itself — the output is `presentation["answer"]`
+    # rather than the guarded text, so a trace can no longer disagree with the surface it
+    # is meant to explain (Charter 13 Law 5; Stage Gate 2).
+    observability.set_trace_io(
+        question,
+        (presentation["answer"] or "").strip() or command_trace_output(state),
+    )
+    observability.record_turn_tools(
+        state.get("tool_calls") or [],
+        replayed=len(state.get("replayed_tool_calls") or []),
+    )
+    # And what it rendered: the components, the comparative matrix as the renderer got it,
+    # and the numbered channel. The trace's tool calls cannot answer "did the table draw,
+    # and with what in it" — a turn can retrieve a cohort pool and draw nothing — which is
+    # the question every stage-gate report has had to answer from a live run by hand.
+    observability.record_presentation(presentation)
 
     # Chosen from the record this turn already holds, not proposed by a model: a chip
     # is a control, and a control that asks something the chart cannot answer is worse

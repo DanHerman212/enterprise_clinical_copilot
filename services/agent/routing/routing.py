@@ -243,9 +243,11 @@ COMMANDS: tuple[Command, ...] = (
         # asked for, and the readmission estimate that belongs beside it.
         supplementary=(ToolSpec("predict_readmission", {"hadm_id": "{hadm_id}"}),),
         # `predict_readmission` is absent from this set because this command runs
-        # it. Every other command's tool is still refused here.
+        # it. `search_literature` is absent since Stage Gate 2: the briefing now retrieves
+        # the published 30-day cohorts its comparison table draws, through the same traced
+        # tool `/pubmed` uses. Every other command's tool is still refused here.
         forbidden=frozenset({"rag_search", "discharge_medications",
-                             "search_literature", "get_lab_trends"}) | PREFLIGHT_TOOLS,
+                             "get_lab_trends"}) | PREFLIGHT_TOOLS,
         sections=SUMMARY_SECTIONS,
         # The model's cited summary is the answer, so it is announced as it is written.
         # Its markers are resolved after the turn, so what a caller watches arrive is

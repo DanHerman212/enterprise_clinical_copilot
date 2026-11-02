@@ -147,9 +147,17 @@ def test_every_command_forbids_every_other_tool():
     added to the server is then forbidden to every command until someone says
     otherwise here, which is the safe direction. The other direction fails
     silently — a new tool that no command forbids is a command that may call it.
+
+    One exception, and it is a decision rather than a drift: `/ehr` runs
+    `search_literature` since Stage Gate 2, because the comparative table it draws is the
+    published 30-day cohorts for this admission's condition. It is named here so that a
+    second command gaining the tool has to be said out loud.
     """
     for command in routing.COMMANDS:
-        assert command.forbidden == set(REGISTERED_TOOLS) - set(command.tools), (
+        allowed = set(command.tools)
+        if command.wire == "summarize":
+            allowed |= {"search_literature"}
+        assert command.forbidden == set(REGISTERED_TOOLS) - allowed, (
             f"{command.slash} does not forbid every tool but its own"
         )
 

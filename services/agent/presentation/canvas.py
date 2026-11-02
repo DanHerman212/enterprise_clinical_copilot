@@ -22,9 +22,7 @@ from services.agent.presentation import (
     CATALOG_ID,
     SURFACE_ID,
 )
-from services.agent.presentation.domain import GENERAL_INPATIENT, phenotype_of_query
 from services.agent.presentation.domain import display_probability, humanize
-from services.agent.presentation.domain import benchmarks_for_phenotype
 from services.agent.presentation.domain import _usable_articles
 
 def _band(probability: float, threshold: float) -> str:
@@ -111,83 +109,97 @@ def _literature_view(literature) -> tuple[list[dict], str, bool] | None:
 _BASELINE_SOURCE = "Enterprise Clinical Copilot"
 
 
-def _draws_matrix(command: str | None, has_literature: bool, phenotype: str,
-                  query: str, has_estimate: bool = False) -> bool:
+def _source_label(comparator: dict) -> str:
+    """`Journal · Year` — what the table calls a row. The pill's label, not a citation."""
+    journal = str(comparator.get("journal") or "").strip()
+    year = str(comparator.get("year") or "").strip()
+    if year:
+        return f"{journal} · {year}" if journal else year
+    pub_date = str(comparator.get("pub_date") or "").strip()
+    return journal or pub_date
+
+
+def _matrix_row(comparator: dict) -> dict:
+    """One verified comparator, in the shape the component draws.
+
+    Every field was settled and verified in the engine against the abstract it came from.
+    Nothing is derived here — not a rate, not a year, not a label — because a second
+    derivation in this layer is how a table and its citation line drift apart.
+    """
+    pub_date = str(comparator.get("pub_date") or "").strip()
+    year = str(comparator.get("year") or "").strip()
+    if not year:
+        digits = [part for part in pub_date.replace(",", " ").split() if part.isdigit()]
+        year = digits[0] if digits and len(digits[0]) == 4 else ""
+    return {
+        "pmid": str(comparator.get("pmid") or "").strip(),
+        "source": _source_label({**comparator, "year": year}),
+        "title": str(comparator.get("title") or "").strip(),
+        "authors": str(comparator.get("authors") or "").strip(),
+        "journal": str(comparator.get("journal") or "").strip(),
+        "year": year,
+        "reported_rate": str(comparator.get("reported_rate") or "").strip(),
+        "rate_kind": str(comparator.get("rate_kind") or "point").strip(),
+        "cohort_summary": str(comparator.get("cohort_summary") or "").strip(),
+        "evidence_tier": str(comparator.get("evidence_tier") or "").strip(),
+        "excerpt": str(comparator.get("rate_sentence") or "").strip(),
+        "url": str(comparator.get("url") or "").strip(),
+    }
+
+
+def _draws_matrix(command: str | None, *, has_estimate: bool,
+                  has_comparators: bool, eligible: bool = True) -> bool:
     """Whether this turn may carry the comparative cohort table at all.
 
-    Reserved to the command whose question it answers. The table exists to qualify a
-    readmission estimate against published cohorts, and only two turns ask that: `/ehr`,
-    which is the briefing the estimate belongs to, and a `/pubmed` turn that is ABOUT the
-    patient's own condition.
+    Reserved to the command whose question it answers — `/ehr`, the briefing the estimate
+    belongs to — and to an admission, and only when that turn actually has something to
+    compare: a verified comparator row, or at least the patient's own estimate to stand
+    alone.
 
-    The gate is the command rather than the evidence, and that distinction is the bug this
-    replaces. It used to ask whether a search had run and whether labs had been drawn, and
-    the phenotype resolved from any tool call carrying an admission — so `/meds`, a lab
-    drill-down and every follow-up question drew the table, because all of them read the
-    patient's chart. Observed live: `/meds` and a follow-up about blood transfusions both
-    arrived with a heart-failure cohort table under them, captioned "No readmission
-    estimate was requested for this turn" — the component explaining its own irrelevance,
-    which is the surface telling us it should not have been drawn.
+    The gate is the command, the encounter and the settled state, and none of them is
+    inferred from the evidence. It used to be the evidence, then a curated phenotype that
+    `/pubmed` could also reach; now `/pubmed` draws no table at all, because a literature
+    turn answers what the literature says and a cohort table of one patient's condition is
+    a different question — the one `/ehr` was asked. Follow-ups draw nothing for the same
+    reason: they are free-text turns and the table is not theirs.
 
-    A command that is not `/ehr` or `/pubmed` therefore draws nothing, including `/risk`
-    (its widget is the whole answer), `/labs` (the trajectories are), `/meds` (the list is)
-    and a free-text turn, which has no command at all. Follow-ups are the case that
-    matters most and are free-text turns: they inherit the patient from the thread they
-    continue, so every one of them carries an admission and none of them asks about
-    cohorts.
+    `eligible` is the encounter: a 30-day readmission cohort is defined over inpatient
+    stays, so an outpatient note has nothing to be compared against.
     """
-    wire = str(command or "").strip().lower()
-    if wire == "summarize":
-        return True
-    if wire == "literature":
-        # The condition-lock's other half, and the estimate's half (Phase F.1,
-        # 2026-10-26). A `/pubmed` turn no longer requests the estimate, so there is no
-        # patient figure for a cohort table to qualify — and a table of published rates
-        # under a literature answer, captioned "no readmission estimate was requested for
-        # this turn", is the surface explaining its own irrelevance. The comparison lives
-        # on `/ehr`, which is the turn the estimate belongs to; the records are what this
-        # turn is for.
-        return bool(has_literature) and bool(has_estimate) \
-            and phenotype_of_query(query) == phenotype
-    return False
+    if not eligible:
+        return False
+    if str(command or "").strip().lower() != "summarize":
+        return False
+    return bool(has_estimate or has_comparators)
 
 
-def _comparative_matrix(estimate: dict | None, phenotype: str | None) -> dict | None:
+def _comparative_matrix(estimate: dict | None,
+                        comparators: list[dict] | None) -> dict | None:
     """This patient's estimate set against the published cohorts, or None.
 
-    Rows come from `literature_benchmarks`, selected by the admission's resolved
-    phenotype (`admission_phenotypes`). None only when there is no phenotype at all — the
-    record is not a stay, or the turn never read a chart to resolve one from.
+    Rows are the comparators the engine verified on this turn — retrieved for this
+    admission's own condition, checked against the abstract each figure was read from.
+    None only when there is nothing at all to draw: no verified cohort and no estimate.
 
-    A phenotype with no curated rows of its own falls back to the all-cause hospital-wide
-    cohort (`GENERAL_INPATIENT`) rather than returning nothing. That fallback is what makes
-    coverage a property of the code instead of a property of the curation: before it, an
-    admission whose condition nobody had curated drew no table, and "no table" is
-    indistinguishable on screen from "this patient cannot be compared" — a third of the
-    demo corpus was silently missing a section of its own briefing (Phase E, 2026-10-26).
-    The row says what it is: its `cohort_summary` begins "Hospital-wide, all conditions",
-    so a reader is never shown a specialty rate borrowed for a patient it does not
-    describe. Nothing is invented to fill the gap and no specialty row is substituted.
+    A turn that verified no cohort does NOT go blank. The patient's own estimate is still
+    the answer to the question that was asked, so the table draws it alone with a sentence
+    saying what is missing. The alternative — borrowing a cohort from another condition to
+    fill the column — is the one thing this surface exists not to do, and "no table" is
+    indistinguishable on screen from "this patient cannot be compared".
 
-    A missing estimate does NOT suppress the table. The cohorts are worth reading on
+    The order the rows arrive in is the order they are drawn in. The engine ranks them by
+    how specifically they match this admission's condition; a second ranking here would be
+    a second opinion about evidence strength, computed from less than the engine holds.
+
+    A missing estimate does NOT suppress the table either. The cohorts are worth reading on
     their own, and the component is told which of the two things it is drawing: with a
     baseline row when there is an estimate, and with a sentence saying so when there is
     not. What it must never do is draw the baseline row with an empty figure in it.
     """
-    if not phenotype:
+    rows = [_matrix_row(row) for row in comparators or [] if isinstance(row, dict)]
+    if not rows and estimate is None:
+        # Nothing to compare and nothing to stand on: no table.
         return None
-    benchmarks = benchmarks_for_phenotype(phenotype)
-    if not benchmarks and phenotype != GENERAL_INPATIENT:
-        benchmarks = benchmarks_for_phenotype(GENERAL_INPATIENT)
-    if not benchmarks:
-        return None
-    # `matched_features` is dropped here rather than sent and ignored. The component's
-    # schema is `.strict()`, so a field it no longer renders is not a harmless extra —
-    # it fails the parse and the table does not draw at all.
-    rows = [
-        {key: value for key, value in row.items() if key != "matched_features"}
-        for row in benchmarks
-    ]
 
     # The rows carry no "matched risk factors" column any more (Phase 4C §1.2). The
     # driver bars directly above the table already show which factors move this
@@ -203,8 +215,18 @@ def _comparative_matrix(estimate: dict | None, phenotype: str | None) -> dict | 
         "rows": rows,
         "baseline_note": "",
     }
-    if estimate is None:
+    if not rows:
+        # The honest empty. The patient's own estimate is still worth drawing and still
+        # the answer to the question that was asked; what is absent is a published cohort
+        # for THIS condition, and saying so is the only alternative to borrowing a cohort
+        # for a different one.
         component["baseline_note"] = (
+            "No published 30-day readmission rate for this admission's primary condition "
+            "was stated in the abstracts retrieved for it, so this table shows the "
+            "patient's own estimate alone. No cohort has been substituted."
+        )
+    if estimate is None:
+        component["baseline_note"] = component["baseline_note"] or (
             "No readmission estimate was requested for this turn, so the table shows "
             "the published cohorts alone."
         )
@@ -231,8 +253,7 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
                         labs: dict | None = None,
                         medications: dict | None = None,
                         narrative: dict | None = None,
-                        phenotype: str = "",
-                        query: str = "",
+                        comparators: list[dict] | None = None,
                         command: str | None = None,
                         eligible: bool = True) -> dict:
     """Turn one predict (+ rag) payload into the A2UI risk-canvas envelope.
@@ -261,18 +282,16 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
     rows the narrative carries the absence alone, exactly as the missing SourceCard
     says nothing rather than explaining itself.
 
-    `phenotype` is the admission's resolved condition, and it is what selects the
-    comparative matrix's cohort rows (`admission_phenotypes`, Phase 4B). Empty means the
-    admission did not resolve, or resolved to a bucket with no comparison policy, and the
-    matrix then draws nothing at all: an unknown condition is the one thing a
-    condition-matched table must not guess at.
+    `comparators` is what the engine verified on this turn: published 30-day readmission
+    rates read out of abstracts retrieved for this admission's own condition, each one
+    checked against the sentence it came from. Empty means retrieval found no cohort it
+    could verify, and the matrix then draws the patient's own estimate alone and says so.
+    The canvas does not select rows, rank them or add one: an ordering invented here would
+    disagree with the engine's, and a cohort added here would be a claim nobody verified.
 
-    `query` is the clinician's own words on a turn that had them, and it is the second
-    half of the condition-lock: on a literature turn the comparison is drawn only when
-    the query is about the patient's own condition. Asking about heart failure while
-    looking at an orthopedic admission draws the records and nothing else — not heart
-    failure cohorts pinned under her estimate, and not orthopedic cohorts answering a
-    question about heart failure either.
+    `command` and `eligible` are the two gates on the matrix. It belongs to `/ehr` — the
+    briefing the estimate belongs to — and to an admission; a literature turn answers what
+    the literature says, and an outpatient record has no inpatient stay to compare.
     """
     components: list[dict] = [
         {"id": "root", "component": "Column", "children": []},
@@ -345,9 +364,10 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
     # here rather than at either placement so no surface can draw the table on a turn that
     # did not ask for it.
     comparison = (
-        _comparative_matrix(estimate, phenotype)
-        if _draws_matrix(command, literature_view is not None, phenotype, query,
-                         has_estimate=estimate is not None) else None
+        _comparative_matrix(estimate, comparators)
+        if _draws_matrix(command, has_estimate=estimate is not None,
+                         has_comparators=bool(comparators),
+                         eligible=eligible) else None
     )
 
     if literature_view is not None:

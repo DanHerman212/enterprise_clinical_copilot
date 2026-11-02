@@ -478,11 +478,12 @@ class TestPresentationContract:
         citations — so it dropped its scope pill AND raised a visible safety swap over an
         answer nothing had been removed from.
 
-        The admission is one whose CHART this turn read (Phase E, 2026-10-26): the
-        matrix is selected by the condition the note states, and a turn that read no chart
-        draws the records alone. The note sections below are the evidence that makes this
-        turn a comparison rather than a search — which is the rule, and the case where it
-        is absent has its own test.
+        The admission is one whose CHART this turn read (Phase E, 2026-10-26). Since Stage
+        Gate 2 the chart read no longer decides the table at all: the table is `/ehr`'s,
+        because a cohort table set under a literature answer is a different question being
+        answered beside the one that was asked. What this turn still has to get right is
+        its scope — general evidence, not chart synthesis — with no safety swap over an
+        answer nothing was removed from.
         """
         out = compose_presentation(
             "Compare this patient's readmission risk against peer-reviewed clinical "
@@ -505,19 +506,19 @@ class TestPresentationContract:
                 {"name": "predict_readmission", "args": {"hadm_id": 90000023},
                  "response": GOOD_PAYLOAD},
             ],
-            # A `/pubmed` turn, which is one of the two commands whose question the
-            # comparison table answers. Without the command the composer cannot know
-            # which surface it is composing for, and draws no table.
+            # A `/pubmed` turn. It used to be one of the two commands the comparison
+            # table answered for; Stage Gate 2 narrowed the table to `/ehr` alone, so the
+            # command is also what proves the narrowing here.
             command="literature",
         )
 
         assert out["scope"] == "general_evidence"
         assert out["scope_suppressed"] is False
-        # And the table is drawn, so the one claim about this patient has somewhere to
-        # sit beside the rate it is being compared with.
+        # And no table: a `/pubmed` answer states what the literature says and does not
+        # set this patient's estimate against a cohort.
         types = [c["component"] for c in
                  out["a2ui"]["messages"][1]["updateComponents"]["components"]]
-        assert "ComparativeRiskMatrix" in types
+        assert "ComparativeRiskMatrix" not in types
 
     def test_a_literature_turn_that_read_no_chart_draws_the_records_alone(self):
         """The condition-lock's own premise, applied to the case the map used to cover.

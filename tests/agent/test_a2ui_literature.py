@@ -61,16 +61,57 @@ def _note(envelope):
     return rendered["note"]
 
 
-# --- the comparative matrix (Phase 4B, 2026-10-16) ---------------------------
-
-# Selected by the admission's resolved phenotype, not by matching the PMIDs a search
-# returned. The fixtures that used to drive these tests with retrieved records are gone
-# on purpose: under the old rule the records decided whether the table drew, which is the
-# defect the change removed — no live search ever returned a curated PMID, so the matrix
-# never rendered online and its one verified appearance came from a fixture capture.
+# --- the comparative matrix --------------------------------------------------
 #
-# A phenotype name is therefore the input, and the absence of one is a case with its own
-# test: an unresolved admission must draw no comparison rather than a guessed one.
+# The rows are the comparators the ENGINE verified on the turn: retrieved for this
+# admission's own condition, each figure checked against the sentence it was read from
+# (`deterministic.verify_comparator`). Until Stage Gate 2 they were selected here, by a
+# per-admission phenotype map, from a curated corpus — which is why "no live search ever
+# returned a curated PMID" and the table never rendered online. The fixtures below are
+# therefore comparators in the shape verification emits, and the canvas's job is now the
+# narrow one: draw what it was given, or say what is missing.
+
+HEART_FAILURE_COMPARATOR = {
+    "pmid": "37495280",
+    "title": "Global Comparison of Readmission Rates.",
+    "authors": "Smith JA, Doe B.",
+    "journal": "Journal of the American College of Cardiology",
+    "pub_date": "2023 Aug 01",
+    "reported_rate": "13.2%",
+    "rate_kind": "point",
+    "cohort_summary": "Pooled international cohorts of hospitalised heart failure.",
+    "evidence_tier": "Meta-Analysis",
+    "rate_sentence": "Of the 1.5 million individuals at risk, 13.2% were readmitted "
+                     "within 30 days.",
+    "url": "https://pubmed.ncbi.nlm.nih.gov/37495280/",
+}
+
+ORTHO_COMPARATOR = {
+    "pmid": "34793857",
+    "title": "Pre-operative healthcare utilization and readmission after "
+             "total joint arthroplasty.",
+    "authors": "Creager AE, Kleven AD, et al.",
+    "journal": "The Journal of Arthroplasty",
+    "pub_date": "2022 Mar 12",
+    "reported_rate": "3.4%",
+    "rate_kind": "point",
+    "cohort_summary": "One institution, 2015-2019, primary total joint arthroplasty.",
+    "evidence_tier": "Retrospective Cohort",
+    "rate_sentence": "The 30-day readmission rate was 3.4%.",
+    "url": "https://pubmed.ncbi.nlm.nih.gov/34793857/",
+}
+
+REVIEW_COMPARATOR = {
+    **ORTHO_COMPARATOR,
+    "pmid": "31234567",
+    "title": "Readmission after joint replacement: a narrative review.",
+    "journal": "JBJS Reviews",
+    "pub_date": "2021 Jan 05",
+    "reported_rate": "5.1%",
+    "evidence_tier": "Narrative Review",
+    "rate_sentence": "Readmission within 30 days is reported at 5.1%.",
+    "url": "https://pubmed.ncbi.nlm.nih.gov/31234567/",
+}
 
 
 def _matrix(envelope):
@@ -78,65 +119,42 @@ def _matrix(envelope):
                 if c["component"] == "ComparativeRiskMatrix")
 
 
-def test_a_resolved_phenotype_draws_the_comparison_above_the_records():
+def test_a_verified_comparator_draws_the_comparison_above_the_records():
     """Order asserted, not merely presence.
 
     The records are no longer a child of this column (Phase F, 2026-10-26): they are
     citations in the prose and rows in the turn's references list, so what the canvas
-    draws on a literature turn is the comparison and nothing that duplicates it.
+    draws beneath the prose on a literature turn is the comparison and nothing that
+    duplicates it.
     """
     envelope = compose_risk_canvas(
         PREDICT, None, literature=_search(),
-        phenotype="heart_failure_cardiorenal",
-        query="congestive heart failure 30-day readmission risk",
-        command="literature")
+        comparators=[HEART_FAILURE_COMPARATOR], command="summarize")
 
     assert _types(envelope)[:2] == ["Column", "ComparativeRiskMatrix"]
     assert "LiteratureList" not in _types(envelope)
 
 
-def test_the_condition_lock_refuses_a_query_about_another_condition():
-    """The directive's clinical-integrity rule, as behaviour.
+def test_a_literature_turn_draws_no_cohort_table():
+    """The question a `/pubmed` turn asks is what the literature says.
 
-    A clinician reading about heart failure while looking at an orthopedic admission asked
-    about heart failure. Pinning that patient's estimate beside orthopedic cohorts answers a
-    question they did not ask; pinning it beside heart failure cohorts is worse. So neither
-    is drawn, and the records are — which is what the turn is actually about.
-
-    Before the lock, this exact turn drew the patient's own bucket: an orthopedic cohort
-    table under a question about heart failure.
+    Stage Gate 2 narrowed the table to `/ehr`. Before it, a comparative literature turn
+    drew the patient's own bucket above the records — an answer to a different question
+    printed beside the one that was asked.
     """
     envelope = compose_risk_canvas(
         PREDICT, None, literature=_search(),
-        phenotype="orthopedic_arthroplasty",
-        query="congestive heart failure 30-day readmission risk")
+        comparators=[HEART_FAILURE_COMPARATOR], command="literature")
 
     assert "ComparativeRiskMatrix" not in _types(envelope)
-    # The records are still the answer; they are drawn as citations now, so this canvas
-    # carries neither the table nor a second copy of them.
     assert "LiteratureList" not in _types(envelope)
-
-
-def test_a_query_naming_no_condition_draws_no_comparison():
-    """An unrecognised subject is not a licence to assume agreement.
-
-    The gate opens on a match, so a question the vocabulary cannot place draws the
-    records alone. The alternative — treating "no recognisable condition" as "same
-    condition" — would make every unclassifiable query an unguarded one.
-    """
-    envelope = compose_risk_canvas(
-        PREDICT, None, literature=_search(),
-        phenotype="orthopedic_arthroplasty",
-        query="what should we watch for after discharge?")
-
-    assert "ComparativeRiskMatrix" not in _types(envelope)
 
 
 def test_a_lab_turn_draws_no_cohort_table():
     """A drill-down asks what a measurement did, so the card is the whole answer.
 
-    The first composed lab turn drew the trajectories under an empty-baseline matrix — the
-    phenotype resolves from the admission, so a lab turn looked like a risk turn to the
+    The first composed lab turn drew the trajectories under an empty-baseline matrix: the
+    admission resolved to a phenotype, so a lab turn looked like a risk turn to the
     selector. A table of published readmission rates beside a haemoglobin course is an
     answer to a question nobody asked.
     """
@@ -152,7 +170,7 @@ def test_a_lab_turn_draws_no_cohort_table():
         }],
     }
     envelope = compose_risk_canvas(
-        None, None, labs=labs, phenotype="orthopedic_arthroplasty")
+        None, None, labs=labs, comparators=[ORTHO_COMPARATOR], command="summarize")
 
     assert "ComparativeRiskMatrix" not in _types(envelope)
     assert "LabTrendCard" in _types(envelope)
@@ -163,18 +181,33 @@ def test_the_table_draws_with_no_search_in_the_turn_at_all():
 
     This is the case that did not work before. The numerator used to require a retrieved
     record with a curated counterpart, so the unified briefing — narrative, risk widget,
-    cohorts, in one turn — could not draw the third part of itself.
+    cohorts, in one turn — could not draw the third part of itself. Now the cohorts arrive
+    with the estimate.
     """
-    envelope = compose_risk_canvas(PREDICT, None, phenotype="heart_failure_cardiorenal",
+    envelope = compose_risk_canvas(PREDICT, None,
+                                   comparators=[HEART_FAILURE_COMPARATOR],
                                    command="summarize")
 
     assert "ComparativeRiskMatrix" in _types(envelope)
     assert "LiteratureList" not in _types(envelope)
 
 
+def test_an_outpatient_turn_draws_no_cohort_table():
+    """A 30-day readmission cohort is defined over inpatient stays.
+
+    The gate is the encounter, passed in by the orchestrator, not a list of admission ids
+    compiled into this layer — which is what the eligibility rule used to be.
+    """
+    envelope = compose_risk_canvas(
+        PREDICT, None, comparators=[HEART_FAILURE_COMPARATOR],
+        command="summarize", eligible=False)
+
+    assert "ComparativeRiskMatrix" not in _types(envelope)
+
+
 def test_the_pinned_row_carries_the_patients_figures_and_its_provenance():
     matrix = _matrix(compose_risk_canvas(
-        PREDICT, None, phenotype="heart_failure_cardiorenal", command="summarize"))
+        PREDICT, None, comparators=[HEART_FAILURE_COMPARATOR], command="summarize"))
 
     baseline = matrix["baseline"]
     # Raw, so the component formats them with the same formatter the widget uses.
@@ -191,7 +224,6 @@ def test_the_pinned_row_carries_the_patients_figures_and_its_provenance():
     row = matrix["rows"][0]
     assert row["pmid"] == "37495280"
     assert row["reported_rate"] == "13.2%"
-    assert row["horizon_days"] == 30
     assert row["source"] == "Journal of the American College of Cardiology · 2023"
     # The excerpt IS the sentence the rate was read from, so the figure and its
     # provenance are the same text and neither can drift from the other.
@@ -199,14 +231,14 @@ def test_the_pinned_row_carries_the_patients_figures_and_its_provenance():
     assert "13.2%" in row["excerpt"]
 
 
-def test_the_orbopedic_bucket_now_has_a_row():
-    """Cynthia Petrov's bucket, which had none.
+def test_the_orthopedic_comparator_reaches_the_row_intact():
+    """Cynthia Petrov's bucket, which had no cohort at all when the corpus selected it.
 
-    The directive's headline case: an orthopedic patient's estimate had no cohort to sit
+    The directive's headline case: an orthopedic patient's estimate had nothing to sit
     beside, which is why the matrix either drew nothing or drew heart failure literature.
     """
     matrix = _matrix(compose_risk_canvas(
-        PREDICT, None, phenotype="orthopedic_arthroplasty", command="summarize"))
+        PREDICT, None, comparators=[ORTHO_COMPARATOR], command="summarize"))
 
     row = matrix["rows"][0]
     assert row["pmid"] == "34793857"
@@ -219,7 +251,7 @@ def test_the_orbopedic_bucket_now_has_a_row():
 
 
 def test_no_row_carries_a_second_copy_of_the_drivers():
-    """The three-column contract, asserted across a phenotype with several rows.
+    """The three-column contract, asserted across a turn with several rows.
 
     Phase 4C §1.2 removed the `Shared risk factors` column entirely, including from the
     pinned baseline row — the matrix is `Source | Rate | Cohort` and nothing else. The
@@ -228,49 +260,60 @@ def test_no_row_carries_a_second_copy_of_the_drivers():
     them is the same evidence twice, and two renderings of one source read as two
     sources.
     """
-    matrix = _matrix(compose_risk_canvas(PREDICT, None, phenotype="copd_respiratory",
-                                         command="summarize"))
+    matrix = _matrix(compose_risk_canvas(
+        PREDICT, None, comparators=[ORTHO_COMPARATOR, REVIEW_COMPARATOR],
+        command="summarize"))
 
-    assert matrix["rows"], "the COPD phenotype should still draw rows"
+    assert len(matrix["rows"]) == 2
     for row in matrix["rows"]:
         assert "matched_features" not in row
     assert "drivers" not in matrix["baseline"]
 
 
-def test_rows_are_ordered_strongest_evidence_first():
-    """COPD has three rows; the pooled estimate leads and the narrative review trails.
+def test_the_canvas_preserves_the_engines_row_order():
+    """Order is the engine's, and this layer must not hold a second opinion.
 
-    Order is asserted because the table is a comparison: a single-centre series above a
-    meta-analysis reads as the stronger evidence, and the reader has no way to tell that
-    the order was incidental.
+    `deterministic.rank_by_specificity` orders the pool before the extraction turn reads
+    it, from the anchors it resolved for this admission. A re-sort here would be a second
+    ranking computed from less than the engine holds, and the two would disagree on the
+    first pool where they were given different evidence.
     """
-    matrix = _matrix(compose_risk_canvas(PREDICT, None, phenotype="copd_respiratory",
-                                         command="summarize"))
+    matrix = _matrix(compose_risk_canvas(
+        PREDICT, None, comparators=[REVIEW_COMPARATOR, ORTHO_COMPARATOR],
+        command="summarize"))
 
     assert [row["evidence_tier"] for row in matrix["rows"]] == [
-        "Meta-Analysis", "Narrative Review"]
+        "Narrative Review", "Retrospective Cohort"]
 
 
-def test_a_phenotype_with_no_curated_cohort_draws_no_comparison():
-    """A turn with no command carries no table, whatever its phenotype.
+def test_a_turn_that_verified_no_cohort_draws_the_estimate_alone():
+    """The honest empty: the table still draws, and it says what is missing.
 
-    The command gate is what this pins: only `/ehr` and a `/pubmed` turn about this
-    patient's own condition ask the question the table answers. (Psychiatric admissions
-    are compared — against the hospital-wide cohort — but only from those two commands,
-    which is Phase E's change and is covered by `test_phenotype_coverage`.)
+    This is now a real outcome rather than a fallback for an uncurated condition —
+    retrieval can retrieve and verify nothing. Drawing no table at all would be
+    indistinguishable on screen from "this patient cannot be compared".
+    """
+    matrix = _matrix(compose_risk_canvas(PREDICT, None, comparators=[],
+                                         command="summarize"))
+
+    assert matrix["rows"] == []
+    assert "baseline" in matrix
+    assert "No cohort has been substituted" in matrix["baseline_note"]
+
+
+def test_a_turn_with_no_command_draws_no_comparison():
+    """The command gate: only `/ehr` asks the question the table answers.
+
+    A free-text follow-up carries comparators like any other turn's state does; what it
+    does not carry is the question. Drawing them under an answer to something else is the
+    fourth part of a briefing arriving unasked.
     """
     envelope = compose_risk_canvas(
-        PREDICT, None, literature=_search(), phenotype="psychiatric")
+        PREDICT, None, literature=_search(),
+        comparators=[HEART_FAILURE_COMPARATOR])
 
     assert "ComparativeRiskMatrix" not in _types(envelope)
     assert "LiteratureList" not in _types(envelope)
-
-
-def test_an_unresolved_admission_draws_no_comparison():
-    """No phenotype is not a licence to guess one."""
-    envelope = compose_risk_canvas(PREDICT, None, literature=_search())
-
-    assert "ComparativeRiskMatrix" not in _types(envelope)
 
 
 def test_the_table_draws_without_an_estimate_and_says_which_it_is():
@@ -280,7 +323,7 @@ def test_the_table_draws_without_an_estimate_and_says_which_it_is():
     absent and a sentence stands where it would have been.
     """
     matrix = _matrix(compose_risk_canvas(
-        None, None, phenotype="heart_failure_cardiorenal", command="summarize"))
+        None, None, comparators=[HEART_FAILURE_COMPARATOR], command="summarize"))
 
     assert "baseline" not in matrix
     assert matrix["baseline_note"].strip()

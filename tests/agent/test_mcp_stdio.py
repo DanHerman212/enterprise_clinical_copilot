@@ -139,6 +139,31 @@ def session_results() -> dict:
         pytest.skip(f"MCP stdio session failed: {_innermost(exc)}")
 
 
+def test_the_production_spawner_starts_the_child_at_the_repository_root():
+    """`stdio_toolbox` must agree with this file about where the child runs.
+
+    This file builds its own `StdioServerParameters` — it has to, because it wants a
+    session it can drive — and that copy hard-codes the repo root. So it kept passing
+    while the production spawner did not: `mcp_client.REPO_ROOT` was `parents[2]` of a
+    module one level deeper than the path it was written for, which is the `services`
+    directory. There, `python -m services.mcp.server` cannot resolve its own package
+    ("No module named 'services'"), and with PYTHONPATH papering over that, `services/
+    mcp/server.py` shadows the installed `mcp` SDK and imports itself.
+
+    Nothing failed in production because nothing there starts a stdio child: the demo
+    runs over `http`. It failed the first time a local harness tried (Stage Gate 2,
+    2026-11-02). Three levels up from `services/agent/engine/` is the root.
+    """
+    from services.agent.engine import mcp_client
+
+    assert mcp_client.REPO_ROOT == HARNESS_ROOT
+    assert (mcp_client.REPO_ROOT / "services" / "mcp" / "server.py").is_file()
+    # The two shapes that cannot work, named so the regression is legible when it reads
+    # as a one-level-off path rather than an exception from a subprocess.
+    assert mcp_client.REPO_ROOT != HARNESS_ROOT / "services"
+    assert mcp_client.REPO_ROOT != HARNESS_ROOT / "services" / "agent"
+
+
 def test_tool_is_advertised(session_results):
     tool = session_results["tools"].get("predict_readmission")
     assert tool is not None, "predict_readmission missing from tools/list"

@@ -56,8 +56,11 @@ SERVED = frozenset(served_admissions.SERVED_HADM_IDS)
 OUTPATIENT = frozenset(OUTPATIENT_HADM_IDS)
 INPATIENT = SERVED - OUTPATIENT
 #: In the authorization boundary with neither a note nor a feature row. Two of them,
-#: and nothing can be served for either.
-UNSERVED = frozenset(admission_phenotypes.UNRESOLVED)
+#: and nothing can be served for either. Declared here, in the test that reads the
+#: boundary, since Stage Gate 2: it was a frozenset in `presentation/domain.py`, and a
+#: hand-maintained map of `hadm_id`s deciding a clinical question is what that gate
+#: removed. The corpus fact belongs to the corpus's test.
+UNSERVED = frozenset({90000039, 90000107})
 #: An id that is not a record at all — the shape a malformed caller sends.
 SYNTHETIC_UNKNOWN = 99999999
 
@@ -162,8 +165,9 @@ def test_the_unserved_orphans_are_outside_the_boundary():
 
 
 def test_the_outpatient_set_is_declared_in_both_places():
-    """The curation decision and the phenotype map must name the same records."""
-    assert OUTPATIENT == frozenset(admission_phenotypes.NON_ADMISSION)
+    """The curation decision and the record's own encounter type must agree."""
+    for hadm_id in sorted(OUTPATIENT):
+        assert admission_phenotypes.is_matrix_eligible(is_outpatient=True) is False
 
 
 # --- inpatient manifests -----------------------------------------------------
@@ -240,14 +244,13 @@ def test_an_outpatient_record_is_not_comparable_against_a_cohort():
     """
     for hadm_id in sorted(OUTPATIENT):
         encounter.set_current(encounter.OUTPATIENT)
-        assert admission_phenotypes.is_matrix_eligible(
-            hadm_id, is_outpatient=True) is False, hadm_id
+        assert admission_phenotypes.is_matrix_eligible(is_outpatient=True) is False, hadm_id
     # The control: an inpatient admission is eligible.
     encounter.set_current(encounter.INPATIENT)
-    assert admission_phenotypes.is_matrix_eligible(90000023) is True
+    assert admission_phenotypes.is_matrix_eligible(is_outpatient=False) is True
     # And an unknown record keeps the behaviour it had before the column existed.
     encounter.set_current(None)
-    assert admission_phenotypes.is_matrix_eligible(90000023) is True
+    assert admission_phenotypes.is_matrix_eligible(is_outpatient=None) is True
 
 
 def test_an_outpatient_record_is_never_scored():

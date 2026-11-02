@@ -90,3 +90,23 @@ def require_served():
         return response
 
     return _require
+
+
+@pytest.fixture(autouse=True)
+def _no_live_extraction(monkeypatch):
+    """No `/ehr` test may reach a model, whatever it does with the command.
+
+    The comparator step reads the chart and calls a model to name the admission's
+    condition. That is correct in production and wrong in a unit test: the suite would
+    depend on Vertex being reachable, on a quota, and on the answer being stable, and the
+    first symptom was a `404 NOT_FOUND` for `test-model` raised from inside a test that
+    only wanted to check citation order.
+
+    `None` is the seam's own vocabulary for "this environment provides no extraction", so
+    the step is skipped rather than mocked. A test that wants to exercise the step injects
+    a stub through `run_command(..., extraction_llm=...)`, which is a parameter, not a
+    monkeypatch — the wiring is then tested exactly as it runs.
+    """
+    from services.agent.engine import deterministic
+
+    monkeypatch.setattr(deterministic, "extraction_llm_factory", lambda model: None)

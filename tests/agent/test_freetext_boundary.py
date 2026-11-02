@@ -560,13 +560,21 @@ def test_the_tool_boundary_leaves_declared_arguments_and_local_tools_alone():
 def test_the_literature_tool_cannot_be_given_a_patient_identifier_at_all():
     """The structural half: the tool's own signature has no parameter that could
     carry an identifier, so the check above is a second line rather than the only
-    one. Adding one would need to get past this test first."""
+    one. Adding one would need to get past this test first.
+
+    Stage Gate 2 added `scope` and `synonyms`, both query-shaped: a scope names which
+    retrieval to run and a synonym list carries more terms for the same search. Neither
+    can name a patient, which is what this test is for, so the assertion is now that the
+    parameters remain a subset of the search vocabulary rather than an exact two.
+    """
     import inspect
 
     from services.mcp.tools import search_literature
 
-    assert set(inspect.signature(search_literature).parameters) == {
-        "query", "max_results"}
+    parameters = set(inspect.signature(search_literature).parameters)
+
+    assert parameters == {"query", "max_results", "scope", "synonyms"}
+    assert not parameters & {"hadm_id", "subject_id", "patient_id", "mrn"}
 
 
 def test_the_graph_is_built_with_the_identifier_guard():

@@ -47,6 +47,47 @@ MODEL_TIMEOUT_SECONDS = timeout_chain().model
 
 def build_llm(model: str) -> ChatGoogleGenerativeAI:
     """The chat model, bound to the Vertex backend with our generation config."""
+    return _client(model, GEMINI_SAFETY_THRESHOLDS)
+
+
+#: Every configurable content filter off, for the extraction turns only.
+#:
+#: The served path keeps `GEMINI_SAFETY_THRESHOLDS` and should: that is a product control
+#: on what the assistant says to a clinician. Extraction is not that job. It reads a
+#: discharge note and returns a condition and a few phrases; its reply is never shown to
+#: anyone, and its input is the note itself — which routinely describes overdoses, toxic
+#: exposures, withdrawal, trauma and psychiatric illness, because a real hospital record
+#: does. A consumer filter applied there does not withhold dangerous output, it withholds
+#: an internal classification step and reads afterwards as "this chart names no condition".
+#:
+#: Measured 2026-11-02: `90000090`, a femoral-neck-fracture admission, returned
+#: `finish_reason=SAFETY` with `HARM_CATEGORY_DANGEROUS_CONTENT` on three consecutive
+#: calls. `services/mcp/config.py` already names dangerous content as the first category
+#: due a review, "because a discharge note describes dangerous things".
+#:
+#: Two categories are not configurable and still apply, so this is not an off switch for
+#: everything.
+CLINICAL_SAFETY_SETTINGS = {
+    "HARM_CATEGORY_HATE_SPEECH": "BLOCK_NONE",
+    "HARM_CATEGORY_HARASSMENT": "BLOCK_NONE",
+    "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_NONE",
+    "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_NONE",
+}
+
+
+def build_extraction_llm(model: str) -> ChatGoogleGenerativeAI:
+    """The chat model for structured extraction over clinical text.
+
+    Same client, same generation config, different content-filter thresholds — the only
+    difference that matters, and the reason it is a separate constructor rather than a
+    parameter: a caller that must remember to pass the right thresholds is a caller that
+    will eventually pass the wrong ones.
+    """
+    return _client(model, CLINICAL_SAFETY_SETTINGS)
+
+
+def _client(model: str, safety_settings: dict) -> ChatGoogleGenerativeAI:
+    """One construction, so the two thresholds cannot diverge in anything else."""
     return ChatGoogleGenerativeAI(
         model=model,
         project=PROJECT,
@@ -73,8 +114,10 @@ def build_llm(model: str) -> ChatGoogleGenerativeAI:
         # The content filters are set explicitly, per category, rather than left to
         # the model's default — which differs between models, and is `OFF` on the
         # ones this pin is due to move to. What is set here is what applies; there
-        # is no other place content filtering is configured.
-        safety_settings=dict(GEMINI_SAFETY_THRESHOLDS),
+        # is no other place content filtering is configured. Which thresholds arrive
+        # is the caller's: `build_llm` passes the product control, and
+        # `build_extraction_llm` passes the clinical one.
+        safety_settings=dict(safety_settings),
     )
 
 

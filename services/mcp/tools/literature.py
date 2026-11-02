@@ -45,6 +45,7 @@ the moment it answered correctly. Never fabricate a citation either.
 
 import asyncio
 import logging
+import re
 import xml.etree.ElementTree as ElementTree
 from typing import Annotated, Any
 
@@ -327,11 +328,18 @@ async def _get(
     raise AssertionError("unreachable: the loop returns on its final attempt")
 
 
-async def _fetch(query: str, limit: int) -> LiteratureResult:
+async def _search(query: str, *, retmax: int, reldate_days: int) -> LiteratureResult:
     """esearch for PMIDs, then efetch for the records.
 
     Every failure here degrades. Nothing that an outside service does should turn
     into a request failure for a question about a patient.
+
+    `retmax` and `reldate_days` are arguments rather than module constants because the
+    two callers want opposite things from them: `/pubmed` asks for three recent records
+    and a benchmark sweep asks for a dozen across fifteen years (see
+    `search_readmission_benchmarks`). Everything between the two calls — the identity
+    parameters, the sort, the degrade contract — is shared, so the two cannot drift into
+    behaving differently on the same failure.
     """
     common = {**_request_params(), "db": "pubmed"}
     term = f"({query}) AND ({PUBLICATION_TYPE_FILTER})" if PUBLICATION_TYPE_FILTER else query
@@ -347,12 +355,12 @@ async def _fetch(query: str, limit: int) -> LiteratureResult:
                     **common,
                     "term": term,
                     "retmode": "json",
-                    "retmax": str(limit),
+                    "retmax": str(retmax),
                     "sort": SORT_ORDER,
                     # Publication date, not entry date: a 1998 paper indexed last
                     # week is not recent literature.
                     "datetype": "pdat",
-                    "reldate": str(RECENCY_DAYS),
+                    "reldate": str(reldate_days),
                 },
             )
             found.raise_for_status()
@@ -388,6 +396,171 @@ async def _fetch(query: str, limit: int) -> LiteratureResult:
     return {"query": query, "returned": len(articles), "articles": articles}
 
 
+async def _fetch(query: str, limit: int) -> LiteratureResult:
+    """The `/pubmed` search: recent records, relevance-sorted, no filtering.
+
+    Behaviour unchanged by the benchmark path below. A `/pubmed` question wants the
+    best three records for a clinical question whatever they report; a comparator
+    sweep wants the few records that state a rate, which is a different question
+    asked of the same two endpoints.
+    """
+    return await _search(query, retmax=limit, reldate_days=RECENCY_DAYS)
+
+
+# --- readmission benchmark retrieval ----------------------------------------
+#
+# `/pubmed` asks "what does the literature say". This asks a narrower question: "which
+# published cohorts state a 30-day readmission rate this patient's estimate can be set
+# against". Same two E-utilities calls, three different choices — the outcome is pinned
+# in the query, the window is wide enough to reach a landmark cohort, and the candidate
+# pool is filtered on the abstract before any model reads it, because a record that
+# states no rate cannot become a comparator however well it matches the condition.
+#
+# There is no curated table behind this and none may be added: every row a caller acts
+# on comes from the records returned here, in this request.
+
+#: The outcome half of a benchmark query. Field terms rather than prose, because the
+#: abstract's own wording is what has to match; `[Title/Abstract]` keeps a MeSH-only hit
+#: from qualifying a record whose abstract never mentions readmission at all.
+READMISSION_OUTCOME_CLAUSE = (
+    '("30-day readmission"[Title/Abstract] OR "readmission rate"[Title/Abstract] '
+    'OR "unplanned readmission"[Title/Abstract] OR "hospital readmission"[Title/Abstract])'
+)
+
+#: Fifteen years rather than `/pubmed`'s five. A landmark readmission cohort is not
+#: recent, and the comparison is of rates rather than of current practice: the recency
+#: window that makes a treatment question answerable would exclude most rows worth
+#: comparing against.
+READMISSION_RECENCY_YEARS = 15
+
+#: The broader outcome half, used on a second pass. The four phrases above are exact
+#: strings, so a record that says "readmission within 30 days" or "30-day
+#: rehospitalisation" matches none of them — measured on 90000090, where six femoral-neck
+#: records came back and every one of them reported a 90-day rate because the 30-day
+#: cohort never entered the result set. This clause asks for the horizon and the outcome
+#: separately, so PubMed finds the record whichever phrase it used.
+READMISSION_WIDE_CLAUSE = (
+    "(readmission[Title/Abstract] OR readmitted[Title/Abstract] "
+    "OR rehospitalization[Title/Abstract] OR rehospitalisation[Title/Abstract]) AND "
+    '("30-day"[Title/Abstract] OR "30 days"[Title/Abstract] '
+    'OR "thirty-day"[Title/Abstract] OR "thirty days"[Title/Abstract])'
+)
+
+#: Twenty-five rather than twelve. Sorting by relevance puts landmark 90-day series above
+#: the 30-day cohorts for a common operation, so a small pool filters to nothing even when
+#: a qualifying record exists further down the ranking.
+READMISSION_CANDIDATE_POOL = 25
+
+#: A readmission mention and a percentage, matched case-insensitively on the abstract.
+_READMISSION_TERM = re.compile(r"readmi(?:ssion|tted)|rehospitali[sz]ation", re.IGNORECASE)
+_PERCENT = re.compile(r"\d+(?:\.\d+)?\s*%")
+
+
+def _clinical_clause(terms: str | list[str] | tuple[str, ...]) -> str:
+    """The clinical half of a broadened query, as an OR of quoted phrases.
+
+    Quoted, because "femoral neck fracture" as free terms also matches a paper about
+    femoral shaft fractures; OR'd, because the synonyms are one clinical concept and any
+    one of them naming a record is the same statement about the patient.
+
+    Only the broadened pass uses this. The first pass asks one plain question and lets
+    PubMed's relevance ranking answer it: measured on 2026-11-02, an OR of six synonyms
+    put empyema and lobectomy abstracts above a pleural-effusion cohort, because a broad
+    OR gives the ranking more ways to be loudly wrong.
+    """
+    phrases = [terms] if isinstance(terms, str) else list(terms or [])
+    quoted = [
+        f'"{" ".join(str(phrase).split())}"'
+        for phrase in phrases if str(phrase or "").strip()
+    ]
+    return f"({' OR '.join(quoted)})" if quoted else ""
+
+
+def readmission_query(
+    terms: str | list[str] | tuple[str, ...], *, wide: bool = False,
+) -> str:
+    """The E-utilities term for one benchmark search: the core target, or the wide pass.
+
+    `terms` is the patient's PRIMARY CONDITION on the first pass and the anchor synonyms
+    on the second. The clinical half is always the caller's — derived from the chart,
+    never from a table in this module — and the outcome half is pinned here so that every
+    benchmark search asks PubMed the same question about a different condition.
+
+    The first pass takes one phrase unquoted, which is how PubMed's own relevance ranking
+    gets to work on the condition alone. The broadened pass ORs the quoted synonyms and
+    swaps in the horizon-and-outcome clause, which is the whole point of a second attempt.
+    """
+    if wide:
+        clinical = _clinical_clause(terms)
+        return f"{clinical} AND {READMISSION_WIDE_CLAUSE}" if clinical else READMISSION_WIDE_CLAUSE
+    core = terms[0] if isinstance(terms, (list, tuple)) and terms else terms
+    core = " ".join(str(core or "").split())
+    return f"({core}) AND {READMISSION_OUTCOME_CLAUSE}" if core else READMISSION_OUTCOME_CLAUSE
+
+
+def quantitative_readmission_articles(articles: list[dict]) -> list[dict]:
+    """The records whose abstract states both a readmission and a percentage.
+
+    A number is the only thing a comparator needs from a record, and most records for a
+    condition do not state one: they report an odds ratio, a five-year figure, or a
+    qualitative finding. Filtering here rather than asking a model to look is what keeps
+    the model's context to records that can produce a row at all — and what makes the
+    empty result an honest answer rather than a model's opinion about relevance.
+    """
+    kept: list[dict] = []
+    for article in articles or []:
+        if not isinstance(article, dict):
+            continue
+        abstract = str(article.get("abstract") or "")
+        if not abstract or not _READMISSION_TERM.search(abstract):
+            continue
+        if not _PERCENT.search(abstract):
+            continue
+        kept.append(article)
+    return kept
+
+
+async def search_readmission_benchmarks(
+    terms: str | list[str] | tuple[str, ...],
+    *,
+    wide: bool = False,
+    max_results: int = READMISSION_CANDIDATE_POOL,
+) -> LiteratureResult:
+    """Live PubMed records that could serve as readmission comparators, or none.
+
+    `terms` is the primary condition on the first pass and the anchor synonyms on the
+    broadened one. `wide` selects the second-pass outcome clause.
+
+    This function runs ONE query and returns the whole filtered pool — `max_results`
+    defaults to the pool rather than to what a model should read. Ranking the candidates
+    against the patient's own condition, and truncating to what the extraction turn can
+    read, is the caller's job: it is the only layer that knows which phrase is the
+    patient's condition, and on 2026-11-02 truncating on PubMed's order dropped a
+    qualifying cohort from a pool that contained it.
+
+    Empty is a real answer and is reported as one (`{"articles": [], ...}`), never as an
+    error. A degraded search propagates unchanged, because "the search did not happen" and
+    "the search found nothing" are different statements and the caller has to be able to
+    tell them apart.
+    """
+    term = readmission_query(terms, wide=wide)
+    result = await _search(
+        term, retmax=READMISSION_CANDIDATE_POOL,
+        reldate_days=READMISSION_RECENCY_YEARS * 366,
+    )
+    if result.get("degraded") or result.get("error"):
+        return result
+
+    articles = quantitative_readmission_articles(result.get("articles") or [])
+    articles = articles[:max_results]
+    if not articles:
+        return _empty(
+            term, "PubMed returned no record stating a 30-day readmission rate.",
+        )
+    _LOG.info("literature: %d benchmark record(s) for %r", len(articles), term[:80])
+    return {"query": term, "returned": len(articles), "articles": articles}
+
+
 async def search_literature(
     query: Annotated[
         str,
@@ -409,6 +582,27 @@ async def search_literature(
             description="how many articles to return (1-10, default 3)",
         ),
     ] = DEFAULT_MAX_RESULTS,
+    scope: Annotated[
+        str,
+        Field(
+            description=(
+                "'general' searches recent literature for the query; "
+                "'readmission' runs the 30-day readmission benchmark retrieval for a "
+                "patient's primary condition, which is a wider window and returns the "
+                "whole filtered candidate pool."
+            ),
+        ),
+    ] = "general",
+    synonyms: Annotated[
+        list[str] | None,
+        Field(
+            description=(
+                "readmission scope only: clinical synonyms for the same condition. "
+                "Supplying them runs the broadened second pass (horizon-and-outcome "
+                "clause, OR of quoted phrases) instead of the first."
+            ),
+        ),
+    ] = None,
 ) -> LiteratureResult | ToolError:
     """Search PubMed for recent literature on a clinical question.
 
@@ -436,6 +630,25 @@ async def search_literature(
         return _error(
             "bad_request",
             "A literature search needs search terms, not blank space.",
+        )
+
+    if str(scope or "general").strip().lower() == "readmission":
+        # The benchmark retrieval, reached through the tool that is already registered.
+        # One tool rather than two because the trace contract is written against
+        # `tool.search_literature`: a second name would mean a second branch in
+        # `record_turn_tools`, in the Langfuse dashboards and in every reader of a trace.
+        #
+        # The pool is returned whole rather than capped at `max_results`: the caller ranks
+        # it against the patient's own condition and decides what the extraction turn
+        # reads, and a cap here would truncate on PubMed's order before that ranking.
+        terms: str | list[str] = cleaned
+        if synonyms:
+            terms = [cleaned, *(str(synonym).strip() for synonym in synonyms
+                                if str(synonym or "").strip())]
+        return await search_readmission_benchmarks(
+            terms,
+            wide=bool(synonyms),
+            max_results=READMISSION_CANDIDATE_POOL,
         )
 
     if not NCBI_EMAIL:

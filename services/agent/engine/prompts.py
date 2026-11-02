@@ -15,6 +15,8 @@ requested. A rule left here that names a tool the loop cannot call is worse than
 no rule: it describes a call that cannot happen.
 """
 
+from typing import Any
+
 SYSTEM_PROMPT = """\
 You are a clinical decision-support assistant. You answer questions about a
 patient's discharge notes from passages retrieved out of those notes. You do not
@@ -931,3 +933,226 @@ _FORMATTING_BY_WIRE = {
 def formatting_for(wire: str | None) -> str:
     """The instruction the formatting turn receives for this command."""
     return _FORMATTING_BY_WIRE.get(str(wire or ""), "")
+
+
+# --- live literature comparators --------------------------------------------
+#
+# Two instructions for the `/ehr` benchmark step, and they are two calls on purpose: one
+# reads the chart and names the condition this admission actually was, the other reads the
+# returned abstracts and proposes comparator rows. Splitting them keeps the second call's
+# context to abstracts that already matched the first call's condition, so a record for
+# another disease never reaches the extraction prompt at all.
+#
+# Neither instruction may name a condition, a study, a rate or a PMID: `zero hardcoded
+# clinical data` is the rule the static benchmark table broke, and a list here would be
+# that same table one layer up.
+#
+# Both replies are JSON because both are read by code — the condition becomes an
+# E-utilities query, the rows are verified against the abstract they were read from. A
+# sentence in either place would be prose this pipeline cannot check.
+
+#: Why the sections arrive whole rather than pre-filtered: the condition has to be chosen
+#: against the whole record, because the list a discharge summary opens with is frequently
+#: a symptom inventory rather than one diagnosis.
+LITERATURE_TARGET_PROMPT = """\
+You are reading one hospital admission's discharge summary in order to name the condition
+that admission was for, so a literature search can be run for published readmission
+cohorts of that condition.
+
+Return ONE JSON object and nothing else:
+
+{"condition": "<the primary reason for this admission, in the words a journal title would
+use>",
+ "procedure": "<the index operation performed during this admission, or empty>",
+ "anchor_terms": ["<3 to 8 short phrases the literature would use for this condition or
+procedure>"]}
+
+WHICH CONDITION
+
+- The admission's PRIMARY condition, not its comorbidities. A patient with diabetes and
+  hypertension admitted for a hip fracture has one condition here, and it is not either
+  of the chronic diagnoses.
+- A LIST IS STILL A CONDITION SET, and it is NEVER a reason to return empty. A comma list
+  ("Pleural effusion, atrial fibrillation, anemia, ascites") and a numbered list are two
+  ways of writing the same thing: several conditions, one admission. Choose the leading
+  acute structural or medical condition — the one the hospital course is treating, and
+  especially the one a procedure was performed for. A list whose first entry is treated by
+  thoracentesis is a pleural effusion admission.
+- The DISEASE, not the symptom that led to it. When the diagnosis section gives both, take
+  the structural or pathological diagnosis: "neck pain with right upper extremity
+  radiculopathy" beside "cervical spondylosis with herniated nucleus pulposus and
+  stenosis" is a cervical spondylosis admission, and "chest pain" beside a completed
+  cardiac workup is not a condition at all. A symptom is how the patient arrived; the
+  disease is what the admission was.
+- When the discharge diagnosis is empty, read the hospital course the same way: the first
+  problem it treats is the condition, and a course that names its own diagnosis has named
+  one.
+- A diagnosis written in capitals with a code beside it is still a diagnosis; read past
+  the code.
+- Nothing that is denied, absent or a risk factor.
+- Return an empty `condition` ONLY when the record names no condition anywhere — no
+  diagnosis, no problem the course treats, nothing a procedure was performed for. A record
+  that lists several conditions has not failed that test. Never guess a condition from the
+  patient's age, sex or medications.
+
+WHICH ANCHORS
+
+- `anchor_terms` are how a retrieved abstract will be recognised as being about this
+  condition. They are the LITERATURE's words, not the chart's: the chart says "uterine
+  leiomyoma" and the papers say "fibroids"; the chart says "cervical spondylosis" and the
+  papers say "cervical spondylotic myelopathy".
+- Give 3 to 8, mixing the condition's name, its standard synonyms, and the index
+  procedure's own noun ("hysterectomy", "hemiarthroplasty", "cervical fusion").
+- A single word is allowed when it is a specific disease or operation noun: "fibroids",
+  "myelopathy", "cirrhosis", "thoracentesis", "hysterectomy".
+- A single word is NEVER enough when it names a region, a symptom, a setting or a generic
+  operation class: "hip", "knee", "spine", "pain", "joint", "surgery", "arthroplasty",
+  "replacement", "fusion", "decompression". A paper about a different operation on the
+  same region contains every one of them, which is exactly the substitution that must not
+  happen.
+- Two words or more is always safe."""
+
+
+#: The same question, asked plainly, for the case where the instruction above is withheld.
+#:
+#: The provider's content filter is a black box that acts on the pair (prompt, record), and
+#: on 2026-11-02 the elaborated prompt was withheld reproducibly for one admission while
+#: this plain form had been in service for two gates without being. The rules are unchanged
+#: — primary condition, disease over symptom, a list is not a reason to abstain — the
+#: framing is simply shorter, because the length of the instruction is not what makes it
+#: correct and appears to be what made it unattractive to the filter.
+LITERATURE_TARGET_FALLBACK_PROMPT = """\
+Name the condition this hospital admission was for, so a literature search can be run for
+its readmission cohorts.
+
+Return one JSON object and nothing else:
+
+{"condition": "<the admission's primary condition, in a journal's words>",
+ "procedure": "<the index operation, or empty>",
+ "anchor_terms": ["<3 to 6 phrases the literature uses for this condition or procedure>"]}
+
+Rules: the primary condition rather than a comorbidity; the disease rather than the symptom
+that led to it; when the diagnosis is a list, the acute condition the hospital course
+treats; never an empty condition when the record names one; anchor phrases specific enough
+to identify the condition (two words or more, or one specific disease or operation noun), and
+in the literature's vocabulary rather than the chart's."""
+
+
+def literature_target_input(sections: dict | None, *, limit: int = 4000) -> str:
+    """The chart, as the target prompt reads it.
+
+    Capped per section: these are discharge summaries, and the condition is named in the
+    first few hundred words of the two sections that carry it. A cap keeps a long note
+    from spending the call's whole context on a hospital course the answer does not need.
+    """
+    lines = ["The discharge summary for this admission follows.", ""]
+    for name, text in (sections or {}).items():
+        body = " ".join(str(text or "").split())[:limit]
+        if not body:
+            continue
+        lines.append(f"<{name}>\n{body}\n</{name}>")
+    return "\n".join(lines)
+
+
+#: The rule the whole benchmark step exists to enforce, stated where the model reads it:
+#: a cohort that is not this patient's cohort is worse than no cohort at all.
+LITERATURE_COMPARATOR_PROMPT = """\
+You are given one patient's admission condition and a set of peer-reviewed abstracts
+retrieved for it from PubMed. Your job is to decide which of these abstracts report a
+30-DAY READMISSION RATE for a cohort that is clinically the same population as this
+patient, and to state that rate exactly as the abstract states it.
+
+Return ONE JSON object and nothing else:
+
+{"comparators": [
+   {"pmid": "<the record's pmid>",
+    "clinical_match": true,
+    "rationale": "<one sentence: why this cohort IS this patient's population>",
+    "horizon_days": 30,
+    "reported_rate": "<the percentage, e.g. 8.4%>",
+    "rate_sentence": "<the sentence from the abstract that states it, copied exactly>",
+    "cohort_summary": "<population, sample size as n=..., and setting>",
+    "evidence_tier": "<the study design the abstract states>"}
+ ],
+ "rejected": [
+   {"pmid": "<pmid>", "reason": "<why this cohort is not this patient's population, or
+    why it states no 30-day readmission rate>"}
+ ]}
+
+Rules, and each one has been broken before:
+
+- A cohort of a DIFFERENT condition is not a match, and no substitution is ever allowed.
+  A knee arthroplasty cohort is not a hip fracture cohort. A lumbar spine cohort is not a
+  cervical spine cohort. A COPD cohort is not a patient without COPD. When the abstract is
+  silent about this patient's condition, it is not a match.
+- `rate_sentence` MUST be copied character for character from the abstract you were
+  given. It is checked by exact comparison, and a row whose sentence does not appear in
+  the abstract is discarded — so a paraphrase scores nothing and a fabricated one cannot
+  reach a reader.
+- `reported_rate` must be the figure that sentence states, with the same qualifier the
+  abstract uses. If the abstract says "close to 20%", the rate is not "20%".
+- `horizon_days` is 30 only when the abstract reports a thirty-day rate. A five-year
+  readmission rate, a 90-day rate, or a 30-day MORTALITY rate is not this.
+- `clinical_match` false is a valid answer and costs nothing. An empty `comparators` list
+  is the correct answer when no abstract qualifies: the reader is told the literature
+  offers no comparison for this condition rather than being shown an unrelated cohort.
+- A SUB-COHORT of this patient's condition or procedure IS this patient's comparison. Age
+  bands (octogenarians, nonagenarians), payer or registry samples (Medicare, NSQIP,
+  PearlDiver, a national readmission database), a single-centre series, and one surgical
+  approach among several (laparoscopic rather than abdominal hysterectomy, hemiarthroplasty
+  rather than total hip) all describe the same operation or disease in a narrower
+  population, and a narrower population is a benchmark. `cohort_summary` must state the
+  qualifier — "patients over 80", "laparoscopic only" — because that is the sentence the
+  reader weighs the comparison by.
+- A different POPULATION is not a narrower one. Pediatric, paediatric, neonatal, infant and
+  adolescent cohorts are refused for an adult admission, and an obstetric-only cohort is
+  refused for any admission that is not about pregnancy: these are different patients, not
+  older or younger ones. The same rule runs the other way — if this admission is pediatric,
+  an adult cohort is the mismatch.
+- A TWO-ARM result is two figures, and how to report it depends on which arm is this
+  patient. When one arm is the patient's own procedure and the other is a comparison arm,
+  report THAT arm alone as a single rate and name it in `cohort_summary` ("ACDF arm of an
+  ACDF-versus-disc-replacement study"). When both arms are the same condition and procedure
+  differing only in management — two care models, two approaches — report both, written
+  `A% vs. B%`, and say in `cohort_summary` what the two figures are. Never compress a
+  two-arm result into one figure and never write "and" where the study says "versus".
+- What is NOT a comparison is a different PROCEDURE on the same region (posterior
+  foraminotomy for an anterior fusion) or a different DISEASE (COPD for a pleural
+  effusion). Refuse those and say which it was.
+- A DIFFERENT INTENSITY of procedure is a different procedure too. When this admission was
+  managed with a bedside or minimally invasive procedure — thoracentesis, paracentesis,
+  catheterisation, endoscopy — a cohort of patients who had a surgical operation on the
+  same organ (decortication, lobectomy, open or video-assisted resection) is not this
+  patient's comparison: the readmission risk of an operation includes the operation. Refuse
+  it and say that the cohort's procedure is more invasive than this admission's.
+- At most two comparators. If more qualify, keep the two whose cohorts are closest to
+  this patient.
+- Never use knowledge from outside these abstracts. A rate you remember from the
+  literature is not in the abstract in front of you and cannot be quoted."""
+
+
+def literature_comparator_input(target: Any, articles: list[dict]) -> str:
+    """The patient's condition and the retrieved abstracts, as the extraction reads them.
+
+    The anchors travel with the condition because they are the phrases that will be looked
+    for in every abstract deterministically, whether or not the model agrees. Stating them
+    here means the model is choosing within the same rule the verifier applies, rather than
+    being overruled after the fact without having been told the rule.
+    """
+    anchors = ", ".join(getattr(target, "anchors", ()) or ())
+    lines = [
+        f"THIS PATIENT'S CONDITION: {getattr(target, 'condition', '') or '(not stated)'}",
+        f"INDEX PROCEDURE: {getattr(target, 'procedure', '') or '(none stated)'}",
+        f"PHRASES THAT IDENTIFY THIS PATIENT'S CONDITION: {anchors or '(none)'}",
+        "",
+        "RETRIEVED ABSTRACTS:",
+    ]
+    for article in articles or []:
+        lines.append(
+            f'<record pmid="{article.get("pmid")}">\n'
+            f'title: {article.get("title")}\n'
+            f'journal: {article.get("journal")} ({article.get("pub_date")})\n'
+            f'abstract:\n{article.get("abstract")}\n'
+            "</record>"
+        )
+    return "\n".join(lines)

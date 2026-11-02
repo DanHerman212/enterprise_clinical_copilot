@@ -85,6 +85,62 @@ class TestTheUnion:
         assert citations.literature_call([LAST]) is LAST
 
 
+class TestTheScopeThatIsNotEvidence:
+    """One tool name, two callers, and only one of them is answering the question.
+
+    Stage Gate 2 gave `/ehr` a literature retrieval of its own: the `/ehr` turn asks
+    `search_literature` for the candidate pool a comparison table will verify rates out
+    of. Those records are the table's inputs; the rows that survive verification are
+    published by the table, with their own PMIDs. They are not the answer's evidence, and
+    treating them as such drew the `/ehr` briefing as if it were a literature turn — the
+    risk widget suppressed, a caption about PubMed records, and twenty-five candidates
+    published as though the answer had cited them.
+
+    The call's own declared `scope` is what separates them, because it is the argument
+    that says what the search was FOR.
+    """
+
+    def test_the_comparator_retrieval_is_not_the_turns_literature(self):
+        retrieval = {
+            "name": "search_literature",
+            "args": {"query": "osteoarthritis knee", "max_results": 10,
+                     "scope": "readmission"},
+            "response": {"query": "osteoarthritis knee", "returned": 25,
+                         "articles": [{"pmid": "34793857"}]},
+        }
+
+        assert citations.literature_calls([retrieval]) == []
+        assert citations.literature_pmids([retrieval]) == frozenset()
+        assert literature_payload([retrieval]) is None
+
+    def test_the_answers_own_search_is_unaffected(self):
+        """`general` is the tool's own default, and every pre-Gate-2 caller left it unset."""
+        retrieval = {
+            "name": "search_literature",
+            "args": {"query": "osteoarthritis knee", "scope": "readmission"},
+            "response": {"query": "osteoarthritis knee", "returned": 1, "articles": []},
+        }
+
+        assert citations.literature_calls([retrieval, LAST]) == [LAST]
+
+    def test_a_turn_that_only_retrieved_cohorts_has_no_literature_surface(self):
+        """The composed `/ehr` surface, on the case that motivated the split."""
+        retrieval = {
+            "name": "search_literature",
+            "args": {"query": "osteoarthritis knee", "scope": "readmission"},
+            "response": {"query": "osteoarthritis knee", "returned": 1, "articles": [
+                {"pmid": "34793857", "title": "T", "journal": "J", "pub_date": "2022",
+                 "abstract": "A", "url": "https://pubmed.ncbi.nlm.nih.gov/34793857/"},
+            ]},
+        }
+
+        out = compose_presentation("/ehr", "Knee osteoarthritis.^[1]", [retrieval],
+                                   None, "summarize")
+
+        assert out.get("literature") in (None, {}, [])
+        assert [row for row in out["references"] if row.get("kind") == "Literature"] == []
+
+
 class TestThePayload:
     def test_the_payload_carries_every_record_the_turn_retrieved(self):
         merged = literature_payload(FOUR_SEARCHES)

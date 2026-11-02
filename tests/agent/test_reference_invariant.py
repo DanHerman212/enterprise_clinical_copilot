@@ -76,6 +76,24 @@ ARTICLES = [
      "url": "https://pubmed.ncbi.nlm.nih.gov/31234567/"},
 ]
 
+#: One comparator as the engine leaves it: verified against the abstract it came from.
+#: Since Stage Gate 2 the table's cohorts are whatever literature retrieval verified on
+#: the turn, so a turn that verified none has no literature row — and a turn that verified
+#: one must publish it as a source like any other.
+COMPARATOR = {
+    "pmid": "29950074",
+    "title": "Readmission after lumbar spine surgery.",
+    "authors": "Proal JD, Moon AS, LaHaise K, et al.",
+    "journal": "World Neurosurgery",
+    "pub_date": "2024 Jul 01",
+    "reported_rate": "4.1%",
+    "rate_kind": "point",
+    "cohort_summary": "Adults undergoing lumbar spine surgery, single centre.",
+    "evidence_tier": "retrospective cohort",
+    "rate_sentence": "The 30-day rate was 4.1%.",
+    "url": "https://pubmed.ncbi.nlm.nih.gov/29950074/",
+}
+
 SEARCH_CALL = {"name": "search_literature",
                "args": {"query": "bilateral lower extremity cellulitis"},
                "response": {"query": "bilateral lower extremity cellulitis",
@@ -93,7 +111,8 @@ class TestEverySourceHasARow:
     def test_a_note_turn_lists_what_it_cites(self):
         out = compose_presentation(
             "/ehr", "Heart failure.^[1] Follow up in a week.^[2]",
-            [SECTIONS_CALL, PREDICT_CALL], command="summarize")
+            [SECTIONS_CALL, PREDICT_CALL], command="summarize",
+            comparators=[COMPARATOR])
 
         cites, rows = _pairs(out)
         assert cites == rows
@@ -102,6 +121,23 @@ class TestEverySourceHasARow:
         # its row — that is what `references` being a view of `sources` means.
         assert out["sources"][2]["kind"] == "Literature"
         assert out["references"][2]["pmid"] == out["sources"][2]["pmid"]
+
+    def test_a_turn_that_verified_no_cohort_publishes_no_literature_row(self):
+        """The other half of the invariant: an absent cohort is not a fabricated one.
+
+        Before Stage Gate 2 the row was always the curated benchmark for the admission's
+        phenotype, so the array always ended with a literature source. Now the row is
+        whatever retrieval verified on the turn, and verification can legitimately
+        return nothing. When it does, the table still draws — the patient's own estimate
+        is still the answer — and no source is invented to sit beside it.
+        """
+        out = compose_presentation(
+            "/ehr", "Heart failure.^[1]",
+            [SECTIONS_CALL, PREDICT_CALL], command="summarize")
+
+        assert [source.get("kind") for source in out["sources"]] == [None]
+        assert all(row.get("kind") != "Literature" for row in out["references"])
+        assert _pairs(out)[0] == _pairs(out)[1] == [1]
 
     def test_a_medication_turn_lists_its_passage(self):
         out = compose_presentation(

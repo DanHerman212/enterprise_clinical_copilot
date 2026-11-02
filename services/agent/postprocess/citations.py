@@ -962,6 +962,32 @@ def citation_bound(
     return ledger.passage_count or literature_slots(tool_calls)
 
 
+#: The scope a `search_literature` call must declare to be the ANSWER's evidence.
+_EVIDENCE_SCOPE = "general"
+
+
+def _searched_for_evidence(call: dict) -> bool:
+    """Whether this search was made to answer the question rather than to serve another part of the
+    pipeline.
+
+    `search_literature` has two callers with different questions. The model asks what the
+    literature says, and those records are the answer's evidence: its pills, its drawer
+    rows, the PMIDs enforcement accepts. The readmission retrieval asks for the candidate
+    pool an extraction turn verifies rates out of, and its survivors are published by the
+    comparison table instead — as cohort rows carrying their own PMIDs.
+
+    Both arrive in `tool_calls` under one name, so the call's own declared `scope` is what
+    separates them. Without this the `/ehr` turn that gate 2 wired would have drawn itself
+    as a literature turn: the risk widget suppressed, a caption about PubMed records, and
+    twenty-five candidates published as if the answer had cited them.
+
+    A call that declares no scope searched for evidence — `general` is the tool's own
+    default, and every caller before the comparator work left it unset.
+    """
+    scope = str((call.get("args") or {}).get("scope") or _EVIDENCE_SCOPE).strip().lower()
+    return scope == _EVIDENCE_SCOPE
+
+
 def literature_calls(
     tool_calls: list[dict] | None,
     conversation_calls: list[dict] | None = None,
@@ -978,16 +1004,21 @@ def literature_calls(
     `literature_call` gives: a declared follow-up binds no literature tool because the
     earlier result is already in the transcript. The replay is a fallback, never an
     addition — a turn with its own searches answers from those.
+
+    A search made for another consumer of the pipeline is not one of these; see
+    `_searched_for_evidence`.
     """
     found = [
         call for call in (tool_calls or [])
         if isinstance(call, dict) and call.get("name") in routing.LITERATURE_TOOLS
+        and _searched_for_evidence(call)
     ]
     if found:
         return found
     replayed = [
         call for call in reversed(list(conversation_calls or []))
         if isinstance(call, dict) and call.get("name") in routing.LITERATURE_TOOLS
+        and _searched_for_evidence(call)
     ]
     return replayed[:1]
 

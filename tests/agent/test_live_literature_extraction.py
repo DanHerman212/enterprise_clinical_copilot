@@ -498,45 +498,70 @@ def test_the_header_parser_refuses_a_sentence_about_the_patient():
     }) is None
 
 
-# --- F2: candidates are ranked by specificity before truncation -------------
+# --- F5: the whole pool reaches the model, in PubMed's order -----------------
+#
+# The extraction turn used to read a ten-record window of a ranked pool: first by how
+# specifically a record named the condition, later by whether it stated a percentage and
+# whether its title named the operation. Every one of those rules was a guess about
+# clinical relevance made in Python, standing where reading the abstract belongs, and each
+# one could hide the record that mattered. Measured 2026-11-02: admission 90000102's pool
+# was twenty-two benign-prostatic-hyperplasia papers, and the one titled "…readmission
+# after transurethral resection of the prostate" ranked fourteenth. The pool now goes over
+# whole.
 
-EXACT = dict(HEMIARTHROPLASTY, pmid="30000020",
-             title="Readmission after femoral neck fracture.",
-             abstract="RESULTS: The 30-day readmission rate was 8.4%.")
-SYNONYM = dict(HEMIARTHROPLASTY, pmid="30000021",
-               title="Readmission after hip fracture surgery.",
-               abstract="RESULTS: The 30-day readmission rate was 7.1%.")
-PROCEDURE_ONLY = dict(HEMIARTHROPLASTY, pmid="30000022",
-                      title="Outcomes of hemiarthroplasty in older adults.",
-                      abstract="RESULTS: The 30-day readmission rate was 6.0%.")
-NEIGHBOUR = dict(HEMIARTHROPLASTY, pmid="30000023",
-                 title="Empyema and readmission.",
-                 abstract="RESULTS: The 30-day readmission rate was 12.0%.")
-
-
-def test_candidates_are_ranked_by_how_specifically_they_name_the_condition():
-    ranked = deterministic.rank_by_specificity(
-        [NEIGHBOUR, PROCEDURE_ONLY, SYNONYM, EXACT], FEMORAL_NECK)
-
-    assert [article["pmid"] for article in ranked] == [
-        "30000020",  # the condition phrase itself
-        "30000021",  # a multi-word anchor
-        "30000022",  # a single-word anchor
-        "30000023",  # nothing the target names
-    ]
+NO_FIGURE_REVIEW = dict(
+    HEMIARTHROPLASTY, pmid="30000030",
+    title="Readmission after femoral neck fracture: a narrative review.",
+    abstract=(
+        "This review discusses readmission after femoral neck fracture and the factors "
+        "that drive it, without pooling a rate."
+    ),
+)
+WITH_FIGURE = dict(
+    HEMIARTHROPLASTY, pmid="30000031",
+    title="Readmission after femoral neck fracture in a national cohort.",
+    abstract="RESULTS: The 30-day readmission rate was 8.4%.",
+)
 
 
-def test_ranking_keeps_pubmed_order_inside_a_tier():
-    first = dict(PROCEDURE_ONLY, pmid="30000022")
-    second = dict(PROCEDURE_ONLY, pmid="30000024")
+def test_every_adult_record_reaches_the_extraction_turn():
+    """No window: twelve records in, twelve records read."""
+    pool = [dict(KNEE_ARTHROPLASTY, pmid=f"3000010{index}") for index in range(12)]
 
-    ranked = deterministic.rank_by_specificity([first, second], FEMORAL_NECK)
+    async def search(terms, wide):
+        return {"query": "pooled", "articles": pool}
 
-    assert [article["pmid"] for article in ranked] == ["30000022", "30000024"]
+    result = asyncio.run(deterministic.extract_comparators(
+        _FakeLLM([_payload([])]), FEMORAL_NECK, search=search))
+
+    assert result.passes[0].candidates == 12
+    assert result.passes[0].aligned == 12, "the pool was cut before the model read it"
 
 
-def test_the_model_reads_at_most_ten_ranked_candidates():
-    assert deterministic.MAX_CANDIDATES_FOR_MODEL == 10
+def test_a_record_with_no_figure_is_read_beside_one_that_states_a_rate():
+    """The model sees both. Which of them is usable is its judgement, not a token test."""
+    async def search(terms, wide):
+        return {"query": "pooled", "articles": [NO_FIGURE_REVIEW, WITH_FIGURE]}
+
+    result = asyncio.run(deterministic.extract_comparators(
+        _FakeLLM([_payload([])]), FEMORAL_NECK, search=search))
+
+    assert result.passes[0].candidates == 2
+    assert result.passes[0].aligned == 2
+
+
+def test_the_pass_hands_the_pool_over_in_pubmed_order():
+    """The review is first in the reply and first in what the model reads.
+
+    Deliberately ordered with the rate-bearing record second: if any local ordering rule
+    were still in the pass, that record would have been promoted and this would fail.
+    """
+    async def search(terms, wide):
+        return {"query": "pooled", "articles": [NO_FIGURE_REVIEW, WITH_FIGURE]}
+
+    pass_ = asyncio.run(deterministic.candidate_pass(search, FEMORAL_NECK))
+
+    assert [article["pmid"] for article in pass_.aligned] == ["30000030", "30000031"]
 
 
 # --- F3: a cohort of children is not this adult's comparison ----------------

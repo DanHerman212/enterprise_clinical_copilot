@@ -78,6 +78,10 @@ class LiteratureArticle(TypedDict):
     pmid: str
     title: str
     journal: str
+    # The publisher's compact form of the journal — `JAMA Netw Open`, `Spine` — which is
+    # what a citation uses and what an inline pill prints. Optional because a record may
+    # state none, and absent is a shorter answer than an invented one.
+    journal_abbrev: NotRequired[str]
     # As the record states it — "2025 Mar 12", or "2025 Jan-Feb" when the issue has
     # no month. Deliberately not normalised into a date type: the reader is judging
     # whether the paper is current, and the record's own precision is the honest one.
@@ -245,6 +249,8 @@ def validate_literature_result(payload: Any) -> LiteratureResult | ToolError:
         # use of it, so it is rejected here rather than rendered as a blank badge.
         if not article["pmid"]:
             raise ToolContractError("Literature article has no pmid.")
+        if "journal_abbrev" in article and not isinstance(article["journal_abbrev"], str):
+            raise ToolContractError("Literature article has a malformed journal_abbrev.")
     if "degraded" in payload and not isinstance(payload["degraded"], bool):
         raise ToolContractError("Literature degraded flag is invalid.")
     return payload

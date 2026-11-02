@@ -1432,6 +1432,9 @@ def verify_comparator(row: dict | None, articles: dict[str, dict],
         # about.
         "title": str(article.get("title") or "").strip(),
         "journal": str(article.get("journal") or "").strip(),
+        # The compact journal, so the table's pill and the prose pill can name the record
+        # the same way. From the record, like the rest of the citation line.
+        "journal_abbrev": str(article.get("journal_abbrev") or "").strip(),
         "pub_date": str(article.get("pub_date") or "").strip(),
         "authors": str(article.get("authors") or "").strip(),
         "url": str(article.get("url") or "").strip(),
@@ -1463,60 +1466,6 @@ def verify_comparators(rows: list[dict] | None, articles: list[dict] | None,
 #: At most two comparators reach the table. The surface draws a comparison, not a
 #: literature review, and a third row pushes the patient's own baseline off the fold.
 MAX_COMPARATORS = 2
-
-#: How many candidates the extraction turn reads. The retrieval pool is larger
-#: (`literature.READMISSION_CANDIDATE_POOL`); this is what survives ranking, because a
-#: model given twenty-five abstracts spends its attention on the wrong ten.
-MAX_CANDIDATES_FOR_MODEL = 10
-
-
-def specificity_tier(article: dict, target: ClinicalTarget) -> int:
-    """How specifically this record names the patient's condition: 0 best, 3 worst.
-
-    0 — the primary condition phrase itself appears in the title or abstract;
-    1 — a multi-word anchor appears;
-    2 — only a single-word anchor appears;
-    3 — nothing the target names appears.
-
-    Deterministic and total, so a pool can be ordered without a model. It sorts rather
-    than scores because the ranking being adjusted already carries information the tier
-    does not: the tier is only entitled to say "this record names the condition and that
-    one names a neighbouring thing", and PubMed keeps the tie.
-
-    This exists because of 2026-11-02: an OR of six synonyms put empyema and lobectomy
-    abstracts above a pleural-effusion cohort, and truncating on that order dropped the
-    one record worth comparing against. The synonyms were the problem at query time and
-    are the answer at rank time — a record that names any of them belongs above one that
-    names none.
-    """
-    haystack = _normalise_text(
-        f"{article.get('title') or ''} {article.get('abstract') or ''}")
-    if not haystack:
-        return 3
-    condition = _normalise_text(target.condition)
-    if condition and condition in haystack:
-        return 0
-    # The chart qualifies the condition and the paper does not: "displaced femoral neck
-    # fracture" in the note is "femoral neck fracture" in a title. Dropping the leading
-    # qualifier is the mechanical version of that difference, and it is the only one a
-    # tier is entitled to assume.
-    words = condition.split()
-    if len(words) >= 3 and " ".join(words[1:]) in haystack:
-        return 0
-    if any(anchor in haystack for anchor in target.anchors if " " in anchor):
-        return 1
-    if any(anchor in haystack for anchor in target.anchors if " " not in anchor):
-        return 2
-    return 3
-
-
-def rank_by_specificity(articles: list[dict] | None,
-                        target: ClinicalTarget) -> list[dict]:
-    """The candidate pool in specificity order, stable within each tier."""
-    return sorted(
-        (article for article in articles or [] if isinstance(article, dict)),
-        key=lambda article: specificity_tier(article, target),
-    )
 
 
 @dataclass(frozen=True)
@@ -1574,14 +1523,15 @@ async def extract_comparators(
     two five-second extraction gaps in the trace, 25.6s for a briefing that had already
     done its chart work.
 
-    The precision the narrow pass bought is now bought by `rank_by_specificity`, which was
-    the actual fix for the dilution that motivated the split: the pool from one broadened
-    query is ordered so that a record naming this admission's condition comes first, and
-    only the top `MAX_CANDIDATES_FOR_MODEL` reach the model. What the reader gets is the
-    union the two passes were trying to approximate, read once.
+    The precision the narrow pass was built for is no longer bought locally at all: the
+    pool from one broadened query is handed to the extraction turn whole, in PubMed's
+    order, and the model that reads the abstracts decides which of them is this patient's
+    cohort. Ordering the pool in Python before the model saw it only decided which records
+    the model was allowed to consider. What the reader gets is the union the two passes
+    were trying to approximate, read once.
 
     Empty stays a real answer at every stage: a query that returns nothing, a pool that is
-    all another population, and a pool that names none of this admission's anchors are three
+    all another population, and a pool that is all a different condition are three
     different facts, and each is reported rather than collapsed into "no rows".
     """
     candidates = await candidate_pass(search, target)
@@ -1630,10 +1580,13 @@ async def candidate_pass(search, target: ClinicalTarget) -> CandidatePass:
     catch what the first missed, and asking once with the broader clause and ranking the
     result catches it without a second round trip.
 
-    Nothing here decides whether a record is ABOUT this patient's condition. Ordering does
-    — `rank_by_specificity` puts the records that name it first — and the extraction turn
-    decides the rest by reading the abstract. A token gate used to refuse records before
-    the model saw them, which turned a synonym into a silent refusal.
+    Nothing here decides whether a record is ABOUT this patient's condition. Every adult
+    record the search returned goes to the extraction turn, in the order PubMed ranked
+    them — no local ordering and no local cut. A Python sort over titles and abstracts was
+    deciding which records the model was allowed to read, and each of its rules — name the
+    condition, state a percentage, name the operation — was a guess about clinical
+    relevance standing where reading the abstract belongs. A token gate used to refuse
+    records before the model saw them, which turned a synonym into a silent refusal.
     """
     result = await search([target.condition, *target.anchors], True)
     result = result if isinstance(result, dict) else {}
@@ -1643,7 +1596,7 @@ async def candidate_pass(search, target: ClinicalTarget) -> CandidatePass:
     pool, refused = adult_cohorts(articles, target)
     return CandidatePass(
         query=query, wide=True, candidates=len(articles),
-        aligned=tuple(rank_by_specificity(pool, target)[:MAX_CANDIDATES_FOR_MODEL]),
+        aligned=tuple(pool),
         refused=tuple(refused),
         excluded=len(refused),
     )

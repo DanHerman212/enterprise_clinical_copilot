@@ -808,13 +808,18 @@ def register_comparator_sources(canvas: dict | None, start: int,
             if not pmid or pmid in seen:
                 continue
             seen.add(pmid)
-            # What the table calls the row: the journal and the year. It stays the pill's
-            # label, because a pill is set inside a sentence or a cell and a full article
-            # title is not.
+            # What the table calls the row: the journal and the year. It stays the ROW's
+            # label, because a row is a record and a record is dated.
             citation = str(row.get("source") or "").strip() or f"PMID {pmid}"
             label = f"{index} · {citation}"
             url = str(row.get("url") or "").strip() or (
                 f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/")
+            # What the pill in the table's source cell prints: the journal alone, the same
+            # compact emerald badge the prose draws, from the same resolver. A cell that
+            # carried `4 · Journal · Year` was a bibliography line in a table column and
+            # stretched the column rather than marking the record (2026-11-02).
+            pill_label = _pill_journal(row.get("journal"),
+                                       row.get("journal_abbrev"))
             # The article, which is what the record IS. A row that named only its journal
             # left the drawer showing `5. The Journal of Arthroplasty · 2022` and nothing
             # else — no paper, no authors, nothing to weigh it by.
@@ -854,9 +859,8 @@ def register_comparator_sources(canvas: dict | None, start: int,
                 "title": title,
                 "authors": authors,
                 "label": label,
-                # The inline form: the journal and the year the table prints, without the
-                # number that belongs to the references list.
-                "pill_label": citation,
+                # The inline form: the journal alone, exactly as the prose pill prints it.
+                "pill_label": pill_label,
                 "subtitle": subtitle,
                 "journal_citation": journal_citation,
                 "section": citation,
@@ -1007,31 +1011,64 @@ def _section_label(section: object) -> str:
 
 #: What a chart section's INLINE pill says, as opposed to what the references list calls it.
 #:
-#: Two vocabularies, because they are read in two places. The list has room for
-#: "History of present illness"; a pill sits inside a sentence, and a reader scanning a
-#: paragraph of five of them was reading the pills rather than the prose (reported from a
-#: printed `/ehr`, 2026-11-02). These are the abbreviations a clinician already uses on a
-#: ward round, resolved here so the browser prints a string and does not decide one.
+#: What a note section's INLINE pill says, as opposed to what the references list calls it.
 #:
-#: A section this map has not caught falls back to `_section_label`, because a new section
-#: arriving as an empty pill is worse than one arriving long.
+#: The pill is the section's own name in Title Case. It was abbreviated for a while — `HPI`,
+#: `Discharge dx` — to keep a printed `/ehr` from being a paragraph of badges, and a reader
+#: reported the opposite defect: `dx` is a chart shorthand, `HPI` is a ward shorthand, and
+#: neither is what the section is called (2026-11-02). The pill is now the heading itself,
+#: compacted by its styling rather than by its vocabulary, so the words on the badge and
+#: the words in the note agree.
+#:
+#: A section this map has not caught falls back to `_section_label`, title-cased, because a
+#: new section arriving as an empty pill is worse than one arriving long.
 _PILL_SECTION_LABELS = {
-    "history_of_present_illness": "HPI",
-    "brief_hospital_course": "Hospital course",
-    "discharge_diagnosis": "Discharge dx",
-    "discharge_medications": "Discharge meds",
-    "medications_on_transfer": "Transfer meds",
-    "discharge_instructions": "Discharge instr",
-    "discharge_condition": "Discharge condition",
-    "discharge_disposition": "Discharge disposition",
-    "followup_instructions": "Follow-up",
-    "laboratory_trends": "Labs",
+    "history_of_present_illness": "History of Present Illness",
+    "brief_hospital_course": "Brief Hospital Course",
+    "discharge_diagnosis": "Discharge Diagnosis",
+    "discharge_medications": "Discharge Medications",
+    "medications_on_transfer": "Medications on Transfer",
+    "discharge_instructions": "Discharge Instructions",
+    "discharge_condition": "Discharge Condition",
+    "discharge_disposition": "Discharge Disposition",
+    "followup_instructions": "Follow-up Instructions",
+    "laboratory_trends": "Laboratory Trends",
 }
+
+
+#: Joining words a Title Case phrase lower-cases unless they open or close it.
+_TITLE_CASE_MINOR = frozenset({
+    "of", "and", "the", "in", "on", "at", "to", "a", "an", "for", "with", "by",
+})
+
+
+def _title_case(text: object) -> str:
+    """A phrase in Title Case, leaving words that already carry capitals alone.
+
+    The second rule is what keeps this usable on journal names: `JAMA`, `PLoS` and
+    `eClinicalMedicine` are spelled by their publishers, and a cased-every-word pass would
+    produce `Jama`, `Plos` and `Eclinicalmedicine`. A word with a capital anywhere but its
+    first letter is a name, so it is passed through untouched; everything else is cased.
+    """
+    words = " ".join(str(text or "").split()).split(" ")
+    cased: list[str] = []
+    for position, word in enumerate(words):
+        if not word:
+            continue
+        if word.isupper() or any(character.isupper() for character in word[1:]):
+            cased.append(word)
+            continue
+        lowered = word.lower()
+        if 0 < position < len(words) - 1 and lowered in _TITLE_CASE_MINOR:
+            cased.append(lowered)
+            continue
+        cased.append(word[:1].upper() + word[1:])
+    return " ".join(cased)
 
 
 def _pill_section_label(section: object) -> str:
     name = str(section or "")
-    return _PILL_SECTION_LABELS.get(name) or _section_label(section)
+    return _PILL_SECTION_LABELS.get(name) or _title_case(_section_label(section))
 
 
 
@@ -1080,22 +1117,23 @@ def note_citations(sources: list[dict]) -> list[dict]:
             "source": str(source.get("cite_source") or "Discharge note"),
             "title": title,
             # What the marker SAYS, resolved here rather than in the browser. The marker
-            # reads `1 · Hospital Course` and not a bare `1`, because a number tells the
+            # reads `Brief Hospital Course` and not a bare `1`, because a number tells the
             # reader nothing about what they are about to open — and resolving it here
             # keeps the section vocabulary in the one module that already owns it
             # (`_SECTION_LABELS`), rather than a second copy in the client that would
             # drift the first time a section is renamed.
             #
             # `label` is the REFERENCES LIST's line, number and all. `pill_label` is what
-            # the inline control prints: the section name alone, in its short form, because
-            # the sentence already tells the reader which source it is a footnote to and
-            # the number lives one line below in the list.
+            # the inline control prints: the section name alone, because the sentence
+            # already tells the reader which source it is a footnote to and the number
+            # lives one line below in the list.
             "label": f"{int(source['cite'])} · {title}",
             "pill_label": _pill_section_label(source.get("section")),
             # Which channel the pill belongs to, so the surface can colour a chart source
             # differently from a published one. Decided here: a browser that classifies
-            # its own evidence has taken a citation decision.
-            "kind": "chart",
+            # its own evidence has taken a citation decision. `note` is a passage out of
+            # this patient's own record; `literature` is somebody else's patients.
+            "kind": "note",
             "excerpt": str(source.get("text") or ""),
         })
     return citations
@@ -1143,6 +1181,27 @@ def _year_of(pub_date: object) -> str:
     return ""
 
 
+def _pill_journal(name: object, abbreviation: object = "") -> str:
+    """A journal as an inline pill spells it: the compact name, Title Case, no year.
+
+    A pill sits inside a sentence, so it carries the journal and nothing else. Not the
+    record number, which belongs to the bibliography a line below, and not the year —
+    `Spine · 2020` is a second citation line rather than a marker, and beside a rate cell
+    it was wide enough to stretch the comparison table's source column (2026-11-02).
+
+    The compact form is the record's own ISO abbreviation: `JAMA Netw Open`, `N Engl J
+    Med`, `Spine`. A clinician cites a paper by that string and recognises it faster than
+    a title. Truncating the full title instead, which is what this used to do, produced
+    `Journal of the American…` — a fragment of a title rather than the name of a journal.
+
+    A record that states neither is `PubMed`, which is true and short rather than blank.
+    """
+    full = " ".join(str(name or "").split())
+    short = " ".join(str(abbreviation or "").split())
+    chosen = short or full
+    return _title_case(chosen) if chosen else "PubMed"
+
+
 #: How much of an abstract a hover card carries.
 #:
 #: The card is 340px wide and floats over the answer being read, so it is a place to judge
@@ -1177,6 +1236,7 @@ def _article_record(article: dict, index: int) -> dict:
     every other citation in the product gets.
     """
     journal = str(article.get("journal") or "").strip()
+    journal_abbrev = str(article.get("journal_abbrev") or "").strip()
     year = _year_of(article.get("pub_date"))
     authors = str(article.get("authors") or "").strip()
     pmid = str(article.get("pmid") or "").strip()
@@ -1191,22 +1251,21 @@ def _article_record(article: dict, index: int) -> dict:
     ) if part).strip()
     subtitle = " · ".join(part for part in (journal_citation, f"PMID {pmid}")
                            if part)
-    # What the pill SAYS. The journal and the year, because a pill is set inside a
-    # sentence and a title is not; cut to a marker's length by `_short_source`, which is
-    # the same budget the comparative table's pill uses.
+    # What the REFERENCES LIST calls the record: the number, the journal and the year. The
+    # list is a bibliography, and a bibliography is numbered and dated.
     label = f"{index} · " + " · ".join(part for part in (
         _short_source(journal) or "PubMed", year) if part)
-    # What the INLINE pill prints: the journal and the year, no number. Two strings
-    # because they are read in two places — the references list is a numbered
-    # bibliography, and a pill is a footnote marker inside a sentence.
-    pill_label = " · ".join(part for part in (
-        _short_source(journal) or "PubMed", year) if part)
+    # What the INLINE pill prints: the journal alone. Two strings because they are read in
+    # two places — a numbered line in a bibliography, and a marker inside a sentence that
+    # the reader is meant to pass over and come back to.
+    pill_label = _pill_journal(journal, journal_abbrev)
     return {
         "index": index,
         "kind": "Literature",
         "badge": _LITERATURE_BADGE,
         "title": title,
         "journal": journal,
+        "journal_abbrev": journal_abbrev,
         "year": year,
         "authors": authors,
         "label": label,
@@ -1235,12 +1294,14 @@ def literature_citations(articles: list[dict], start: int = 1) -> list[dict]:
     to use the same numbers or the pill and the drawer row disagree; from 1 always, the
     third article of a mixed turn shared the number of the third note passage.
 
-    The marker's DISPLAY is the number, the journal and the year; the identifier stays the
-    link target so a reader who wants the paper is one click from the card's title. That
-    trade was made on 2026-10-15 (journal over identifier), revisited on 2026-10-16 (the
-    pills were reading long, so the journal is cut to `_CITE_SOURCE_CHARS`), and completed
-    here: the record now also carries the article, its authors and its abstract, because
-    the card behind the pill is the same card a note citation opens.
+    The marker's DISPLAY is the journal, resolved to the record's own compact name; the
+    identifier stays the link target so a reader who wants the paper is one click from the
+    card's title. That trade was made on 2026-10-15 (journal over identifier), revisited on
+    2026-10-16 (the pills were reading long, so the journal was cut to `_CITE_SOURCE_CHARS`),
+    and settled on 2026-11-02: a pill is the journal alone — `JAMA Netw Open`, `Spine` — and
+    the year belongs to the bibliography. The record also carries the article, its authors
+    and its abstract, because the card behind the pill is the same card a note citation
+    opens.
 
     `source` is the EYEBROW the card shows under the title. For a note passage that is
     "Discharge note" and the section is the title; for a published record the title is the
@@ -1254,10 +1315,10 @@ def literature_citations(articles: list[dict], start: int = 1) -> list[dict]:
             "source": record["subtitle"],
             "title": record["title"],
             "label": record["label"],
-            # The inline control prints the journal and the year, without the number: the
-            # number is the references list's, and a pill inside a sentence is not the
-            # place to repeat it. `kind` is what the surface colours it by — a published
-            # cohort and a note section are weighed differently.
+            # The inline control prints the journal alone: the number is the references
+            # list's, and the year is what made the pill a citation line rather than a
+            # marker. `kind` is what the surface colours it by — a published cohort and a
+            # note section are weighed differently.
             "pill_label": record["pill_label"],
             "kind": "literature",
             "subtitle": record["subtitle"],

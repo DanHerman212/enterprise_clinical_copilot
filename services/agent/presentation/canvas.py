@@ -147,6 +147,9 @@ def _matrix_row(comparator: dict) -> dict:
         "title": str(comparator.get("title") or "").strip(),
         "authors": str(comparator.get("authors") or "").strip(),
         "journal": str(comparator.get("journal") or "").strip(),
+        # The compact journal the pill prints, carried from the record rather than
+        # shortened here: a layer that abbreviates is a second place journal names live.
+        "journal_abbrev": str(comparator.get("journal_abbrev") or "").strip(),
         "year": year,
         "reported_rate": str(comparator.get("reported_rate") or "").strip(),
         "rate_kind": str(comparator.get("rate_kind") or "point").strip(),

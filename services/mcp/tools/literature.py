@@ -291,6 +291,11 @@ def _articles(root: ElementTree.Element) -> list[dict[str, str]]:
             "pmid": pmid,
             "title": _text(node.find(".//Article/ArticleTitle")),
             "journal": journal,
+            # The compact form a citation uses and a pill prints — `JAMA Netw Open`,
+            # `N Engl J Med`, `Spine`. Carried beside the title rather than derived from
+            # it: an abbreviation is the publisher's, and the one place that can make it
+            # is the record that states it.
+            "journal_abbrev": _text(node.find(".//Journal/ISOAbbreviation")),
             "pub_date": _pub_date(node),
             # The citation line's third part. Empty when the record states no author,
             # which the reference then leaves out rather than inventing.

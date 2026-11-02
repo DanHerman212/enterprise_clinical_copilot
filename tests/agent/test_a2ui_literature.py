@@ -6,7 +6,7 @@ regression half matters as much as the new half: the risk canvas must look exact
 as it did before when no search ran.
 """
 
-from services.agent.presentation.a2ui import _narrative, compose_presentation, compose_risk_canvas, literature_citations, literature_payload
+from services.agent.presentation.a2ui import _narrative, compose_presentation, compose_risk_canvas, literature_citations, literature_payload, note_citations
 from services.agent.presentation.domain import _usable_articles
 
 ARTICLE = {
@@ -273,10 +273,10 @@ def test_no_row_carries_a_second_copy_of_the_drivers():
 def test_the_canvas_preserves_the_engines_row_order():
     """Order is the engine's, and this layer must not hold a second opinion.
 
-    `deterministic.rank_by_specificity` orders the pool before the extraction turn reads
-    it, from the anchors it resolved for this admission. A re-sort here would be a second
-    ranking computed from less than the engine holds, and the two would disagree on the
-    first pool where they were given different evidence.
+    The engine hands the verified rows over in the order the extraction turn produced
+    them. A re-sort here would be a second ordering computed from less than the engine
+    holds, and the two would disagree on the first table where they were given different
+    evidence.
     """
     matrix = _matrix(compose_risk_canvas(
         PREDICT, None, comparators=[REVIEW_COMPARATOR, ORTHO_COMPARATOR],
@@ -338,6 +338,9 @@ def test_a_long_journal_name_is_cut_to_the_marker_budget():
     and the rounded border read as a pill cut in half. Phase F (2026-10-26) gave the pill
     a leading number like every other citation in the product, so the budget is asserted
     on the journal part and the whole label is checked for the number it opens with.
+
+    What this asserts is the REFERENCES LIST's line, which is still a numbered, dated
+    bibliography entry. The inline pill is pinned separately, below.
     """
     citations = literature_citations([
         {**ARTICLE, "journal": "Journal of the American College of Cardiology"},
@@ -353,8 +356,72 @@ def test_a_long_journal_name_is_cut_to_the_marker_budget():
     assert "Journal of the American College of Cardiology".startswith(
         journal_part[:-1].rstrip())
     # A name inside the budget is passed through whole and unmarked, and the year closes
-    # the pill so a reader can tell a 2009 record from a 2024 one without opening it.
+    # the list line so a reader can tell a 2009 record from a 2024 one without opening it.
     assert citations[1]["label"] == "2 · Home healthcare now · 2025"
+
+
+def test_the_inline_pill_is_the_compact_journal_and_nothing_else():
+    """No record number and no year — the pill is a marker, not a citation line.
+
+    A reader reported the pill reading `World Neurosurgery · 2024` inside a sentence, and
+    the same string stretching the comparison table's source column (2026-11-02). The
+    number belongs to the bibliography a line below; the year is what turned a marker into
+    a second citation line; and the compact form is the record's own abbreviation, because
+    that is how a clinician cites the paper.
+    """
+    citations = literature_citations([
+        {**ARTICLE, "journal": "JAMA network open", "journal_abbrev": "JAMA Netw Open",
+         "pub_date": "2024 Mar"},
+        {**ARTICLE, "journal": "Cureus", "journal_abbrev": "Cureus",
+         "pub_date": "2023"},
+        {**ARTICLE, "journal": "Journal of the American College of Cardiology",
+         "journal_abbrev": "J Am Coll Cardiol", "pub_date": "2022 Jan"},
+    ])
+
+    assert [citation["pill_label"] for citation in citations] == [
+        "JAMA Netw Open", "Cureus", "J Am Coll Cardiol"]
+    for citation in citations:
+        assert citation["kind"] == "literature"
+        assert citation["pill_label"] == citation["pill_label"].strip()
+
+
+def test_a_journal_title_is_title_cased_when_it_stands_in_for_the_abbreviation():
+    citations = literature_citations([
+        {**ARTICLE, "journal": "JAMA network open", "journal_abbrev": ""},
+    ])
+
+    assert citations[0]["pill_label"] == "JAMA Network Open"
+
+
+def test_a_record_that_names_no_journal_is_marked_pubmed():
+    citations = literature_citations([{**ARTICLE, "journal": "", "journal_abbrev": ""}])
+
+    assert citations[0]["pill_label"] == "PubMed"
+
+
+def test_a_note_pill_is_the_section_heading_in_title_case():
+    """The badge carries the section's own name, not a ward shorthand.
+
+    The pill was abbreviated for a while — `HPI`, `Discharge dx` — and a reader reported
+    the opposite of what the abbreviation was for: `dx` is a chart shorthand and neither
+    form is what the section is called. The words on the badge and the words in the note
+    agree now, and the badge is compacted by its styling rather than by its vocabulary.
+    """
+    citations = note_citations([
+        {"cite": 1, "section": "brief_hospital_course", "text": "Admitted."},
+        {"cite": 2, "section": "history_of_present_illness", "text": "Pain."},
+        {"cite": 3, "section": "laboratory_trends", "text": "Creatinine 1.4."},
+        {"cite": 4, "section": "some_new_section", "text": "New."},
+    ])
+
+    assert [citation["pill_label"] for citation in citations] == [
+        "Brief Hospital Course", "History of Present Illness", "Laboratory Trends",
+        "Some New Section",
+    ]
+    # The colour channel, decided here: a note passage is this patient's own record.
+    assert {citation["kind"] for citation in citations} == {"note"}
+    # The references list keeps the number and the note's own casing.
+    assert citations[0]["label"] == "1 · Brief hospital course"
 
 
 # --- selecting the payload -------------------------------------------------

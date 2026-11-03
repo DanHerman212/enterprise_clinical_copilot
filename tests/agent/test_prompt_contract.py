@@ -262,16 +262,25 @@ def test_the_free_text_prompt_is_told_when_the_record_is_an_outpatient_visit():
 
 
 def test_the_summary_headings_are_conditional_on_an_inpatient_stay():
-    """`**Hospital course.**` is only right for an admission.
+    """`**Hospital course & procedures.**` is only right for an admission.
 
     The heading example is what the model copies, so an unconditional
     "**Hospital course.** The patient was admitted …" is an instruction to invent a stay
     for a record that had none (90000028 through the command path, 90000073 through this
     one). The outpatient form has to be shown, not merely permitted.
+
+    The label set is the one `EHR_FORMATTING` uses (2026-11-03): the free-text summary
+    and the `/ehr` briefing name the same four sections, so a reader who moves between
+    the two surfaces is not reading two different documents. The legacy discharge-only
+    labels are gone, and the rule that made them conditional is what remains.
     """
     assert "**Hospital course.** The patient was admitted" not in SYSTEM_PROMPT
     assert "**Clinical course.**" in SYSTEM_PROMPT
-    assert "**Discharge diagnosis.**" in SYSTEM_PROMPT
+    assert "**Presentation & diagnosis.**" in SYSTEM_PROMPT
+    assert "**Hospital course & procedures.**" in SYSTEM_PROMPT
+    assert "**Discharge plan & medications.**" in SYSTEM_PROMPT
+    # And the discharge-only label the summary used to require is no longer taught.
+    assert "**Discharge diagnosis.**" not in SYSTEM_PROMPT
 
 
 def test_the_medication_authority_separates_reading_from_listing():

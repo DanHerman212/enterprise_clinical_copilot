@@ -223,9 +223,17 @@ def test_the_ehr_instruction_no_longer_asks_for_markdown_headings():
 
 
 def test_the_ehr_instruction_matches_the_summary_style():
-    """One style for a section label, whether the summary came from /ehr or /pubmed."""
-    assert "**Clinical course.**" in SYSTEM_PROMPT
-    assert "**Discharge diagnosis.**" in SYSTEM_PROMPT
+    """One style for a section label, whether the summary came from /ehr or /pubmed.
+
+    Asserted as a set rather than a sample (2026-11-03): the free-text prompt and the
+    briefing now name the same sections, so a label added to one of them without the
+    other is the regression, not the presence of any single one.
+    """
+    for label in ("**Presentation & diagnosis.**", "**Clinical course.**",
+                  "**Hospital course & procedures.**", "**Discharge plan & medications.**",
+                  "**Readmission risk & trajectory.**"):
+        assert label in prompts.EHR_FORMATTING, label
+        assert label in SYSTEM_PROMPT, label
 
 
 # --- Defect 7: verified ------------------------------------------------------

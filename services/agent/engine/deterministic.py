@@ -84,7 +84,7 @@ from services.agent.routing.routing import (
     supplementary_arguments,
     tool_arguments,
 )
-from services.mcp.retrieval.sections import SUMMARY_SECTIONS
+from services.mcp.retrieval.sections import ADMISSION_DIAGNOSIS
 
 logger = logging.getLogger(__name__)
 
@@ -226,41 +226,6 @@ def _retrieved_records(recorded: list[RecordedToolCall]) -> list[Any]:
             if isinstance(article, dict)
         )
     return records
-
-
-def _ordered_summary_payload(name: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """A summary's passages in `SUMMARY_SECTIONS` order, before anyone reads them.
-
-    `/ehr` cross-wired `^[3]` and `^[4]` (TF-7, 2026-10-23). The retrieval tool returns
-    the four sections in whatever order it scores them — the discharge instructions
-    before the discharge diagnosis, on 90000015 — while the formatter is told to write
-    the sections in the canonical order. The model numbered the markers by the passage
-    index it was given, so the narrative's third section carried `^[3]` for the fourth
-    passage, and a reader clicking inside the Discharge diagnosis paragraph landed on
-    the medication list.
-
-    This is a `_execute_tool_calls(order=…)` hook rather than a pass over `recorded`
-    afterwards, because the ordering has to reach the MODEL too. Reordering only the
-    recorded payload left the formatter reading retrieval order while the citation
-    layer numbered canonically, and the markers stayed crossed in the other direction
-    (measured on the same dev suite the next run).
-
-    Sections the canonical tuple does not name keep their relative order at the end, so
-    a record with an extra heading still reads in the order it arrived.
-    """
-    response = dict(payload)
-    passages = response.get("passages")
-    if not isinstance(passages, list) or len(passages) < 2:
-        return payload
-    if not isinstance(passages[0], dict) or "section" not in passages[0]:
-        return payload
-    order = {section: index for index, section in enumerate(SUMMARY_SECTIONS)}
-    # A stable sort, so unnamed sections keep the order they came in.
-    response["passages"] = sorted(
-        passages,
-        key=lambda passage: order.get(str(passage.get("section") or ""), len(order)),
-    )
-    return response
 
 
 def _consolidate_medication_passages(recorded: list[RecordedToolCall]) -> None:
@@ -592,9 +557,13 @@ async def run_command(
         not encounter.states_inpatient_fields()
         and any(spec.tool == "predict_readmission" for spec in command.supplementary)
     )
-    # A summary's passages are ordered canonically as they arrive, so the formatter's
-    # numbering and the citation layer's numbering are the same order (TF-7).
-    order = _ordered_summary_payload if command.wire == "summarize" else None
+    # Every passage reaches the formatting turn and the citation ledger in the order the
+    # retrieval tool returned it, which for `/ehr` is the note's own document order. There
+    # used to be a re-ordering hook here that put a summary's passages into the canonical
+    # four-section order, because the tool returned them scored rather than read. The tool
+    # now returns the note's sections as the note states them, so a hook that sorted them
+    # into a second order is a second opinion about how a chart reads (2026-11-03).
+    #
     # Numbering continues from what the replayed turns already showed the model, because
     # a marker is resolved against the whole conversation's citable units (TF-10) — and
     # those units are counted by `citations.passage_total`, which knows that a laboratory
@@ -612,7 +581,7 @@ async def run_command(
         # have a parent to nest under. The reasoning loop does not, and spanning there
         # produced a separate root trace per tool.
         traced=True,
-        order=order,
+        order=None,
         cite_offset=cite_offset,
     )
 
@@ -630,7 +599,7 @@ async def run_command(
         }]
         extra_messages, extra_recorded = await _execute_tool_calls(
             toolbox, fallback, on_event, project=_presented_for_model, traced=True,
-            order=order,
+            order=None,
             cite_offset=cite_offset + _passage_count(recorded),
         )
         tool_messages += extra_messages
@@ -857,9 +826,9 @@ async def run_command(
 # checking could tell it from a correct one because both are well-formed rows.
 
 #: The sections a target is derived from, in the order the derivation reads them: what the
-#: admission WAS, then what happened during it. Members of
-#: `services.mcp.retrieval.sections.SUMMARY_SECTIONS`, named here because the order is a
-#: reading decision rather than the retrieval contract's.
+#: admission WAS, then what happened during it. Canonical names from
+#: `services.mcp.retrieval.sections`, named here because the order is a reading decision
+#: rather than the retrieval contract's.
 _TARGET_SECTION_ORDER = ("discharge_diagnosis", "brief_hospital_course")
 
 #: An anchor shorter than this is an organ or a limb, not a condition. "hip" and "knee"
@@ -1270,8 +1239,13 @@ def fallback_target_from_sections(sections: dict | None) -> ClinicalTarget | Non
     phrase, and every check downstream still has to agree with it before a row is served.
     """
     blocks: list[str] = []
-    diagnosis = str((sections or {}).get("discharge_diagnosis") or "")
-    blocks.extend(diagnosis.splitlines())
+    # Both diagnosis blocks, because a note may carry only one of them. Until 2026-11-03
+    # the admission and discharge diagnoses shared a single key, so reading one read the
+    # other; now that they are separate sections, a note documenting only the diagnosis it
+    # admitted has to be read here or this last resort would find no condition in a note
+    # that states one in its first line.
+    for key in ("discharge_diagnosis", ADMISSION_DIAGNOSIS):
+        blocks.extend(str((sections or {}).get(key) or "").splitlines())
     for line in str((sections or {}).get("brief_hospital_course") or "").splitlines():
         header = _SECTION_HEADER.match(line)
         if header:

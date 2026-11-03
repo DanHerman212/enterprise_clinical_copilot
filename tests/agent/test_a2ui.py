@@ -266,11 +266,13 @@ class TestSourceResolution:
         # Without a section hint the number mapping is unchanged.
         assert resolve_source(rag["passages"], 1, ())["section"] == "brief_hospital_course"
 
-        # A section hint the note does not have is a deterministic
-        # "not available" — never a fallback to the wrong section.
+        # A section hint the note does not have no longer vetoes a real passage: `^[2]`
+        # indexes a discharge diagnosis, so that is what the reader is shown. It used to
+        # answer "not available", which told the reader nothing was retrieved while a
+        # passage sat right there (2026-11-03).
         resolved = resolve_source(rag["passages"], 2, ("discharge_instructions",))
-        assert resolved["section"] == "not available"
-        assert "instruction" in resolved["text"]
+        assert resolved["section"] == "discharge_diagnosis"
+        assert "TKA" in resolved["text"]
 
     def test_extracts_the_intent_section_from_whole_note_chunks(self):
         """The index stores whole-note chunks, so the intent-labeled passage
@@ -317,10 +319,15 @@ class TestSourceResolution:
         assert "Valium" in resolved["text"]
         assert "HOSPITAL COURSE" not in resolved["text"]
 
-    def test_unavailable_when_the_note_lacks_all_target_sections(self):
-        """The note mentions meds only inside the hospital course — the
-        deterministic answer is 'not available', never a meds sentence mined
-        from the hospital course narrative."""
+    def test_the_cited_passage_resolves_when_the_note_lacks_the_target_section(self):
+        """`/meds` on a note with no medication section cites the hospital course.
+
+        This is the defect of 2026-11-03. The note mentions the prescription only inside
+        the course, so the intent found no `discharge_medications`; the old rule answered
+        "not available" — about a passage the tool had returned and the model had cited.
+        The answer said no medication information existed while its own source named two
+        drugs. A valid index now wins over an unmatched intent.
+        """
         note = (
             "ADMISSION DIAGNOSIS: Symptomatic thyroid goiter.\n\n"
             "HOSPITAL COURSE: The patient underwent total thyroidectomy on "
@@ -335,9 +342,20 @@ class TestSourceResolution:
         ], "query": "discharge notes"}
         resolved = resolve_source(
             rag["passages"], 1, ("discharge_medications", "discharge_instructions"))
-        assert resolved["section"] == "not available"
-        assert "No discharge medication information" in resolved["text"]
-        assert "Vicodin" not in resolved["text"]
+
+        assert resolved["section"] == "brief_hospital_course"
+        assert "Vicodin" in resolved["text"]
+
+    def test_not_available_is_reserved_for_an_empty_or_out_of_range_citation(self):
+        passages = [{"id": "n_bhc_1", "section": "brief_hospital_course",
+                     "text": "Hospital Course: recovered."}]
+
+        out_of_range = resolve_source(passages, 4, ("discharge_medications",))
+        assert out_of_range["section"] == "not available"
+        assert "No discharge medication information" in out_of_range["text"]
+
+        empty = resolve_source([], 1, ("discharge_medications",))
+        assert empty["section"] == "not available"
 
 
 class TestToolCallExtraction:
@@ -697,17 +715,23 @@ class TestResolvedSources:
         assert citation["title"] == "Discharge medications"
         assert citation["source"] == "Discharge note"
 
-    def test_unavailable_section_is_a_deterministic_entry(self):
+    def test_a_medication_answer_citing_the_course_resolves_to_the_course(self):
+        """The settled `/meds` answer cites the passage it was verified against.
+
+        When a note has no medication section, that passage is the hospital course, and
+        the source list must say so rather than reporting nothing available.
+        """
         rag = {"query": "discharge notes", "passages": [
             {"id": "n_bhc_1", "section": "brief_hospital_course",
-             "text": "Hospital Course: given Vicodin.", "score": 0.3}]}
+             "text": "Hospital Course: discharged on Vicodin and Synthroid.",
+             "score": 0.3}]}
         out = compose_presentation(
             "What medications was the patient discharged on?",
-            "None listed^[1].",
+            "2 discharge medications ^[1].",
             [{"name": "rag_search", "response": rag}],
         )
-        assert out["sources"][0]["section"] == "not available"
-        assert "Vicodin" not in out["sources"][0]["text"]
+        assert out["sources"][0]["section"] == "brief_hospital_course"
+        assert "Vicodin" in out["sources"][0]["text"]
 
     def test_no_passages_or_no_citations_is_an_empty_list(self):
         assert compose_presentation("Q", "No cites.", []) ["sources"] == []

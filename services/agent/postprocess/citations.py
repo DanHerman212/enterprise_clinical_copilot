@@ -334,54 +334,88 @@ def enforce_citations(
     return kept, flags + collapse_flags
 
 
+def _marker_key(body: str) -> str:
+    """One marker's identity, compared rather than printed: `1, 2` and `1,2` agree."""
+    return ",".join(part.strip() for part in str(body or "").split(","))
+
+
 def collapse_repeated_citations(answer: str) -> tuple[str, list[str]]:
-    """Drop a marker that repeats the one immediately before it in the same paragraph.
+    """Keep one marker out of a run of the same citation in one paragraph.
 
     Reported from a printed `/ehr` (2026-11-02): one paragraph carried the same section's
-    pill three times, once per sentence, so the evidence markers rather than the prose
-    were what the paragraph looked like. The rule lives here, not in the renderer, because
-    this module is the single owner of what a marker is and of whether it survives
-    settlement — a browser that decides not to draw one has taken a citation decision and
-    left the prose and the evidence disagreeing on the server.
+    pill on every sentence, and again on 2026-11-03, when the hospital course was cited
+    four times in four consecutive sentences. The markers rather than the prose were what
+    the paragraph looked like. The rule lives here, not in the renderer, because this
+    module is the single owner of what a marker is and of whether it survives settlement —
+    a browser that decides not to draw one has taken a citation decision and left the
+    prose and the evidence disagreeing on the server.
 
-    Narrow on purpose. A marker is dropped only when the marker immediately before it in
-    the same paragraph names the SAME citation — compared after expansion, so `^[1]` and
-    `^[1]` collapse and `^[1, 2]` does not collapse into `^[1]`. A paragraph that
-    alternates two sources keeps every marker, and one that leaves a source and returns to
-    it keeps the return: the rule is about repetition, not about how often a source may be
-    cited.
+    A RUN, not a pair, and the LAST marker of it survives. That is the change of
+    2026-11-03: the earlier rule dropped a marker only when the one immediately before it
+    named the same source, and it kept the FIRST of the pair — so three consecutive
+    sentences on one passage lost two markers and the paragraph still opened with a badge,
+    and four sentences lost three. Keeping the last also subsumes the within-sentence case:
+    a sentence that wrote `^[4] ^[4]` keeps the one at its end.
+
+    A run is broken by a different marker, by a paragraph break, or by a marker that is not
+    a note passage at all. So `^[3]` then `^[4]` keeps both, `^[4]`, `^[3]`, `^[4]` keeps
+    all three — the run was interrupted, and the return to a source is a claim about the
+    sentence it is attached to — and a published record's `^[PMID: …]` is never collapsed,
+    because two sentences citing the same cohort study are two claims about that study
+    rather than one marker repeated.
 
     The reference list is unaffected — it is built from `sources`, not from the prose — so
-    the row is still there to be opened, and the marker beside the first sentence is still
-    the way to it. Each removal is flagged, because a silent deletion of a citation is the
-    kind of change this layer exists to make visible.
+    the row is still there to be opened. Each removal is flagged, because a silent deletion
+    of a citation is the kind of change this layer exists to make visible.
     """
     if "^[" not in (answer or ""):
         return answer, []
+    markers = [
+        (match.start(), match.end(), _marker_key(match.group(1)))
+        for match in _ANY_MARKER_RE.finditer(answer)
+    ]
+    if len(markers) < 2:
+        return answer, []
+
+    removals: list[tuple[int, int]] = []
     flags: list[str] = []
+    run: list[tuple[int, int, str]] = []
+
+    def close_run() -> None:
+        """Every marker of a run but the last one goes."""
+        for start, end, body in run[:-1]:
+            removals.append((start, end))
+            flags.append(f"citation_repeat_collapsed:^{body}")
+
+    previous_end = 0
+    for start, end, body in markers:
+        # A published record's badge is not a section marker: a paragraph naming the same
+        # cohort twice is making two claims, so it breaks the run and joins none.
+        if not _NUMERIC_BODY_RE.fullmatch(body or ""):
+            close_run()
+            run = []
+        elif _PARAGRAPH_BREAK.search(answer, previous_end, start) or (
+            run and run[-1][2] != body
+        ):
+            close_run()
+            run = [(start, end, body)]
+        else:
+            run.append((start, end, body))
+        previous_end = end
+    close_run()
+
+    if not removals:
+        return answer, []
     out: list[str] = []
     last = 0
-    # The body of the last marker that survived, where it ended, and whether a paragraph
-    # break has fallen since. A repeat is only a repeat inside one paragraph.
-    previous: str | None = None
-    previous_end = 0
-    for match in _ANY_MARKER_RE.finditer(answer):
-        if _PARAGRAPH_BREAK.search(answer, previous_end, match.start()):
-            previous = None
-        body = " ".join(match.group(1).split())
-        if body and body == previous:
-            start = match.start()
-            while start > last and answer[start - 1] in " \t":
-                start -= 1
-            out.append(answer[last:start])
-            last = match.end()
-            previous_end = match.end()
-            flags.append(f"citation_repeat_collapsed:^{body}")
-            continue
-        previous = body
-        previous_end = match.end()
-        out.append(answer[last:match.end()])
-        last = match.end()
+    for start, end in removals:
+        # The space in front of a removed marker goes with it, so removing the marker
+        # before a full stop does not leave "morphine ." behind.
+        cut = start
+        while cut > last and answer[cut - 1] in " \t":
+            cut -= 1
+        out.append(answer[last:cut])
+        last = end
     out.append(answer[last:])
     return _tidy_removed_markers("".join(out)), flags
 

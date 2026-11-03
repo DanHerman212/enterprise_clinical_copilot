@@ -640,10 +640,18 @@ def resolve_source(passages: list[dict], passage_n: int,
     """Resolve one citation to the passage and section body it supports.
 
     `passage_n` is the model's ORIGINAL 1-based passage number (before
-    renumbering). `sections` is the question's section intent; when given, the
-    section is located by label or extracted from any whole-note chunk, and
-    the model's number is ignored — the model mis-numbers citations (a meds
-    answer cites ^[1] while its supporting passage sits elsewhere).
+    renumbering). `sections` is the question's section intent: when the passages contain
+    one of those sections — as a labelled passage, or embedded in a whole-note chunk — that
+    body is what the reader is shown, because the model mis-numbers citations and the intent
+    knows what the question asked for.
+
+    The intent is a PREFERENCE and never a veto. A citation that indexes a passage the tool
+    actually returned resolves to that passage and its own section, whatever the intent says.
+    It used to be a veto: with intent given and no matching section in the passages, a valid
+    `^[1]` resolved to "not available" — so a `/meds` answer whose only passage was the
+    hospital course told the reader no medication information existed while citing a passage
+    that named three drugs (90000069, 2026-11-03). "Not available" is now reserved for the
+    two cases where there is nothing to show: no passages at all, or a number outside them.
 
     Returns {"section", "text"}. Callers own the badge number and the query.
     """
@@ -669,11 +677,14 @@ def resolve_source(passages: list[dict], passage_n: int,
         if cited is not None:
             break
 
-    if cited is None and sections:
-        # The note has NONE of the targeted sections. The deterministic answer
-        # is "not available", not a passage mined from unrelated narrative.
+    # Nothing to show, and nothing to prefer: an empty retrieval, or a number that indexes
+    # no passage. These are the only two "not available" cases.
+    if not passages:
         return {"section": "not available",
-                "text": _unavailable_text(sections[0])}
+                "text": _unavailable_text(sections[0] if sections else "")}
+    if cited is None and not (1 <= passage_n <= len(passages)):
+        return {"section": "not available",
+                "text": _unavailable_text(sections[0] if sections else "")}
 
     if cited is None:
         # Clamp to a real passage so an out-of-range number never raises.
@@ -986,16 +997,52 @@ def resolve_sources(answer: str, citation_map: dict[str, int],
 # The section names as a clinician reads them. A separate vocabulary from
 # `feature_labels`, which names MODEL features: these name parts of a note, and the
 # two happen to share the word "discharge" without meaning the same thing by it.
+#
+# One entry per canonical section in `services/mcp/retrieval/sections.py` (2026-11-03).
+# The registry grew to cover the whole cohort, and every name it can produce has to be
+# readable here: the fallback below turns an unmapped key into its own underscores, so an
+# unmapped section is not a crash but a citation labelled "admission diagnosis" in lower
+# case beside ones that are capitalised, which is the sort of detail a reader sees and a
+# test does not. `tests/agent/test_section_labels.py` holds the two maps to the registry.
 _SECTION_LABELS = {
+    "name": "Patient name",
+    "unit_no": "Unit number",
+    "admission_date": "Admission date",
+    "discharge_date": "Discharge date",
+    "date_of_birth": "Date of birth",
+    "sex": "Sex",
+    "service": "Service",
+    "allergies": "Allergies",
+    "attending": "Attending physician",
+    "chief_complaint": "Chief complaint",
+    "major_procedure": "Major surgical or invasive procedure",
     "history_of_present_illness": "History of present illness",
+    "review_of_systems": "Review of systems",
+    "past_medical_history": "Past medical history",
+    "past_surgical_history": "Past surgical history",
+    "social_history": "Social history",
+    "family_history": "Family history",
+    "physical_exam": "Physical exam",
+    "pertinent_results": "Pertinent results",
     "brief_hospital_course": "Brief hospital course",
-    "discharge_diagnosis": "Discharge diagnosis",
-    "discharge_medications": "Discharge medications",
+    "medications_on_admission": "Medications on admission",
     "medications_on_transfer": "Medications on transfer",
-    "discharge_instructions": "Discharge instructions",
-    "discharge_condition": "Discharge condition",
+    "discharge_medications": "Discharge medications",
     "discharge_disposition": "Discharge disposition",
+    "admission_diagnosis": "Admission diagnosis",
+    "discharge_diagnosis": "Discharge diagnosis",
+    "discharge_condition": "Discharge condition",
+    "discharge_instructions": "Discharge instructions",
+    "discharge_summary": "Discharge summary",
     "followup_instructions": "Follow-up instructions",
+    "facility": "Facility",
+    "complications": "Complications",
+    "consults": "Consultations",
+    "assessment_and_plan": "Assessment and plan",
+    "pathology": "Pathology",
+    "infections": "Infections",
+    "transfusions": "Blood transfusions",
+    "indications": "Indications for the surgery",
     # Not a note heading: a laboratory trajectory, the other channel a chart answer can
     # rest on. It is here because this map is where a section key becomes words a reader
     # sees, and a lab citation that fell through to the generic branch would read
@@ -1023,15 +1070,44 @@ def _section_label(section: object) -> str:
 #: A section this map has not caught falls back to `_section_label`, title-cased, because a
 #: new section arriving as an empty pill is worse than one arriving long.
 _PILL_SECTION_LABELS = {
+    "name": "Patient Name",
+    "unit_no": "Unit Number",
+    "admission_date": "Admission Date",
+    "discharge_date": "Discharge Date",
+    "date_of_birth": "Date of Birth",
+    "sex": "Sex",
+    "service": "Service",
+    "allergies": "Allergies",
+    "attending": "Attending Physician",
+    "chief_complaint": "Chief Complaint",
+    "major_procedure": "Major Procedure",
     "history_of_present_illness": "History of Present Illness",
+    "review_of_systems": "Review of Systems",
+    "past_medical_history": "Past Medical History",
+    "past_surgical_history": "Past Surgical History",
+    "social_history": "Social History",
+    "family_history": "Family History",
+    "physical_exam": "Physical Exam",
+    "pertinent_results": "Pertinent Results",
     "brief_hospital_course": "Brief Hospital Course",
-    "discharge_diagnosis": "Discharge Diagnosis",
-    "discharge_medications": "Discharge Medications",
+    "medications_on_admission": "Medications on Admission",
     "medications_on_transfer": "Medications on Transfer",
-    "discharge_instructions": "Discharge Instructions",
-    "discharge_condition": "Discharge Condition",
+    "discharge_medications": "Discharge Medications",
     "discharge_disposition": "Discharge Disposition",
+    "admission_diagnosis": "Admission Diagnosis",
+    "discharge_diagnosis": "Discharge Diagnosis",
+    "discharge_condition": "Discharge Condition",
+    "discharge_instructions": "Discharge Instructions",
+    "discharge_summary": "Discharge Summary",
     "followup_instructions": "Follow-up Instructions",
+    "facility": "Facility",
+    "complications": "Complications",
+    "consults": "Consultations",
+    "assessment_and_plan": "Assessment and Plan",
+    "pathology": "Pathology",
+    "infections": "Infections",
+    "transfusions": "Blood Transfusions",
+    "indications": "Indications for the Surgery",
     "laboratory_trends": "Laboratory Trends",
 }
 

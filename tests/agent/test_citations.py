@@ -15,6 +15,7 @@ from services.agent.postprocess.citations import (  # noqa: E402
     SECTION_ALIASES,
     citation_remap,
     cited_numbers,
+    collapse_repeated_citations,
     dedupe_list_citations,
     extract_section,
     first_citation,
@@ -326,6 +327,104 @@ class TestListCitationDeduplication:
         assert dedupe_list_citations(answer).splitlines() == [
             "Findings are summarised below ^[2]:", "- A", "- B",
         ]
+
+
+class TestRepeatedCitationCollapsing:
+    """One marker per run of one source inside a paragraph.
+
+    Measured on the live `/ehr` turn for 90000069 (2026-11-03): the hospital course was
+    cited four times in four consecutive sentences, so the paragraph read as four badges
+    with prose between them. The rule keeps the LAST marker of a run — the sentence that
+    closes the passage's evidence keeps its pill — and it is a run rather than a pair, so
+    three or four sentences on one passage lose all but one marker.
+
+    What it must never do is delete a citation that carries information: a change of source
+    ends the run, a return to a source after a different one is a new run, and a published
+    record's PMID badge is not a section marker and is not touched.
+    """
+
+    def test_back_to_back_sentences_on_one_passage_keep_the_last_marker(self):
+        answer = ("Postoperatively, the patient had shoulder pain managed with IV morphine "
+                  "^[4]. The patient also had slight dysphagia treated with Decadron ^[4].")
+
+        collapsed, flags = collapse_repeated_citations(answer)
+
+        assert collapsed == (
+            "Postoperatively, the patient had shoulder pain managed with IV morphine. "
+            "The patient also had slight dysphagia treated with Decadron ^[4].")
+        assert flags == ["citation_repeat_collapsed:^4"]
+
+    def test_a_long_run_loses_every_marker_but_the_last(self):
+        answer = "A ^[4]. B ^[4]. C ^[4]. D ^[4]."
+
+        collapsed, flags = collapse_repeated_citations(answer)
+
+        assert collapsed == "A. B. C. D ^[4]."
+        assert flags == ["citation_repeat_collapsed:^4"] * 3
+
+    def test_a_repeat_inside_one_sentence_keeps_the_marker_at_its_end(self):
+        answer = "The discharge was uneventful ^[4] and uncomplicated ^[4]."
+
+        collapsed, _ = collapse_repeated_citations(answer)
+
+        assert collapsed == "The discharge was uneventful and uncomplicated ^[4]."
+
+    def test_two_different_sources_are_both_kept(self):
+        answer = "She was anticoagulated ^[3]. The INR was therapeutic ^[4]."
+
+        collapsed, flags = collapse_repeated_citations(answer)
+
+        assert collapsed == answer
+        assert flags == []
+
+    def test_an_interrupted_run_keeps_the_return(self):
+        """`^[4]`, `^[3]`, `^[4]` is three claims, not a repeated marker."""
+        answer = "First ^[4]. Second ^[3]. Third ^[4]."
+
+        collapsed, flags = collapse_repeated_citations(answer)
+
+        assert collapsed == answer
+        assert flags == []
+
+    def test_the_same_marker_in_two_paragraphs_is_kept_in_both(self):
+        """A paragraph break is a new claim: the second section cites the same passage."""
+        answer = ("First paragraph rests on the course ^[2].\n\n"
+                  "Second paragraph rests on it again ^[2].")
+
+        collapsed, flags = collapse_repeated_citations(answer)
+
+        assert collapsed == answer
+        assert flags == []
+
+    def test_a_published_record_badge_is_never_collapsed(self):
+        answer = ("The first cohort reported 2.5% ^[PMID: 24108298]. The second reported "
+                  "2.9% ^[PMID: 24108298].")
+
+        collapsed, flags = collapse_repeated_citations(answer)
+
+        assert collapsed == answer
+        assert flags == []
+
+    def test_a_pmid_badge_ends_the_run_of_section_markers(self):
+        answer = "Findings ^[4]. A cohort reports this ^[PMID: 24108298]. Impression ^[4]."
+
+        collapsed, flags = collapse_repeated_citations(answer)
+
+        assert collapsed == answer
+        assert flags == []
+
+    def test_a_marker_is_compared_as_a_set_not_as_spacing(self):
+        answer = "First ^[1, 2]. Second ^[1,2]."
+
+        collapsed, flags = collapse_repeated_citations(answer)
+
+        assert collapsed == "First. Second ^[1,2]."
+        assert flags == ["citation_repeat_collapsed:^1,2"]
+
+    def test_prose_without_markers_passes_through_untouched(self):
+        answer = "A sentence with no evidence markers at all."
+
+        assert collapse_repeated_citations(answer) == (answer, [])
 
     def test_a_list_citing_different_passages_is_left_alone(self):
         answer = "Findings:\n- A ^[1]\n- B ^[3]\n- C ^[1]"

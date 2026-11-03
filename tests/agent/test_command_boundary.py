@@ -425,21 +425,23 @@ def test_the_summary_prompt_makes_sections_conditional_on_the_evidence():
     """A heading the passages do not support is a heading the model must omit.
 
     The sections are still named, because the interface renders them, but three of them
-    are now conditional. Ordering all four unconditionally is what produced a fabricated
+    are conditional. Ordering all four unconditionally is what produced a fabricated
     discharge plan for 90000028 and an "admission" for 90000073 on 2026-10-20: to satisfy
     the format the model wrote sections the note did not contain.
 
-    Asserted as the section names plus the omission rule, so the wording can be improved
-    without failing a test that only ever checked the requirement is still stated.
+    The four labels changed on 2026-11-03, when the retrieval tool started returning the
+    whole note rather than four whitelisted sections: the summary can now describe the
+    presentation and the operation, so it asks for them. What this asserts is unchanged —
+    every label named, and omission sanctioned.
     """
     formatting = prompts.formatting_for("summarize")
 
     # The inpatient heading, and the outpatient counterpart that replaces it.
-    assert "Hospital course" in formatting
+    assert "Presentation & diagnosis" in formatting
     assert "Clinical course" in formatting
     # Both inventable sections are named as conditional, and omission is sanctioned.
-    assert "Discharge diagnosis" in formatting
-    assert "Discharge instructions" in formatting
+    assert "Hospital course & procedures" in formatting
+    assert "Discharge plan & medications" in formatting
     assert "omit" in formatting.lower()
     # The risk section still has to be asked for.
     assert "Readmission risk & trajectory" in formatting

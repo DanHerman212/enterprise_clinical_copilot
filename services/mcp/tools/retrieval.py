@@ -49,10 +49,18 @@ from services.mcp.dependencies.features import (
     get_feature_source,
 )
 from services.mcp.retrieval.sections import (
+    ADMISSION_DIAGNOSIS,
+    ASSESSMENT_AND_PLAN,
+    BRIEF_HOSPITAL_COURSE,
+    DISCHARGE_DIAGNOSIS,
     DISCHARGE_INSTRUCTIONS,
     DISCHARGE_MEDICATIONS,
-    SUMMARY_SECTIONS,
+    DISCHARGE_SUMMARY,
+    HISTORY_OF_PRESENT_ILLNESS,
+    MEDICATIONS_ON_ADMISSION,
+    MEDICATIONS_ON_TRANSFER,
     parse_note,
+    redaction_profile,
 )
 from services.mcp.retrieval.chunking import (
     DEFAULT_MAX_CHARS,
@@ -523,16 +531,76 @@ def _section_for_query(query: str) -> str | None:
     return None
 
 
-def _search_sections(hadm_id: int) -> dict[str, Any]:
-    """One passage per summary section, merged in a fixed order.
+def _norm_body(text: str) -> str:
+    """A section body folded to the form two sections are compared in.
 
-    Deterministic section coverage for summary questions WITHOUT relying on the
-    embedding index: re-parse the note and re-chunk it with the same
-    deterministic chunker that built the index, so every summary section present
-    in the note is returned with its exact chunk text. The agent cites ^[n] in this
-    fixed order, so each section maps to a distinct citation number and recall
-    is 100% by construction — no top-k luck, no whole-note leakage, no
-    dropped sections.
+    Whitespace collapsed and case removed, so a note that prints the same block under two
+    headings with different line wrapping is recognised as one block. Nothing else is
+    folded: two bodies that differ by a word are two statements, and consolidating them
+    would be an editorial decision this layer is not entitled to make.
+    """
+    return " ".join(str(text or "").split()).lower()
+
+
+def _keep_final_diagnosis(passage: dict[str, Any], incoming: str, note_id: str,
+                          ordinals: dict[str, int]) -> None:
+    """Retag a duplicated admission-diagnosis passage as the discharge diagnosis.
+
+    Called when a body has been seen before. The common shape is a note that lists the
+    same diagnoses under `ADMISSION DIAGNOSES` and again under `DISCHARGE DIAGNOSES`: one
+    block, two headings. The passage is kept once, and the heading that survives is the
+    final one — a summary asks what the patient left with, and a citation labelled
+    "Admission diagnosis" pointing at the discharge list is a label the note contradicts.
+
+    Only that pair is upgraded. Any other duplicate keeps the label it arrived with: this
+    is a rule about which of two names for one block is the better name, not a rename pass
+    over the whole note.
+    """
+    if passage.get("section") != ADMISSION_DIAGNOSIS or incoming != DISCHARGE_DIAGNOSIS:
+        return
+    # The admission ordinal goes back into the pool: the passage is no longer an admission
+    # diagnosis, so a later, genuinely different admission block should be `_1` rather than
+    # `_2` with nothing before it.
+    if ordinals.get(ADMISSION_DIAGNOSIS):
+        ordinals[ADMISSION_DIAGNOSIS] -= 1
+    ordinals[DISCHARGE_DIAGNOSIS] = ordinals.get(DISCHARGE_DIAGNOSIS, 0) + 1
+    passage["section"] = DISCHARGE_DIAGNOSIS
+    passage["id"] = f"{note_id}_{DISCHARGE_DIAGNOSIS}_{ordinals[DISCHARGE_DIAGNOSIS]}"
+
+
+def _search_sections(hadm_id: int) -> dict[str, Any]:
+    """Every section of the discharge note, in the order the note states them.
+
+    This is what `/ehr`'s narrative rests on, so it is lossless by construction: the note
+    is parsed once with `parse_note` and each parsed section becomes one passage, with the
+    text the parser found and the name it gave it. No chunker, no section whitelist, no
+    per-section truncation to the first chunk.
+
+    What it replaced, and why that was wrong: the previous version re-chunked the note with
+    the index's chunker and returned the FIRST chunk of each of four `SUMMARY_SECTIONS`.
+    Three separate losses followed from that. A note's sections outside those four —
+    operative procedures, complications, consults, the assessment and plan — were never
+    returned at all, so the narrative could not mention the operation the admission was
+    for. A section longer than one chunk lost its tail, which for a hospital course is
+    usually where the outcome is. And sections were re-ordered into the whitelist's
+    order, so a summary that cites `^[3]` and `^[4]` pointed at passages that were not in
+    the order the note reads in. Measured on the cohort 2026-11-03: fourteen of eighty-seven
+    notes had content the old path could not reach.
+
+    Order is the document's, which is also the order the formatting turn reads and the
+    citation ledger numbers. Duplicate section names keep their own ordinals — a note that
+    states a diagnosis on admission and again at discharge yields two passages, `_1` and
+    `_2`, rather than one overwriting the other.
+
+    Byte-identical bodies are collapsed (2026-11-03): a note that repeats one block under
+    `ADMISSION DIAGNOSES` and `DISCHARGE DIAGNOSES` is stating one fact twice, and two
+    passages for it give the prose two citations for one sentence. The surviving passage
+    keeps the final diagnosis's name, because that is the heading a summary is answered by.
+
+    The text before the first recognised heading is real note text and is emitted as the
+    history of present illness, which is what an unheaded preamble of a discharge summary
+    is. A note with no recognised headings at all is a narrative note; the whole of it is
+    returned as one passage rather than as nothing.
     """
     if not valid_hadm_id(hadm_id):
         return _error(hadm_id, "bad_request", "hadm_id must be a positive integer")
@@ -548,90 +616,79 @@ def _search_sections(hadm_id: int) -> dict[str, Any]:
         return {"hadm_id": hadm_id, "query": "discharge notes",
                 "returned": 0, "passages": [],
                 "note": "no discharge note found for this admission"}
-    chunks = _chunk_texts_for(note_id, text)
-    by_section: dict[str, list[tuple[str, str]]] = {}
-    for cid, ctext in chunks.items():
-        m = _SECTION_RE.search(cid)
-        if m:
-            by_section.setdefault(m.group("section"), []).append((cid, ctext))
 
-    merged: list[dict[str, Any]] = []
-    for expected in SUMMARY_SECTIONS:
-        picks = by_section.get(expected)
-        if not picks:
-            continue  # note lacks this section -> nothing to cite
-        cid, ctext = picks[0]
-        # These passages are re-parsed from the note, not retrieved by the
-        # index, so an embedding score would be a fabrication. Mark them
-        # honestly instead of the old hardcoded 1.0.
-        merged.append({"id": cid, "section": expected, "text": ctext,
-                       "retrieval": "deterministic"})
+    # Folded exactly as `parse_note` folds it, because the offsets below are offsets into
+    # the folded text and a note saved with CRLF would otherwise slice the preamble at the
+    # wrong character.
+    normalised = text.replace("\r\n", "\n").replace("\r", "\n")
+    parsed = parse_note(text)
 
-    if not merged:
-        # A real note can lack all discharge-narrative summary sections (e.g. a
-        # speech-therapy or narrative note). Honest empty rather than guessing.
+    passages: list[dict[str, Any]] = []
+    ordinals: dict[str, int] = {}
+    #: Normalised body -> the index of the passage that already carries it. A note that
+    #: states the same block under two headings is stating one thing twice, and a passage
+    #: per heading gives the model two citations for one fact — which is exactly what
+    #: `/ehr` did on 90000069, where `^[1]` and `^[2]` were the same two diagnoses
+    #: (2026-11-03).
+    seen_bodies: dict[str, int] = {}
+
+    def emit(name: str, body: str) -> None:
+        key = _norm_body(body)
+        existing = seen_bodies.get(key)
+        if existing is not None:
+            _keep_final_diagnosis(passages[existing], name, note_id, ordinals)
+            return
+        ordinals[name] = ordinals.get(name, 0) + 1
+        passages.append({
+            "id": f"{note_id}_{name}_{ordinals[name]}",
+            "section": name,
+            "text": body,
+            "retrieval": "deterministic",
+        })
+        seen_bodies[key] = len(passages) - 1
+
+    if parsed.sections:
+        first = parsed.sections[0]
+        preamble = normalised[:first.start].strip()
+        if preamble and not redaction_profile(preamble).is_placeholder_only:
+            emit("history_of_present_illness", preamble)
+        for section in parsed.sections:
+            body = section.body.strip()
+            if not body or redaction_profile(body).is_placeholder_only:
+                continue
+            emit(section.name, body)
+    else:
+        # A headingless narrative note. One passage, labelled for what it is, rather than
+        # an empty result: the absence of headings is not the absence of a note.
+        body = normalised.strip()
+        if body and not redaction_profile(body).is_placeholder_only:
+            emit("discharge_summary", body)
+
+    if not passages:
+        # Either every section was redaction placeholders or the note is empty of prose.
+        # Honest empty rather than a fabricated passage.
         return {"hadm_id": hadm_id, "query": "discharge notes",
                 "returned": 0, "passages": [],
-                "note": "no discharge summary sections found in this note"}
+                "note": "no readable sections found in this note"}
     return {"hadm_id": hadm_id, "query": "discharge notes",
-            "returned": len(merged), "passages": merged}
-
-
-def _search_section_chunks(hadm_id: int, section: str) -> dict[str, Any]:
-    """EVERY chunk of ONE discharge-note section, in ordinal order.
-
-    `_search_sections` returns one passage per section — the FIRST chunk — which is
-    right for a summary and wrong for a list. A discharge medication list that
-    rolls onto a second chunk loses its tail there, and a silently truncated
-    medication list is a clinical safety problem rather than a cosmetic one.
-
-    Deterministic in the same sense as its sibling: the note is re-parsed and
-    re-chunked with the chunker that built the index, so each passage is exact
-    section text and no embedding is consulted.
-    """
-    if not valid_hadm_id(hadm_id):
-        return _error(hadm_id, "bad_request", "hadm_id must be a positive integer")
-    note_id, text = _fetch_note_row(hadm_id)
-    if not text:
-        unknown = _unknown_if_absent(hadm_id)
-        if unknown:
-            return unknown
-        return {"hadm_id": hadm_id, "query": section, "returned": 0, "passages": [],
-                "note": "no discharge note found for this admission"}
-
-    picks: list[tuple[str, str]] = []
-    for cid, ctext in _chunk_texts_for(note_id, text).items():
-        match = _SECTION_RE.search(cid)
-        if match and match.group("section") == section:
-            picks.append((cid, ctext))
-    # The chunk id ends in the ordinal, and sorting those as strings would put
-    # chunk 10 before chunk 2 — reordering the medication list, which is the one
-    # thing this function exists to keep in order.
-    picks.sort(key=lambda pair: int(pair[0].rsplit("_", 1)[-1]))
-
-    if not picks:
-        return {"hadm_id": hadm_id, "query": section, "returned": 0, "passages": [],
-                "note": f"the note has no {section} section"}
-
-    return {
-        "hadm_id": hadm_id,
-        "query": section,
-        "returned": len(picks),
-        "passages": [
-            {"id": cid, "section": section, "text": ctext,
-             "retrieval": "deterministic"}
-            for cid, ctext in picks
-        ],
-    }
+            "returned": len(passages), "passages": passages}
 
 
 async def rag_search_sections(hadm_id: int) -> RetrievalResult | ToolError:
-    """Retrieve one cited passage per summary section (history of present
-    illness, hospital course, discharge diagnosis, discharge instructions),
-    merged in that fixed order. Use for summarization questions so the answer
-    can cite each section distinctly. The discharge medications section is not
-    among them — call `discharge_medications` for a medication list, which
-    returns every chunk of that section rather than its first.
+    """Retrieve every section of the admission's discharge note, in document order.
+
+    Use for summarization questions. Each passage is one section as the note states it,
+    with the heading's own name, so the answer can cite the hospital course and the
+    operative procedures as distinct sources and a reader who opens a marker lands on the
+    passage that supports the sentence they were reading.
+
+    Every section is returned, not a chosen few, and each is whole. The sections a
+    narration can draw on are the record's, not this tool's, and a tool that decided which
+    parts of a note were worth reading would be deciding what the summary could say.
+
+    `discharge_medications` is included here as one passage among the rest; call
+    `discharge_medications` when the complete medication list is what is needed, since that
+    path returns the discharge-instructions section beside it and the doses live there.
 
     Args:
         hadm_id: MIMIC-IV hospital admission id.
@@ -644,40 +701,123 @@ async def rag_search_sections(hadm_id: int) -> RetrievalResult | ToolError:
         return _error(hadm_id, "invalid_tool_response", "Retrieval response was malformed.")
 
 
-# The two sections a medication list is spread across, in the order the extraction
-# should read them: the list of names first, then the passage that carries the doses.
-MEDICATION_SECTIONS = (DISCHARGE_MEDICATIONS, DISCHARGE_INSTRUCTIONS)
+#: The sections that exist to carry a medication list. A note that has any of them is a
+#: note whose discharge medications are where the document says they are.
+_DEDICATED_MED_SECTIONS = (
+    DISCHARGE_MEDICATIONS,
+    MEDICATIONS_ON_TRANSFER,
+    DISCHARGE_INSTRUCTIONS,
+)
+
+#: Where a discharge prescription goes when the note has no medication section at all.
+#: Surgical notes write the prescriptions at the end of the course — "we will send her home
+#: with Medrol … Darvocet and Flexeril" — and a headingless narrative note holds the only
+#: medication mention the record has. Measured 2026-11-03: `/meds` on 90000069 returned
+#: nothing, because the old path asked the chunker for two sections the note does not have.
+_FALLBACK_MED_SECTIONS = (
+    ASSESSMENT_AND_PLAN,
+    BRIEF_HOSPITAL_COURSE,
+    MEDICATIONS_ON_ADMISSION,
+    HISTORY_OF_PRESENT_ILLNESS,
+    DISCHARGE_SUMMARY,
+)
+
+
+def _ordered_sections(parsed, normalised: str) -> list[tuple[str, str]]:
+    """Every readable section of the note, in document order, naming the preamble.
+
+    `_search_sections` builds this list inline; it is repeated here rather than shared
+    because that function's shape is fixed by the `/ehr` contract and this one needs the
+    same reading of the document — including the text before the first heading, which is
+    the history in a discharge summary, and a headingless note, which is one narrative.
+    """
+    found: list[tuple[str, str]] = []
+    if parsed.sections:
+        first = parsed.sections[0]
+        preamble = normalised[:first.start].strip()
+        if preamble and not redaction_profile(preamble).is_placeholder_only:
+            found.append((HISTORY_OF_PRESENT_ILLNESS, preamble))
+        for section in parsed.sections:
+            body = section.body.strip()
+            if not body or redaction_profile(body).is_placeholder_only:
+                continue
+            found.append((section.name, body))
+    else:
+        body = normalised.strip()
+        if body and not redaction_profile(body).is_placeholder_only:
+            found.append((DISCHARGE_SUMMARY, body))
+    return found
+
+
+def _no_medication_sections_payload(hadm_id: int, note_id: str | None) -> dict[str, Any]:
+    """The honest empty: this note states no discharge medications to cite."""
+    _LOG.info("discharge_medications: no medication section in note %s (hadm %s)",
+              note_id, hadm_id)
+    return {"hadm_id": hadm_id, "query": "discharge medications",
+            "returned": 0, "passages": [],
+            "note": "no discharge medication section found in this note"}
 
 
 def _search_medication_sections(hadm_id: int) -> dict[str, Any]:
-    """Every chunk of the medications section, then every chunk of the instructions.
+    """The note's medication text, whole, from wherever this note keeps it.
 
-    Merged rather than concatenated into one blob so each passage keeps its own
-    section label: the extraction is told which passage is the list and which carries
-    the doses, and the citation layer can still say where a value came from.
+    One pass over the parsed document, and a fallback that is the point of the rewrite.
+    The old version asked the chunker for two named sections and concatenated their chunks,
+    so a note without a `discharge_medications` section returned nothing at all — which is
+    most surgical notes, where the prescriptions sit at the end of the course, and any note
+    that has no headings. `/meds` on 90000069 answered "no medications" for a record that
+    names three (2026-11-03).
 
-    An error from either section is the whole answer. A partial list served as a
-    complete one is the failure mode this avoids: better to say the retrieval failed
-    than to return four of nine drugs and let the grid imply the patient is on four.
+    So: if the note has a section that exists to hold a medication list, those sections are
+    the answer and nothing else is. If it has none, the sections a discharge prescription is
+    actually written in are the answer — the assessment and plan, the course, the admission
+    list, the history, or the whole of a headingless note. Never both: a record with a
+    dedicated list is read from that list, because the narrative's inpatient drugs are not
+    the patient's discharge medications and mixing them is how a `/meds` grid lists IV
+    morphine as something to take at home.
+
+    Every chosen section is returned whole — the truncation to the first chunk is gone — and
+    duplicate bodies are dropped, so a note that states the same list twice cites it once.
     """
-    merged: dict[str, Any] = {
-        "hadm_id": hadm_id,
-        "query": "discharge medications",
-        "returned": 0,
-        "passages": [],
-    }
-    notes: list[str] = []
-    for section in MEDICATION_SECTIONS:
-        payload = _search_section_chunks(hadm_id, section)
-        if payload.get("error"):
-            return payload
-        merged["passages"].extend(payload.get("passages") or [])
-        if payload.get("note"):
-            notes.append(str(payload["note"]))
-    merged["returned"] = len(merged["passages"])
-    if not merged["passages"] and notes:
-        merged["note"] = "; ".join(notes)
-    return merged
+    if not valid_hadm_id(hadm_id):
+        return _error(hadm_id, "bad_request", "hadm_id must be a positive integer")
+    note_id, text = _fetch_note_row(hadm_id)
+    if not text:
+        unknown = _unknown_if_absent(hadm_id)
+        if unknown:
+            return unknown
+        return {"hadm_id": hadm_id, "query": "discharge medications",
+                "returned": 0, "passages": [],
+                "note": "no discharge note found for this admission"}
+
+    normalised = text.replace("\r\n", "\n").replace("\r", "\n")
+    ordered = _ordered_sections(parse_note(text), normalised)
+
+    dedicated = [entry for entry in ordered if entry[0] in _DEDICATED_MED_SECTIONS]
+    chosen = dedicated or [
+        entry for entry in ordered if entry[0] in _FALLBACK_MED_SECTIONS
+    ]
+
+    passages: list[dict[str, Any]] = []
+    ordinals: dict[str, int] = {}
+    seen_bodies: set[str] = set()
+    for name, body in chosen:
+        key = _norm_body(body)
+        if key in seen_bodies:
+            continue
+        seen_bodies.add(key)
+        ordinals[name] = ordinals.get(name, 0) + 1
+        passages.append({
+            "id": f"{note_id}_{name}_{ordinals[name]}",
+            "section": name,
+            "text": body,
+            "retrieval": "deterministic",
+        })
+
+    if not passages:
+        return _no_medication_sections_payload(hadm_id, note_id)
+    return {"hadm_id": hadm_id, "query": "discharge medications",
+            "returned": len(passages), "passages": passages}
 
 
 async def discharge_medications(hadm_id: int) -> RetrievalResult | ToolError:

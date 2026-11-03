@@ -477,51 +477,305 @@ def test_passage_text_is_the_section_chunk_not_the_whole_note():
     assert "Pneumonia" not in text
 
 
-def test_search_sections_is_deterministic_and_complete():
-    """_search_sections returns the summary's four sections in fixed order, with
-    the exact chunk text — 100% recall by construction, no whole-note leakage.
+def test_search_sections_returns_every_section_in_document_order():
+    """`_search_sections` is lossless: one passage per parsed section, in note order.
 
-    The storage spellings (`brief_hospital_course`, `discharge_diagnosis`) are
-    asserted rather than the document's, because a section name is part of every
-    chunk id in the search index: changing one costs a re-index.
+    The contract changed on 2026-11-03. It used to re-chunk the note and return the first
+    chunk of each of four whitelisted sections, which lost every other section of the note,
+    lost the tail of any section longer than a chunk, and returned the four in the
+    whitelist's order rather than the note's. A summary built on that could not mention the
+    operation the admission was for, and its citation numbers pointed at passages in an
+    order the note does not read in.
+
+    So what is asserted here is coverage and order, not a chosen four: every section the
+    parser recognises appears, carrying its own text and nothing else, in the sequence the
+    document states them.
     """
     with patch.object(rs, "_fetch_note_row",
                       lambda hadm: ("MT-1-DS", _SUMMARY_NOTE)):
         result = rs._search_sections(90000015)
 
-    assert result["returned"] == 4
     sections = [p["section"] for p in result["passages"]]
     assert sections == [
         "history_of_present_illness", "brief_hospital_course",
         "discharge_diagnosis", "discharge_instructions"]
-    # Each passage is that one section and nothing else: the hospital course
-    # passage must not carry the diagnosis, and the diagnosis passage must not
-    # carry the instructions.
+    assert result["returned"] == len(sections)
+    # Each passage is that one section and nothing else: the hospital course passage must
+    # not carry the diagnosis, and the diagnosis passage must not carry the instructions.
     by_section = {p["section"]: p["text"] for p in result["passages"]}
     assert "recovered well" in by_section["brief_hospital_course"]
     assert "Pneumonia" not in by_section["brief_hospital_course"]
     assert "Pneumonia" in by_section["discharge_diagnosis"]
     assert "antibiotic" not in by_section["discharge_diagnosis"]
-    # The medications section is deliberately not part of a summary — it has its
-    # own command, and its own tool that returns every chunk rather than one.
-    assert "discharge_medications" not in sections
+    # Ids are stable and carry the section, which is what the citation layer reads.
+    assert [p["id"] for p in result["passages"]] == [
+        "MT-1-DS_history_of_present_illness_1",
+        "MT-1-DS_brief_hospital_course_1",
+        "MT-1-DS_discharge_diagnosis_1",
+        "MT-1-DS_discharge_instructions_1",
+    ]
+    assert all(p["retrieval"] == "deterministic" for p in result["passages"])
 
 
-def test_search_sections_honest_empty_when_no_summary_sections():
-    """A note with none of the summary's four sections is an honest empty, not a
-    guess — and not a parse failure.
+_OPERATIVE_NOTE = (
+    "ADMISSION DIAGNOSIS: Right hip fracture.\n\n"
+    "OPERATIVE PROCEDURES: Hemiarthroplasty of the right hip.\n\n"
+    "COMPLICATIONS: None.\n\n"
+    "COURSE ON ADMISSION: She was admitted and taken to theatre the next morning.\n\n"
+    "DISCHARGE DIAGNOSIS: Right hip fracture, status post hemiarthroplasty.\n\n"
+    "DISCHARGE MEDICATIONS: Oxycodone 5 mg every six hours as needed.\n\n"
+    "DISCHARGE INSTRUCTIONS: Weight bear as tolerated. Follow up in two weeks."
+)
 
-    The note below does have sections the index holds; they are simply not the
-    ones a summary is made of, which is the case this distinguishes from a note
-    that failed to parse at all.
+
+def test_search_sections_keeps_the_operative_and_complication_blocks():
+    """The sections a summary could not previously reach are the ones it needed most.
+
+    Operative procedures, complications and the admission course sit between the diagnosis
+    and the discharge plan in this note. None of them was in the old whitelist, so all
+    three were absent from the tool result and a summary could not say the patient had an
+    operation or that it went without complication.
     """
-    note = ("SOCIAL HISTORY: The patient lives alone.\n\n"
-            "PHYSICAL EXAM: Alert and oriented.")
-    with patch.object(rs, "_fetch_note_row", lambda hadm: ("MT-2-DS", note)):
-        result = rs._search_sections(90000016)
+    with patch.object(rs, "_fetch_note_row", lambda hadm: ("MT-3-DS", _OPERATIVE_NOTE)):
+        result = rs._search_sections(90000018)
+
+    sections = [p["section"] for p in result["passages"]]
+    assert sections == [
+        "admission_diagnosis",
+        "major_procedure",
+        "complications",
+        "brief_hospital_course",
+        "discharge_diagnosis",
+        "discharge_medications",
+        "discharge_instructions",
+    ]
+    by_section = {p["section"]: p["text"] for p in result["passages"]}
+    assert "Hemiarthroplasty" in by_section["major_procedure"]
+    # "COMPLICATIONS: None." is its own section, not the tail of the procedure list.
+    assert by_section["complications"] == "None."
+    assert "taken to theatre" in by_section["brief_hospital_course"]
+
+
+def test_search_sections_keeps_two_diagnosis_blocks_apart():
+    """Admission and discharge diagnoses are two statements, not one key.
+
+    They shared a canonical name until 2026-11-03, so a note documenting both produced one
+    section whose heading was whichever came first. The passage carry the ordinal, so a
+    citation can name the one it quotes.
+    """
+    with patch.object(rs, "_fetch_note_row", lambda hadm: ("MT-3-DS", _OPERATIVE_NOTE)):
+        result = rs._search_sections(90000018)
+
+    by_section = {p["section"]: p["text"] for p in result["passages"]}
+    assert by_section["admission_diagnosis"] == "Right hip fracture."
+    assert "status post hemiarthroplasty" in by_section["discharge_diagnosis"]
+
+
+def test_search_sections_numbers_repeated_sections_without_overwriting():
+    """Two sections of the same name both survive, with incrementing ordinals."""
+    note = (
+        "DISCHARGE DIAGNOSIS: Pneumonia.\n\n"
+        "DISCHARGE DIAGNOSIS: Acute kidney injury.\n\n"
+        "HOSPITAL COURSE: Treated with antibiotics."
+    )
+    with patch.object(rs, "_fetch_note_row", lambda hadm: ("MT-4-DS", note)):
+        result = rs._search_sections(90000019)
+
+    assert [p["id"] for p in result["passages"]] == [
+        "MT-4-DS_discharge_diagnosis_1",
+        "MT-4-DS_discharge_diagnosis_2",
+        "MT-4-DS_brief_hospital_course_1",
+    ]
+    assert result["passages"][0]["text"] == "Pneumonia."
+    assert result["passages"][1]["text"] == "Acute kidney injury."
+
+
+def test_search_sections_keeps_the_text_before_the_first_heading():
+    """A discharge summary's opening lines are note text, not a preamble to discard."""
+    note = (
+        "The patient is a 71-year-old woman admitted with pneumonia.\n\n"
+        "HOSPITAL COURSE: Treated with antibiotics."
+    )
+    with patch.object(rs, "_fetch_note_row", lambda hadm: ("MT-5-DS", note)):
+        result = rs._search_sections(90000020)
+
+    assert result["passages"][0]["section"] == "history_of_present_illness"
+    assert result["passages"][0]["id"] == "MT-5-DS_history_of_present_illness_1"
+    assert "71-year-old woman" in result["passages"][0]["text"]
+
+
+def test_search_sections_returns_a_headingless_note_whole():
+    """A narrative note with no recognised headings is one passage, not nothing.
+
+    The old path returned an empty result for these, so three of the eighty-seven notes in
+    the cohort reached the formatting turn as "no summary sections found" while holding a
+    full narrative.
+    """
+    note = ("The patient presented with two days of pleuritic chest pain. She was admitted "
+            "for observation and discharged home the following day.")
+    with patch.object(rs, "_fetch_note_row", lambda hadm: ("MT-6-DS", note)):
+        result = rs._search_sections(90000021)
+
+    assert result["returned"] == 1
+    passage = result["passages"][0]
+    assert passage["section"] == "discharge_summary"
+    assert passage["id"] == "MT-6-DS_discharge_summary_1"
+    assert "pleuritic chest pain" in passage["text"]
+
+
+def test_search_sections_skips_a_fully_redacted_section():
+    """A section that is only de-identification placeholders is not a reading of anything."""
+    note = (
+        "HISTORY OF PRESENT ILLNESS: ____________\n\n"
+        "HOSPITAL COURSE: Recovered well."
+    )
+    with patch.object(rs, "_fetch_note_row", lambda hadm: ("MT-7-DS", note)):
+        result = rs._search_sections(90000022)
+
+    assert [p["section"] for p in result["passages"]] == ["brief_hospital_course"]
+
+
+_IDENTICAL_DIAGNOSES = (
+    "ADMISSION DIAGNOSES: 1. Neck pain with right upper extremity radiculopathy.\n\n"
+    "DISCHARGE DIAGNOSES: 1. Neck pain with right upper extremity radiculopathy.\n\n"
+    "HOSPITAL COURSE: She was admitted and taken to theatre."
+)
+
+_DIFFERENT_DIAGNOSES = (
+    "ADMISSION DIAGNOSES: 1. Neck pain with right upper extremity radiculopathy.\n\n"
+    "DISCHARGE DIAGNOSES: 1. Cervical spondylosis with stenosis at C5-C6.\n\n"
+    "HOSPITAL COURSE: She was admitted and taken to theatre."
+)
+
+
+def test_an_identical_diagnosis_block_is_returned_once_as_the_discharge_diagnosis():
+    """One block under two headings is one passage, and the final heading is the one kept.
+
+    Measured on 90000069 (2026-11-03): the note lists the same two diagnoses under
+    `ADMISSION DIAGNOSES` and `DISCHARGE DIAGNOSES`, so the tool returned two identical
+    passages and the summary cited both for one sentence — `^[1]` and `^[2]` naming the
+    same two diagnoses. A summary is answered by the diagnosis the patient left with, so
+    the surviving passage takes that name.
+    """
+    with patch.object(rs, "_fetch_note_row",
+                      lambda hadm: ("MT-8-DS", _IDENTICAL_DIAGNOSES)):
+        result = rs._search_sections(90000023)
+
+    assert [p["section"] for p in result["passages"]] == [
+        "discharge_diagnosis", "brief_hospital_course"]
+    # The id is recomputed with the ordinal of the name that survived, so nothing
+    # downstream sees a `discharge_diagnosis` passage numbered as an admission one.
+    assert result["passages"][0]["id"] == "MT-8-DS_discharge_diagnosis_1"
+
+
+def test_two_different_diagnosis_blocks_are_both_kept():
+    """A deduplication, not a consolidation: different text is a different statement."""
+    with patch.object(rs, "_fetch_note_row",
+                      lambda hadm: ("MT-9-DS", _DIFFERENT_DIAGNOSES)):
+        result = rs._search_sections(90000024)
+
+    assert [p["section"] for p in result["passages"]] == [
+        "admission_diagnosis", "discharge_diagnosis", "brief_hospital_course"]
+    by_section = {p["section"]: p["text"] for p in result["passages"]}
+    assert "radiculopathy" in by_section["admission_diagnosis"]
+    assert "stenosis" in by_section["discharge_diagnosis"]
+
+
+def test_a_duplicate_under_any_other_heading_keeps_its_first_label():
+    """Only the admission/discharge diagnosis pair is renamed; nothing else is upgraded."""
+    note = (
+        "SOCIAL HISTORY: Lives alone.\n\n"
+        "FAMILY HISTORY: Lives alone."
+    )
+    with patch.object(rs, "_fetch_note_row", lambda hadm: ("MT-10-DS", note)):
+        result = rs._search_sections(90000025)
+
+    assert [p["section"] for p in result["passages"]] == ["social_history"]
+
+
+# --- /meds: the medication text, from wherever this note keeps it -----------------
+
+
+def test_medication_sections_returns_every_dedicated_section_whole():
+    """No first-chunk truncation, and the instructions come too.
+
+    The old path asked the chunker for one chunk of each of two sections, so a medication
+    list that ran onto a second chunk lost its tail — the failure mode a `/meds` grid shows
+    as a patient on four drugs when the note lists nine.
+    """
+    note = (
+        "DISCHARGE MEDICATIONS: On transfer, Celebrex, Coumadin, Colace, Synthroid.\n\n"
+        "DISCHARGE INSTRUCTIONS: Celebrex 200 mg daily. Coumadin 5 mg daily. "
+        "Colace 100 mg twice daily. Synthroid 75 mcg daily."
+    )
+    with patch.object(rs, "_fetch_note_row", lambda hadm: ("MT-11-DS", note)):
+        result = rs._search_medication_sections(90000014)
+
+    assert [p["section"] for p in result["passages"]] == [
+        "discharge_medications", "discharge_instructions"]
+    by_section = {p["section"]: p["text"] for p in result["passages"]}
+    assert "Synthroid" in by_section["discharge_medications"]
+    # Every dose survives, not just the first chunk's worth.
+    for dose in ("200 mg", "5 mg", "100 mg", "75 mcg"):
+        assert dose in by_section["discharge_instructions"]
+
+
+def test_medication_sections_falls_back_to_the_narrative_when_there_is_no_med_section():
+    """The 90000069 shape: a surgical note whose prescriptions sit at the end of the course."""
+    note = (
+        "ADMISSION DIAGNOSIS: Neck pain.\n\n"
+        "HOSPITAL COURSE: She underwent anterior cervical discectomy. Postoperatively "
+        "she was managed with IV morphine and treated with Decadron. We will send her "
+        "home with Medrol, Darvocet and Flexeril."
+    )
+    with patch.object(rs, "_fetch_note_row", lambda hadm: ("MT-2113-DS", note)):
+        result = rs._search_medication_sections(90000069)
+
+    assert [p["section"] for p in result["passages"]] == ["brief_hospital_course"]
+    assert "send her home with Medrol" in result["passages"][0]["text"]
+
+
+def test_medication_sections_falls_back_to_a_headingless_note():
+    note = "She was discharged home on warfarin 5 mg daily with follow-up in one week."
+    with patch.object(rs, "_fetch_note_row", lambda hadm: ("MT-12-DS", note)):
+        result = rs._search_medication_sections(90000013)
+
+    assert [p["section"] for p in result["passages"]] == ["discharge_summary"]
+
+
+def test_a_dedicated_medication_section_wins_over_the_narrative():
+    """Both are present: the list is the answer, and the course is not mixed into it.
+
+    Mixing them is how a `/meds` grid ends up listing IV morphine as something to take at
+    home, which is the extraction rule this path exists to make possible.
+    """
+    note = (
+        "DISCHARGE MEDICATIONS: Warfarin 5 mg daily.\n\n"
+        "HOSPITAL COURSE: Managed with IV morphine overnight."
+    )
+    with patch.object(rs, "_fetch_note_row", lambda hadm: ("MT-13-DS", note)):
+        result = rs._search_medication_sections(90000012)
+
+    assert [p["section"] for p in result["passages"]] == ["discharge_medications"]
+
+
+def test_medication_sections_reports_an_honest_empty():
+    """A note with no medication section and nothing a prescription is written in.
+
+    The diagnosis and the complications block are the whole note: neither is a place a
+    discharge prescription is stated, so there is nothing to cite and the tool says so
+    rather than returning a passage the extraction would then mine for drug names.
+    """
+    note = (
+        "DISCHARGE DIAGNOSIS: Symptomatic thyroid goiter.\n\n"
+        "COMPLICATIONS: None."
+    )
+    with patch.object(rs, "_fetch_note_row", lambda hadm: ("MT-14-DS", note)):
+        result = rs._search_medication_sections(90000011)
+
     assert result["returned"] == 0
     assert result["passages"] == []
-    assert "no discharge summary sections" in result.get("note", "")
+    assert "no discharge medication section" in result["note"]
 
 
 def test_meds_fallback_keeps_hadm_restrict():

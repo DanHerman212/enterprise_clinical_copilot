@@ -82,12 +82,29 @@ MEDICATIONS_ON_ADMISSION = "medications_on_admission"
 MEDICATIONS_ON_TRANSFER = "medications_on_transfer"
 DISCHARGE_MEDICATIONS = "discharge_medications"
 DISCHARGE_DISPOSITION = "discharge_disposition"
+# The diagnosis the patient was admitted with, and the diagnosis they left with, are two
+# different statements about two different moments — and for a `/ehr` summary they answer
+# two different questions. They shared one key until 2026-11-03, so a note that documented
+# both produced one section whose heading said whichever came first, and a note documenting
+# only an admission diagnosis was labelled as if it were a discharge diagnosis.
+ADMISSION_DIAGNOSIS = "admission_diagnosis"
 DISCHARGE_DIAGNOSIS = "discharge_diagnosis"
 DISCHARGE_CONDITION = "discharge_condition"
 DISCHARGE_INSTRUCTIONS = "discharge_instructions"
 DISCHARGE_SUMMARY = "discharge_summary"
 FOLLOWUP_INSTRUCTIONS = "followup_instructions"
 FACILITY = "facility"
+# Sections the cohort audit (2026-11-03, all 87 notes) found as top-level headings and that
+# had no key of their own: they were absorbed into whichever section preceded them, which
+# is how an operative complication ended up inside the hospital course and a pathology
+# report inside the procedure list.
+COMPLICATIONS = "complications"
+CONSULTS = "consults"
+ASSESSMENT_AND_PLAN = "assessment_and_plan"
+PATHOLOGY = "pathology"
+INFECTIONS = "infections"
+TRANSFUSIONS = "transfusions"
+INDICATIONS = "indications"
 
 # The clinical sections a discharge summary draws on, in the order it cites them.
 # Defined here, beside the vocabulary it is drawn from, because three layers read it:
@@ -126,11 +143,13 @@ KNOWN_HEADINGS: dict[str, tuple[str, ...]] = {
     SEX: ("Sex",),
     SERVICE: ("Service",),
     ALLERGIES: ("Allergies",),
-    ATTENDING: ("Attending",),
+    ATTENDING: ("Attending", "Attending Physician"),
     CHIEF_COMPLAINT: (
         "Chief Complaint",
         # MTSamples uses the reason for admission as its opening statement.
         "Reason for Admission",
+        # The cohort audit (2026-11-03): a transfer note states its reason the same way.
+        "Reason for Transfer",
     ),
     MAJOR_PROCEDURE: (
         "Major Surgical or Invasive Procedure",
@@ -147,6 +166,17 @@ KNOWN_HEADINGS: dict[str, tuple[str, ...]] = {
         "Procedures During This Hospitalization",
         "Procedures During Hospitalization",
         "Operations and Procedures",
+        # The operative-record vocabulary, from the cohort audit (2026-11-03). These were
+        # unrecognised, so an operative block was absorbed into whatever preceded it and
+        # the operation the admission was FOR arrived inside another section's body.
+        "Operation",
+        "Operations",
+        "Operation Performed",
+        "Operative Procedure",
+        "Operative Procedures",
+        "Procedure Performed",
+        "Procedures Done",
+        "Operation and Procedure",
     ),
     HISTORY_OF_PRESENT_ILLNESS: (
         "History of Present Illness", "HPI",
@@ -165,6 +195,9 @@ KNOWN_HEADINGS: dict[str, tuple[str, ...]] = {
         "Past History",
         "Past Medical/Family/Social History",
         "Past Medical, Family, Social History",
+        # The cohort audit (2026-11-03): a comorbidity list, whatever moment it names.
+        "Secondary Diagnoses Prior to Hospitalization",
+        "Postop Comorbidities",
     ),
     PAST_SURGICAL_HISTORY: (
         "Past Surgical History",
@@ -183,6 +216,9 @@ KNOWN_HEADINGS: dict[str, tuple[str, ...]] = {
         "Discharge Physical Examination",
         "Physical Examination at the Time of Discharge",
         "Physical Examination on Discharge",
+        # The cohort audit (2026-11-03).
+        "Admission Physical",
+        "Admission Physical Examination",
     ),
     PERTINENT_RESULTS: (
         "Pertinent Results", "Pertinent Labs",
@@ -195,6 +231,19 @@ KNOWN_HEADINGS: dict[str, tuple[str, ...]] = {
         "Laboratories on Admission",
         "Significant Labs and X-Rays",
         "Additional Laboratory Studies",
+        # The cohort audit (2026-11-03). `Findings` belongs here rather than in a section
+        # of its own: in these notes it heads the reading that supports the diagnosis.
+        "Laboratory Findings",
+        "Laboratory Values",
+        "Laboratory Tests",
+        "Laboratory at Discharge",
+        "Admission Labs",
+        "Pertinent Laboratory Data",
+        "Significant Lab and X-Ray",
+        "Predischarge Laboratory Findings",
+        "Laboratory Data and Diagnostic Studies",
+        "Diagnostic Data",
+        "Findings",
     ),
     BRIEF_HOSPITAL_COURSE: (
         "Brief Hospital Course", "Hospital Course",
@@ -204,6 +253,13 @@ KNOWN_HEADINGS: dict[str, tuple[str, ...]] = {
         "Brief Summary of Hospital Course",
         # MTSamples: "Course on Admission" is the admission hospital course.
         "Course on Admission",
+        # The cohort audit (2026-11-03): eleven further forms of the same block.
+        "Course in Hospital",
+        "Hospital Course and Treatment",
+        "Hospital Course Summary",
+        "Brief History of Hospital Course",
+        "Brief H&P and Hospital Course",
+        "History of Present Illness and Hospital Course",
     ),
     MEDICATIONS_ON_ADMISSION: ("Medications on Admission",),
     # A transfer medication list is neither the admission list nor the discharge
@@ -226,29 +282,50 @@ KNOWN_HEADINGS: dict[str, tuple[str, ...]] = {
         "Current Medications",
         "Medications and Advice on Discharge",
         "Discharge Medications/Instructions",
+        # The cohort audit (2026-11-03): the singular form.
+        "Discharge Medication",
     ),
     DISCHARGE_DISPOSITION: (
         "Discharge Disposition",
         # MTSamples heading for where the patient went on discharge.
         "Disposition",
     ),
-    DISCHARGE_DIAGNOSIS: (
-        "Discharge Diagnosis", "Discharge Diagnoses",
-        # MTSamples lists admission/admitting/secondary/final diagnoses; these
-        # all feed the same diagnosis picture for our purposes.
+    ADMISSION_DIAGNOSIS: (
+        # Everything that states what the patient arrived with. Kept apart from
+        # DISCHARGE_DIAGNOSIS (2026-11-03): a summary that reads only one of them is
+        # reading a different moment, and folding the two together meant a note's
+        # admission and final diagnoses competed for one key.
         "Admission Diagnosis",
         "Admission Diagnoses",
         "Admitting Diagnosis",
         "Admitting Diagnoses",
-        "Secondary Diagnosis",
-        "Secondary Diagnoses",
+        "Diagnosis at Admission",
+        "Diagnosis on Admission",
         "Diagnoses on Admission",
+        "Preoperative Diagnosis",
+        "Preoperative Diagnoses",
+        "Preliminary Diagnoses",
+        "Transfer Diagnoses",
+    ),
+    DISCHARGE_DIAGNOSIS: (
+        "Discharge Diagnosis", "Discharge Diagnoses",
         "Diagnoses on Discharge",
-        "Primary Diagnoses",
+        "Postoperative Diagnosis",
+        "Postoperative Diagnoses",
+        "Primary Discharge Diagnoses",
+        "Secondary Discharge Diagnoses",
+        "Additional Discharge Diagnoses",
         "Final Diagnosis",
         "Final Diagnoses",
-        # MTSamples: "Diagnosis at Admission" and a bare "Diagnoses" block.
-        "Diagnosis at Admission",
+        "Final Diagnosis/Reason for Admission",
+        # MTSamples lists secondary and primary diagnoses; with no moment named they are
+        # the document's own diagnosis block.
+        "Secondary Diagnosis",
+        "Secondary Diagnoses",
+        "Primary Diagnoses",
+        "Primary Diagnosis",
+        "Principal Diagnosis",
+        "Diagnosis",
         "Diagnoses",
     ),
     DISCHARGE_CONDITION: (
@@ -279,10 +356,24 @@ KNOWN_HEADINGS: dict[str, tuple[str, ...]] = {
         # adopting it here means parse_note/chunking treat it as discharge
         # instructions instead of burying it inside another section).
         "Instructions Given to the Patient at the Time of Discharge",
+        # The cohort audit (2026-11-03). `Transfer Instructions` is the same kind of
+        # content at a unit boundary: what the receiving team must do.
+        "Instructions",
+        "Discharge Instructions and Medications",
+        "Transfer Instructions",
     ),
     DISCHARGE_SUMMARY: (
         "Discharge Summary",
         "Discharge Summaries",
+        # The cohort audit (2026-11-03): document-level headers. A note that opens with
+        # "HISTORY AND PHYSICAL:" or "CLINICAL RESUME:" is naming the document it is,
+        # not a section of it — the sections below still split on their own headings.
+        "History and Physical",
+        "Brief History and Physical",
+        "Clinical Resume",
+        "Admission Summary",
+        "Hospital Summary",
+        "Summary",
     ),
     FOLLOWUP_INSTRUCTIONS: (
         "Followup Instructions", "Follow-up Instructions",
@@ -292,8 +383,53 @@ KNOWN_HEADINGS: dict[str, tuple[str, ...]] = {
         "Follow-Up",
         "Followup Appointments",
         "Instructions for Followup",
+        # The cohort audit (2026-11-03).
+        "Follow-Up Appointment",
+        "Discharge Followup",
+        "Discharge Followup Planning",
     ),
     FACILITY: ("Facility",),
+    # --- sections the cohort audit found with no key of their own (2026-11-03) --------
+    COMPLICATIONS: (
+        # A top-level block in these notes, typically sitting between OPERATIVE
+        # PROCEDURES and COURSE ON ADMISSION. Unrecognised, it was absorbed into the
+        # procedure list, so "COMPLICATIONS: None." read as part of the operation.
+        "Complications",
+    ),
+    CONSULTS: (
+        "Consultations",
+        "Consults",
+        "Consult",
+        "Consulting Services",
+    ),
+    ASSESSMENT_AND_PLAN: (
+        # The SOAP plan of an assessment note, and the imaging impression where a note
+        # carries one as a block.
+        "Plan",
+        "Assessment",
+        "Assessment and Discharge Plan",
+        "Assessment and Plan",
+        "Impression",
+    ),
+    PATHOLOGY: (
+        "Pathology",
+        "Pathology Report",
+        "Surgical Pathology",
+    ),
+    INFECTIONS: (
+        "Infections",
+        "Infection",
+    ),
+    TRANSFUSIONS: (
+        "Blood Transfusions",
+        "Blood Transfusion",
+        "Transfusions",
+    ),
+    INDICATIONS: (
+        "Indications for the Surgery",
+        "Indications for Surgery",
+        "Indications",
+    ),
 }
 
 # A line that could be a heading: starts a line, a handful of words, then a

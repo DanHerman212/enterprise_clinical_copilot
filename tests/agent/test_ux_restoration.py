@@ -210,10 +210,15 @@ def test_the_meds_marker_resolves_to_the_consolidated_text():
 # --- Defect 8: no markdown headings in /ehr -----------------------------------
 
 def test_the_ehr_instruction_no_longer_asks_for_markdown_headings():
-    """`##` streamed to the reader as literal characters until the answer settled."""
+    """`##` streamed to the reader as literal characters until the answer settled.
+
+    The four labels changed on 2026-11-03 with the retrieval rewrite: the tool now returns
+    the whole note, so the summary names the presentation and the operation instead of the
+    two discharge blocks it used to be limited to.
+    """
     assert "## " not in prompts.EHR_FORMATTING
-    for label in ("**Hospital course.**", "**Clinical course.**",
-                  "**Discharge diagnosis.**", "**Discharge instructions.**"):
+    for label in ("**Presentation & diagnosis.**", "**Clinical course.**",
+                  "**Hospital course & procedures.**", "**Discharge plan & medications.**"):
         assert label in prompts.EHR_FORMATTING
 
 

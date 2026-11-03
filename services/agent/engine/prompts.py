@@ -632,26 +632,41 @@ FRAMING
 # decides what to execute and no longer holds a single prompt; the command table
 # carries the wire name and `formatting_for` maps it to the text below.
 
-MEDS_FORMATTING = """Extract the discharge medications from the note sections you were given.
+MEDS_FORMATTING = """Extract the DISCHARGE medications from the note sections you were given.
 Return a JSON object with one key, "medications", holding an array of objects with exactly
 these fields: "medication", "dosage", "frequency".
 
-You are given TWO sections, and a medication may appear in either or both. The discharge
-medications section is usually the list of drug names; the discharge instructions section
-usually states the doses and frequencies, and sometimes names drugs the list omits.
+You are given one or more passages, and a medication may appear in any of them. A discharge
+medications section is usually the list of drug names; a discharge instructions section
+usually states the doses and frequencies, and sometimes names drugs the list omits. When the
+note has no medication section at all, the passages you were given are narrative ones — the
+assessment and plan, the hospital course, the admission list, the history — and the
+prescription is usually a clause at the end of one of them.
 
-Include EVERY medication that appears in either section. A drug named in the instructions but
+Include EVERY medication the patient was discharged on. A drug named in the instructions but
 absent from the list is still a discharge medication and must have a row: dropping a prescribed
 drug is the one error this extraction must never make.
 
-Order the rows as the discharge medications section lists them, then any drug that appears only
-in the instructions, in the order it appears there.
+Exclude what was only given in hospital. A narrative passage also reports drugs given during
+the stay or around an operation — IV analgesia, an intraoperative agent, a steroid course, a
+single dose for a procedure — and none of those belong in a list of what to take at home. A
+drug is a discharge medication only if the passage says the patient left on it, was sent home
+on it, or was prescribed it at discharge: a clause naming what the patient is going home with
+states discharge medications, while a clause about how a symptom was managed on the ward
+states hospital treatment rather than a prescription.
 
-Take each value verbatim from the text you were given. If neither section states a dosage or a
+Order the rows as the medication list gives them, then any drug that appears only in the
+prose, in the order it appears there.
+
+Take each value verbatim from the text you were given. If no passage states a dosage or a
 frequency for a medication, use an empty string. An empty field is the honest answer; a guessed
 dose is a clinical error. Do not infer a dose from a similar drug, do not normalise or expand an
 abbreviation, do not convert units or spellings, and do not add a medication, a dosage or a
 frequency that does not appear in the text.
+
+An empty "medications" array is the correct answer when no passage names a discharge
+medication. Do not fill it in from what the diagnosis implies, and do not list an inpatient
+drug to have something to return.
 
 Return only the JSON object, with no prose before or after it."""
 
@@ -731,12 +746,21 @@ about missing information."""
 EHR_FORMATTING = """Summarise the note sections you were given, for a clinician.
 Write flowing prose with these section labels, in this order:
 
-- **Hospital course.** for an inpatient admission. Where the record is an outpatient
-  encounter — the caveat in the tool result says when it is — there was no admission, so
-  write **Clinical course.** instead. Never write a hospital course for a record that was
-  not a stay.
-- **Discharge diagnosis.** only if the passages you were given contain a discharge diagnosis.
-- **Discharge instructions.** only if the passages you were given contain discharge instructions.
+- **Presentation & diagnosis.** for an inpatient admission, in two moves: the presenting
+  symptoms and the history that led to admission — onset, duration, prior treatment — from
+  the passage that narrates them; then the admission and discharge diagnoses from the
+  diagnosis passage. Name the condition ONCE, where the diagnoses are stated, and let the
+  narrative sentence describe the presentation instead of naming it in advance. Where the
+  record is an outpatient encounter — the caveat in the tool result says when it is — there
+  was no admission, so write **Clinical course.** instead and omit the other three sections.
+  Never write a presentation and diagnosis section for a record that was not a stay.
+- **Hospital course & procedures.** only if the passages describe the hospital course, procedures,
+  or inpatient treatment: every operative or invasive procedure performed, the complications or
+  the documented absence of complications, the treatments and medications given during the stay,
+  and how the patient's symptoms progressed.
+- **Discharge plan & medications.** only if the passages contain discharge medications, a
+  disposition, restrictions, or follow-up instructions: where the patient went, what they were
+  prescribed, what they were told not to do, and who follows them.
 - **Readmission risk & trajectory.** only where a readmission-risk estimate was given to you.
 
 A label the passages do not support is a label you omit. Omitting a section is the correct
@@ -745,11 +769,22 @@ is the worst version of it. Never write a label and then fill it with a claim th
 not contain, and never write a placeholder such as "not documented" under a label of your own
 choosing.
 
+Two rules on where a citation goes, and no others:
+
+- Symptoms, history and the workup come from the passage that narrates them: onset, duration,
+  prior treatment, imaging findings and how the stay unfolded are stated in the history of
+  present illness or the hospital course, so a sentence about them takes THAT passage's
+  number. It describes what happened; it does not name the diagnosis.
+- The formal diagnoses come from the diagnosis passage. A diagnosis list states diagnoses and
+  nothing else, so it is never the source for a finding or a symptom. The diagnosis is stated
+  once: if the diagnosis passage has named the condition, no earlier sentence names it again,
+  and one claim never carries two numbers.
+
 Open each section with its label in bold, followed by a period, at the START of its own
-paragraph — exactly `**Hospital course.**`, or `**Clinical course.**` for an outpatient record,
-and so on — then the prose of that section on the same line. The interface sets the bold run as
-the section's heading, which is why it must be the first thing in the paragraph and must end
-with the period: a label buried mid-sentence cannot be found, and markdown heading syntax
+paragraph — exactly `**Presentation & diagnosis.**`, `**Clinical course.**` for an outpatient
+record, and so on — then the prose of that section on the same line. The interface sets the bold
+run as the section's heading, which is why it must be the first thing in the paragraph and must
+end with the period: a label buried mid-sentence cannot be found, and markdown heading syntax
 (`##`) is not used anywhere in this answer — it reaches the reader as literal characters while
 the answer is being written.
 
@@ -758,12 +793,25 @@ Use bold for nothing else in this answer, and never wrap a whole section in a si
 The note sections summarise the passages you were given, and a section is written only where the
 passages contain what it names.
 
-Cite each sentence with the number of the passage that supports it. Each passage in the
-tool result carries a `cite` value: that is the number to write, and it is not the
-position of the section you are writing. The two happen to match only by coincidence
-otherwise, and a marker that resolves to another section is a citation the reader cannot
-trust — a discharge diagnosis cited as the discharge instructions is the failure this
-sentence exists to prevent.
+Cite with an inline marker, and there are exactly two legal forms of one. `^[3]` cites a
+note passage, using the `cite` value that passage carries. `^[PMID: 24108298]` cites a
+published record the <verified_comparators> block gives you. Any other marker — a section
+name, a tool name, a number you composed — is deleted before the answer is published, which
+leaves the sentence it was attached to resting on nothing.
+
+A tool result that carries no `cite` value is not citable, and the readmission estimate is
+one: it is this answer's own calculation rather than evidence a reader can open. State it
+with the `probability_display` and `threshold_display` strings it gives you, and put no
+marker on it.
+
+Each sentence takes the number of the passage that supports it, and that number is not the
+position of the section you are writing. The two match only by coincidence otherwise, and a
+marker that resolves to another section is a citation the reader cannot trust — a discharge
+diagnosis cited as the discharge instructions is the failure this sentence exists to prevent.
+
+Put the marker at the END of the sentence it supports and BEFORE the full stop: `… with
+stenosis ^[1].`, never `… with stenosis. ^[1]`. A badge after the stop reads as a mark on the
+paragraph rather than on the claim, and the sentence it was written for has already ended.
 
 Report what the record documents and stop there. Do not close with clinical advice, a vigilance
 or monitoring recommendation, a follow-up plan of your own, or any statement about what the
@@ -808,17 +856,13 @@ what they mean for the follow-up plan, and describe magnitude qualitatively — 
 a modest contributor — from how the factors rank and which way they point. The bars beside
 your sentence carry the quantities.
 
-Cite with an inline marker of the form ^[1], ^[2], ^[3]: the FIRST passage you were given is
-^[1], the second is ^[2], and so on, in the order the passages appear in the result. Put the
-marker immediately after the first claim that draws on that passage. Cite each passage at
-most once in the whole answer.
-
 Never write a passage identifier into the prose. The result gives each passage an id such as
 the note and section it came from; that id is a machine name for the passage, not a citation,
-and it must not appear in an answer a clinician reads. The ^[n] marker is the only form of
-citation, and it is what the interface turns into the numbered source the reader can open.
+and it must not appear in an answer a clinician reads. A marker of one of the two forms above
+is the only form of citation, and it is what the interface turns into the numbered source the
+reader can open.
 
-Write nothing about medications, and append no disclaimer about missing information."""
+Append no disclaimer about missing information."""
 
 LITERATURE_FORMATTING = """Summarise the published literature you were given, for a clinician asking
 the question above. The records were retrieved for that question, so the summary must answer it.

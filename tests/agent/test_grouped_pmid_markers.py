@@ -15,7 +15,12 @@ cite. `test_the_grouped_form_is_untouched_by_renumbering` pins the other half â€
 is not a note citation and the renumberer must keep its hands off it.
 """
 
-from services.agent.postprocess.citations import enforce_citations, renumber_citations
+from services.agent.postprocess.citations import (
+    collapse_repeated_citations,
+    drop_unknown_markers,
+    enforce_citations,
+    renumber_citations,
+)
 
 # The three records from the live turn of 2026-10-30, in the order the model wrote them.
 GROUPED = "^[PMID: 39559360, 37028984, 36774746]"
@@ -120,3 +125,69 @@ class TestTheGroupedFormIsStillOneMarkerToTheRenumberer:
         answer = f"Two trials agree.{GROUPED}"
 
         assert renumber_citations(answer) == answer
+
+
+class TestAGroupedBadgeSurvivesSettlement:
+    """The lapses that motivated the normaliser, all seen or reasoned from 2026-11-03.
+
+    Two cohorts in one sentence produced either no badge at all or a badge naming both.
+    The first is silent data loss â€” `drop_unknown_markers` does not recognise
+    `^[PMID: 111, PMID: 222]`, so it deleted it and the paragraph stated two published
+    rates with nothing to open. The second reached the browser as raw markup, because one
+    badge can only be one control.
+    """
+
+    def test_a_badge_repeating_the_label_is_split_into_one_marker_per_record(self):
+        answer = "The rates were 4.1% and 3.7%.^[PMID: 35985540, PMID: 33534292]"
+
+        kept, flags = enforce_citations(answer, 0, {"35985540", "33534292"})
+
+        assert kept == (
+            "The rates were 4.1% and 3.7%."
+            "^[PMID: 35985540] ^[PMID: 33534292]"
+        )
+        assert flags == []
+
+    def test_a_badge_with_one_label_and_two_ids_is_split_too(self):
+        answer = "The rates were 4.1% and 3.7%.^[PMID: 35985540, 33534292]"
+
+        kept, flags = enforce_citations(answer, 0, {"35985540", "33534292"})
+
+        assert kept == (
+            "The rates were 4.1% and 3.7%."
+            "^[PMID: 35985540] ^[PMID: 33534292]"
+        )
+        assert flags == []
+
+    def test_the_repeated_label_form_is_not_treated_as_an_unknown_marker(self):
+        """`drop_unknown_markers` runs at settlement too, and used to delete this shape."""
+        answer = "The rates were 4.1% and 3.7%.^[PMID: 35985540, PMID: 33534292]"
+
+        assert drop_unknown_markers(answer) == answer
+
+    def test_two_distinct_badges_in_one_sentence_both_survive(self):
+        answer = (
+            "The first cohort reported 4.1%^[PMID: 35985540] and the second 3.7%"
+            "^[PMID: 33534292]."
+        )
+
+        kept, flags = enforce_citations(answer, 0, {"35985540", "33534292"})
+
+        assert kept == answer
+        assert flags == []
+
+    def test_two_distinct_badges_are_not_collapsed_as_a_repeated_citation(self):
+        """The run-collapse rule is about a repeated note passage, not about cohorts."""
+        answer = (
+            "The first cohort reported 4.1%^[PMID: 35985540] and the second 3.7%"
+            "^[PMID: 33534292]."
+        )
+
+        assert collapse_repeated_citations(answer) == (answer, [])
+
+    def test_the_split_badges_carry_no_note_number(self):
+        """A publication is not a position: the split must not invent one."""
+        kept, _ = enforce_citations(
+            "Rates.^[PMID: 35985540, PMID: 33534292]", 0, {"35985540", "33534292"})
+
+        assert "^[1]" not in kept

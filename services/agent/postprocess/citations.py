@@ -243,7 +243,7 @@ _PARAGRAPH_BREAK = re.compile(r"\n[ \t]*\n")
 #: The PMID form is here deliberately — it is a citation the interface draws as its
 #: own badge, and a filter that only knew about numbers would delete it.
 _KNOWN_MARKER_RE = _marker_re(
-    r"\s*(?:\d+(?:\s*,\s*\d+)*|\d+\s*-\s*\d+|PMID:\s*\d+(?:\s*,\s*\d+)*)\s*",
+    r"\s*(?:\d+(?:\s*,\s*\d+)*|\d+\s*-\s*\d+|PMID:\s*\d+(?:\s*[,;]\s*(?:PMID\s*:?\s*)?\d+)*)\s*",
     re.IGNORECASE,
 )
 
@@ -258,6 +258,48 @@ _PMID_BODY_RE = re.compile(r"PMID:?\s*(\d+)", re.IGNORECASE)
 #: three papers. `_KNOWN_MARKER_RE` already accepts both forms, so a group reaches
 #: enforcement; this is what recognises it once it is there.
 _PMID_LIST_BODY_RE = re.compile(r"PMID:?\s*\d+(?:\s*,\s*\d+)*", re.IGNORECASE)
+
+
+#: A badge naming several published records at once: `PMID: 1, PMID: 2`, `PMID: 1, 2`,
+#: `PMID: 1; PMID: 2`. Every shape the model writes when one sentence rests on two cohorts.
+#: Built through `_marker_re` like every other marker pattern here, because Law 1 forbids
+#: compiling the marker language inline anywhere — this module included.
+_GROUPED_PMID_RE = _marker_re(
+    r"\s*PMID\s*:?\s*\d+(?:\s*[,;]\s*(?:PMID\s*:?\s*)?\d+)+\s*",
+    re.IGNORECASE,
+)
+
+
+def normalise_grouped_pmid_markers(answer: str) -> str:
+    """One badge per record, from a badge that named several.
+
+    The model writes `^[PMID: 35186616, 37028984]` when a sentence rests on two cohorts,
+    and the browser draws markers one at a time, so the grouped form was reaching
+    settlement and dying there: `_KNOWN_MARKER_RE` accepts `PMID: 1, 2` but not
+    `PMID: 1, PMID: 2`, and a marker it does not recognise is deleted — so on 2026-11-03 a
+    risk paragraph naming two published cohorts lost both badges and the reader had two
+    rates with nothing to open.
+
+    Splitting is the repair rather than widening the pattern, because the grouped shape
+    has no single valid rendering: one badge can only be one control. Two ids under one
+    badge become two badges, which is what the sentence meant.
+
+    A badge naming ONE record is left exactly as written — the shape is already correct and
+    rewriting it would be churn on the common path. A bare `^[1, 2]` is untouched too:
+    those are note positions, not identifiers, and this function reads the `PMID` label to
+    tell them apart.
+    """
+    if not _GROUPED_PMID_RE.search(str(answer or "")):
+        return answer
+
+    def _split(match: "re.Match[str]") -> str:
+        identifiers = re.findall(r"\d+", match.group(0))
+        # One record, one badge: a group that names the same identifier twice is naming it
+        # once, which is the rule `enforce_citations` applies to a single badge.
+        ordered = list(dict.fromkeys(identifiers))
+        return " ".join(f"^[PMID: {pmid}]" for pmid in ordered)
+
+    return _GROUPED_PMID_RE.sub(_split, answer)
 
 
 def enforce_citations(
@@ -302,6 +344,10 @@ def enforce_citations(
     """
     if "^[" not in (answer or ""):
         return answer, []
+    # A badge that named two records is two badges before anything reads it. Done first
+    # because every step below classifies a marker by its body, and the grouped shape
+    # classifies as nothing — which is how a real citation came to be deleted.
+    answer = normalise_grouped_pmid_markers(answer)
     limit = max(int(slots or 0), 0)
     allowed = {str(pmid) for pmid in pmids}
     flags: list[str] = []
@@ -545,6 +591,26 @@ def _drop_unknown_markers(answer: str) -> str:
         lambda m: m.group(0) if _KNOWN_MARKER_RE.fullmatch(m.group(0)) else "",
         answer,
     )
+
+
+def strip_markers(answer: str) -> str:
+    """Every citation marker removed, for a wire that publishes no citations at all.
+
+    `/labs` is that wire (2026-11-03). Its evidence is a trajectory table drawn directly
+    under the sentence, row by row, with each reading's reference interval and flag; a
+    marker in the prose addresses a card that repeats the row it sits beside, and the
+    drawer beneath it listed one synthetic record per analyte. So the instruction asks for
+    no markers, and this removes any the model wrote anyway — a `^[4]` with no citation
+    behind it renders as a dead badge, which is worse than the pill it was imitating.
+
+    The whitespace in front of a removed marker goes with it, so a sentence that ended
+    `… 7.1 g/dL ^[2].` still ends `… 7.1 g/dL.` rather than gaining a stray space before
+    its full stop.
+    """
+    if "^[" not in (answer or ""):
+        return answer
+    stripped = _ANY_MARKER_RE.sub("", answer)
+    return _tidy_removed_markers(stripped)
 
 
 def drop_unknown_markers(answer: str) -> str:

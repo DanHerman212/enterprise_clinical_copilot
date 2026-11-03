@@ -154,6 +154,83 @@ class TestALabCitationOpens:
                    for section in out["sources"])
 
 
+class TestTheLabsCommandPublishesNoCitations:
+    """`/labs` draws its evidence as a table, so it publishes no citation channel.
+
+    Reported from the 2026-11-03 smoke test: a lab answer carried a `Laboratory Trends`
+    pill per analyte in the prose, and the drawer under the table listed one "Clinical
+    Note" card per analyte — nine of them — repeating rows the table had already drawn.
+    The sentence and the table say the same thing, so the pill's popover was a restatement
+    and the drawer was that restatement nine times over.
+
+    What must survive is the grounding: a lab turn is still a chart answer, verified and
+    badged, and the trend card still draws. Only the citation channel is emptied.
+    """
+
+    ANSWER = "Creatinine rose from 1.05 to 1.62 mg/dL, above its reference interval."
+
+    def _out(self):
+        return compose_presentation(
+            "Describe the laboratory trajectories.",
+            self.ANSWER, [LAB_CALL], None, "labs",
+        )
+
+    def test_no_sources_and_no_references_are_published(self):
+        out = self._out()
+
+        assert out["sources"] == []
+        assert out["references"] == []
+
+    def test_the_turn_is_still_a_verified_chart_answer(self):
+        """Emptied citations must not withhold the badge or raise a false swap."""
+        out = self._out()
+
+        assert out["verified"] is True
+        assert out["scope"] == "patient_chart"
+        assert out["scope_suppressed"] is False
+
+    def test_the_trend_table_still_draws(self):
+        assert "LabTrendCard" in _types(self._out())
+
+    def test_a_marker_left_in_the_prose_binds_to_nothing(self):
+        """Belt and braces: even an old answer with a marker publishes no citation for it."""
+        out = compose_presentation(
+            "Describe the laboratory trajectories.",
+            "Creatinine rose from 1.05 to 1.62 mg/dL.^[1]", [LAB_CALL], None, "labs",
+        )
+
+        assert out["sources"] == []
+
+    def test_the_free_text_lab_answer_still_cites(self):
+        """Out of scope, and pinned so a later edit does not widen the suppression: a
+        free-text question about an analyte is not the `/labs` command."""
+        out = compose_presentation(
+            "How do the discharge red blood cells compare to the reference range?",
+            "Creatinine rose from 1.05 to 1.62 mg/dL.^[1]",
+            [LAB_CALL],
+        )
+
+        assert out["sources"][0]["section"] == citations.LAB_SECTION
+
+
+class TestTheLabsProseCarriesNoMarkers:
+    """The instruction asks for none, and the engine removes any the model writes.
+
+    A `^[4]` with no citation behind it renders as a dead badge — worse than the pill it
+    was imitating — so the strip is not optional.
+    """
+
+    def test_strip_markers_removes_every_form_and_closes_the_gap(self):
+        assert citations.strip_markers(
+            "Creatinine rose to 1.62 mg/dL ^[1]. Sodium fell ^[2].") == (
+            "Creatinine rose to 1.62 mg/dL. Sodium fell.")
+
+    def test_strip_markers_leaves_prose_without_markers_untouched(self):
+        text = "Creatinine rose from 1.05 to 1.62 mg/dL."
+
+        assert citations.strip_markers(text) == text
+
+
 # --- the cap: a panel already read is not read again --------------------------
 
 class TestThePanelIsReadOnce:

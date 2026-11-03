@@ -721,6 +721,14 @@ async def run_command(
     )
     text = response.text() if hasattr(response, "text") else str(response.content)
 
+    # `/labs` publishes no citations, so it carries no markers (2026-11-03). Its evidence
+    # is the trajectory table drawn under the sentence — every reading with its own
+    # reference interval and flag — so a pill in the prose opens a card restating the row
+    # beside it. The instruction asks for none; this removes any the model wrote anyway,
+    # because a marker with no citation behind it renders as a dead badge.
+    if command.wire == "labs":
+        text = citations.strip_markers(text)
+
     state: dict[str, Any] = {
         "messages": [
             SystemMessage(content=SYSTEM_PROMPT),

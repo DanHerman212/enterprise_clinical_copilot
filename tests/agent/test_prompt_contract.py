@@ -391,13 +391,19 @@ def test_the_prompt_pins_medication_names_sections_and_both_timepoints():
 
 
 def test_the_lab_command_prompt_carries_the_same_three_rules():
-    """`/labs` is a formatting turn, so the rules live in its own prompt as well."""
+    """`/labs` is a formatting turn, so the rules live in its own prompt as well.
+
+    The citation rule inverted on 2026-11-03: the prompt used to ask for a marker per
+    analyte series, and now asks for none, because the trajectory table under the sentence
+    already attributes every reading it states.
+    """
     from services.agent.routing import routing
 
     assert "Never open with \"all laboratory values remained within their reference ranges\"" \
         in prompts.LABS_FORMATTING
     assert "`_abnormality_rank`" not in prompts.LABS_FORMATTING
-    assert "cites each one's series" in prompts.LABS_FORMATTING
+    assert "Write no citation markers on this wire" in prompts.LABS_FORMATTING
+    assert "cites each one's series" not in prompts.LABS_FORMATTING
 
 
 def test_a_concern_question_is_answered_with_every_abnormal_analyte_not_a_winner():

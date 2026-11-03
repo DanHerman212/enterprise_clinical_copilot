@@ -373,7 +373,20 @@ def compose_presentation(question: str, answer: str,
     # later edit that adds a channel.
     record_sources = resolve_sources(answer, citation_map or {}, rag, intent,
                                      evidence=evidence_calls)
-    narrative = _narrative(answer, record_sources, literature,
+    # What the reader is SHOWN as evidence, which for `/labs` is nothing at all
+    # (2026-11-03). A laboratory turn already draws every reading it discusses — the
+    # measurement, the reference interval, the course and the flag, one row per timepoint —
+    # in the table under the sentence. A note citation into a trajectory only re-labels that
+    # table as a set of "Clinical Note" records, so the drawer beneath a lab answer listed
+    # one synthetic card per analyte and the prose carried a pill whose popover repeated the
+    # row it sat beside.
+    #
+    # `record_sources` is still resolved and still decides what this turn rests on: the
+    # scope badge, the grounding verdict and the literature gate are all read from it below.
+    # Only the published channel is emptied, so the answer stays a patient-chart answer with
+    # no citations rather than becoming an uncited one.
+    shown_sources = [] if command == "labs" else record_sources
+    narrative = _narrative(answer, shown_sources, literature,
                            literature_start=literature_start)
 
     scope = turn_scope(evidence_calls)
@@ -496,7 +509,7 @@ def compose_presentation(question: str, answer: str,
         rag,
         cite=first_citation(answer),
         sections=intent,
-        source=record_sources[0] if record_sources else None,
+        source=shown_sources[0] if shown_sources else None,
         literature=drawn_literature,
         labs=labs,
         medications=command_payload,
@@ -534,7 +547,7 @@ def compose_presentation(question: str, answer: str,
     # used (patient 90000069, turn 3, 2026-10-31 — two rows nothing pointed at).
     published_sources = literature_sources(
         articles, start=literature_start, cited=cited_numbers_of_records)
-    sources = record_sources + published_sources
+    sources = shown_sources + published_sources
 
     comparator_sources, comparator_references = register_comparator_sources(
         canvas, start=len(sources) + 1,

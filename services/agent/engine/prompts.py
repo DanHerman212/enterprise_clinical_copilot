@@ -655,6 +655,13 @@ on it, or was prescribed it at discharge: a clause naming what the patient is go
 states discharge medications, while a clause about how a symptom was managed on the ward
 states hospital treatment rather than a prescription.
 
+A passage may also carry what the patient ARRIVED on — "On transfer, …", "On admission, …",
+"Medications on transfer", "home medications" — beside the regimen to continue at discharge.
+Extract only the discharge regimen: an arrival list is what the patient came in taking, and a
+drug on it is not a discharge medication unless the discharge regimen names it again or a
+passage says it was continued. Do not give an arrival-list drug a row on the strength of the
+arrival list alone.
+
 Order the rows as the medication list gives them, then any drug that appears only in the
 prose, in the order it appears there.
 
@@ -725,8 +732,11 @@ value crossed its reference limit, and then name the movements that did happen w
 size: a creatinine that nearly doubled is a finding even though it never left its range,
 and a reassurance followed by a list of changes is a contradiction in two sentences.
 
-A sentence that covers several analytes cites each one's series (`^[1], ^[2]`); one marker
-under a claim about "all laboratory values" does not support it.
+Write no citation markers on this wire. Every value you state is in the table drawn directly
+under your sentence, row by row, with its own reference interval and flag — so `^[1]` or
+`^[4]` in the prose would open a card repeating the row beside it, and a marker the reader can
+click adds nothing they cannot already see. Write the values and the judgements; this answer
+carries no `^[...]` of any kind.
 
 The trajectories were generated from this admission's own recorded features. They were NOT read
 from a laboratory record. Say so once, plainly, in the course of the answer — the card carries
@@ -809,9 +819,12 @@ position of the section you are writing. The two match only by coincidence other
 marker that resolves to another section is a citation the reader cannot trust — a discharge
 diagnosis cited as the discharge instructions is the failure this sentence exists to prevent.
 
-Put the marker at the END of the sentence it supports and BEFORE the full stop: `… with
-stenosis ^[1].`, never `… with stenosis. ^[1]`. A badge after the stop reads as a mark on the
-paragraph rather than on the claim, and the sentence it was written for has already ended.
+Put a note passage's marker at the END of the sentence it supports and BEFORE the full stop:
+`… with stenosis ^[1].`, never `… with stenosis. ^[1]`. A badge after the stop reads as a mark
+on the paragraph rather than on the claim, and the sentence it was written for has already
+ended. This rule and the one-number-per-claim rule above are about note passages. A published
+cohort's badge follows the rule in the readmission section below, which is different: it goes
+immediately after that study's own rate, mid-sentence if that is where the rate is.
 
 Report what the record documents and stop there. Do not close with clinical advice, a vigilance
 or monitoring recommendation, a follow-up plan of your own, or any statement about what the
@@ -831,11 +844,17 @@ Where the input also carries a <verified_comparators> block, this section places
 against the published cohorts in one or two sentences, and the comparison is the point of the
 section. State the patient's own estimate with `probability_display` as it is given, state the
 published rate or rates the block states, and say in the same breath that a published cohort is
-a population benchmark and not a prediction about this patient. Cite each cohort with the PMID
-the block gives it, written ^[PMID: 12345678], immediately after the rate it supports — the
-interface resolves that badge to the numbered row the table draws. A two-arm row is two
-figures: quote both, in the order the block states them, and never average them or quote a
-difference the block does not state.
+a population benchmark and not a prediction about this patient. A two-arm row is two figures:
+quote both, in the order the block states them, and never average them or quote a difference
+the block does not state.
+
+EVERY published rate you state carries its own badge, immediately after that study's rate or
+clause — mid-sentence if that is where the rate sits, and before the full stop if the rate ends
+the sentence. `the 4.1% reported after total knee arthroplasty ^[PMID: 35186616]` is the shape.
+The badge names one record and only one: two cohorts are two badges, side by side, never
+`^[PMID: 35186616, 37028984]` and never one badge for a sentence about both. A cohort rate
+without its badge reads as this patient's own figure, which is the confusion the table beside
+this paragraph exists to prevent.
 
 Where an input block of published cohorts is NOT given, the section ends after the drivers.
 Do not reach for a rate you know from training, do not describe "the literature" in general,

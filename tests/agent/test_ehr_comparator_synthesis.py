@@ -137,7 +137,23 @@ def test_the_prompt_places_the_estimate_against_the_cohorts():
 
     assert "<verified_comparators> block" in text
     assert "population benchmark and not a prediction about this patient" in text
-    assert "^[PMID: 12345678]" in text
+    assert "^[PMID: 35186616]" in text
+
+
+def test_every_cohort_rate_carries_its_own_badge_and_never_a_combined_one():
+    """The risk paragraph lost both badges when two cohorts shared a sentence.
+
+    Measured 2026-11-03: the placement rule ("before the full stop") and the
+    one-number-per-claim rule were written for note passages, and the model applied them
+    to published cohorts too — either dropping the badges or merging two records into
+    `^[PMID: 111, 222]`, which settlement could not draw. The instruction now scopes the
+    old rules to note passages and states the comparator rule on its own.
+    """
+    text = " ".join(_ehr_prompt().split())
+
+    assert "EVERY published rate you state carries its own badge" in text
+    assert "This rule and the one-number-per-claim rule above are about note passages" in text
+    assert "never `^[PMID: 35186616, 37028984]`" in text
 
 
 def test_the_prompt_forbids_a_comparison_when_there_is_no_block():

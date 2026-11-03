@@ -30,11 +30,19 @@ corpus:
     notes_table_ref: "trim-icon-498815-a0.readmission.hybrid_notes"
     split_table_ref: "trim-icon-498815-a0.readmission.hybrid_split"
     split_name: "test"
-    # 87 MTSamples notes -> 446 section chunks (deterministic, recomputed
+    # 87 MTSamples notes -> 582 section chunks (deterministic, recomputed
     # locally with the same chunk_note(pack_to=700) path the pipeline runs:
     # scripts/agent/count_hybrid_chunks.py). Two notes were removed as
     # inclusion violations on 2026-10-08, which took this from 454.
-    expected_vectors: 446
+    #
+    # 446 -> 582 on 2026-11-03, with the lossless chunker: text before a note's
+    # first heading is now chunked as `history_of_present_illness`, a headingless
+    # note is chunked whole as `discharge_summary` (three admissions previously
+    # produced no chunk at all), and the whitelist grew from 13 to 22 sections
+    # (major_procedure, complications, consults, assessment_and_plan,
+    # followup_instructions, chief_complaint, allergies, review_of_systems,
+    # admission_diagnosis).
+    expected_vectors: 582
     shard_size: "SHARD_SIZE_SMALL"
     deploy_machine_type: "e2-standard-2"
 

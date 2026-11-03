@@ -6,9 +6,12 @@ A chunk is the unit of retrieval: one Vector Search datapoint, one citable
 passage. Rules, in order:
 
   1. Split on section boundaries (parse_note does the splitting).
-  2. A section at or under max_chars is one chunk.
-  3. A longer section splits on paragraph (blank line), then sentence.
-  4. Chunks that are entirely redaction or empty are dropped - they cost money
+  2. Text before the first recognised heading is the history of a discharge
+     summary: it is chunked as `history_of_present_illness`, and a note with no
+     recognised heading at all is chunked whole as `discharge_summary`.
+  3. A section at or under max_chars is one chunk.
+  4. A longer section splits on paragraph (blank line), then sentence.
+  5. Chunks that are entirely redaction or empty are dropped - they cost money
      to embed and can never support a citation.
 
 chunk_id is deterministic: "{note_id}:{section}:{ordinal}", so re-running the
@@ -23,8 +26,13 @@ import re
 from dataclasses import dataclass
 
 from services.mcp.retrieval.sections import (
+    ADMISSION_DIAGNOSIS,
+    DISCHARGE_DIAGNOSIS,
+    DISCHARGE_SUMMARY,
+    HISTORY_OF_PRESENT_ILLNESS,
     KNOWN_HEADINGS,
     SUMMARY_SECTIONS,
+    Section,
     parse_note,
     redaction_profile,
 )
@@ -39,22 +47,41 @@ DEFAULT_MAX_CHARS = 1500
 DEFAULT_PACK_TO = 700
 
 # Narrative/assessment sections worth indexing. Metadata (name, dates, sex) and
-# lab-line noise (pertinent_results) add embedding cost without retrieval
-# value. Single source of truth: the ingest pipeline whitelist, the build
-# scripts, and the serving-side datapoint-id parser all import this tuple.
+# lab-line noise (pertinent_results) add embedding cost without retrieval value.
+# Single source of truth: the ingest pipeline whitelist, the build scripts, and the
+# serving-side datapoint-id parser all import this tuple.
+#
+# The clinical narrative a free-text question actually asks about lives in the sections
+# added on 2026-11-03 — the operation, the complications, the consults, the plan, the
+# follow-up and the complaints that opened the admission. Without them the only route to
+# a procedure was whatever the hospital course happened to repeat: 39 of 87 cohort notes
+# carry a `major_procedure` section the index could not return, and 10 carry an
+# `assessment_and_plan` (measured 2026-11-03).
+#
+# `pertinent_results` stays out. It is a line-per-analyte block whose embedding buys
+# nothing the structured lab tool does not answer better.
 INDEX_SECTIONS = (
     "history_of_present_illness",
     "past_medical_history",
     "family_history",
     "social_history",
+    "review_of_systems",
+    "chief_complaint",
+    "allergies",
     "physical_exam",
     "brief_hospital_course",
+    "major_procedure",
+    "complications",
+    "consults",
+    "assessment_and_plan",
     "discharge_condition",
+    "admission_diagnosis",
     "discharge_diagnosis",
     "discharge_medications",
     "medications_on_admission",
     "discharge_disposition",
     "discharge_instructions",
+    "followup_instructions",
     "discharge_summary",
 )
 
@@ -105,19 +132,86 @@ def chunk_note(note: dict, max_chars: int = DEFAULT_MAX_CHARS,
     would otherwise yield a 40-char chunk per line; packing gives retrieval
     units of usable size. Defaults to no packing (each piece is its own chunk).
 
+    Lossless at the document's edges (2026-11-03). `parse_note` only names text that
+    follows a RECOGNISED heading, so two kinds of note text produced no chunk at all and
+    could not be retrieved by any query:
+
+      * the narrative before a note's first heading, which is the history in a discharge
+        summary — emitted as `history_of_present_illness`, the same name and the same
+        text `_search_sections` gives it;
+      * a note written without headings, which parsed to no sections at all — emitted as
+        one `discharge_summary` passage rather than as nothing. Three of eighty-seven
+        cohort admissions were invisible to `rag_search` for exactly this reason.
+
+    Both were already handled on the `/ehr` path; this is the index agreeing with it.
+
     chunk_ids are unique per note: ordinal continues across repeated sections of
     the same name (a note can carry both "Physical Exam" and "Discharge Exam",
     or "Past Medical History" and its "PMH" alias), so the second instance does
     not collide with the first.
     """
+    normalised = str(note.get("text") or "").replace("\r\n", "\n").replace("\r", "\n")
+    parsed = parse_note(normalised)
+
+    pieces: list[Section] = []
+    if parsed.sections:
+        preamble = normalised[:parsed.sections[0].start].strip()
+        if preamble and not redaction_profile(preamble).is_placeholder_only:
+            pieces.append(Section(name=HISTORY_OF_PRESENT_ILLNESS, heading="",
+                                  body=preamble, start=0,
+                                  end=parsed.sections[0].start))
+        pieces.extend(parsed.sections)
+    else:
+        body = normalised.strip()
+        if body and not redaction_profile(body).is_placeholder_only:
+            pieces.append(Section(name=DISCHARGE_SUMMARY, heading="", body=body,
+                                  start=0, end=len(normalised)))
+
     chunks: list[Chunk] = []
     name_ordinals: dict[str, int] = {}
-    for section in parse_note(note["text"]).sections:
+    for section in _drop_duplicate_diagnoses(pieces):
         base = name_ordinals.get(section.name, 0)
         section_chunks = _chunk_section(note, section, max_chars, pack_to, base)
         chunks.extend(section_chunks)
         name_ordinals[section.name] = base + len(section_chunks)
     return chunks
+
+
+def _norm_body(text: str) -> str:
+    """A section body folded to the form two bodies are compared in.
+
+    Whitespace collapsed and case removed, so a note that prints one block under two
+    headings with different line wrapping is recognised as one block. Deliberately the
+    same rule `retrieval._norm_body` applies on the serving side: the two layers have to
+    agree about when two bodies are one, or the index holds two copies and the passage
+    hides one of them.
+    """
+    return " ".join(str(text or "").split()).lower()
+
+
+def _drop_duplicate_diagnoses(sections: list[Section]) -> list[Section]:
+    """One passage per diagnosis list, labelled the discharge way.
+
+    A note that prints the same list under `ADMISSION DIAGNOSES` and again under
+    `DISCHARGE DIAGNOSES` is stating one fact twice. `_search_sections` keeps the second
+    and tags it as the discharge diagnosis (`_keep_final_diagnosis`), so the reading a
+    summary answers with is the final one; an index that embedded both copies would let a
+    retrieval cite the admission heading for a discharge fact, and would spend two
+    vectors on one block.
+
+    Only that pair, and only when the bodies agree once folded. A note whose diagnoses
+    were revised between admission and discharge holds two different lists, and both are
+    indexed: the difference between them is a finding, not a duplicate.
+    """
+    final = {_norm_body(section.body) for section in sections
+             if section.name == DISCHARGE_DIAGNOSIS}
+    if not final:
+        return sections
+    return [
+        section for section in sections
+        if not (section.name == ADMISSION_DIAGNOSIS
+                and _norm_body(section.body) in final)
+    ]
 
 
 def _chunk_section(note: dict, section, max_chars: int,

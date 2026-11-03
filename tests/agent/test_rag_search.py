@@ -262,6 +262,21 @@ def test_section_parsing_unknown_returns_none():
     assert section is None
 
 
+def test_every_indexed_section_round_trips_through_a_datapoint_id():
+    """`INDEX_SECTIONS` is the build's whitelist AND the serving parser's vocabulary.
+
+    A section the build indexes but this regex cannot name is a hard `unparsed_datapoint`
+    error at serving time, and a section it names only partially (one multi-underscore
+    name shadowing another) is a passage labelled with the wrong section. The tuple grew
+    on 2026-11-03 — `major_procedure`, `assessment_and_plan`, `followup_instructions`,
+    `review_of_systems` — so every name is round-tripped here rather than one sample.
+    """
+    for section in rs.INDEX_SECTIONS:
+        note_id, parsed = rs._parse_datapoint_id(f"10001-DS-1_{section}_1")
+        assert note_id == "10001-DS-1", section
+        assert parsed == section, section
+
+
 def test_index_endpoint_reconstructs_with_full_name():
     """find_neighbors crashes on .list() lazy objects (no _public_match_client);
     _index_endpoint must re-construct by the full resource name."""

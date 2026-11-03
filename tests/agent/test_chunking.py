@@ -260,6 +260,97 @@ def test_fixed_width_fallback_cuts_at_word_boundaries():
             assert token in vocabulary, f"mid-word cut produced {token!r}"
 
 
+# --- the document's edges: text parse_note cannot name (2026-11-03) -----------
+#
+# `parse_note` only names text that follows a RECOGNISED heading, so a note with no
+# headings produced no chunks at all and a note's opening narrative was never indexed.
+# Three of eighty-seven cohort admissions were unreachable by `rag_search` for the first
+# reason. `/ehr` already read both cases (`_search_sections`), so the index was the only
+# layer that could not see them.
+
+def test_a_headingless_note_is_one_discharge_summary_passage():
+    note = {"hadm_id": 3, "note_id": 500, "text": (
+        "The patient is a 63 year old woman admitted with pneumonia. "
+        "She improved on ceftriaxone and was discharged home in good condition.")}
+
+    chunks = chunk_note(note)
+
+    assert [c.section for c in chunks] == ["discharge_summary"]
+    assert chunks[0].chunk_id == "500:discharge_summary:1"
+    assert "ceftriaxone" in chunks[0].text
+    # The build keeps a chunk only when its section is indexed.
+    assert "discharge_summary" in INDEX_SECTIONS
+
+
+def test_text_before_the_first_heading_is_the_history():
+    """An unheaded preamble of a discharge summary is the history of present illness."""
+    note = {"hadm_id": 3, "note_id": 501, "text": (
+        "A 70 year old man presents with two days of fevers.\n\n"
+        "Brief Hospital Course:\nAdmitted, treated with antibiotics, improved.\n")}
+
+    chunks = chunk_note(note)
+
+    assert [c.section for c in chunks] == [
+        "history_of_present_illness", "brief_hospital_course"]
+    assert "two days of fevers" in chunks[0].text
+    assert chunks[0].chunk_id == "501:history_of_present_illness:1"
+
+
+def test_a_preamble_does_not_collide_with_the_notes_own_hpi():
+    """The preamble takes ordinal 1, and the note's own history section takes 2."""
+    note = {"hadm_id": 3, "note_id": 502, "text": (
+        "Admitted with chest pain.\n\n"
+        "History of Present Illness:\nHe had chest pain for one hour.\n")}
+
+    hpi = [c for c in chunk_note(note) if c.section == "history_of_present_illness"]
+
+    assert [c.chunk_id for c in hpi] == [
+        "502:history_of_present_illness:1",
+        "502:history_of_present_illness:2",
+    ]
+    assert "Admitted with chest pain" in hpi[0].text
+    assert "one hour" in hpi[1].text
+
+
+def test_a_redaction_only_preamble_is_not_chunked():
+    note = {"hadm_id": 3, "note_id": 503, "text": (
+        "___\n\nBrief Hospital Course:\nAdmitted and improved.\n")}
+
+    assert [c.section for c in chunk_note(note)] == ["brief_hospital_course"]
+
+
+def test_an_identical_diagnosis_list_is_indexed_once():
+    """One block, two headings: the index embeds it once, under the final heading."""
+    note = {"hadm_id": 4, "note_id": 600, "text": (
+        "Admission Diagnosis:\n1. Pneumonia\n\n"
+        "Discharge Diagnosis:\n1.  PNEUMONIA\n")}
+
+    chunks = chunk_note(note)
+
+    assert [c.section for c in chunks] == ["discharge_diagnosis"]
+    # The surviving copy is the discharge block, byte for byte as the note writes it.
+    assert chunks[0].text == "1.  PNEUMONIA"
+
+
+def test_a_revised_diagnosis_list_keeps_both_sections():
+    """A diagnosis added during the stay is a finding, not a duplicate."""
+    note = {"hadm_id": 4, "note_id": 601, "text": (
+        "Admission Diagnosis:\n1. Sepsis\n\n"
+        "Discharge Diagnosis:\n1. Sepsis\n2. Acute kidney injury\n")}
+
+    assert [c.section for c in chunk_note(note)] == [
+        "admission_diagnosis", "discharge_diagnosis"]
+
+
+def test_a_note_with_no_discharge_diagnosis_keeps_its_admission_one():
+    note = {"hadm_id": 4, "note_id": 602, "text": (
+        "Admission Diagnosis:\n1. Sepsis\n\nBrief Hospital Course:\nTreated.\n")}
+
+    assert [c.section for c in chunk_note(note)] == [
+        "admission_diagnosis", "brief_hospital_course"]
+
+
+
 def test_index_sections_are_canonical_section_names():
     """Every indexed section must be a canonical parser name (ECC-33): a typo
     here would silently index nothing for that section."""

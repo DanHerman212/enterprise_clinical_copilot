@@ -701,23 +701,34 @@ async def rag_search_sections(hadm_id: int) -> RetrievalResult | ToolError:
         return _error(hadm_id, "invalid_tool_response", "Retrieval response was malformed.")
 
 
-#: The sections that exist to carry a medication list. A note that has any of them is a
-#: note whose discharge medications are where the document says they are.
+#: The sections that exist to carry a DISCHARGE medication list. A note that has either of
+#: them has its discharge regimen where the document says it is.
+#:
+#: `medications_on_transfer` is deliberately absent (2026-11-03). In a transitional-care or
+#: rehabilitation note that heading is the list the patient ARRIVED on — "On transfer,
+#: Celebrex, Coumadin, Colace, …" — carried over from the acute hospital, and a drug on it
+#: may have been stopped before discharge. Reading it beside the discharge list put two
+#: drugs the patient left without into a `/meds` grid, both with no dose, because an
+#: arrival list states names and not regimens.
 _DEDICATED_MED_SECTIONS = (
     DISCHARGE_MEDICATIONS,
-    MEDICATIONS_ON_TRANSFER,
     DISCHARGE_INSTRUCTIONS,
 )
 
-#: Where a discharge prescription goes when the note has no medication section at all.
+#: Where a discharge prescription goes when the note has no discharge medication section.
 #: Surgical notes write the prescriptions at the end of the course — "we will send her home
-#: with Medrol … Darvocet and Flexeril" — and a headingless narrative note holds the only
+#: with a steroid taper and an opioid" — and a headingless narrative note holds the only
 #: medication mention the record has. Measured 2026-11-03: `/meds` on 90000069 returned
 #: nothing, because the old path asked the chunker for two sections the note does not have.
+#:
+#: The transfer list belongs here rather than above: with no discharge section it is the
+#: only medication text the record has, and a note whose sole list is "on transfer" is
+#: better read than reported as having nothing.
 _FALLBACK_MED_SECTIONS = (
     ASSESSMENT_AND_PLAN,
     BRIEF_HOSPITAL_COURSE,
     MEDICATIONS_ON_ADMISSION,
+    MEDICATIONS_ON_TRANSFER,
     HISTORY_OF_PRESENT_ILLNESS,
     DISCHARGE_SUMMARY,
 )

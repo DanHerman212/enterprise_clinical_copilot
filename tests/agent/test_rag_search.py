@@ -759,6 +759,43 @@ def test_a_dedicated_medication_section_wins_over_the_narrative():
     assert [p["section"] for p in result["passages"]] == ["discharge_medications"]
 
 
+def test_a_transfer_list_is_not_read_beside_the_discharge_list():
+    """An arrival list is what the patient came in on, so the dedicated pass excludes it.
+
+    In a transitional-care note, `MEDICATIONS ON TRANSFER` is the list carried in from the
+    acute hospital, and a drug on it may have been stopped before discharge — 90000015's
+    Lovenox was discontinued the day after transfer, and niacin was dropped from the
+    discharge regimen entirely. Read beside the discharge list, both reached the grid with
+    no dose, because an arrival list states names and not regimens (2026-11-03).
+    """
+    note = (
+        "MEDICATIONS ON TRANSFER: Celebrex, Coumadin, Colace, Lovenox, niacin.\n\n"
+        "DISCHARGE MEDICATIONS: Coumadin 5 mg daily, Colace 100 mg twice daily.\n\n"
+        "DISCHARGE INSTRUCTIONS: Continue Coumadin 5 mg daily and Colace 100 mg twice "
+        "daily. Lovenox was discontinued."
+    )
+    with patch.object(rs, "_fetch_note_row", lambda hadm: ("MT-15-DS", note)):
+        result = rs._search_medication_sections(90000015)
+
+    assert [p["section"] for p in result["passages"]] == [
+        "discharge_medications", "discharge_instructions"]
+    assert "Lovenox" not in " ".join(p["text"] for p in result["passages"]
+                                     if p["section"] != "discharge_instructions")
+
+
+def test_a_note_whose_only_list_is_the_transfer_list_still_reports_it():
+    """Fallback, not exclusion: with no discharge section it is the only text there is."""
+    note = (
+        "MEDICATIONS ON TRANSFER: Coumadin, Colace.\n\n"
+        "HISTORY OF PRESENT ILLNESS: Admitted for rehabilitation."
+    )
+    with patch.object(rs, "_fetch_note_row", lambda hadm: ("MT-16-DS", note)):
+        result = rs._search_medication_sections(90000010)
+
+    assert [p["section"] for p in result["passages"]] == [
+        "medications_on_transfer", "history_of_present_illness"]
+
+
 def test_medication_sections_reports_an_honest_empty():
     """A note with no medication section and nothing a prescription is written in.
 

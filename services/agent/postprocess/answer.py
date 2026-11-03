@@ -319,6 +319,7 @@ def settle_answer(
     tool_calls: list[dict] | None,
     replayed_tool_calls: list[dict] | None,
     wants_literature: bool = False,
+    comparators: list[dict] | None = None,
 ) -> Settlement:
     """Decide the answer's markers: vocabulary, bound, then the reader's numbering.
 
@@ -335,6 +336,9 @@ def settle_answer(
     array reached the reader (`agent-00227-n7g`, patient 90000023 turn 3, 2026-10-31).
     The caller unwraps (`graph.final_text`) because the engine owns the container and this
     module owns the prose.
+
+    `comparators` is the cohort rows the comparison table published — plain data, passed
+    in rather than read out of the graph, so this stays a function of its arguments.
     """
     bound = citations.citation_bound(tool_calls or [], replayed_tool_calls or [])
     # The badge allowance follows the same rule the bound does, on the one axis where it
@@ -346,6 +350,20 @@ def settle_answer(
     pmids = citations.literature_pmids(
         tool_calls or [], (replayed_tool_calls or None) if wants_literature else None,
     )
+    # And the cohorts the comparison table published, which is a third channel beside the
+    # note passages and the answer's own literature — the same union `guardrail` builds
+    # (`citations.comparator_pmids`), made here so both passes allow the same set.
+    #
+    # `/ehr`'s comparator search declares `scope="readmission"`, so `literature_pmids`
+    # deliberately does NOT count it: those records are the table's, not the answer's own
+    # citation list, and counting them would draw the briefing as a literature turn with
+    # twenty-five candidates. The consequence was that a `^[PMID: …]` badge naming a
+    # cohort the table had just verified resolved against an empty allowance and was
+    # deleted here — so it never reached the guardrail below, which already knew the row.
+    # Measured 2026-11-03: `^[PMID: 24108298]` on 90000069 and both comparator badges on
+    # 90000015 were removed as `citation_out_of_range` while the references drawer listed
+    # the records they named.
+    pmids = pmids | citations.comparator_pmids(comparators)
 
     flags: list[str] = []
     settled_prose: str | None = None
@@ -414,6 +432,8 @@ def sanitize_answer_markers(state: dict, text: str | None = None) -> None:
         tool_calls=state.get("tool_calls") or [],
         replayed_tool_calls=state.get("replayed_tool_calls") or [],
         wants_literature=bool(state.get("wants_literature")),
+        # The adapter holds a state, so it reads the same rows `graph._settle` passes.
+        comparators=state.get("comparators") or [],
     )
     if message is not None and settled.prose is not None:
         message.content = settled.prose

@@ -1338,6 +1338,12 @@ def _settle(state: dict, *, prose: str | None) -> None:
         tool_calls=state.get("tool_calls") or [],
         replayed_tool_calls=state.get("replayed_tool_calls") or [],
         wants_literature=bool(state.get("wants_literature")),
+        # The cohorts this turn verified and the comparison table drew. Passed as data
+        # because settlement is a function of its arguments, not of the graph: the rows
+        # are the same ones `guard_answer` allows a `^[PMID: …]` badge to name, and the
+        # two passes must agree or the earlier one deletes what the later one permits
+        # (90000069 and 90000015, 2026-11-03).
+        comparators=state.get("comparators") or [],
     )
     message = final_message(state)
     if message is not None and settled.prose is not None:

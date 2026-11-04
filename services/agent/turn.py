@@ -320,6 +320,11 @@ async def compose_success(
         # list is a real answer — verification can reject every candidate — and the canvas
         # says so rather than borrowing a cohort for a different condition.
         comparators=state.get("comparators") or [],
+        # And the published records an earlier turn of this thread cited. Read by the
+        # narrative and by the reference rows, never by the canvas: a follow-up quoting the
+        # thread's benchmark owes the reader a pill and a card for it, and does not owe
+        # them a second comparison table (`_draws_matrix` is scoped to `/ehr`).
+        thread_literature=state.get("thread_literature") or [],
     )
 
     # The trace, written once, now that the answer is settled AND composed. Two records,

@@ -93,7 +93,8 @@ class TestTheLabSeriesIsKept:
             }],
         }]
 
-        messages, calls = asyncio.run(graph.replay_messages(_MustNotBeCalled(), turns))
+        messages, calls, _articles = asyncio.run(
+            graph.replay_messages(_MustNotBeCalled(), turns))
 
         assert [call["name"] for call in calls] == ["get_lab_trends"]
         assert calls[0]["response"]["trends"][0]["label"] == "Creatinine"

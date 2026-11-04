@@ -320,6 +320,7 @@ def settle_answer(
     replayed_tool_calls: list[dict] | None,
     wants_literature: bool = False,
     comparators: list[dict] | None = None,
+    thread_literature: list[dict] | None = None,
 ) -> Settlement:
     """Decide the answer's markers: vocabulary, bound, then the reader's numbering.
 
@@ -339,6 +340,13 @@ def settle_answer(
 
     `comparators` is the cohort rows the comparison table published — plain data, passed
     in rather than read out of the graph, so this stays a function of its arguments.
+
+    `thread_literature` is the same idea one layer out: the published records an EARLIER
+    turn of this thread retrieved and then cited, so a follow-up can cite them again
+    instead of being told the note does not document the literature (2026-11-04). It
+    widens the badge allowance by exactly those identifiers and nothing else — the pool a
+    search returns is not evidence, and `citations.cited_articles` is what decided which
+    records of it a turn actually rested on.
     """
     bound = citations.citation_bound(tool_calls or [], replayed_tool_calls or [])
     # The badge allowance follows the same rule the bound does, on the one axis where it
@@ -364,6 +372,11 @@ def settle_answer(
     # 90000015 were removed as `citation_out_of_range` while the references drawer listed
     # the records they named.
     pmids = pmids | citations.comparator_pmids(comparators)
+    # And the records an earlier turn of the thread verified. Same rule, one layer out: a
+    # follow-up answering from the thread's own published benchmark is not naming an
+    # identifier nobody retrieved — the thread retrieved it, and `replay_messages`
+    # carried back the records that turn cited.
+    pmids = pmids | citations.record_pmids(thread_literature)
 
     flags: list[str] = []
     settled_prose: str | None = None
@@ -434,6 +447,7 @@ def sanitize_answer_markers(state: dict, text: str | None = None) -> None:
         wants_literature=bool(state.get("wants_literature")),
         # The adapter holds a state, so it reads the same rows `graph._settle` passes.
         comparators=state.get("comparators") or [],
+        thread_literature=state.get("thread_literature") or [],
     )
     if message is not None and settled.prose is not None:
         message.content = settled.prose

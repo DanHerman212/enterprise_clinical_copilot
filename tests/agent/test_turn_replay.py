@@ -163,7 +163,8 @@ def test_a_replayed_risk_turn_carries_its_drivers_into_the_transcript():
     """
     from langchain_core.messages import ToolMessage
 
-    messages, calls = asyncio.run(graph.replay_messages(_NoToolbox(), RISK_TURN))
+    messages, calls, _articles = asyncio.run(
+        graph.replay_messages(_NoToolbox(), RISK_TURN))
 
     assert calls[0]["name"] == "predict_readmission"
     assert [f["feature"] for f in calls[0]["response"]["top_factors"]] == \

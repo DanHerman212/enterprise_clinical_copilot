@@ -65,7 +65,7 @@ def test_a_replayed_lab_panel_carries_the_series_and_its_citation_numbers():
     is gone: the panel now reaches the model exactly as the tool returned it, with the
     citation fields the renderer adds for every passage-shaped unit.
     """
-    messages, _ = asyncio.run(graph.replay_messages(
+    messages, _, _articles = asyncio.run(graph.replay_messages(
         _Box({"get_lab_trends": RONCO_PANEL}),
         _turn("get_lab_trends", RONCO_PANEL, question="/labs", hadm_id=90000108),
     ))
@@ -90,7 +90,7 @@ def test_a_replayed_estimate_shows_display_strings_and_no_float():
         "base_value": 0.1,
     }
 
-    messages, _ = asyncio.run(graph.replay_messages(
+    messages, _, _articles = asyncio.run(graph.replay_messages(
         _Box({"predict_readmission": payload}),
         _turn("predict_readmission", payload, question="/ehr", hadm_id=90000023),
     ))
@@ -108,7 +108,7 @@ def test_the_recorded_replay_still_holds_what_the_tool_returned():
     against it, read the recorded call. If projection leaked into it, the `excursion` this
     test's own panel is ranked by would become part of "what the tool said".
     """
-    _, calls = asyncio.run(graph.replay_messages(
+    _, calls, _articles = asyncio.run(graph.replay_messages(
         _Box({"get_lab_trends": RONCO_PANEL}),
         _turn("get_lab_trends", RONCO_PANEL, question="/labs", hadm_id=90000108),
     ))

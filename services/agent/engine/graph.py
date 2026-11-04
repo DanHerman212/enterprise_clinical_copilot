@@ -110,6 +110,11 @@ class AgentState(TypedDict):
     # this turn did. Kept out of `tool_calls` so the caller's stored turn stays
     # exactly this turn's calls, which is what the site replays back next time.
     replayed_tool_calls: list[RecordedToolCall]
+    #: The published records the thread already rested on — the articles an earlier turn's
+    #: search returned that that turn's own answer cited by PMID (`citations.cited_articles`).
+    #: Seeded before the run, read by the badge allowance and by the composer, so a
+    #: follow-up can cite what the thread verified. See `replay_messages`.
+    thread_literature: list[dict]
     #: Set once the graph has sent the model back to retrieve. Read by `route` to keep
     #: the demand one-shot: a model that twice answers without calling a tool would
     #: otherwise be asked a third time, and the third answer is no better than the second.
@@ -747,6 +752,24 @@ def build_graph(
             # from the notes that the labs were not documented. Provenance is a fact the
             # client has; it sends it.
             return END
+        if any(str(call.get("name")) == "rag_search_sections"
+               for call in state.get("replayed_tool_calls") or []):
+            # A typed follow-up in a thread that has already read the WHOLE note. The
+            # demand exists to stop a first turn answering the chart from memory (measured
+            # 2026-10-15: two turns in one thread answered with no call at all, and the
+            # markers were stripped as pointing at nothing). On a follow-up it did the
+            # opposite of its purpose: asked how the thread's published benchmark compared
+            # with the estimate, the model answered from the transcript — correctly, the
+            # evidence was there — and this branch spent a note search on its behalf whose
+            # reply then REPLACED that answer with one saying the notes document no
+            # peer-reviewed research (2026-11-04).
+            #
+            # The licence is full-chart synthesis specifically, not "a replay exists". A
+            # thread whose only call was a laboratory panel, or one narrow vector search,
+            # holds no account of the admission: a new chart question asked into it still
+            # needs the note read, and treating any replay as sufficient turned the one
+            # protection this path has into a hole (2026-11-04).
+            return END
         return "demand_retrieval"
 
     graph = StateGraph(AgentState)
@@ -1014,16 +1037,14 @@ async def ask(
     # keeps none of the three.
     wants_literature = turn_is_about_literature(question, question_kind)
 
-    # Earlier turns' published-records searches are carried only into a turn that is
-    # itself about published records. See `replay_messages`: a `search_literature`
-    # result left in the transcript re-entered every later turn, binding a marker to an
-    # article nobody had been shown and badging a chart answer as general evidence.
-    #
-    # Built before the graph rather than after it, because ONE binding decision reads it:
-    # whether the laboratory panel this turn is asked to rank is already in hand
-    # (`_freetext_allowed`). The replay is the only place that fact lives.
-    replayed, replayed_calls = await replay_messages(
-        toolbox, turns, keep_literature=wants_literature)
+    # Earlier turns' reported evidence travels with the run, in both senses. Their tool
+    # calls are the array the answer's markers are numbered against and guarded by, and
+    # the published records they actually cited are what a follow-up may cite again —
+    # without them a question about the thread's benchmark was answered from the discharge
+    # note (2026-11-04). Built before the graph rather than after it, because ONE binding
+    # decision reads it: whether the laboratory panel this turn is asked to rank is already
+    # in hand (`_freetext_allowed`). The replay is the only place that fact lives.
+    replayed, replayed_calls, thread_literature = await replay_messages(toolbox, turns)
 
     graph = build_graph(
         toolbox, model=model, on_event=on_event, question_kind=question_kind,
@@ -1112,6 +1133,12 @@ async def ask(
                 # stripped as unsupported, which is a correct answer destroyed by a
                 # guardrail that could only see this turn.
                 "replayed_tool_calls": replayed_calls,
+                # The published records earlier turns of this thread rested on. Passed to
+                # the citation layer and the composer as DATA, so a follow-up can cite a
+                # record the thread already verified instead of being told the notes do
+                # not document the literature. Empty for a first turn, and empty for a
+                # thread whose answers cited none.
+                "thread_literature": thread_literature,
                 # Cleared per run, so the demand below is made at most once per question
                 # rather than once per conversation.
                 "retrieval_demanded": False,
@@ -1216,6 +1243,22 @@ def replayed_turns(turns: list[dict[str, str]] | None) -> list[BaseMessage]:
     return messages
 
 
+def _pruned_literature_payload(payload: dict, cited: list[dict]) -> dict:
+    """A search's payload reduced to the records its turn actually rested on.
+
+    The replay renders this, and `replayed_tool_calls` records it, so the model on a later
+    turn is shown exactly the studies the earlier answer cited — the same set
+    `thread_literature` carries, by construction, because both are built from this list.
+
+    A copy rather than a mutation: the payload came from `toolbox.call` and may be the
+    caller's own object, and a replay must not rewrite a tool's result.
+    """
+    pruned = dict(payload)
+    pruned["articles"] = list(cited)
+    pruned["returned"] = len(cited)
+    return pruned
+
+
 def _replayed_tool_messages(
     call: dict[str, Any], call_id: str, payload: Any, *, offset: int = 0
 ) -> list[BaseMessage]:
@@ -1252,8 +1295,7 @@ def _replayed_tool_messages(
 
 async def replay_messages(
     toolbox: MCPToolbox, turns: list[dict[str, Any]] | None,
-    *, keep_literature: bool = True,
-) -> tuple[list[BaseMessage], list[RecordedToolCall]]:
+) -> tuple[list[BaseMessage], list[RecordedToolCall], list[dict]]:
     """The earlier conversation, as the messages the model would have seen.
 
     A turn is replayed in the order it happened: the question, then each tool
@@ -1274,27 +1316,31 @@ async def replay_messages(
     this turn's calls would strike the score out of a correct answer. Returning
     them here is what keeps one resolution of a payload — messages and evidence
     are two views of the same replay, never two trips to the tool.
+
+    EVERY call the thread made is replayed — including a published-records search,
+    whatever scope it declared. A filter here used to drop `search_literature` from any
+    turn that was not itself about the literature, to stop a stale result re-entering a
+    chart answer (90000058). It stopped one failure and caused a worse one: a follow-up
+    asking how the published benchmark compared with the estimate could not see that the
+    thread had already retrieved the records, had no way to look again, and answered from
+    the discharge note that the notes do not document peer-reviewed research
+    (2026-11-04). What makes a record safe to show on a later turn is not its absence; it
+    is the third return value.
+
+    That third value is the thread's published evidence: the records a search returned
+    that the same turn's answer then addressed by PMID (`citations.cited_articles`). A
+    search's POOL is not evidence — twenty-five candidates come back and one is cited —
+    so only what an earlier turn actually rested on travels, and only that may be cited
+    again.
     """
     messages: list[BaseMessage] = []
     calls: list[RecordedToolCall] = []
+    thread_articles: list[dict] = []
+    seen_pmids: set[str] = set()
     offset = 0
     for turn_index, turn in enumerate(turns or []):
         messages.append(HumanMessage(content=turn["question"]))
         for call_index, call in enumerate(turn.get("tool_calls") or []):
-            # A published-records search is not carried into a turn that is not about
-            # published records (Phase E, 2026-10-26).
-            #
-            # `search_literature` returns somebody else's patients. Kept in the transcript,
-            # it re-entered every later turn: a `/meds` follow-up was answered with `^[1]`
-            # bound to a World Neurosurgery article, badged General Medical Evidence, with
-            # the old `LiteratureList` re-rendered under the medication instructions
-            # (90000058). The records were retrieved for a question that was asked and
-            # answered; a later question about this patient's chart is not a reason to show
-            # them again. Nothing is dropped that the current turn asked for —
-            # `keep_literature` is set from the question itself, and a genuine literature
-            # question is bound the same tool anyway.
-            if not keep_literature and str(call.get("name")) in routing.LITERATURE_TOOLS:
-                continue
             payload = call.get("payload")
             if payload is None:
                 logger.info(
@@ -1303,12 +1349,34 @@ async def replay_messages(
                     call["name"], turn_index,
                 )
                 payload = await toolbox.call(call["name"], dict(call.get("args") or {}))
+            if str(call.get("name")) in routing.LITERATURE_TOOLS:
+                # A search returns a pool; a turn rests on one or two of it. Only the
+                # records that turn's own answer CITED are part of the thread's evidence,
+                # so only those reach the transcript and `replayed_tool_calls`. Replaying
+                # all twenty-five abstracts let a follow-up quote figures from candidates
+                # nothing had displayed — and cite them, which settlement then stripped,
+                # leaving ungrounded numbers in the prose (90000069, 2026-11-04).
+                #
+                # A search the turn cited nothing from is not replayed at all: it
+                # contributed no evidence to that answer, so there is nothing for a later
+                # turn to inherit from it.
+                cited = citations.cited_articles(payload, turn.get("answer") or "")
+                if not cited:
+                    continue
+                payload = _pruned_literature_payload(payload, cited)
+                for article in cited:
+                    pmid = str(article.get("pmid") or "")
+                    if pmid and pmid not in seen_pmids:
+                        seen_pmids.add(pmid)
+                        thread_articles.append(article)
             messages.extend(
                 _replayed_tool_messages(call, f"replay-{turn_index}-{call_index}", payload,
                                         offset=offset)
             )
             # The numbering continues across turns, because the citation layer resolves
-            # a marker against every citable unit the conversation has shown.
+            # a marker against every citable unit the conversation has shown. A
+            # published-records payload contributes none: `passage_total` counts note
+            # passages and laboratory analytes, and an article is addressed by its PMID.
             offset += _passage_total(payload)
             calls.append({
                 "name": call["name"],
@@ -1316,7 +1384,7 @@ async def replay_messages(
                 "response": payload if isinstance(payload, dict) else {"result": payload},
             })
         messages.append(AIMessage(content=turn["answer"]))
-    return messages, calls
+    return messages, calls, thread_articles
 
 
 def _settle(state: dict, *, prose: str | None) -> None:
@@ -1344,6 +1412,11 @@ def _settle(state: dict, *, prose: str | None) -> None:
         # two passes must agree or the earlier one deletes what the later one permits
         # (90000069 and 90000015, 2026-11-03).
         comparators=state.get("comparators") or [],
+        # And the published records an earlier turn of this thread cited, for the same
+        # reason one layer out: settlement runs before the guardrail, so an allowance
+        # that knew only this turn's evidence would delete a follow-up's citation of the
+        # thread's own benchmark (2026-11-04).
+        thread_literature=state.get("thread_literature") or [],
     )
     message = final_message(state)
     if message is not None and settled.prose is not None:

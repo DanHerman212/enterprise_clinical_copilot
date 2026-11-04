@@ -58,7 +58,11 @@ from services.agent.postprocess.citations import (  # noqa: F401 — re-exported
     citation_remap,
     renumber_citations,
 )
-from services.agent.presentation.domain import _usable_articles, is_matrix_eligible
+from services.agent.presentation.domain import (
+    _LITERATURE_FIELDS,
+    _usable_articles,
+    is_matrix_eligible,
+)
 # The analyte vocabulary, from the shared leaf rather than from `routing/`: this layer
 # may not import the routing package (Charter 13 §5), and the answer it needs — "did the
 # question name a measurement?" — is a label question, not a routing decision.
@@ -261,7 +265,8 @@ def compose_presentation(question: str, answer: str,
                          literature_replay: bool = False,
                          citation_map: dict[str, int] | None = None,
                          question_names_analyte: bool = False,
-                         comparators: list[dict] | None = None) -> dict:
+                         comparators: list[dict] | None = None,
+                         thread_literature: list[dict] | None = None) -> dict:
     """The full presentation contract for an answered question.
 
     One call produces every field the browser consumes, so the answer's
@@ -344,6 +349,23 @@ def compose_presentation(question: str, answer: str,
     # what the model was shown and what the reader is shown cannot drift apart.
     literature = literature_payload(
         tool_calls, evidence_calls if literature_replay else None)
+    # The published records the thread already rested on, beside this turn's own. A
+    # follow-up that names the benchmark an earlier turn compared against is quoting the
+    # thread, so the marker has to resolve to the record the thread retrieved — otherwise
+    # the prose states a rate and the reader has no card to open (2026-11-04). One merged,
+    # de-duplicated array numbered once, so a pill and its drawer row cannot disagree.
+    #
+    # Only the records this answer NAMES enter. The turn's own search keeps the rule that
+    # an uncited result is still published — a turn that names no record did read what it
+    # retrieved — but an inherited record was not read by this turn, and a row for it would
+    # claim the answer rests on a paper it never mentioned.
+    named_thread_pmids = {str(pmid) for pmid in cited_numbers_of_records}
+    thread_records = [
+        article for article in thread_literature or []
+        if isinstance(article, dict)
+        and str(article.get("pmid") or "").strip() in named_thread_pmids
+    ]
+    published_records = _published_records(literature, thread_records)
     # The lab card reads THIS turn's calls, not the conversation's. `evidence_calls` is
     # the right array for what the answer rests on and for how its markers are numbered
     # (TF-10, 2026-10-23), but a chart is not a provenance statement — it is a drawing
@@ -387,7 +409,8 @@ def compose_presentation(question: str, answer: str,
     # no citations rather than becoming an uncited one.
     shown_sources = [] if command == "labs" else record_sources
     narrative = _narrative(answer, shown_sources, literature,
-                           literature_start=literature_start)
+                           literature_start=literature_start,
+                           records=published_records)
 
     scope = turn_scope(evidence_calls)
 
@@ -546,7 +569,8 @@ def compose_presentation(question: str, answer: str,
     # and the answer rests on one; publishing all three told the reader two papers had been
     # used (patient 90000069, turn 3, 2026-10-31 — two rows nothing pointed at).
     published_sources = literature_sources(
-        articles, start=literature_start, cited=cited_numbers_of_records)
+        published_records, start=literature_start,
+        cited=cited_numbers_of_records)
     sources = shown_sources + published_sources
 
     comparator_sources, comparator_references = register_comparator_sources(
@@ -1480,7 +1504,8 @@ def literature_sources(articles: list[dict], start: int = 1,
 
 
 def _narrative(answer: str, sources: list[dict], literature: dict | None,
-               *, literature_start: int = 1) -> dict | None:
+               *, literature_start: int = 1,
+               records: list[dict] | None = None) -> dict | None:
     """The narrative surface for this answer, or None when there is no prose.
 
     Citations come from every kind of evidence the turn rests on, and a mixed turn
@@ -1506,8 +1531,42 @@ def _narrative(answer: str, sources: list[dict], literature: dict | None,
     if not answer.strip():
         return None
     notes = note_citations(sources)
-    articles = _usable_articles(literature or {})
-    if not articles or literature is None:
+    # `records` is the merged array the caller already numbered — this turn's records and
+    # the thread's, once each. Passed rather than re-derived so the narrative's citations
+    # and the turn's `sources` are one list under one set of numbers. Without it (the
+    # historical call shape) this turn's own search is the whole array.
+    articles = _usable_articles(literature or {}) if records is None else records
+    if not articles:
         return narrative_surface(answer, notes)
     return narrative_surface(
         answer, notes + literature_citations(articles, start=literature_start))
+
+
+def _published_records(literature: dict | None,
+                       thread_articles: list[dict] | None) -> list[dict]:
+    """This turn's published records and the thread's, once each, in one array.
+
+    A follow-up that answers about the benchmark an earlier turn compared against rests on
+    a record THIS turn never searched for, so the marker in its prose addresses something
+    only the thread holds. Numbering is where that goes wrong when the two channels are
+    built separately: the same paper, published twice, gets two numbers and one drawer row.
+    So the array is merged once — the turn's own records first, because they are this
+    turn's evidence — and everything downstream numbers this list.
+
+    Records are normalised to the payload's own shape, and one with no pmid is dropped: it
+    cannot be cited or linked, which is the whole use of it (`_usable_articles`).
+    """
+    records: list[dict] = []
+    seen: set[str] = set()
+    for article in [*_usable_articles(literature or {}), *(thread_articles or [])]:
+        if not isinstance(article, dict):
+            continue
+        pmid = str(article.get("pmid") or "").strip()
+        if not pmid or pmid in seen:
+            continue
+        seen.add(pmid)
+        records.append({
+            field: article.get(field) if isinstance(article.get(field), str) else ""
+            for field in _LITERATURE_FIELDS
+        })
+    return records

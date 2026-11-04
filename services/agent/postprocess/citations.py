@@ -1271,6 +1271,21 @@ def literature_pmids(
     )
 
 
+def record_pmids(rows: "Iterable[dict] | None") -> frozenset[str]:
+    """The PMIDs of a list of verified records — published cohorts or articles.
+
+    One rule for every channel that may widen the badge allowance: a record is citable
+    because something verified it, and what is read is its identifier. The comparison
+    table's cohorts and the records an earlier turn of the thread retrieved are verified
+    by different routes and allowed by the same rule (2026-11-04).
+    """
+    return frozenset(
+        str(row.get("pmid") or "").strip()
+        for row in rows or []
+        if isinstance(row, dict) and str(row.get("pmid") or "").strip()
+    )
+
+
 def comparator_pmids(comparators: "list[dict] | None") -> frozenset[str]:
     """The PMIDs of the published cohorts this turn verified and drew.
 
@@ -1290,11 +1305,7 @@ def comparator_pmids(comparators: "list[dict] | None") -> frozenset[str]:
     condition the literature could not answer for: no rows, nothing citable, and the prose
     says so in its own words rather than in a marker.
     """
-    return frozenset(
-        str(row.get("pmid") or "").strip()
-        for row in comparators or []
-        if isinstance(row, dict) and str(row.get("pmid") or "").strip()
-    )
+    return record_pmids(comparators)
 
 
 def cited_pmids(answer: str) -> list[str]:
@@ -1319,6 +1330,30 @@ def cited_pmids(answer: str) -> list[str]:
             if number not in found:
                 found.append(number)
     return found
+
+
+def cited_articles(payload: object, answer: str) -> list[dict]:
+    """The records one search returned that that turn's OWN answer addressed by PMID.
+
+    A published record is thread evidence only when the turn that retrieved it also rested
+    on it. A comparator search returns twenty-five candidates and at most two survive
+    extraction; carrying the pool into a later turn would let a follow-up cite a cohort no
+    earlier turn used, which is the invented identifier `enforce_citations` exists to
+    delete (the same argument `comparator_pmids` makes about the pool it reads).
+
+    Read off the badges in the answer, because an identifier is how prose addresses a
+    published record rather than a position in the array. An answer that cites no record
+    contributes none, and the turn it came from is then not evidence for a later one.
+    """
+    if not isinstance(payload, dict):
+        return []
+    named = set(cited_pmids(answer))
+    if not named:
+        return []
+    return [
+        article for article in payload.get("articles") or []
+        if isinstance(article, dict) and str(article.get("pmid") or "") in named
+    ]
 
 
 def citation_header(number: int, modality: str) -> str:

@@ -58,7 +58,9 @@ def _replay(turns, toolbox=None):
 
 
 def _replay_with_evidence(turns, toolbox=None):
-    return asyncio.run(graph.replay_messages(toolbox or _Toolbox(), turns))
+    messages, calls, _thread_articles = asyncio.run(
+        graph.replay_messages(toolbox or _Toolbox(), turns))
+    return messages, calls
 
 
 def test_a_stored_payload_is_replayed_as_an_asked_call_and_its_result():

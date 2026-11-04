@@ -123,14 +123,14 @@ class TestADeclaredFollowUpIsAnsweredInOnePass:
 
         assert model.turns == [None, "any"]
 
-    def test_a_lab_follow_up_keeps_the_ordinary_free_text_toolset(self):
-        """An undeclared question about the panel is not special-cased.
+    def test_an_undeclared_lab_follow_up_still_gets_the_forced_retrieval(self):
+        """A laboratory panel is not the whole note, so a typed follow-up still retrieves.
 
         The evidence set is the standing free-text boundary plus whatever the question
-        earns: a lab follow-up is a question about the chart like any other, and the
-        series in the transcript is reachable through the ordinary path. Withdrawing a
-        note search on a guess about the wording was tried and removed — the guess cost
-        more answers than it saved.
+        earns: a lab follow-up is a question about the chart like any other. The exemption
+        from `demand_retrieval` is full-chart synthesis specifically — `rag_search_sections`
+        in the replay — because a series describes one measurement and says nothing about
+        the admission a new chart question asks about (2026-11-04).
         """
         model = _AnswersInProse()
 

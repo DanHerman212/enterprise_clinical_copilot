@@ -148,6 +148,11 @@ class _Case:
     #: Whether the same sentence, typed by a person with no transcript, still reaches
     #: the crossing tool. True unless the fix detached the wording from its cue test.
     typed_reaches: bool = True
+    #: What that turn answered. A literature turn names the record it rests on — that is
+    #: how the replay knows which of the returned studies the thread may carry forward
+    #: (`graph.replay_messages` prunes a search to its cited articles), so a fixture whose
+    #: literature answer cites nothing leaves the click with no thread evidence at all.
+    answer: str = ANSWER
 
 
 CASES: tuple[_Case, ...] = (
@@ -242,6 +247,7 @@ CASES: tuple[_Case, ...] = (
         state=_literature_state(),
         scope="literature",
         crossing="search_literature",
+        answer="Anticoagulation reduces stroke risk in atrial fibrillation ^[PMID: 1000].",
     ),
 )
 
@@ -310,7 +316,7 @@ def _replay(case: _Case) -> list[dict[str, Any]]:
     """The backing turn, in the shape the site stores and sends back."""
     return [{
         "question": case.question,
-        "answer": ANSWER,
+        "answer": case.answer,
         "tool_calls": [{"name": call["name"], "args": {"hadm_id": 90000015},
                         "payload": call["response"]}
                        for call in case.state["tool_calls"]],

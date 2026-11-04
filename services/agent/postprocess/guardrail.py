@@ -1037,7 +1037,11 @@ def guard_answer(
         # explains the comparison those rows are half of, so it has to be able to name
         # them; the allowance is the rows that were DRAWN, not the retrieval pool, so a
         # PMID the table refused is still an identifier nobody verified.
-        | citations.comparator_pmids((state or {}).get("comparators")),
+        | citations.comparator_pmids((state or {}).get("comparators"))
+        # And the published records an earlier turn of this thread cited. Same rule again:
+        # the thread retrieved them and its answer rested on them, so a follow-up naming
+        # one is quoting the thread rather than inventing an identifier (2026-11-04).
+        | citations.record_pmids((state or {}).get("thread_literature")),
     )
     flags += f
 

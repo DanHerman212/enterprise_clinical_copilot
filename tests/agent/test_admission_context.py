@@ -300,7 +300,13 @@ def test_a_declared_driver_drilldown_answers_from_the_replayed_score():
 
 
 def test_the_same_question_undeclared_still_has_its_retrieval_demanded():
-    """The declaration is the signal, not the wording: only the control knows."""
+    """A scoring call is not a chart read, so an undeclared follow-up still retrieves.
+
+    The exemption is full-chart synthesis — `rag_search_sections` in the replay — not
+    "something was replayed". This turn's replay holds the estimate and nothing that
+    describes the admission, so the demand still fires, and the declaration is what stops
+    it (see the test above).
+    """
     model = _AnsweringModel("Prior admissions contributed most of the estimate.")
 
     _ask(model, DRIVER_QUESTION, MANIFEST, turns=DRIVER_TURNS)

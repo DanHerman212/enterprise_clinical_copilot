@@ -129,7 +129,7 @@ def _run(*tools, replayed=None, wants=("rag_search_sections", "rag_search")):
     events: list[dict] = []
 
     async def replay(toolbox, turns, **_kwargs):
-        return [], list(replayed or [])
+        return [], list(replayed or []), []
 
     with patch.object(model_gateway, "build_llm", lambda name: model), \
             patch.object(graph, "replay_messages", replay):

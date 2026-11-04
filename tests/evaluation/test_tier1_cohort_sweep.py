@@ -32,7 +32,7 @@ from evaluation.outpatient_oracle import OUTPATIENT_HADM_IDS
 from services.agent.ingress import contracts as served_admissions
 from services.agent.engine import deterministic
 from services.agent.presentation.a2ui import compose_presentation, compose_risk_canvas, predict_payload
-from services.mcp.retrieval.sections import SUMMARY_SECTIONS
+from services.mcp.retrieval.sections import DISCHARGE_SUMMARY, KNOWN_HEADINGS
 from services.mcp.tools import (
     discharge_medications,
     get_lab_trends,
@@ -69,6 +69,21 @@ SYNTHETIC_UNKNOWN = 99999999
 #: the field an administrative question is answered from, which is why the manifest is
 #: rendered at all.
 REQUIRED_MANIFEST_FIELDS = ("age", "gender", "discharge_location")
+
+#: Every section name `rag_search_sections` can return.
+#:
+#: The tool emits `section.name` for each section `parse_note` recognised, so the contract
+#: is the PARSER's vocabulary — not the search index's whitelist. The two are not the same
+#: set, and the difference is deliberate: `pertinent_results`, `past_surgical_history`,
+#: `service`, `attending`, `pathology`, `indications`, `infections`, `transfusions` and
+#: `medications_on_transfer` are all returned as evidence and are all absent from
+#: `INDEX_SECTIONS`, because embedding them buys nothing the structured tools do not
+#: answer better. `discharge_summary` is not a heading at all: it is the name the reader
+#: gives the whole of a note that carries no recognised heading, so it is added here.
+#:
+#: Measured over all 87 served records on 2026-11-04: 30 distinct names returned, 9 of
+#: them outside `INDEX_SECTIONS`, none outside this set.
+NOTE_SECTIONS = frozenset(KNOWN_HEADINGS) | frozenset({DISCHARGE_SUMMARY})
 
 
 #: One admission is one sweep slot. Its reads run in sequence inside the slot and the
@@ -380,7 +395,12 @@ def test_every_feature_driver_has_a_name_a_size_and_a_direction(sweep):
 
 
 def test_the_risk_canvas_builds_for_every_inpatient(sweep):
-    """`/risk` draws a widget and no prose, so the surface IS the answer."""
+    """`/ehr` draws the estimate as the risk canvas, so the canvas IS the answer.
+
+    `/risk` was the command that returned the widget and no prose; it was retired on
+    2026-10-26 and the canvas moved under `/ehr`, which draws it beside the note
+    narration. The assertion never depended on which command reached it.
+    """
     broken: dict[int, str] = {}
     for hadm_id in sorted(INPATIENT):
         payload = _payload_for(sweep, hadm_id, "risk")
@@ -557,7 +577,7 @@ def test_every_returned_note_passage_carries_its_citation_metadata(sweep):
             if not isinstance(passage.get("id"), str) or not passage["id"]:
                 broken[hadm_id] = "passage without a note id"
                 break
-            if passage.get("section") not in SUMMARY_SECTIONS:
+            if passage.get("section") not in NOTE_SECTIONS:
                 broken[hadm_id] = f"unknown section {passage.get('section')!r}"
                 break
             if not isinstance(passage.get("text"), str) or not passage["text"].strip():
@@ -567,13 +587,16 @@ def test_every_returned_note_passage_carries_its_citation_metadata(sweep):
 
 
 def test_every_note_read_returns_sections_or_an_explained_empty(sweep):
-    """All 87 records. A record with no summary headings is not a parse failure.
+    """All 87 records answer with at least one section, and an empty is always explained.
 
-    Five records carry a note that contains none of the four discharge-summary headings
-    — three inpatients (90000026, 90000033, 90000087) and two outpatients (90000051,
-    90000073). The tool answers those with a structured empty and a sentence saying so,
-    which is the correct answer: the note exists and simply is not a discharge summary.
-    What must not happen is a bare empty with no explanation, or an exception.
+    Five records — three inpatients (90000026, 90000033, 90000087) and two outpatients
+    (90000051, 90000073) — carry a note with none of the four discharge-summary headings.
+    Until 2026-11-03 they were the reason this test counted `len(with_sections) + 5`:
+    the reader only knew the summary's four sections, so a note without them produced
+    nothing. The reader is now lossless and a headingless note is returned whole as one
+    `discharge_summary` passage, so the offset is gone — every served record has
+    sections, and a genuinely empty list is the redaction-only case, which must still
+    explain itself rather than answer with a bare `[]`.
     """
     unexplained: dict[int, str] = {}
     errored: dict[int, str] = {}
@@ -590,7 +613,7 @@ def test_every_note_read_returns_sections_or_an_explained_empty(sweep):
     assert not errored, errored
     assert not unexplained, unexplained
 
-    # The two shapes that exist, stated as counts so a change in either is visible.
+    # The shapes that exist, stated as counts so a change in either is visible.
     with_sections = [h for h in sorted(SERVED)
                      if (_payload_for(sweep, h, "notes").get("passages") or [])]
-    assert len(with_sections) + 5 == len(SERVED), sorted(set(SERVED) - set(with_sections))
+    assert len(with_sections) == len(SERVED), sorted(set(SERVED) - set(with_sections))

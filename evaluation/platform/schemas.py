@@ -70,6 +70,36 @@ class DeterministicExpectations(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
 
+class TurnSpec(BaseModel):
+    """One scripted turn: what to ask, and what the surface declared about it.
+
+    A turn used to be a bare string, which cannot express the two things the BFF sends
+    beside a question and the agent acts on structurally (`contracts.REQUEST_INTENTS`,
+    `contracts.ACCEPTED_REQUEST_FIELDS`): the `intent` a control declared, and the
+    `chip` a menu click names. Replaying a chip turn as typed text measures the words
+    the service happened to propose rather than the affordance that proposed them, and
+    replaying a declared risk-driver turn as free text measures the wording cue instead
+    of the declaration.
+
+    `prompt` is optional because a chip turn HAS no wording of its own: the agent
+    composes it from the chip and the admission, and the service refuses a question
+    beside a command as `ambiguous_intent`. The harness reads the composed question back
+    off the response instead of inventing one.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    prompt: str | None = None
+    intent: Literal["follow_up", "risk_driver"] | None = None
+    chip: str | None = None
+
+    @model_validator(mode="after")
+    def _something_to_ask(self) -> TurnSpec:
+        if not (self.prompt or "").strip() and not (self.chip or "").strip():
+            raise ValueError("a turn needs a prompt, a chip, or both")
+        return self
+
+
 class DatasetItemInput(BaseModel):
     """One dataset item: a patient, a workflow, and the prompts to run.
 
@@ -80,7 +110,7 @@ class DatasetItemInput(BaseModel):
 
     patient_id: str
     workflow_type: WorkflowType
-    turns: list[str]
+    turns: list[str | TurnSpec]
     patient_manifest: dict[str, Any]
     #: The command under test (`risk`, `meds`, …) where the item is a command turn.
     command: str | None = None
@@ -103,6 +133,23 @@ class DatasetItemInput(BaseModel):
             raise ValueError("patient_id is required")
         return text
 
+    @property
+    def prompts(self) -> list[str]:
+        """The scripted text of each turn, `""` for a chip turn with no wording."""
+        return [turn if isinstance(turn, str) else (turn.prompt or "")
+                for turn in self.turns]
+
+    @property
+    def declarations(self) -> list[dict[str, str | None]]:
+        """What each turn's surface declared: `{"intent": ..., "chip": ...}`.
+
+        A bare string declares nothing, which is why the shape is uniform here rather
+        than `None` for the inherited form: `make_task` indexes this by turn.
+        """
+        return [{"intent": None, "chip": None} if isinstance(turn, str)
+                else {"intent": turn.intent, "chip": turn.chip}
+                for turn in self.turns]
+
     @field_validator("patient_manifest")
     @classmethod
     def _manifest_mandatory(cls, value: dict[str, Any]) -> dict[str, Any]:
@@ -117,7 +164,8 @@ class DatasetItemInput(BaseModel):
     def _turn_count_matches_workflow(self) -> DatasetItemInput:
         if not self.turns:
             raise ValueError("turns must contain at least one prompt")
-        if any(not str(turn).strip() for turn in self.turns):
+        if any(not prompt.strip() and not (declaration["chip"] or "").strip()
+               for prompt, declaration in zip(self.prompts, self.declarations)):
             raise ValueError("a turn is blank: every scripted prompt must be non-empty")
         if self.workflow_type == "multi_turn":
             if not 2 <= len(self.turns) <= MAX_TURNS:

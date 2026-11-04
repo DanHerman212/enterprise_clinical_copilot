@@ -97,9 +97,14 @@ def test_every_scenario_becomes_a_harness_item():
     assert len(items) == 26
     assert {item.workflow_type for item in items} == {
         "single_probe", "command_plus_followup", "multi_turn"}
-    # Trajectory 4 is the one that needs more than the two-turn script the runner had.
-    long_threads = [item for item in items if len(item.turns) > 2]
-    assert len(long_threads) == 3, [item.patient_id for item in long_threads]
+    # Trajectory 4 always needed more than the two-turn script the runner had; Phase B
+    # deepened six t2/t3/t6 threads to three turns so the declared affordances and the
+    # thread-continuity paths are measured on a thread rather than on a pair.
+    long_threads = sorted(item.scenario_id for item in items if len(item.turns) > 2)
+    assert long_threads == [
+        "dev_t2_01", "dev_t2_02", "dev_t2_03", "dev_t2_04",
+        "dev_t3_03", "dev_t4_01", "dev_t4_02", "dev_t4_03", "dev_t6_01",
+    ]
     assert max(len(item.turns) for item in items) == 4
 
 
@@ -204,9 +209,17 @@ def test_the_scenario_mix_covers_every_trajectory():
 # ------------------------------------------------------- dynamic loop-back (Traj. 2)
 
 
+def _scripted_prompt(turn) -> str:
+    """A turn's text, whether it is a bare string or a declaration object."""
+    if isinstance(turn, str):
+        return turn
+    return str(turn.get("prompt") or "")
+
+
 def _loop_back_rows() -> list[dict]:
     return [row for row in ROWS
-            if any(FOLLOW_UP_PLACEHOLDER.search(turn) for turn in row["turns"])]
+            if any(FOLLOW_UP_PLACEHOLDER.search(_scripted_prompt(turn))
+                   for turn in row["turns"])]
 
 
 def test_only_trajectory_2_defers_its_second_turn():
@@ -249,9 +262,10 @@ def test_the_task_injects_the_chip_and_replays_the_thread(monkeypatch):
     calls: list[dict] = []
 
     def fake_ask(*, question, hadm_id, run_tag, session_id=None, turns=None,
-                 follow_ups=False):
+                 follow_ups=False, intent=None, chip=None):
         calls.append({"question": question, "turns": turns,
-                      "follow_ups": follow_ups, "session_id": session_id})
+                      "follow_ups": follow_ups, "session_id": session_id,
+                      "intent": intent, "chip": chip})
         if len(calls) == 1:
             return {"answer": "Discharged home with home health.",
                     "follow_ups": ["What was the length of stay?",
@@ -276,6 +290,11 @@ def test_the_task_injects_the_chip_and_replays_the_thread(monkeypatch):
         "/ehr", "What was the length of stay?"]
     assert calls[0]["follow_ups"] is True
     assert calls[1]["follow_ups"] is False
+    # A loop-back turn IS the chip the service proposed, so it declares what a click
+    # declares. Turn 1 is a typed command and declares nothing.
+    assert calls[0]["intent"] is None
+    assert calls[1]["intent"] == "follow_up"
+    assert calls[1]["chip"] is None
     assert calls[1]["turns"], "Turn 1 is replayed into Turn 2"
     assert calls[1]["turns"][0]["question"] == "/ehr"
     assert calls[1]["session_id"] == calls[0]["session_id"]
@@ -288,7 +307,7 @@ def test_a_four_turn_thread_reaches_the_judge_whole():
     calls: list[dict] = []
 
     def fake_ask(*, question, hadm_id, run_tag, session_id=None, turns=None,
-                 follow_ups=False):
+                 follow_ups=False, intent=None, chip=None):
         calls.append({"question": question, "turns": list(turns or [])})
         return {"answer": f"answer to {question}", "langfuse_trace_id": "t",
                 "status": 200}
@@ -355,11 +374,11 @@ def test_the_rubric_covers_the_three_refusal_classes_the_suite_tests():
 
 
 def test_the_rubric_version_is_recorded_so_runs_stay_comparable():
-    assert RUBRIC.startswith("# Evaluation Rubric v7")
-    assert "Version 6, 2026-10-21" in RUBRIC
+    assert RUBRIC.startswith("# Evaluation Rubric v8")
+    assert "Version 7, 2026-10-29" in RUBRIC
     from evaluation.platform.sync_dev_suite import RUBRIC_VERSION  # noqa: PLC0415
 
-    assert RUBRIC_VERSION == "v7"
+    assert RUBRIC_VERSION == "v8"
 
 
 def test_a_blank_later_turn_is_a_structural_failure():
@@ -414,10 +433,19 @@ def test_an_answer_that_discusses_the_evidence_flag_is_not_an_artefact():
     assert ok, failures
 
 
-def test_the_outpatient_scenario_expects_no_risk_factors_and_no_verification():
+def test_the_outpatient_scenario_expects_no_risk_factors_and_a_grounded_refusal():
+    """`verified` is TRUE for the refusal, and the boundary is carried by the widget ban.
+
+    The flag says the answer was checked against this patient's record. Since the chunker
+    repair the outpatient note returns a citable passage, so the refusal IS grounded — in
+    the therapy note and in the manifest's `encounter` line — and reports true. What must
+    never appear is a risk surface: `components == []` and `RiskInfluencers` forbidden.
+    Expecting `verified: false` was written when an outpatient had no citable passage at
+    all, and it failed the canary on a correct refusal (2026-11-04).
+    """
     row = next(row for row in ROWS if row["id"] == "dev_t7_01")
     expected = row["expected_output"]
-    assert expected["verified"] is False
+    assert expected["verified"] is True
     assert expected["components"] == []
     assert "RiskInfluencers" in expected["forbidden_components"]
     # `/risk` was retired on 2026-10-26; the refusal is `/ehr`'s now. Turn 2 asks

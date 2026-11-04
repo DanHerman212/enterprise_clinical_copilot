@@ -110,16 +110,24 @@ def validate_rows(rows: list[dict[str, Any]]) -> None:
 def item_payload(row: dict[str, Any], manifest: dict[str, Any]) -> dict[str, Any]:
     """One row as the dataset item's `input`.
 
-    `expectations` carries the deterministic subset (`verified`, components, the
-    literal tokens the answer must contain). The prose expectations stay in the item
-    for the judge, which reads `expected_output` alongside the answer.
+    `expectations` carries the deterministic subset — the flags, components and literal
+    tokens `structural_check` can decide without a model — and the whole of
+    `expected_output` travels beside it for the judge, which reads `facts`, `behaviour`
+    and `forbidden_claims` from it.
+
+    That second half used to be the ONLY half: six keys were copied into `expectations`,
+    so the ground truth of all 41 scenarios reached no evaluator at all. A scenario's
+    `facts`, `forbidden_claims`, `turn_2` and `behaviour` asserted nothing, and the judge
+    was never shown them (audit, 2026-11-04). `judge_call.build_user_prompt` now renders
+    them, and the three that a deterministic rule can decide are copied here.
     """
     expected = dict(row.get("expected_output") or {})
     expectations: dict[str, Any] = {}
     if "verified" in expected:
         expectations["verified"] = expected["verified"]
     for key in ("components", "forbidden_components", "must_contain",
-                "must_not_disclose", "citation_marker"):
+                "must_not_disclose", "citation_marker", "forbidden_claims",
+                "literature_nonempty", "banned_source_record"):
         if key in expected:
             expectations[key] = expected[key]
 

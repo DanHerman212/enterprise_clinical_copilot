@@ -107,7 +107,7 @@ def test_a_refusal_becomes_readable_text_not_a_blank():
 
 
 def _judge_returning(**dims):
-    def judge_fn(*, input, output):  # noqa: A002
+    def judge_fn(*, input, output, expected_output=None, **kwargs):  # noqa: A002
         dimensions = {name: 3 for name in ev.DIMENSIONS}
         dimensions.update(dims)
         return {"dimensions": dimensions, "verdict": "PASS", "flags": []}
@@ -117,7 +117,7 @@ def _judge_returning(**dims):
 def test_structural_failure_short_circuits_the_judge():
     called = []
 
-    def judge_fn(*, input, output):  # noqa: A002
+    def judge_fn(*, input, output, expected_output=None, **kwargs):  # noqa: A002
         called.append(1)
         return {"dimensions": {}, "verdict": "PASS"}
 
@@ -226,16 +226,19 @@ def test_suite2_items_are_single_probes_carrying_their_expectations():
 # --- Step 8 runner: scope, environment gate, and wire compliance -------------
 
 
-def test_runner_targets_only_the_two_small_datasets():
+def test_runner_targets_the_tier2_suites_and_never_the_full_census():
     """The 328-item census is a deliberate step, not another entry in a tuple.
 
-    Naming it now takes `--allow-full-census` on the command line, so a routine check
-    cannot become a three-hour run because of a typo in `--datasets`.
+    Naming it still takes `--allow-full-census` on the command line, so a routine check
+    cannot become a three-hour run because of a typo in `--datasets`. The default moved
+    to the two Tier 2 suites in the v8 repair: the legacy census pilot and suite-2 sets
+    assert an envelope and no ground truth, so a default run measured the suites that
+    measure least.
     """
     from evaluation.platform import run_evals
 
-    assert set(run_evals.DATASETS) == {"clinical-census-pilot-v2",
-                                       "suite2-adversarial-v1"}
+    assert set(run_evals.DATASETS) == {"ecc-tier2-dev-suite",
+                                       "ecc-tier2-holdout-suite"}
     assert "clinical-census-full-v1" not in run_evals.DATASETS
     assert run_evals.FULL_CENSUS_DATASET == "clinical-census-full-v1"
 
@@ -384,7 +387,7 @@ def test_session_id_is_refused_by_the_service():
 def test_composite_skips_the_judge_when_assertions_fail():
     called = []
 
-    def judge_fn(*, input, output):  # noqa: A002
+    def judge_fn(*, input, output, expected_output=None, **kwargs):  # noqa: A002
         called.append(1)
         return {"dimensions": {}, "verdict": "PASS"}
 
@@ -397,7 +400,7 @@ def test_composite_skips_the_judge_when_assertions_fail():
 def test_composite_calls_the_judge_once_and_applies_the_pass_rule():
     calls = []
 
-    def judge_fn(*, input, output):  # noqa: A002
+    def judge_fn(*, input, output, expected_output=None, **kwargs):  # noqa: A002
         calls.append(1)
         dims = {name: 3 for name in ev.DIMENSIONS}
         dims["responsiveness"] = 1
@@ -495,7 +498,7 @@ def test_every_score_carries_the_judges_explanation():
     """`safety=1` with no comment is unexplainable; the reasoning must ride along."""
     reasoning = ("The answer implies the patient should be discharged tomorrow, which "
                  "is a care decision the assistant is not entitled to make.")
-    def judge_fn(*, input, output):  # noqa: A002
+    def judge_fn(*, input, output, expected_output=None, **kwargs):  # noqa: A002
         dims = {name: 3 for name in ev.DIMENSIONS}
         dims["safety"] = 1
         return {"dimensions": dims, "verdict": "FAIL",

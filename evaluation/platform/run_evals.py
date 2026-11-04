@@ -36,7 +36,13 @@ from evaluation.platform.evaluators import gate_verdict  # noqa: E402
 from evaluation.platform.schemas import MIN_PASS_RATE  # noqa: E402
 
 #: Hardcoded targets (spec §5). Deliberately not a parameter.
-DATASETS = ("clinical-census-pilot-v2", "suite2-adversarial-v1")
+#:
+#: The two Tier 2 suites, as of the v8 repair (2026-11-04). The legacy census pilot and
+#: suite-2 sets were the default while their items carried no ground truth — 41 census
+#: items assert an envelope and nothing else, and the judge was never shown an answer key.
+#: A bare `run_evals` would then have reported a pass rate over the suites that measure the
+#: least, while the suites that measure the product sat behind a flag.
+DATASETS = ("ecc-tier2-dev-suite", "ecc-tier2-holdout-suite")
 
 #: The Tier 2 dev suite (Phase 04). A gated target rather than a routine one: its
 #: canary is named, and the full 26 run needs the Architect's sign-off, so it is
@@ -148,7 +154,14 @@ def execute_agent_thread(item: Any) -> dict[str, Any]:
 
 
 def dry_payloads() -> int:
-    """Validate one Turn-1 and one Turn-2 body per dataset against the service parser."""
+    """Validate the request bodies against the service parser, and send nothing.
+
+    One Turn-1 and one Turn-2 body per dataset, PLUS the three shapes the Tier 2 suites
+    now use and the legacy ones do not: a replayed turn whose derivable result is
+    stripped, a body that declares an `intent`, and a body that carries a `chip` and no
+    question. Those three are the wire changes of Phase A, and a dry run that did not
+    build them would report "accepted" for a contract it never exercised.
+    """
     from evaluation.platform.fixtures import census_items, suite2_items
     from evaluation.platform.runner import build_body, validate_body
     from evaluation.platform.task import replay_turn
@@ -159,17 +172,44 @@ def dry_payloads() -> int:
     items = [*census_items(hadm_ids=[90000015], manifest_provider=manifest)[:1],
              *suite2_items(manifest_provider=manifest)[:1]]
     for item in items:
-        validate_body(build_body(question=item.turns[0], hadm_id=int(item.patient_id),
+        prompts = item.prompts
+        validate_body(build_body(question=prompts[0], hadm_id=int(item.patient_id),
                                  run_tag="dry"))
-        if len(item.turns) > 1:
+        if len(prompts) > 1:
             validate_body(build_body(
-                question=item.turns[1], hadm_id=int(item.patient_id), run_tag="dry",
-                turns=[replay_turn(item.turns[0], {
+                question=prompts[1], hadm_id=int(item.patient_id), run_tag="dry",
+                turns=[replay_turn(prompts[0], {
                     "answer": "placeholder",
                     "tool_calls": [{"name": "predict_readmission",
                                     "args": {"hadm_id": 90000015},
                                     "response": {"probability_display": "16.7%"}}]})]))
-        print(f"  OK  {item.workflow_type}: {item.turns[0][:60]}")
+        print(f"  OK  {item.workflow_type}: {prompts[0][:60]}")
+
+    turn = replay_turn("/ehr", {
+        "answer": "placeholder",
+        # A retrieval result and a kept result in one turn: the first must travel as
+        # `payload: None` so the agent re-resolves it, the second must keep its payload.
+        "tool_calls": [
+            {"name": "rag_search_sections", "args": {"hadm_id": 90000015},
+             "response": {"passages": [{"section": "brief_hospital_course"}]},
+             "derivable": True},
+            {"name": "predict_readmission", "args": {"hadm_id": 90000015},
+             "response": {"probability_display": "16.7%", "derivable_hint": True},
+             "derivable": False},
+        ]})
+    stripped = [call.get("payload") for call in turn["tool_calls"]]
+    if stripped[0] is not None or stripped[1] is None:
+        print(f"FATAL: replayed payloads are wrong: {stripped}", flush=True)
+        return 2
+    print("  OK  replay_turn: derivable payload stripped, kept payload preserved")
+
+    validate_body(build_body(question="What is the oxycodone SR taper?",
+                             hadm_id=90000015, run_tag="dry", intent="follow_up",
+                             turns=[turn]))
+    print("  OK  intent: a declared follow_up is accepted")
+    validate_body(build_body(question=None, hadm_id=90000015, run_tag="dry",
+                             chip="summarize"))
+    print("  OK  chip: a command with no question is accepted")
     print("payloads accepted by the service contract; nothing sent")
     return 0
 

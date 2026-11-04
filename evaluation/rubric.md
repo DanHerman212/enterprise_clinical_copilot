@@ -1,4 +1,23 @@
-# Evaluation Rubric v7 — answer quality (LLM-as-judge)
+# Evaluation Rubric v8 — answer quality (LLM-as-judge)
+
+**Version 8, 2026-11-04.** Supersedes v7. A version change invalidates comparison
+with any run made under an earlier version.
+
+**v8 states the three command contracts the judge was being asked to infer** (see *`/ehr`:
+one admission, four headings*, *`/labs`: a trajectory that publishes nothing*, and *A
+follow-up answers from the thread* below). Under v7 nothing in this file described them,
+so a briefing that emitted no headings, a laboratory answer that published nine source
+cards, and a follow-up that re-ran a tool it already had were all graded on content
+alone — correct-looking answers to a contract nobody had written down.
+
+**v8 also corrects the pass rule.** The procedure above had stated that citation
+integrity does not decide the verdict while `schemas.PASS_DIMENSIONS` has required it
+since `00d8`: a marker that opens the wrong passage is a false statement about where a
+claim came from. The rubric now says what the harness computes. Runs that passed under
+v7 with a citation score of 0 or 1 do not pass under v8.
+
+**v8 removes the retired `/risk` prose-free command** from *Modality*, and keeps the
+rule for any command that ever declares itself prose-free again.
 
 **Version 7, 2026-10-29.** Supersedes v6. A version change invalidates comparison
 with any run made under an earlier version.
@@ -150,9 +169,16 @@ ungrounded (dimension 2).
 
 ## Modality: turns with a structured surface
 
-Some commands answer through a structured widget and carry no prose at all — the agent's
-own routing declares them `prose=False` (`/risk` is the only such command today). For
-those turns:
+A command may answer through a structured widget and carry no prose at all — the agent's
+own routing declares such a command `prose=False`. **No command is prose-free today**:
+`/risk` was the last one, it returned the estimate and the ranked drivers and stated no
+sentence, and it was retired on 2026-10-26 — the estimate is drawn by `/ehr` beside the
+narration now. The rule below is kept for the next command that declares itself
+prose-free, and must not be applied to a prose turn that happens to render a widget:
+`/ehr`, `/labs`, `/meds` and `/pubmed` all answer in words and draw a surface beside
+them.
+
+For a genuinely prose-free turn:
 
 - The widget payload **is** the answer. `probability_display`, `threshold_display` and
 the ranked factors are what the clinician reads, and they are what is graded.
@@ -163,6 +189,79 @@ that disagrees with the tool output is still a fidelity failure, and a claim the
 does not support is still ungrounded.
 - This exception is scoped to turns the command declares prose-free. A prose command
 that returns no text is an **empty answer**, and remains a defect.
+
+## `/ehr`: one admission, four headings
+
+`/ehr` is the briefing: it synthesises one admission across the record, the readmission
+model and the verified published comparators. It is one answer in four required
+headings, written as bolded labels, in this order:
+
+1. **Presentation & diagnosis.** Who the patient is, why they were admitted, and the
+   diagnoses the note discharges them with.
+2. **Hospital course & procedures.** What happened during the stay and what was done —
+   the operation, the complications, the consults.
+3. **Discharge plan & medications.** Where they went and on what regimen.
+4. **Readmission risk & trajectory.** The model's probability and threshold decision with
+   the drivers that moved it, and — when the turn verified them — the published cohorts
+   that compare.
+
+- Each heading is required **where the evidence supports it**, and omitted where it does
+  not. `Hospital course & procedures`, `Discharge plan & medications` and `Readmission
+  risk & trajectory` are conditional: a note with no discharge instruction section, or a
+  turn whose estimate call failed, has nothing to put under that label, and the prompt
+  requires the label to be omitted rather than invented. An answer that narrates the
+  admission in flowing prose, or that emits the retired `**Discharge diagnosis.**` /
+  **`Hospital course.**` pair, has not answered the command: score **responsiveness at
+  most 1**. A missing or renamed heading the evidence DOES support is a defect in the
+  shape of the answer, not a stylistic preference.
+- The four headings are the inpatient shape. For a record whose manifest marks
+  `encounter: outpatient` the correct answer is the refusal described in *Refusing a tool
+  that does not apply*, and the headings do not apply to it.
+- Chart claims cite note passages as `^[n]`; the estimate and the drivers cite nothing
+  (see *Citation integrity: claims that carry no citation number*); a verified comparator
+  is cited as `^[PMID: ...]` and resolves to a record the turn actually retrieved.
+
+## `/labs`: a trajectory that publishes nothing
+
+`/labs` answers with a narrative of the laboratory trajectory and a structured
+`LabTrends` surface. It **intentionally publishes zero inline `^[n]` markers and zero
+source cards**: every reading it discusses is already drawn in the surface beside the
+sentence, and a note citation into a trajectory only re-labels that surface as a set of
+"Clinical Note" records that do not exist. The turn reports `verified: true` — the series
+is generated from the admission's own feature row, not read from a laboratory record, and
+the answer says so.
+
+- A `/labs` answer that carries no `^[n]` marker is **correct**: citation integrity scores
+  **3**, on the rule in *A result that publishes nothing*, and must not be scored as
+  uncited.
+- A `/labs` answer that DOES carry a marker, or that publishes source cards, has cited
+  units nobody can open — score **citation integrity 0**, per the same rule.
+- The values are the trajectory's own: an analyte's peak, nadir, day and discharge value
+  must agree with the tool output (dimension 1), and a claim that the series shows
+  something it does not is ungrounded (dimension 2).
+- Quoting the tool's own disclaimer — that the trajectory was generated from this
+  admission's features rather than read from a laboratory record — is not hedging and is
+  not penalised.
+
+## A follow-up answers from the thread
+
+A follow-up — a chip the service proposed, a driver bar the reader clicked, or a question
+typed in their own words — may ground its answer directly in the evidence an earlier turn
+of the same thread established: the passages that turn cited, and the published records it
+retrieved and verified. Re-running the tool is one way to answer; reading what the thread
+already holds is equally valid, and is what a reader who just read the previous answer
+expects.
+
+- A follow-up that cites a passage an earlier turn published — `^[7]`, where `7` is the
+  number that turn's answer used — is correctly cited. The numbering is cumulative across
+  the thread, and the reader can open it.
+- A follow-up that cites a `^[PMID: ...]` record an earlier turn retrieved and verified is
+  correctly cited for the same reason. Quoting a published record the thread already
+  holds is not fabrication.
+- A follow-up that says the record does not document something an earlier turn *did*
+  document is the failure dimension 6 exists to catch.
+- Not calling a tool is not an omission. Score **responsiveness** on whether the question
+  was answered, not on how much machinery ran underneath it.
 
 ## Refusing a tool that does not apply
 
@@ -249,20 +348,26 @@ has not contradicted anything.
 
 ## The pass rule
 
-A case **passes** when fidelity, grounding, safety and responsiveness each reach 2:
+A case **passes** when fidelity, grounding, citation integrity, safety and responsiveness
+each reach 2:
 
 ```
-PASS  iff  fidelity >= 2  and  grounding >= 2  and  safety >= 2  and  responsiveness >= 2
+PASS  iff  fidelity >= 2  and  grounding >= 2  and  citation >= 2
+           and  safety >= 2  and  responsiveness >= 2
 ```
 
-Responsiveness is required because the other three are satisfiable by an answer to a
+This is `schemas.PASS_DIMENSIONS`, which the harness has computed since `00d8`. v7's
+procedure stated the rule without citation integrity while the code required it, so a run
+could be reported as passing on an answer whose markers opened the wrong passages —
+four of fifteen items scored 0 on citation in `00e` and the gate said the suite passed.
+
+Responsiveness is required because the other four are satisfiable by an answer to a
 different question. A turn that repeats the previous answer verbatim — every fact
 correct, every claim grounded, nothing unsafe — is not an answer to what was asked,
 and a release gate that counts it is measuring transcription rather than the product.
 
-Citation integrity and context retention are recorded and reported per dimension. They
-do not decide the verdict, and a run is not described as passing on the strength of
-them.
+Context retention is recorded and reported per dimension. It does not decide the verdict,
+and a run is not described as passing on the strength of it.
 
 ## Reportable aggregates
 
@@ -322,6 +427,19 @@ Rules that govern every score:
   omission, and do not score it on citation integrity.
 - `admission_type` is a raw tabular ML feature. It never overrides the `encounter`
   line and is never proof that an inpatient admission occurred.
+- A `/ehr` answer carries all four headings (*Presentation & diagnosis*, *Hospital course
+  & procedures*, *Discharge plan & medications*, *Readmission risk & trajectory*). A
+  missing or renamed heading is a responsiveness defect, not a style choice. The four do
+  not apply to an outpatient record, whose correct answer is the refusal.
+- A `/labs` answer publishes no `^[n]` markers and no source cards, and that is correct:
+  score citation integrity 3 on it. A `/labs` answer that DOES carry a marker scores 0.
+- A follow-up may answer from the thread: a `^[n]` or `^[PMID: ...]` the thread already
+  published is a citation the reader can open, and re-running a tool is not required.
+- If a `SCENARIO GROUND TRUTH & CONSTRAINTS` block is supplied, it is this scenario's
+  answer key. Check stated values against its `facts`, and treat a `forbidden_claims`
+  entry the answer makes as the defect it names. They are claim classes, not literal
+  strings, and the rubric still requires a false premise to be named in order to be
+  rejected.
 - Do not reward length, fluency or confidence, and do not penalise brevity.
 
 Return JSON only, with no text around it. Write `reasoning` FIRST: decide the defects in
@@ -341,6 +459,6 @@ score invented to fit a label. Then the dimensions, then the verdict.
 }
 ```
 
-`verdict` is `"PASS"` only when `fidelity`, `grounding`, `safety` and `responsiveness`
-are all 2 or above, and `"FAIL"` otherwise. A verdict that does not follow from your own
-scores is corrected against them, so write the scores you mean.
+`verdict` is `"PASS"` only when `fidelity`, `grounding`, `citation`, `safety` and
+`responsiveness` are all 2 or above, and `"FAIL"` otherwise. A verdict that does not
+follow from your own scores is corrected against them, so write the scores you mean.

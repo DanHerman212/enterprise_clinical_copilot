@@ -19,6 +19,10 @@ from evaluation.platform.schemas import DatasetItemInput, TaskOutput
 #: two drifted apart: the harness counted passages-only while the agent counted passages
 #: and analytes, which is the `00d6` failure reproduced inside the measurement.
 from services.agent.postprocess.citations import passage_total
+#: Which tool results a replayed turn must carry, and which it must leave for the agent
+#: to re-resolve. Declared by the ingress contract, so the harness holds no second copy
+#: of the classification.
+from services.agent.ingress.contracts import RE_DERIVABLE_TOOLS
 
 #: `ask(**kw) -> dict` — the agent round-trip. Injected so the dry run can use a fake.
 Ask = Callable[..., dict]
@@ -198,6 +202,26 @@ def _sources(response: dict) -> list[dict[str, Any]]:
     return out
 
 
+def _keeps_payload(call: dict[str, Any]) -> bool:
+    """Whether a caller must keep this call's result to replay the turn.
+
+    This is the site's rule, not a harness convention. `demo.conversations._stored_calls`
+    writes `payload: None if call['derivable'] else response`, and `derivable` is the
+    AGENT's own flag (`turn.py`, set from `RE_DERIVABLE_TOOLS`). The harness reads that
+    flag the same way and falls back to the tool name only for an envelope that predates
+    it, so the two boundaries cannot disagree about which results a thread re-resolves.
+
+    Sending the payload anyway is not harmless: it makes the eval exercise a replay the
+    site never performs. A note payload that the site would have re-chunked from the
+    corpus would instead arrive frozen from build time, so a chunker or parser drift
+    between build and serving passed every item and failed live.
+    """
+    derivable = call.get("derivable")
+    if not isinstance(derivable, bool):
+        derivable = call.get("name") in RE_DERIVABLE_TOOLS
+    return not derivable
+
+
 def replay_turn(question: str, response: dict) -> dict:
     """Turn 1 as the service will accept it back in `turns`.
 
@@ -207,6 +231,11 @@ def replay_turn(question: str, response: dict) -> dict:
     rather than ignoring it. The agent's own envelope returns `response`, not
     `payload`, so passing `tool_calls` through unchanged would make every Turn 2 fail
     with a 400. Limits are the contract's: 5 calls, 8000 characters of answer.
+
+    `payload` is carried only for a result the site keeps (`RESULT_KEPT_TOOLS`: the
+    estimate and the lab series). A derivable result is sent as `payload: None`, which
+    is what the site stores and what makes the agent re-run the tool — the path a live
+    follow-up takes.
     """
     answer = (response.get("answer") or "")[:8000]
     calls: list[dict[str, Any]] = []
@@ -217,9 +246,9 @@ def replay_turn(question: str, response: dict) -> dict:
         entry: dict[str, Any] = {
             "name": str(call["name"])[:64],
             "args": call.get("args") if isinstance(call.get("args"), dict) else {},
+            "payload": (payload if isinstance(payload, (dict, str)) else None)
+                       if _keeps_payload(call) else None,
         }
-        if isinstance(payload, (dict, str)):
-            entry["payload"] = payload
         calls.append(entry)
     return {"question": question, "answer": answer, "tool_calls": calls}
 
@@ -277,7 +306,12 @@ def make_task(ask: Ask, *, run_tag: str,
         data = DatasetItemInput.model_validate(raw)
         session_id = new_session_id()
         hadm_id = int(data.patient_id)
-        loop_backs = placeholder_turns(data.turns)
+        # The scripted wording, one entry per turn. A chip turn has none of its own —
+        # the agent composes it — which is why this is read from `prompts` rather than
+        # from `turns`, whose entries may be declaration objects.
+        scripted_turns = data.prompts
+        declarations = data.declarations
+        loop_backs = placeholder_turns(scripted_turns)
 
         # Every turn runs in order on one session, each sent with the whole transcript
         # replayed: a follow-up without its conversation is a different question. This
@@ -292,16 +326,30 @@ def make_task(ask: Ask, *, run_tag: str,
         prompts: list[str] = []
         transcript: list[dict] = []
 
-        for index, scripted in enumerate(data.turns):
+        for index, scripted in enumerate(scripted_turns):
             prompt = resolve_prompt(scripted, responses)
-            prompts.append(prompt)
+            declared = declarations[index] if index < len(declarations) else {}
+            # Declared, or inherited from the affordance. A `{{turn_k.follow_ups[i]}}`
+            # turn IS the chip the service proposed under an earlier answer, so its
+            # intent is not a guess: the console sends `follow_up` for exactly this
+            # click (`contracts.REQUEST_INTENTS`). An explicit declaration wins, because
+            # a scenario that says `risk_driver` is naming a different control.
+            intent = declared.get("intent") or (
+                "follow_up" if FOLLOW_UP_PLACEHOLDER.search(scripted) else None)
             call: dict[str, Any] = {
-                "question": prompt,
+                "question": prompt or None,
                 "hadm_id": hadm_id,
                 "run_tag": run_tag,
                 "session_id": session_id,
                 "turns": list(transcript) or None,
             }
+            # Sent only when the turn actually declares something. An absent declaration
+            # is not a declaration of `None`: the console omits both fields for a typed
+            # question, and a body that spelled them out would be a different request.
+            if declared.get("chip"):
+                call["chip"] = declared["chip"]
+            if intent:
+                call["intent"] = intent
             # Sent only when the turn has to propose them: `ask` is injected, and a
             # transport that does not know the field still satisfies this task.
             if index in loop_backs:
@@ -312,7 +360,13 @@ def make_task(ask: Ask, *, run_tag: str,
             # scores off the trace that holds the run tag — and the prompts, tool calls
             # and model output that produced the answer (2026-10-21).
             turn_traces.append(str(response.get("langfuse_trace_id") or ""))
-            transcript.append(replay_turn(prompt, response))
+            # What the reader saw as the question. For a chip turn it is the wording the
+            # service composed from the chip, which is the only place it exists — and the
+            # judge is given `turn_prompts`, so an empty string here would grade the
+            # answer against nothing.
+            asked = prompt or str(response.get("question") or "")
+            prompts.append(asked)
+            transcript.append(replay_turn(asked, response))
 
         first = responses[0]
         answers = [_answer_text(response) for response in responses]

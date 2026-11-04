@@ -34,11 +34,29 @@ AGENT_URL = "https://agent-jamycsjjzq-ue.a.run.app"
 
 #: The only datasets this runner may execute. Adding a name here is a deliberate act;
 #: the full census is not on the list on purpose.
-ALLOWED_DATASETS = ("clinical-census-pilot-v2", "suite2-adversarial-v1")
+#:
+#: The two Tier 2 suites are here because they are `run_evals.DATASETS` — the default
+#: targets of the newer runner beside this one — and a scope check that refused a suite
+#: the platform grades every run would fail the moment anything reached it through here.
+ALLOWED_DATASETS = ("clinical-census-pilot-v2", "suite2-adversarial-v1",
+                    "ecc-tier2-dev-suite", "ecc-tier2-holdout-suite")
 
 
 class ScopeError(RuntimeError):
     """Raised when a caller asks the runner for a dataset outside its scope."""
+
+
+def _rubric_version() -> str:
+    """The rubric the run is graded under, read from the rubric file.
+
+    This stamped a literal `v4` while the rubric was at v5 and then at v7, so every run
+    through this runner claimed a version that had been superseded and could not be
+    compared with anything. The rubric's own first line is the only source: both runners
+    now derive it from there rather than keeping a copy that rots.
+    """
+    from evaluation.platform.run_evals import rubric_version  # noqa: PLC0415
+
+    return rubric_version()
 
 
 def check_scope(names: list[str]) -> list[str]:
@@ -50,9 +68,11 @@ def check_scope(names: list[str]) -> list[str]:
     return names
 
 
-def build_body(*, question: str, hadm_id: int, run_tag: str,
+def build_body(*, question: str | None, hadm_id: int, run_tag: str,
                turns: list[dict[str, Any]] | None = None,
-               follow_ups: bool = False) -> dict[str, Any]:
+               follow_ups: bool = False,
+               intent: str | None = None,
+               chip: str | None = None) -> dict[str, Any]:
     """The request body, exactly as the service accepts it.
 
     `session_id` is deliberately absent: the service refuses it as a conversation
@@ -62,13 +82,28 @@ def build_body(*, question: str, hadm_id: int, run_tag: str,
     `follow_ups` is sent only when a later turn of the item consumes what it proposes.
     A loop-back turn has no wording of its own until the first turn has run, so this is
     the harness asking the service what to ask next (Tier 2 dev suite, Trajectory 2).
+
+    `intent` and `chip` are the declarations the console sends for a control it drew
+    (`contracts.REQUEST_INTENTS`, `contracts.ACCEPTED_REQUEST_FIELDS`). They are NOT
+    interchangeable with prompt text: a declared `risk_driver` is what a clicked driver
+    bar means, and the wording of the question says nothing structural.
+
+    A chip turn carries the chip and **no** question, because that is what the console
+    sends and what the service accepts: a command plus a question is refused as
+    `ambiguous_intent` for every command but the one that takes a topic. The wording is
+    the agent's to compose, and `task.make_task` reads it back off the response.
     """
-    body: dict[str, Any] = {"question": question, "hadm_id": int(hadm_id),
-                            "run_tag": run_tag}
+    body: dict[str, Any] = {"hadm_id": int(hadm_id), "run_tag": run_tag}
+    if chip:
+        body["chip"] = chip
+    else:
+        body["question"] = question
     if turns:
         body["turns"] = turns
     if follow_ups:
         body["follow_ups"] = True
+    if intent:
+        body["intent"] = intent
     return body
 
 
@@ -79,17 +114,19 @@ def validate_body(body: dict[str, Any]) -> None:
     parse_agent_request(body, max_question_chars=4000)
 
 
-def http_ask(*, question: str, hadm_id: int, run_tag: str,
+def http_ask(*, question: str | None, hadm_id: int, run_tag: str,
              turns: list[dict[str, Any]] | None = None,
              session_id: str | None = None,
-             follow_ups: bool = False) -> dict[str, Any]:
+             follow_ups: bool = False,
+             intent: str | None = None,
+             chip: str | None = None) -> dict[str, Any]:
     """One `/ask` call. `session_id` is accepted for logging only and not sent."""
     import httpx
 
     from evaluation.platform.http_auth import identity_token  # noqa: PLC0415
 
     body = build_body(question=question, hadm_id=hadm_id, run_tag=run_tag, turns=turns,
-                      follow_ups=follow_ups)
+                      follow_ups=follow_ups, intent=intent, chip=chip)
     validate_body(body)
     headers = {"Authorization": f"Bearer {identity_token(AGENT_URL)}"}
     with httpx.Client(timeout=180.0) as client:
@@ -136,8 +173,9 @@ def run(names: list[str], *, run_tag: str, max_concurrency: int = 5) -> dict[str
             evaluators=[quality],
             composite=composite,
             max_concurrency=max_concurrency,
-            description=f"live pilot, rubric {RUBRIC[:0] or 'v4'}",
-            metadata={"rubric_version": "v4", "run_tag": run_tag, "agent_url": AGENT_URL},
+            description=f"live pilot, rubric {_rubric_version()}",
+            metadata={"rubric_version": _rubric_version(), "run_tag": run_tag,
+                      "agent_url": AGENT_URL},
         )
         record_run_scores(
             client, dataset_run_id=experiment.dataset_run_id,
@@ -183,19 +221,20 @@ def main(argv: list[str] | None = None) -> int:
         probes = (suite2_items(manifest_provider=lambda ids: {})[:1]
                   if "suite2-adversarial-v1" in names else [])
         for item in [*examples[:1], *probes]:
-            body = build_body(question=item.turns[0], hadm_id=int(item.patient_id),
+            prompts = item.prompts
+            body = build_body(question=prompts[0], hadm_id=int(item.patient_id),
                               run_tag=args.run_tag)
             validate_body(body)
-            if len(item.turns) > 1:
+            if len(prompts) > 1:
                 second = build_body(
-                    question=item.turns[1], hadm_id=int(item.patient_id),
+                    question=prompts[1], hadm_id=int(item.patient_id),
                     run_tag=args.run_tag,
-                    turns=[replay_turn(item.turns[0], {
+                    turns=[replay_turn(prompts[0], {
                         "answer": "placeholder", "tool_calls": [
                             {"name": "predict_readmission", "args": {"hadm_id": 1},
                              "response": {"probability": 0.34}}]})])
                 validate_body(second)
-            print(f"  OK  {item.workflow_type}: {item.turns[0][:50]}")
+            print(f"  OK  {item.workflow_type}: {prompts[0][:50]}")
         print("\nall request bodies accepted by the service contract; nothing sent")
         return 0
 

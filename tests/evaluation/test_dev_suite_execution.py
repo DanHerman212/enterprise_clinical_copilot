@@ -148,15 +148,23 @@ def test_an_item_without_a_scenario_id_falls_back_to_its_dataset_id():
 
 
 def test_the_run_stamps_the_rubric_version_it_is_graded_under():
-    assert run_evals.rubric_version() == "v7"
+    assert run_evals.rubric_version() == "v8"
     header = (REPO / "evaluation" / "rubric.md").read_text().splitlines()[0]
     assert run_evals.rubric_version() in header
 
 
-def test_the_dev_suite_is_an_allowed_target_and_not_a_default_one():
-    assert run_evals.DEV_SUITE_DATASET in run_evals.DATASETS or (
-        run_evals.DEV_SUITE_DATASET == "ecc-tier2-dev-suite")
-    assert run_evals.DEV_SUITE_DATASET not in run_evals.DATASETS
+def test_the_tier2_suites_are_the_default_targets():
+    """The default run is the suite that measures the product.
+
+    These were gated targets reached by `--datasets` while the two legacy census sets
+    were the default, so a bare run graded 30 items whose expected output asserted an
+    envelope and nothing else (Phase A, 2026-11-04). The holdout stays reachable the same
+    way it always was; what changed is which suites a routine run measures.
+    """
+    assert set(run_evals.DATASETS) == {run_evals.DEV_SUITE_DATASET,
+                                      run_evals.HOLDOUT_SUITE_DATASET}
+    assert run_evals.DEV_SUITE_DATASET in run_evals.DATASETS
+    assert run_evals.FULL_CENSUS_DATASET not in run_evals.DATASETS
 
 
 def test_the_item_input_sent_to_langfuse_validates_as_a_dataset_item():

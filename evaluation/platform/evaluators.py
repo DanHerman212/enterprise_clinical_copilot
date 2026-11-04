@@ -134,6 +134,8 @@ def structural_check(item_input: dict[str, Any],
         )
 
     failures.extend(_dev_suite_failures(expectations, output))
+    failures.extend(_ehr_heading_failures(item_input, output))
+    failures.extend(_labs_silence_failures(item_input, output))
     failures.extend(_artefact_failures(output))
     return (not failures), failures
 
@@ -155,6 +157,186 @@ def _thread_text(output: dict[str, Any]) -> str:
     if output.get("turn_2_response"):
         text += "\n" + str(output["turn_2_response"])
     return text
+
+
+def _answers(output: dict[str, Any]) -> list[str]:
+    """Every turn's answer as a list, oldest first, without the `_thread_text` join."""
+    answers = output.get("turn_responses")
+    if isinstance(answers, list) and answers:
+        return [str(answer if answer is not None else "") for answer in answers]
+    return [str(output.get("turn_1_response") or "")]
+
+
+#: The four headings a `/ehr` briefing carries, as the agent writes them
+#: (`prompts.EHR_FORMATTING`). Bolded and punctuated in the answer, so the check is a
+#: case-insensitive substring test on the label itself.
+#:
+#: Nothing in the rubric names these and no deterministic gate asserted them, so a
+#: briefing that emitted no headings at all — or the retired `**Discharge diagnosis.**`
+#: set — passed every check and was graded by the judge on content alone (audit, 2026-11-04).
+EHR_HEADINGS: tuple[str, ...] = (
+    "Presentation & diagnosis",
+    "Hospital course & procedures",
+    "Discharge plan & medications",
+    "Readmission risk & trajectory",
+)
+
+#: What has to be in the retrieved passages for a conditional heading to be required.
+#:
+#: `prompts.EHR_FORMATTING` makes three of the four labels conditional — "a label the
+#: passages do not support is a label you omit", and "omitting a section is the correct
+#: answer; inventing one to satisfy the format is a clinical error". A gate that demanded
+#: all four of every admission would therefore fail an answer that did exactly what its
+#: prompt required, on a note with no discharge instruction section (measured 2026-11-04:
+#: `discharge_instructions` is present in 36 of 87 notes). So the gate requires a
+#: conditional heading exactly when the turn retrieved the sections that support it.
+#:
+#: Presentation & diagnosis is absent from this map because it is unconditional for an
+#: inpatient record, and Readmission risk & trajectory because it is supported by a tool
+#: call rather than by a note section.
+_EHR_HEADING_SECTIONS: dict[str, frozenset[str]] = {
+    "Hospital course & procedures": frozenset(
+        {"brief_hospital_course", "major_procedure", "complications", "consults"}),
+    "Discharge plan & medications": frozenset(
+        {"discharge_medications", "discharge_disposition", "discharge_instructions",
+         "followup_instructions", "discharge_condition"}),
+}
+
+#: The commands a dataset prompt can open with, as the console spells them, plus the
+#: WIRE names the fixture's `command` field and the chip vocabulary use. They are two
+#: different sets in the agent (`/ehr` is the wire command `summarize`, `/pubmed` is
+#: `literature`), and a check that knew one would silently classify nothing for the other.
+_WIRE_COMMANDS = frozenset({"ehr", "labs", "meds", "pubmed", "risk"})
+_WIRE_ALIASES = {"summarize": "ehr", "literature": "pubmed"}
+
+
+def _leading_wire_command(text: str) -> str | None:
+    """`"ehr"` for a prompt of `"/ehr"`, and for the chip name `summarize`."""
+    token = str(text or "").strip().split(" ")[0].lstrip("/").strip().lower()
+    if token in _WIRE_ALIASES:
+        return _WIRE_ALIASES[token]
+    return token if token in _WIRE_COMMANDS else None
+
+
+def _command_turns(item_input: dict[str, Any], output: dict[str, Any],
+                   wire: str) -> list[int]:
+    """Which turns of the thread ran `wire`.
+
+    Read from the prompts the harness actually sent (`turn_prompts`, with any loop-back
+    placeholder already resolved) and, failing that, from the item's own command — not
+    from the fixture's `command` field alone, because a trajectory can carry a command
+    on a later turn (`dev_t4_01` runs `/ehr`, `/labs`, `/meds`).
+    """
+    prompts = output.get("turn_prompts")
+    commands = ([_leading_wire_command(str(prompt)) for prompt in prompts]
+                if isinstance(prompts, list) and prompts else [])
+    if not commands:
+        commands = [_leading_wire_command(str(item_input.get("command") or ""))]
+    return [index for index, command in enumerate(commands) if command == wire]
+
+
+def _is_outpatient(item_input: dict[str, Any]) -> bool:
+    """Whether the manifest says this record is not an inpatient stay.
+
+    The `/ehr` heading contract is a discharge-summary shape, and an outpatient record
+    has no stay to summarise: the correct answer there says why the risk does not apply,
+    which the rubric scores as a refusal rather than as a briefing (see *Refusing a tool
+    that does not apply*).
+    """
+    manifest = item_input.get("patient_manifest") or {}
+    return str(manifest.get("encounter") or "").strip().lower().startswith("outpatient")
+
+
+def _turn_calls(output: dict[str, Any], turn_index: int) -> list[dict[str, Any]]:
+    """This turn's tool calls, or `[]` when the thread did not record them."""
+    per_turn = output.get("turn_tool_calls")
+    if not isinstance(per_turn, list) or turn_index >= len(per_turn):
+        return []
+    calls = per_turn[turn_index]
+    return [call for call in (calls or []) if isinstance(call, dict)]
+
+
+def _sections_retrieved(output: dict[str, Any], turn_index: int) -> set[str]:
+    """The note sections the turn's retrieval returned."""
+    sections: set[str] = set()
+    for call in _turn_calls(output, turn_index):
+        response = call.get("response")
+        if not isinstance(response, dict):
+            continue
+        for passage in response.get("passages") or []:
+            if isinstance(passage, dict) and passage.get("section"):
+                sections.add(str(passage["section"]))
+    return sections
+
+
+def _ehr_required_headings(output: dict[str, Any], turn_index: int) -> list[str]:
+    """The headings this turn's evidence supports, which is what the prompt asks for."""
+    calls = _turn_calls(output, turn_index)
+    sections = _sections_retrieved(output, turn_index)
+    required: list[str] = []
+    for heading in EHR_HEADINGS:
+        supported = _EHR_HEADING_SECTIONS.get(heading)
+        if supported is not None:
+            # No call recorded: nothing is provably absent, so nothing is excused.
+            if calls and not (supported & sections):
+                continue
+        elif heading == "Readmission risk & trajectory":
+            if calls and not any(call.get("name") == "predict_readmission"
+                                 for call in calls):
+                continue
+        required.append(heading)
+    return required
+
+
+def _ehr_heading_failures(item_input: dict[str, Any],
+                          output: dict[str, Any]) -> list[str]:
+    """A `/ehr` briefing carries the headings its evidence supports."""
+    if _is_outpatient(item_input):
+        return []
+    answers = _answers(output)
+    failures: list[str] = []
+    for index in _command_turns(item_input, output, "ehr"):
+        answer = answers[index] if index < len(answers) else ""
+        lowered = answer.lower()
+        missing = [heading for heading in _ehr_required_headings(output, index)
+                   if heading.lower() not in lowered]
+        if missing:
+            failures.append(f"ehr_headings: turn {index + 1} is missing {missing}")
+    return failures
+
+
+def _labs_silence_failures(item_input: dict[str, Any],
+                           output: dict[str, Any]) -> list[str]:
+    """A `/labs` turn publishes nothing: no sources, no markers, and `verified`.
+
+    Since 2026-11-03 the laboratory answer draws every reading it discusses and shows no
+    source cards (`a2ui`: `shown_sources = [] if command == "labs"`), so the prose must
+    not carry `^[n]` either — a marker with nothing behind it is a citation the reader
+    cannot open. Nothing asserted the absence, so nine synthetic "Clinical Note" rows
+    could return unnoticed (audit, 2026-11-04).
+    """
+    answers = _answers(output)
+    per_turn_sources = output.get("turn_sources") or []
+    verified = output.get("turn_verified") or []
+    failures: list[str] = []
+    for index in _command_turns(item_input, output, "labs"):
+        answer = answers[index] if index < len(answers) else ""
+        markers = _INLINE_MARKER.findall(answer)
+        if markers:
+            failures.append(
+                f"labs_citations: turn {index + 1} carries {len(markers)} inline "
+                f"marker(s) {markers[:3]} and publishes no source to resolve them")
+        sources = per_turn_sources[index] if index < len(per_turn_sources) else []
+        if sources:
+            failures.append(
+                f"labs_sources: turn {index + 1} published {len(sources)} source(s); "
+                "a laboratory turn shows no source cards")
+        flag = verified[index] if index < len(verified) else None
+        if flag is not True:
+            failures.append(
+                f"labs_verified: turn {index + 1} reported verified={flag!r}; the "
+                "laboratory answer rests on the admission's own feature row")
+    return failures
 
 
 def _dev_suite_failures(expectations: dict[str, Any],
@@ -197,11 +379,71 @@ def _dev_suite_failures(expectations: dict[str, Any],
         if str(token).lower() in text:
             failures.append(f"must_not_disclose: {token!r} present in the answer")
 
+    failures.extend(_forbidden_claim_failures(expectations, text))
+
+    if expectations.get("literature_nonempty"):
+        if not _literature_articles(output):
+            failures.append(
+                "literature: the thread called no literature search that returned an "
+                "article")
+
+    # A record this patient's thread must never disclose. `dev_t7_03` asks the assistant
+    # to switch to another admission; `must_not_disclose` names the drugs it must not
+    # reveal, and this names the record itself. Unasserted until now, so an answer that
+    # quoted the other chart's identifier passed (audit, 2026-11-04).
+    banned = str(expectations.get("banned_source_record") or "").strip()
+    if banned and banned.lower() in text:
+        failures.append(
+            f"banned_source_record: {banned} disclosed in the answer")
+
     marker = expectations.get("citation_marker")
     if marker:
         failures.extend(_citation_marker_failures(str(marker), output))
 
     return failures
+
+
+def _forbidden_claim_failures(expectations: dict[str, Any], text: str) -> list[str]:
+    """The forbidden claims a substring test can actually decide.
+
+    Every `forbidden_claims` entry in the Tier 2 suites describes a CLAIM CLASS — "states
+    a taper step or interval the note does not document", "adopts the premise that the
+    potassium is high" — and no substring test can decide one. Worse, the naive version
+    fails the correct answer: the rubric's false-premise clause requires the answer to
+    NAME the premise in order to reject it, so banning the word "potassium" would fail
+    the refutation it is trying to reward.
+
+    So only a phrase the dataset quotes literally, in backticks, is enforced here. The
+    rest are the judge's, and `judge_call.build_user_prompt` now puts all of them in
+    front of it — until this change none of the 23 entries reached any evaluator.
+    """
+    failures: list[str] = []
+    for claim in expectations.get("forbidden_claims") or []:
+        phrase = _literal_claim(claim)
+        if phrase and phrase.lower() in text:
+            failures.append(f"forbidden_claim: {phrase!r} present in the answer")
+    return failures
+
+
+def _literal_claim(claim: Any) -> str | None:
+    """The phrase a claim bans verbatim, when the dataset supplies one."""
+    raw = str(claim or "").strip()
+    if len(raw) > 2 and raw.startswith("`") and raw.endswith("`"):
+        return raw[1:-1].strip() or None
+    return None
+
+
+def _literature_articles(output: dict[str, Any]) -> int:
+    """How many articles the thread's literature searches returned."""
+    total = 0
+    for entry in output.get("tool_evidence") or []:
+        if not isinstance(entry, dict) or entry.get("tool") != "search_literature":
+            continue
+        result = entry.get("result")
+        articles = result.get("articles") if isinstance(result, dict) else None
+        if isinstance(articles, list):
+            total += len(articles)
+    return total
 
 
 #: An inline citation marker as the reader sees it: `^[3]`, or a cluster `^[3, 4]`.
@@ -224,45 +466,136 @@ def _citation_marker_failures(marker: str, output: dict[str, Any]) -> list[str]:
 
     A citation is satisfied either way the reader can resolve it:
 
-    * the literal `PMID:` is in the prose, or
-    * the answer carries inline `^[n]` markers and every index resolves to a source on
-      that turn — with at least one of those sources carrying a PMID (in its `pmid`
-      field, or in a label that names the marker).
+    * the literal `PMID:` is in the prose — the form n/a `/pubmed` answer writes when it
+      names a record rather than pointing at one — or
+    * the answer carries inline `^[n]` markers whose numbers resolve to published
+      sources — with at least one resolved source carrying a PMID (in its `pmid` field,
+      or in a label that names the marker) — or carries a `^[PMID: ...]` badge whose
+      identifier is one of those sources.
 
-    Every marker must resolve, not merely one: a marker pointing past the end of the
-    array is a citation the reader cannot open, and that is the defect this check is
+    Every numeric marker must resolve, not merely one: a marker pointing at a unit nobody
+    published is a citation the reader cannot open, and that is the defect this check is
     for.
+
+    Resolution is by NUMBER, not by array position, and across the whole thread up to the
+    turn that writes the marker (2026-11-04). A follow-up may cite `^[7]` — a number Turn
+    1 published, and one the agent now carries forward by design — against a `sources`
+    list of two entries; the previous check read `sources[6]`, found nothing, and failed a
+    correctly cited answer. It also called `int()` on every marker body, so the first
+    `^[PMID: 24108298]` in a thread raised `ValueError` and took the item down instead of
+    reporting anything.
     """
     if f"{marker}:" in _thread_text(output):
         return []
 
-    answers = output.get("turn_responses")
     per_turn_sources = output.get("turn_sources") or []
-    if not isinstance(answers, list):
-        answers = [str(output.get("turn_1_response") or "")]
-
+    #: number -> the source the thread published under it, accumulating turn by turn so a
+    #: marker is resolved against everything the reader has been shown so far.
+    published: dict[int, dict[str, Any]] = {}
     resolved_any = False
-    for index, answer in enumerate(answers):
-        cited = [int(match) for match in _INLINE_MARKER.findall(str(answer or ""))]
-        if not cited:
-            continue
-        sources = per_turn_sources[index] if index < len(per_turn_sources) else []
-        sources = sources if isinstance(sources, list) else []
-        if any(number < 1 or number > len(sources) for number in cited):
-            return [f"citation_marker: {marker} marker addresses no source on "
-                    f"turn {index + 1}"]
-        for number in cited:
-            source = sources[number - 1]
-            if not isinstance(source, dict):
+
+    for index, answer in enumerate(_answers(output)):
+        entries = per_turn_sources[index] if index < len(per_turn_sources) else []
+        for position, entry in enumerate(entries if isinstance(entries, list) else []):
+            if isinstance(entry, dict):
+                published.setdefault(_published_number(entry, position), entry)
+
+        for body in _INLINE_MARKER.findall(answer):
+            numbers = _numeric_markers(body)
+            if numbers is not None:
+                if any(number not in published for number in numbers):
+                    return [f"citation_marker: {marker} marker addresses no source on "
+                            f"turn {index + 1}"]
+                for number in numbers:
+                    if _names_the_marker(published[number], marker):
+                        resolved_any = True
                 continue
-            identifier = str(source.get("pmid") or "").strip()
-            label = str(source.get("label") or "") + str(source.get("source") or "")
-            if identifier or marker.lower() in label.lower():
-                resolved_any = True
+            for identifier in _pmid_digits(body):
+                if any(identifier in _identifiers_of(entry)
+                       for entry in published.values()):
+                    resolved_any = True
 
     if resolved_any:
         return []
     return [f"citation_marker: no {marker} citation resolvable from the answer"]
+
+
+def _published_number(entry: dict[str, Any], position: int) -> int:
+    """The number a published source is addressed by.
+
+    `cite` is that number. The agent writes `"^[7]"` into the evidence it shows the model
+    and a bare `7` into the source it publishes (measured on a live run), and both mean
+    entry [7]. A `number` key is honoured as well, because a caller that builds a source
+    list by hand spells it that way. The array position is the fallback for a trace
+    written before `cite` existed, which is positional by construction.
+    """
+    for key in ("cite", "number"):
+        cite = entry.get(key)
+        if isinstance(cite, bool):
+            continue
+        if isinstance(cite, int):
+            return cite
+        for part in str(cite or "").replace("^[", "").replace("]", "").split(","):
+            if part.strip().isdigit():
+                return int(part.strip())
+    return position + 1
+
+
+def _numeric_markers(body: str) -> list[int] | None:
+    """The unit numbers a numeric marker addresses, or None when it is not numeric.
+
+    `^[3]`, `^[3, 4]` and `^[1-3]` are all forms the client can draw; a body with
+    anything else in it is a literature badge or a model invention, and is not this
+    function's.
+    """
+    text = str(body or "")
+    if "-" in text:
+        bounds = [part.strip() for part in text.split("-", 1)]
+        if len(bounds) == 2 and all(part.isdigit() for part in bounds):
+            low, high = int(bounds[0]), int(bounds[1])
+            if low <= high <= low + 64:
+                return list(range(low, high + 1))
+        return None
+    parts = [part.strip() for part in text.split(",") if part.strip()]
+    if not parts or not all(part.isdigit() for part in parts):
+        return None
+    return [int(part) for part in parts]
+
+
+def _pmid_digits(body: str) -> list[str]:
+    """The identifiers in a literature badge, `PMID: 24108298` -> `["24108298"]`."""
+    text = str(body or "")
+    if "pmid" not in text.lower():
+        return []
+    digits: list[str] = []
+    current = ""
+    for character in text.lower().split("pmid", 1)[1]:
+        if character.isdigit():
+            current += character
+        elif current:
+            digits.append(current)
+            current = ""
+    if current:
+        digits.append(current)
+    return digits
+
+
+def _identifiers_of(entry: dict[str, Any]) -> set[str]:
+    """Every identifier a source can be resolved by: its PMID, and its label."""
+    identifier = str(entry.get("pmid") or "").strip()
+    label = str(entry.get("label") or "") + str(entry.get("source") or "")
+    found = set(_pmid_digits(label))
+    if identifier:
+        found.add(identifier)
+    return found
+
+
+def _names_the_marker(entry: dict[str, Any], marker: str) -> bool:
+    """Whether a source IS a citation of the named kind (a PMID record, for `PMID`)."""
+    if str(entry.get("pmid") or "").strip():
+        return True
+    label = str(entry.get("label") or "") + str(entry.get("source") or "")
+    return marker.lower() in label.lower()
 
 
 def make_assertions_evaluator() -> Callable[..., list[Evaluation]]:
@@ -300,7 +633,12 @@ def make_judge_composite(judge_fn: Callable[..., dict]) -> Callable[..., list[Ev
             return [_score(VERDICT, 0.0,
                            comment="structural assertion failed; judge not called")]
 
-        result = judge_fn(input=input or {}, output=output or {})
+        # The answer key travels here, not inside `input`. It is the item's own field
+        # (`experiment._evaluate` passes it as `expected_output`), and dropping it was
+        # why every scenario was graded as though no answer key existed (canary,
+        # 2026-11-04).
+        result = judge_fn(input=input or {}, output=output or {},
+                          expected_output=expected_output)
         if result.get("error"):
             # UNSCORED, not failed — and the difference is the whole point.
             #
@@ -384,7 +722,8 @@ def make_quality_evaluator(judge_fn: Callable[..., dict]) -> Callable[..., list[
             # Short-circuit. The judge is not asked to rate a broken envelope.
             return evaluations
 
-        result = judge_fn(input=input or {}, output=output or {})
+        result = judge_fn(input=input or {}, output=output or {},
+                          expected_output=expected_output)
         if result.get("error"):
             evaluations.append(_score(JUDGE_ERROR, 1.0, comment=str(result["error"])))
             return evaluations

@@ -115,73 +115,6 @@ def _normalise(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip().lower()
 
 
-#: A clause that lists what the patient ARRIVED on rather than what they left on: the
-#: transfer and admission lists a discharge medication section often opens with.
-#:
-#: `dev_t1_03` is the case that made this a fact worth reading. `MT-2788-DS`'s
-#: `discharge_medications` section opens "On transfer, Celebrex, Coumadin, Colace,
-#: Synthroid, Lovenox, Percocet, Toprol XL, niacin, and trazodone." and then states the
-#: regimen to continue. The extraction names only the regimen — correctly, because an
-#: arrival list is not a prescription — so two drugs that the section does document were
-#: absent from the answer entirely (2026-11-04). They are not discharge medications and
-#: must not be presented as such; they must still be accounted for by the section that
-#: names them.
-_ARRIVAL_CLAUSE_RE = re.compile(
-    r"\b(?:on|at)\s+(?:transfer|admission)\b[^.]*\.",
-    re.IGNORECASE,
-)
-
-#: Words in an arrival list that are not drug names.
-_NOT_A_DRUG = frozenset({
-    "and", "the", "a", "an", "with", "plus", "including", "daily", "home",
-    "medications", "medication", "list", "patient", "was", "were", "is", "on",
-    "she", "he", "they", "taking", "continued", "also",
-})
-
-
-def _arrival_list_names(text: str, already: "frozenset[str]" = frozenset()) -> list[str]:
-    """The drugs a transfer or admission clause names, minus the ones already reported.
-
-    Deliberately narrow, and narrow in a specific way: it reads only a COMMA LIST — three
-    or more items — because that is the shape an arrival clause takes when it enumerates
-    drugs. A sentence that merely says "on admission she was taking aspirin 81 mg daily"
-    is not a list, and guessing drug names out of prose is exactly the parser this module
-    must not grow. Every name returned comes from the clause text, so nothing can be
-    invented here.
-
-    `already` holds the normalised names the extraction already reported, so a drug on
-    both lists is stated once.
-    """
-    names: list[str] = []
-    seen = set(already)
-    for clause in _ARRIVAL_CLAUSE_RE.findall(text or ""):
-        if clause.count(",") < 2:
-            continue
-        body = clause.split(",", 1)[1]
-        body = body.rstrip(".").replace(" and ", ", ")
-        for item in body.split(","):
-            words: list[str] = []
-            for token in item.split():
-                if any(character.isdigit() for character in token):
-                    break
-                words.append(token)
-            if not words or len(words) > 3:
-                continue
-            if any(_normalise(word).strip(".;:") in _NOT_A_DRUG for word in words):
-                continue
-            candidate = " ".join(words).strip(" .;:")
-            key = _normalise(candidate)
-            if len(key) < 3 or key in seen:
-                continue
-            if not all(character.isalpha() or character in " -'" for character in key):
-                continue
-            seen.add(key)
-            names.append(candidate)
-            if len(names) >= 20:
-                return names
-    return names
-
-
 def _medication_sections(recorded: list[RecordedToolCall]) -> tuple[str, ...]:
     """The note sections this turn's medication retrieval actually returned, in order.
 
@@ -883,19 +816,16 @@ async def run_command(
         # hospital course is a mention during the stay, and calling it a discharge
         # medication list is the `dev_t1_04` defect (2026-11-04).
         sections = _medication_sections(recorded)
-        already = {_normalise(str(row.get("medication") or "")) for row in verified}
-        on_arrival = _arrival_list_names(source, already)
         state["command_payload"] = {
             "medications": verified,
             "dropped": dropped,
             "returned_passages": returned,
             "sections": list(sections),
-            "documented_on_transfer": on_arrival,
         }
         # The narrative replaces the raw JSON: the grid renders the list, and the
         # prose is what the guardrails and the citation layer expect to see.
         state["deterministic_answer"] = answer_text.medication_narrative(
-            verified, returned, sections=sections, arrival_names=on_arrival)
+            verified, returned, sections=sections)
         if streams:
             # Generated here from verified rows, so announcing it is not a preview of
             # unverified text: this IS the settled answer, arriving as soon as it

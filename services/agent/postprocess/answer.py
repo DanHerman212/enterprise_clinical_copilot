@@ -132,8 +132,7 @@ def _distinct_medications(verified: list[dict[str, str]]) -> list[str]:
 
 
 def medication_narrative(verified: list[dict[str, str]], returned_passages: int,
-                         sections: tuple[str, ...] = (),
-                         arrival_names: tuple[str, ...] = ()) -> str:
+                         sections: tuple[str, ...] = ()) -> str:
     """What the narrative says for a medications command.
 
     The prose names the medications as well as counting them. It used to say only "N
@@ -154,11 +153,6 @@ def medication_narrative(verified: list[dict[str, str]], returned_passages: int,
     note with no such section, 2026-11-04). The sentence states the absence and rooms what
     it does say in the section that says it.
 
-    `arrival_names` are the drugs the section's transfer or admission clause names. They
-    are not discharge medications and are not counted as any, but a `/meds` answer that
-    omits a drug the section documents is incomplete, so they are reported once, with the
-    clause they came from.
-
     The fallback sentence reserved for a genuinely empty result is used only when the tool
     returned no passages at all. A tool that returned text this module could not verify is
     a different failure, and the prose states that failure clinically: what was retrieved,
@@ -174,32 +168,21 @@ def medication_narrative(verified: list[dict[str, str]], returned_passages: int,
     # when a passage exists — a marker pointing at nothing is worse than none.
     source = " ^[1]" if returned_passages else ""
     dedicated = "discharge_medications" in sections
-    transfer = [name for name in arrival_names
-                if _normalise(name) not in {_normalise(row.get("medication") or "")
-                                            for row in verified}]
     if names:
         if dedicated:
             count = len(names)
             noun = "medication" if count == 1 else "medications"
-            sentence = (
+            return (
                 f"{count} discharge {noun}, as recorded in the discharge note: "
                 f"{', '.join(names)}{source}."
             )
-        else:
-            where = ", ".join(section.replace("_", " ") for section in sections) or (
-                "material that was retrieved")
-            sentence = (
-                "The clinical record does not contain a dedicated discharge medications "
-                f"section. The medications it mentions in the {where} during this stay: "
-                f"{', '.join(names)}{source}."
-            )
-        if transfer:
-            sentence += (
-                " The same section also lists "
-                f"{', '.join(transfer)} on transfer into this stay, which is what the "
-                "patient arrived on rather than a discharge prescription."
-            )
-        return sentence
+        where = ", ".join(section.replace("_", " ") for section in sections) or (
+            "material that was retrieved")
+        return (
+            "The clinical record does not contain a dedicated discharge medications "
+            f"section. The medications it mentions in the {where} during this stay: "
+            f"{', '.join(names)}{source}."
+        )
     if returned_passages == 0:
         return "No specific discharge medication information is available for this admission."
     if dedicated:

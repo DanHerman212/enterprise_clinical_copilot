@@ -248,9 +248,17 @@ class TestSourceResolution:
     citations are built from, so this is now the layer that matters.
     """
 
-    def test_resolves_the_cited_passage_by_section_not_number(self):
-        """A meds answer cites ^[1] while the meds passage sits at index 2 —
-        the canvas must still show discharge_medications."""
+    def test_resolves_the_cited_passage_by_number_even_with_a_section_hint(self):
+        """`^[1]` is the first passage, whatever section the question asked about.
+
+        This asserted the opposite until 2026-11-04: the section hint ran first and, on a
+        match, `passage_n` was never consulted, so a citation to one passage was served as
+        another. On `dev_t3_01` a marker into the third hospital-course chunk was resolved
+        to the first, and the judge — reading the passage the reader would have opened —
+        scored a correct citation as pointing at text that did not support the claim.
+        The hint is now a fallback for a number that addresses nothing, and may choose the
+        BODY inside the cited passage, which is what it was introduced for.
+        """
         rag = {"passages": [
             {"id": "n_bhc_1", "section": "brief_hospital_course",
              "text": "Hospital Course: recovered.", "score": 0.3},
@@ -259,12 +267,23 @@ class TestSourceResolution:
             {"id": "n_meds_1", "section": "discharge_medications",
              "text": "Discharge Medications: Celebrex 200 mg daily.", "score": 0.1},
         ], "query": "discharge notes"}
+
+        # The number wins, hint or no hint.
         resolved = resolve_source(rag["passages"], 1, ("discharge_medications",))
+        assert resolved["section"] == "brief_hospital_course"
+        assert "recovered" in resolved["text"]
+        assert resolve_source(rag["passages"], 1, ())["section"] == "brief_hospital_course"
+
+        # The number that indexes the medication passage opens it.
+        resolved = resolve_source(rag["passages"], 3, ("discharge_medications",))
         assert resolved["section"] == "discharge_medications"
         assert "Celebrex" in resolved["text"]
 
-        # Without a section hint the number mapping is unchanged.
-        assert resolve_source(rag["passages"], 1, ())["section"] == "brief_hospital_course"
+        # A number that addresses nothing falls back to the hint, because the question
+        # still asked something even though the marker is broken.
+        resolved = resolve_source(rag["passages"], 99, ("discharge_medications",))
+        assert resolved["section"] == "discharge_medications"
+        assert "Celebrex" in resolved["text"]
 
         # A section hint the note does not have no longer vetoes a real passage: `^[2]`
         # indexes a discharge diagnosis, so that is what the reader is shown. It used to
@@ -664,6 +683,20 @@ class TestResolvedSources:
          "text": "Discharge Medications: Celebrex 200 mg daily.", "score": 0.1},
     ]}
 
+    #: What `/meds` really hands the composer: `deterministic._consolidate_medication_passages`
+    #: merges the medication and instruction chunks into ONE passage, at index 0, precisely so
+    #: the narrative's single `^[1]` opens the medications. The medication passage is first by
+    #: construction, so a test that put it third was testing the intent override rather than
+    #: the product (2026-11-04).
+    MEDS_FIRST = {"query": "discharge notes", "passages": [
+        {"id": "n_meds_1", "section": "discharge_medications",
+         "text": "Discharge Medications: Celebrex 200 mg daily.", "score": 0.1},
+        {"id": "n_bhc_1", "section": "brief_hospital_course",
+         "text": "Hospital Course: recovered.", "score": 0.3},
+        {"id": "n_dx_1", "section": "discharge_diagnosis",
+         "text": "Discharge Diagnoses: TKA.", "score": 0.2},
+    ]}
+
     def test_one_entry_per_citation_keyed_by_its_own_number(self):
         """Each marker resolves to the passage at its own position.
 
@@ -681,13 +714,18 @@ class TestResolvedSources:
         assert out["sources"][1]["section"] == "discharge_diagnosis"
         assert all(s["query"] == "discharge notes" for s in out["sources"])
 
-    def test_single_citation_resolves_by_section_intent(self):
-        """A meds answer cites ^[1] but the meds passage is third — the
-        resolved source is discharge_medications, not the first passage."""
+    def test_a_single_citation_opens_the_passage_it_names(self):
+        """`Celebrex^[1]` opens `passages[0]`, which for `/meds` is the medications.
+
+        This used to assert that the section hint overrode the number, because the
+        fixture put the medication passage third. The hint no longer overrides a valid
+        number, and the real pipeline does not need it to: `/meds` consolidates the
+        medication chunks into one passage at index 0 before the narrative is written.
+        """
         out = compose_presentation(
             "What medications was the patient discharged on?",
             "Celebrex^[1].",
-            [{"name": "rag_search", "response": self.THREE}],
+            [{"name": "discharge_medications", "response": self.MEDS_FIRST}],
         )
         assert len(out["sources"]) == 1
         src = out["sources"][0]
@@ -705,7 +743,7 @@ class TestResolvedSources:
         out = compose_presentation(
             "What medications was the patient discharged on?",
             "Celebrex^[1].",
-            [{"name": "rag_search", "response": self.THREE}],
+            [{"name": "discharge_medications", "response": self.MEDS_FIRST}],
         )
         citation = _by_id(out["a2ui"])["narrative"]["citations"][0]
         first = out["sources"][0]

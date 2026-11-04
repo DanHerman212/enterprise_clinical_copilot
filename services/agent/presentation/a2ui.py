@@ -692,49 +692,46 @@ def resolve_source(passages: list[dict], passage_n: int,
 
     Returns {"section", "text"}. Callers own the badge number and the query.
     """
-    cited = None
-    intent_body = None
-    matched_section = None
-    for sec in sections:
-        cited = next((p for p in passages if p.get("section") == sec), None)
-        if cited is not None:
-            matched_section = sec
-            break
-        # The index stores whole-note chunks: a passage labeled with a
-        # different section still CONTAINS the target section, and the
-        # labeled chunk can miss the top-k (near-tied whole-note
-        # embeddings). Pull the section body out of the passage text.
-        for p in passages:
-            body = extract_section(p.get("text", ""), sec)
-            if body:
-                cited = p
-                intent_body = body
-                matched_section = sec
-                break
-        if cited is not None:
-            break
-
-    # Nothing to show, and nothing to prefer: an empty retrieval, or a number that indexes
-    # no passage. These are the only two "not available" cases.
+    # Nothing to show, and nothing to prefer: an empty retrieval is the one case where
+    # the answer is "not available" whatever the number says.
     if not passages:
         return {"section": "not available",
                 "text": _unavailable_text(sections[0] if sections else "")}
-    if cited is None and not (1 <= passage_n <= len(passages)):
-        return {"section": "not available",
-                "text": _unavailable_text(sections[0] if sections else "")}
 
-    if cited is None:
-        # Clamp to a real passage so an out-of-range number never raises.
-        idx = min(max(passage_n, 1), len(passages)) - 1
-        cited = passages[idx]
-        shown_section = cited.get("section", "discharge note")
-        section_text = extract_section(cited.get("text", ""), shown_section)
-    elif intent_body is not None:
-        shown_section = matched_section
-        section_text = intent_body
+    in_range = 1 <= passage_n <= len(passages)
+    if in_range:
+        # THE NUMBER WINS. `^[n]` is a claim about a specific passage, and the section
+        # intent is the question's preference — the docstring below has said "a PREFERENCE
+        # and never a veto" since the intent was introduced, while the code ran the intent
+        # loop first and, on any match, never consulted `passage_n` at all. A citation to
+        # the third hospital-course chunk was served as the first one, because the section
+        # matched; the reader clicked a marker and landed on a passage the answer did not
+        # rest on (2026-11-04).
+        cited = passages[passage_n - 1]
     else:
-        shown_section = matched_section or cited.get("section", "discharge note")
-        section_text = extract_section(cited.get("text", ""), shown_section)
+        # Out of range: fall back to the question's intent, because a marker that
+        # addresses nothing still has a question to answer.
+        cited = next((p for p in passages if p.get("section") in sections), None)
+        if cited is None and not sections:
+            return {"section": "not available",
+                    "text": _unavailable_text("")}
+        if cited is None:
+            return {"section": "not available",
+                    "text": _unavailable_text(sections[0])}
+
+    shown_section = str(cited.get("section") or "discharge note")
+    section_text = extract_section(cited.get("text", ""), shown_section)
+    # Intent may still choose the BODY, never the passage. The index stores whole-note
+    # chunks, so a passage labelled with a coarser heading can contain the section the
+    # question asked for; pulling that body out is the reason the intent exists. It cannot
+    # move the reader to a different passage, and it cannot override a passage that is
+    # already labelled with the section the question named.
+    if sections and shown_section not in sections:
+        for sec in sections:
+            body = extract_section(cited.get("text", ""), sec)
+            if body:
+                shown_section, section_text = sec, body
+                break
 
     return {"section": shown_section,
             "text": section_text or cited.get("text", ""),

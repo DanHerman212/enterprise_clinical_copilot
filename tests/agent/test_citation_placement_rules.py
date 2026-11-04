@@ -79,10 +79,56 @@ def test_the_number_shown_to_the_model_is_the_number_resolved_back():
 
     out = a2ui.compose_presentation(
         "What do the discharge instructions say?",
-        prose, [call], display, None,
-        evidence=replayed + [call],
+        prose, [call], evidence=replayed + [call], citation_map=display,
     )
 
     assert [source["section"] for source in out["sources"]] == ["discharge_instructions"]
     assert out["sources"][0]["cite"] == 1
     assert "Continue Coumadin" in out["sources"][0]["text"]
+
+
+def test_a_valid_number_is_never_overridden_by_the_question_s_intent():
+    """`^[2]` means the second passage, whatever section the question asked about.
+
+    `resolve_source` used to run the intent loop first and, on a match, never consult
+    `passage_n` — so a citation to the third hospital-course chunk was served as the first
+    one. The docstring has claimed "a PREFERENCE and never a veto" since the intent was
+    introduced; the code now does what it says (2026-11-04).
+    """
+    passages = [
+        {"section": "discharge_medications", "text": "On transfer, Celebrex."},
+        {"section": "brief_hospital_course", "text": "Admitted for rehabilitation."},
+        {"section": "brief_hospital_course", "text": "Discontinued the prophylaxis."},
+    ]
+
+    resolved = a2ui.resolve_source(
+        passages, 2, ("discharge_medications",))
+
+    assert resolved["section"] == "brief_hospital_course"
+    assert resolved["text"] == "Admitted for rehabilitation."
+
+
+def test_the_intent_still_recovers_an_out_of_range_number():
+    passages = [
+        {"section": "history_of_present_illness", "text": "A 61-year-old woman."},
+        {"section": "discharge_medications", "text": "Celebrex 200 mg daily."},
+    ]
+
+    resolved = a2ui.resolve_source(passages, 99, ("discharge_medications",))
+
+    assert resolved["section"] == "discharge_medications"
+    assert "Celebrex" in resolved["text"]
+
+
+def test_the_intent_may_choose_the_body_inside_the_cited_passage():
+    """A whole-note chunk labelled with a coarser heading can contain the asked-for one."""
+    passages = [
+        {"section": "discharge_summary",
+         "text": "Discharge medications: Celebrex 200 mg daily.\nFollow-up: clinic in 2 weeks."},
+    ]
+
+    resolved = a2ui.resolve_source(passages, 1, ("discharge_medications",))
+
+    assert resolved["section"] == "discharge_medications"
+    assert "Celebrex" in resolved["text"]
+    assert "Follow-up" not in resolved["text"]

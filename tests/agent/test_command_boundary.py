@@ -628,7 +628,7 @@ def test_the_fallback_sentence_needs_a_genuinely_empty_result():
         "No specific discharge medication information is available for this admission."
     )
 
-    unverified = medication_narrative([], 3)
+    unverified = medication_narrative([], 3, sections=("discharge_medications",))
     assert unverified != (
         "No specific discharge medication information is available for this admission."
     )
@@ -641,7 +641,8 @@ def test_the_fallback_sentence_needs_a_genuinely_empty_result():
 
 def test_the_narrative_counts_the_verified_rows_rather_than_all_of_them():
     verified = [{"medication": "Lasix", "dosage": "80 mg", "frequency": "daily"}]
-    assert "1 discharge medication" in medication_narrative(verified, 1)
+    assert "1 discharge medication" in medication_narrative(
+        verified, 1, sections=("discharge_medications",))
 
 
 def test_a_taper_counts_as_one_medication_and_the_names_are_stated():
@@ -653,7 +654,7 @@ def test_a_taper_counts_as_one_medication_and_the_names_are_stated():
         {"medication": "oxycodone SR", "dosage": "10 mg", "frequency": "q.12h."},
         {"medication": "Celebrex", "dosage": "200 mg", "frequency": "daily"},
     ]
-    narrative = medication_narrative(taper, 2)
+    narrative = medication_narrative(taper, 2, sections=("discharge_medications",))
     assert "2 discharge medications" in narrative
     assert "oxycodone SR" in narrative and "Celebrex" in narrative
     assert narrative.count("oxycodone SR") == 1, "one drug, named once"
@@ -663,13 +664,14 @@ def test_a_taper_counts_as_one_medication_and_the_names_are_stated():
         {"medication": "Toprol XL", "dosage": "50 mg", "frequency": "daily"},
         {"medication": "toprol  xl", "dosage": "25 mg", "frequency": "daily"},
     ]
-    assert "1 discharge medication" in medication_narrative(split, 2)
+    assert "1 discharge medication" in medication_narrative(
+        split, 2, sections=("discharge_medications",))
 
 
 def test_the_narrative_lists_every_distinct_drug_in_first_seen_order():
     rows = [{"medication": n, "dosage": "", "frequency": ""}
             for n in ("Celebrex", "Colace", "Ativan")]
-    assert medication_narrative(rows, 3).startswith(
+    assert medication_narrative(rows, 3, sections=("discharge_medications",)).startswith(
         "3 discharge medications, as recorded in the discharge note: "
         "Celebrex, Colace, Ativan")
 
@@ -684,12 +686,12 @@ def test_the_narrative_cites_the_passage_it_reports_on():
     """
     rows = [{"medication": "Celebrex", "dosage": "200 mg", "frequency": "daily"}]
 
-    cited = medication_narrative(rows, 1)
+    cited = medication_narrative(rows, 1, sections=("discharge_medications",))
     assert cited.endswith("^[1]."), cited
 
     # No passage retrieved means no marker: a citation pointing at nothing is removed
     # downstream anyway, and writing one would claim evidence this turn never had.
-    unverified = medication_narrative([], 1)
+    unverified = medication_narrative([], 1, sections=("discharge_medications",))
     assert "^[1]" in unverified
 
     # A genuinely empty result says so, and cites nothing.

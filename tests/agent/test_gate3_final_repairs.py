@@ -105,7 +105,8 @@ def test_a_sixteen_drug_reply_parses_to_sixteen_verified_rows():
     assert len(verified) == 16
     assert [row["medication"] for row in verified][-2:] == ["Prednisone", "Clindamycin"]
 
-    narrative = medication_narrative(verified, returned_passages=3)
+    narrative = medication_narrative(
+        verified, returned_passages=3, sections=("discharge_medications",))
     assert narrative.startswith("16 discharge medications, as recorded in the discharge")
     assert "Aspirin" in narrative
 
@@ -122,7 +123,8 @@ def test_a_reply_truncated_mid_string_is_still_refused():
 
     assert verified == []
     assert dropped == []
-    assert medication_narrative(verified, returned_passages=3) == (
+    assert medication_narrative(
+        verified, returned_passages=3, sections=("discharge_medications",)) == (
         "The discharge medications section was retrieved, but no medication could be "
         "read from it ^[1]."
     )

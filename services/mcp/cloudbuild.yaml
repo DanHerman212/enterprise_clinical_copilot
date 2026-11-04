@@ -55,7 +55,12 @@ steps:
       - --region=${_REGION}
       - --no-allow-unauthenticated
       - --service-account=mcp-server-sa@$PROJECT_ID.iam.gserviceaccount.com
-      - --set-env-vars=^@^PROJECT_ID=$PROJECT_ID@LOCATION=${_REGION}@FEATURE_SOURCE=bigquery
+      # CODE_REVISION is part of this authoritative --set-env-vars string, not a
+      # separate `gcloud run services update` afterwards: that flag REPLACES the
+      # whole set, so an out-of-band stamp is erased by the next deploy.
+      # $SHORT_SHA is populated for trigger builds; a manual submit must pass
+      # --substitutions SHORT_SHA=<sha>.
+      - --set-env-vars=^@^PROJECT_ID=$PROJECT_ID@LOCATION=${_REGION}@FEATURE_SOURCE=bigquery@CODE_REVISION=$SHORT_SHA
       # PubMed literature search. Both of these are secrets, and the contact address
       # is one for a repository reason rather than a security one: it is a personal
       # email, this repo's visibility is not ours to assume, and the address travels

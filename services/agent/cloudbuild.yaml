@@ -119,12 +119,20 @@ steps:
         # Langfuse at all (see services/agent/observability.py), it is just no longer
         # reachable by accident when a service lookup fails.
         LANGFUSE_HOST=https://observability.danielmherman.com
+        # CODE_REVISION is part of this authoritative --set-env-vars string, not a
+        # separate `gcloud run services update` after the fact. That flag REPLACES
+        # the whole set, so a stamp applied out of band is erased by the next
+        # deploy of any kind, and /health then falls back to K_REVISION — a
+        # revision name, not a commit. Provenance must be a property of the build
+        # that produced the image. $SHORT_SHA is populated automatically for
+        # trigger builds; a manual `gcloud builds submit` must pass
+        # --substitutions SHORT_SHA=<sha> or it resolves empty.
         gcloud run deploy agent \
           --image "${_IMAGE}" \
           --region "${_REGION}" \
           --no-allow-unauthenticated \
           --service-account "agent-sa@$PROJECT_ID.iam.gserviceaccount.com" \
-          --set-env-vars "^@^PROJECT_ID=$PROJECT_ID@LOCATION=${_REGION}@MCP_TRANSPORT=http@MCP_URL=$${MCP_URL}@LANGFUSE_HOST=$${LANGFUSE_HOST}" \
+          --set-env-vars "^@^PROJECT_ID=$PROJECT_ID@LOCATION=${_REGION}@MCP_TRANSPORT=http@MCP_URL=$${MCP_URL}@LANGFUSE_HOST=$${LANGFUSE_HOST}@CODE_REVISION=$SHORT_SHA" \
           --set-secrets "^@^LANGFUSE_PUBLIC_KEY=langfuse-project-public-key:latest@LANGFUSE_SECRET_KEY=langfuse-project-secret-key:latest" \
           --min-instances 0 --max-instances 3 --memory 1Gi \
           --cpu 2 --concurrency 20 --timeout 120

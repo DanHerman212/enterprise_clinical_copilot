@@ -168,6 +168,33 @@ def test_the_payload_still_satisfies_its_contract():
     validate_prediction_result(_predict())
 
 
+def test_the_wire_schema_lets_a_factor_value_be_an_integer():
+    """The TypedDict IS the MCP output schema, so `float` re-floated every count.
+
+    `server.add_tool` derives an output schema from the return annotation, and a bare
+    `float` makes this field `{"type": "number"}`. A row value of `0` for `oncology_flag`
+    then reached the client as `0.0` — measured against the deployed server on
+    2026-11-04 — and the prompt's rule to quote a served value exactly had a form no
+    clinician writes. `int | float` derives `anyOf [integer, number]`.
+    """
+    import json
+
+    from mcp.server import MCPServer
+
+    from services.mcp.tools import predict_readmission
+
+    server = MCPServer(name="schema-probe", version="0")
+    server.add_tool(predict_readmission)
+    tool = server._tool_manager.get_tool("predict_readmission")
+    factor = tool.output_schema["$defs"]["PredictionFactor"]["properties"]["value"]
+
+    options = {json.dumps(option, sort_keys=True) for option in factor["anyOf"]}
+    assert json.dumps({"type": "integer"}) in options, (
+        "an integer must be a valid wire value, or `0` arrives as `0.0`")
+    assert json.dumps({"type": "number"}) in options, (
+        "a measurement like 4.75 must still be accepted")
+
+
 # --- the copy the model reads --------------------------------------------------
 
 def test_the_model_is_shown_the_value_beside_the_direction():

@@ -22,7 +22,15 @@ class PredictionFactor(TypedDict):
     # Declared here because an undeclared key is dropped from the structured payload the
     # client receives, and this one is the difference between an answer that states what
     # moved the estimate and one that says the chart does not document the value.
-    value: NotRequired[float]
+    #
+    # `int | float`, not `float`, because this type IS the wire schema. `server.add_tool`
+    # derives an output schema from the return annotation, and a bare `float` makes it
+    # `{"type": "number"}`, which re-floats the integer `prediction._clinical_value`
+    # produces: a row value of `0` for `oncology_flag` reached the client as `0.0`, and
+    # the prompt's rule to quote a served value exactly then had a number to copy that no
+    # clinician writes. The union emits `anyOf [integer, number]`, and the validator
+    # keeps an integer as an integer (canary, 2026-11-04).
+    value: NotRequired[int | float]
 
 
 class PredictionResult(TypedDict):

@@ -160,6 +160,31 @@ def _row_value(row: dict, feature: str) -> float | None:
         return None
 
 
+#: How many decimals a served feature value is published with.
+#:
+#: A row's value is an ENCODED feature and carries binary noise: an index length of stay
+#: arrives as `42.458333333333336`. The prompt tells the model to state a served value
+#: exactly as it is given, so the precision a reader sees has to be decided before the
+#: model sees it — otherwise the prose copies fourteen digits, or the guardrail scrapes
+#: them off afterwards with a regex that only fires on three or more decimals.
+#:
+#: Two, not one: a Gate 3 item was scored a fidelity failure for printing `24.7` where the
+#: row holds `24.6667`, and `24.67` keeps the record recognisable. The binary tail is what
+#: goes, not the measurement.
+_FEATURE_VALUE_DECIMALS = 2
+
+
+def _clinical_value(value: float) -> float | int:
+    """One feature value at the precision the payload publishes.
+
+    An integer-valued float becomes an integer, because a count of `0.0` prior admissions
+    is a formatted number rather than a measurement, and the prompt's exact-quoting rule
+    would print the `0.0` at a reader.
+    """
+    rounded = round(float(value), _FEATURE_VALUE_DECIMALS)
+    return int(rounded) if rounded == int(rounded) else rounded
+
+
 def _scored_factor(factor: dict, row: dict) -> dict:
     """One attribution, with the patient's own value for the feature beside it.
 
@@ -172,9 +197,12 @@ def _scored_factor(factor: dict, row: dict) -> dict:
     had been given (reported 2026-11-02).
 
     The value is the row's own, not a summary of it: `rdw_max` is stated as the row holds
-    it, because that is the number the booster scored. Nothing is rounded here; the
-    rounding a reader sees is a presentation decision made once, at the layer that writes
-    prose.
+    it, because that is the number the booster scored. It is PUBLISHED at clinical
+    precision (`_clinical_value`) rather than raw: the model is instructed to quote a
+    served value exactly, and a length of stay of `42.458333333333336` days in a clinical
+    sentence is a formatting fault the reader has to read past. The rounding happens here,
+    once, so the number the model quotes, the number the guardrail verifies against and
+    the number a later turn replays are the same number.
     """
     entry: dict[str, Any] = {
         "feature": factor["feature"],
@@ -183,7 +211,7 @@ def _scored_factor(factor: dict, row: dict) -> dict:
     }
     value = _row_value(row, str(factor["feature"]))
     if value is not None:
-        entry["value"] = value
+        entry["value"] = _clinical_value(value)
     return entry
 
 

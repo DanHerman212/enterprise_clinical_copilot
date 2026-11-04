@@ -615,7 +615,13 @@ def _presented_factor(factor: Any) -> Any:
 
     Three fields at most: the humanized feature name, which is the name both the prose and
     the bars use; the direction the model attached to it; and the patient's own value for
-    that feature, exactly as the scored row holds it.
+    that feature, at the precision the tool publishes it with.
+
+    The value is passed through as it arrives rather than re-floated. The tool decides the
+    precision (`prediction._clinical_value` — two decimals, integers as integers), and
+    re-floating it here would print a whole number as `42.0` and hand a re-derived form of
+    it to a prompt whose rule is to quote the served value exactly. What the model reads
+    and what the guardrail verifies against are then the same number.
 
     The value used to be left out of here, on the argument that it was "already stated in
     the `<admission_metadata>` block". That was true of the eleven fields the manifest
@@ -641,7 +647,7 @@ def _presented_factor(factor: Any) -> Any:
         presented["direction"] = factor["direction"]
     value = factor.get("value")
     if _is_number(value):
-        presented["value"] = float(value)
+        presented["value"] = value
     return presented
 
 

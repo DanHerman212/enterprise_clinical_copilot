@@ -79,7 +79,10 @@ def test_every_attributed_feature_carries_the_rows_own_value():
     factors = {factor["feature"]: factor for factor in _predict()["top_factors"]}
 
     assert factors["rdw_max"]["value"] == 15.5
-    assert factors["prior_inpatient_days"]["value"] == 23.5417
+    # Published at clinical precision (2026-11-04): the row holds 23.5417, and the model
+    # is told to quote a served value exactly, so the payload carries two decimals and
+    # not the four the encoded column happens to hold.
+    assert factors["prior_inpatient_days"]["value"] == 23.54
     assert factors["monocytes_min"]["value"] == 0.21
 
 
@@ -87,7 +90,10 @@ def test_a_count_is_a_number_rather_than_the_string_bigquery_returned():
     """Every column arrives from BigQuery as a string, so a copy would be `"17"`.
 
     The payload is read by a model and by the widget; a string where a number belongs is
-    the kind of shape that silently fails a comparison one layer down.
+    the kind of shape that silently fails a comparison one layer down. An integral value
+    stays an integer rather than becoming `17.0`: the prompt's exact-quoting rule would
+    put the trailing `.0` in front of a reader, and a count of 17 admissions is not a
+    measurement to that precision.
     """
     with patch.object(pr, "feature_order", lambda: ["medication_order_count"]), \
          patch.object(pr, "_source", lambda: _Source()), \
@@ -97,7 +103,52 @@ def test_a_count_is_a_number_rather_than_the_string_bigquery_returned():
         (factor,) = pr._predict(90000012)["top_factors"]
 
     assert factor["value"] == 17
-    assert isinstance(factor["value"], float)
+    assert isinstance(factor["value"], int)
+
+
+def test_a_repeating_float_is_published_at_clinical_precision():
+    """`42.458333333333336` days is a formatting fault, not a measurement.
+
+    The row's encoded value carries binary noise. The prompt tells the model to state a
+    served value exactly, so the precision has to be decided before the model reads it:
+    otherwise the prose copies fourteen digits — observed live on 90000015, "length of
+    stay (42.458333333333336 days)" — or the guardrail scrapes them off afterwards with a
+    regex that only fires on three or more decimals.
+    """
+    row = dict(ROW, index_los_days="42.458333333333336")
+
+    class _NoisySource:
+        def fetch(self, hadm_id):
+            return dict(row)
+
+    with patch.object(pr, "feature_order", lambda: ["index_los_days"]), \
+         patch.object(pr, "_source", lambda: _NoisySource()), \
+         patch.object(pr, "predict_one", lambda instance: (
+             _reply(top_factors=[{"feature": "index_los_days",
+                                  "attribution": 0.21}]), "model-1")):
+        payload = pr._predict(90000012)
+    (factor,) = payload["top_factors"]
+
+    assert factor["value"] == 42.46
+    # And the copy the model reads is the same number, not a re-floated one.
+    presented = mcp_client._presented_for_model("predict_readmission", payload)
+    assert presented["top_factors"][0]["value"] == 42.46
+
+
+def test_the_guardrail_accepts_prose_quoting_the_published_value():
+    """The number the model quotes and the number the guard checks are the same one."""
+    call = {"name": "predict_readmission", "response": {
+        "top_factors": [{"feature": "index_los_days", "value": 42.46,
+                         "direction": "increases"}],
+    }}
+    answer = "Her length of stay was 42.46 days, which raises her risk."
+
+    normalised, rounding_flags = normalise_factor_values(answer, [call])
+    verified, risk_flags = verify_risk_numbers(normalised, [call])
+
+    assert normalised == answer
+    assert rounding_flags == []
+    assert "42.46" in verified
 
 
 def test_a_parent_feature_carries_no_value_rather_than_a_guessed_one():

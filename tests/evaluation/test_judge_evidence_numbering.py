@@ -1,13 +1,15 @@
 """The judge grades a marker against the numbering the reader clicked.
 
-`/ehr` publishes `sources` carrying the same number the answer's marker uses, and since
-2026-10-28 that number is never rewritten (`citations._renumber_citations`). Both halves
-travel with the turn: the published list states the numbering beside the answer, and the
-raw tool evidence carries a `cite` marker on every passage and analyte it shows.
+`/ehr` publishes `sources` carrying the same number the answer's marker uses, and that
+number is never rewritten to first-appearance order (`citations._renumber_citations`).
+The published list travels with the turn it belongs to, so the numbering stated beside an
+answer is the numbering that answer was written in.
 
-The history this replaced: markers used to be renumbered to first-appearance order while
-the raw payloads kept the order the tools returned, so a correct answer scored
-`citation: 1` on three consecutive Gate 1 canaries (2026-10-23).
+Until 2026-11-04 every raw payload ALSO carried a `cite` badge numbered cumulatively
+across the thread. Two schemes for one passage reached the judge together, and it resolved
+turn 2's `^[1]` against the cumulative block and scored a correct citation as pointing at
+the wrong section (`dev_t3_02`, `dev_t3_01`). `task._evidence` no longer stamps those
+badges: the per-turn `sources` list is the single place a number is stated.
 """
 
 from __future__ import annotations
@@ -37,17 +39,17 @@ OUTPUT = {
     "turn_responses": ["Summary with ^[3] on instructions.", "Taper: ^[1]."],
     "turn_sources": [SOURCES, [{"cite": 1, "section": "discharge_medications",
                                 "text": "oxycodone SR 20 mg q12h for five days."}]],
-    # What `task._evidence` now builds: every unit carries the marker the answer must
-    # write, numbered across the whole thread.
+    # What `task._evidence` builds: the payloads as the tools returned them, with no
+    # citation numbering on them. The per-turn `sources` list is the only numbering.
     "tool_evidence": [
         {"tool": "rag_search_sections", "result": {"passages": [
-            {"cite": "^[1]", "section": "history_of_present_illness",
+            {"section": "history_of_present_illness",
              "text": "A 61-year-old woman."},
-            {"cite": "^[2]", "section": "brief_hospital_course",
+            {"section": "brief_hospital_course",
              "text": "Admitted for rehab."},
-            {"cite": "^[3]", "section": "discharge_diagnosis",
+            {"section": "discharge_diagnosis",
              "text": "Status post knee replacement."},
-            {"cite": "^[4]", "section": "discharge_instructions",
+            {"section": "discharge_instructions",
              "text": "Continue Coumadin."},
         ]}},
     ],
@@ -62,23 +64,37 @@ def test_the_published_numbering_travels_with_each_turn():
     assert "[4] discharge_diagnosis: Status post knee replacement." in prompt
 
 
-def test_every_raw_unit_carries_the_marker_the_answer_must_write():
-    """The raw block is now directly checkable: `"cite": "^[4]"` IS the instructions.
+def test_the_raw_evidence_carries_no_second_numbering():
+    """One passage must not arrive with two numbers.
 
-    A judge no longer has to count array positions, and a marker can be resolved to a
-    named passage in one read.
+    The per-turn `sources` list states what `^[k]` means. A `cite` badge on the payload
+    stated a different number for the same passage, and the judge used the wrong one.
     """
     prompt = build_user_prompt(INPUT, OUTPUT)
     raw = prompt.split("RAW TOOL EVIDENCE")[1]
 
-    assert '"cite": "^[3]"' in raw
-    assert '"cite": "^[4]"' in raw
-    # The fourth raw passage is the instructions, and it says so.
-    instructions = raw.split('"cite": "^[4]"')[1]
-    assert "discharge_instructions" in instructions
-    # The prompt tells the judge what the marker means, in the same words the payload
-    # uses, so the two cannot drift into different conventions.
-    assert '"cite": "^[10]"' in prompt
+    assert '"cite": "^[' not in raw
+    assert "Continue Coumadin" in raw
+    assert "Status post knee replacement" in raw
+
+
+def test_the_prompt_says_a_turns_list_starts_at_one():
+    """Restarting at [1] is the display contract, not a renumbering defect."""
+    prompt = build_user_prompt(INPUT, OUTPUT)
+
+    assert "numbered from [1] independently of every other turn" in prompt
+
+
+def test_each_turns_passage_text_reaches_the_judge_whole():
+    """No character cap: a fact at character 1,600 is still visible."""
+    long_text = "A" * 1600 + " Lovenox was discontinued on 08/30/2007."
+    output = {"turn_responses": ["Answer ^[1]."],
+              "turn_sources": [[{"cite": 1, "section": "brief_hospital_course",
+                                 "text": long_text}]],
+              "tool_evidence": []}
+    prompt = build_user_prompt({"turns": ["/ehr"]}, output)
+
+    assert "Lovenox was discontinued on 08/30/2007." in prompt
 
 
 def test_the_second_turn_gets_its_own_numbering():

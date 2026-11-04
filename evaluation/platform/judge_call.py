@@ -134,22 +134,39 @@ def build_user_prompt(input_doc: dict[str, Any], output: dict[str, Any],
         parts.append(f"TURN {index + 1} — QUESTION:\n{question}\n\nANSWER:\n{answer}\n")
         cited = _cited_sources(output, index)
         if cited:
-            # The numbering the reader clicks. Sources are listed by their own number, so
-            # `^[k]` resolves to the entry LABELLED [k] — not to entry k by position, and
-            # not to anything in the raw evidence below. Numbers are no longer rewritten
-            # to first-appearance order (`citations._renumber_citations`, 2026-10-28), so
-            # the label and the number are now the same fact.
+            # The numbering the reader clicks, and the ONLY numbering a marker in this
+            # turn's answer may be judged against. There used to be a second one: every
+            # raw payload carried a `cite` badge numbered cumulatively across the whole
+            # conversation, so one passage arrived with two different numbers and the
+            # judge had to guess which the answer meant. It guessed the raw block in
+            # `dev_t3_02` and scored a correct citation as pointing at the wrong section
+            # (2026-11-04). `task._evidence` no longer stamps those badges, so there is
+            # one scheme left and this paragraph states it.
             parts.append(
-                f"TURN {index + 1} — THE NUMBERING THIS ANSWER USES: every `^[k]` in the "
-                "answer above resolves to the entry labelled [k] below, and to nothing "
-                "else. A number with no entry here addresses no unit this turn published.\n"
+                f"TURN {index + 1} — THE NUMBERING THIS ANSWER USES. This is the only "
+                f"numbering that applies to the answer above. Every `^[k]` written in "
+                f"TURN {index + 1}'s answer resolves to the entry labelled [k] in TURN "
+                f"{index + 1}'s SOURCES below, and to nothing else.\n"
+                f"Turn {index + 1}'s list is numbered from [1] independently of every "
+                "other turn: a later turn that writes `^[1]` is naming its OWN first "
+                "source, not repeating turn 1's. Starting a turn's list at [1] is the "
+                "standard per-turn display contract and must not be scored as a "
+                "renumbering defect.\n"
+                "When a turn emitted no sources of its own, its markers resolve in the "
+                "sources published by the most recent earlier turn that did — that is "
+                "an inherited list, not a missing one, and citing it is correct.\n"
+                f"A number with no entry in either list addresses no unit the thread "
+                "published, which IS a citation failure.\n"
                 + cited + "\n")
     parts.append(
         "RAW TOOL EVIDENCE (what the tools returned, in the order they returned it).\n"
-        "Each passage and each analyte carries the marker the answer must write for it:\n"
-        "`\"cite\": \"^[10]\"` is the unit `^[10]` addresses. A number can be checked\n"
-        "against this block directly, and a unit with no `cite` (an estimate, a medication\n"
-        "list, a search result set) consumes none.\n" + evidence)
+        "This block carries NO citation numbers. It is here so a claim can be checked\n"
+        "against the passage text the answer was written from: compare the sentence to\n"
+        "the section bodies below. Never infer a marker's meaning from a position in\n"
+        "this block; resolve `^[k]` against the SOURCES list printed with the turn it\n"
+        "appears in. A payload with no passages or trends (an estimate, a medication\n"
+        "list, a search result set) is evidence of a different kind and consumes no\n"
+        "number.\n" + evidence)
     return "\n".join(parts)
 
 
@@ -171,7 +188,16 @@ def _cited_sources(output: dict[str, Any], turn_index: int) -> str:
             continue
         cite = entry.get("cite")
         section = str(entry.get("section") or "note passage")
-        text = " ".join(str(entry.get("text") or "").split())[:400]
+        # The whole passage, with no character cap. This was `[:400]` until 2026-11-04,
+        # and that slice decided three scenarios: the Lovenox discontinuation sentence
+        # sits at character 1,576 of a 2,472-character `brief_hospital_course` passage,
+        # so the judge read the opening of the passage, found no mention of the claim, and
+        # scored citation 0 on a passage that states it verbatim (`dev_t2_04`,
+        # `dev_t3_01`, `dev_t5_01`). A cap cannot be tuned to "long enough": the corpus
+        # grows, and every future chunk that ends after the cap fails the same way. The
+        # sources a turn publishes are bounded by what the note contains, and the judge's
+        # context holds five of them many times over.
+        text = " ".join(str(entry.get("text") or "").split())
         lines.append(f"  [{cite}] {section}: {text}")
     return "\n".join(lines)
 

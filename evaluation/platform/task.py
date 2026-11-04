@@ -14,11 +14,6 @@ from typing import Any, Callable
 
 from shared import a2ui
 from evaluation.platform.schemas import DatasetItemInput, TaskOutput
-#: One definition of what consumes a citation number (`00d8` Row 1, charter Law 1).
-#: The harness stamps the same markers the agent renders, and a local counter is how the
-#: two drifted apart: the harness counted passages-only while the agent counted passages
-#: and analytes, which is the `00d6` failure reproduced inside the measurement.
-from services.agent.postprocess.citations import passage_total
 #: Which tool results a replayed turn must carry, and which it must leave for the agent
 #: to re-resolve. Declared by the ingress contract, so the harness holds no second copy
 #: of the classification.
@@ -69,62 +64,27 @@ def _answer_text(response: dict) -> str:
     return ""
 
 
-def _citation_units(payload: Any) -> int:
-    """How many citation numbers one tool payload consumes.
-
-    Delegates to `citations.passage_total`. The local rules — one number per note
-    passage, one per analyte, nothing for an estimate, a medication list or a search
-    result set — are that function's to state, and this module states none of them.
-    """
-    return passage_total(payload)
-
-
-def _numbered(payload: Any, cite_start: int) -> Any:
-    """The payload with a `cite` marker on each unit, on a copy.
-
-    The recorded payload is the execution record and is not this function's to rewrite;
-    the judge gets its own copy carrying the number the answer must write.
-    """
-    if not isinstance(payload, dict):
-        return payload
-    for key in ("passages", "trends"):
-        rows = payload.get(key)
-        if not isinstance(rows, list):
-            continue
-        counter = cite_start
-        stamped = []
-        for row in rows:
-            if isinstance(row, dict):
-                stamped.append({**row, "cite": f"^[{counter}]"})
-                counter += 1
-            else:
-                stamped.append(row)
-        return {**payload, key: stamped}
-    return payload
-
-
-def _evidence(response: dict, cite_start: int = 1) -> list[dict[str, Any]]:
-    """Tool payloads with their disclaimers and their citation numbers intact.
+def _evidence(response: dict) -> list[dict[str, Any]]:
+    """Tool payloads as the tools returned them, with their disclaimers intact.
 
     `synthetic` and `note` travel with `get_lab_trends` and were dropped by every
     previous collector, which made an answer quoting the tool's own disclaimer look
     fabricated.
 
-    It also used to be one flat list with no numbering at all, so a marker could only be
-    graded by counting array positions in the judge's own head — and the numbering the
-    reader sees was rewritten downstream, so the count landed on the wrong unit (`00e`,
-    2026-10-28). Each unit now carries the marker the answer must write for it, numbered
-    from `cite_start`, which the caller advances by the units this payload consumed.
+    There is deliberately NO citation numbering on these payloads. Until 2026-11-04 each
+    unit carried a `cite` badge numbered cumulatively across the whole thread, beside a
+    per-turn `sources` list numbered from 1 — two schemes for one passage, and the judge
+    resolved a turn's `^[1]` against the cumulative block and scored a correct citation
+    as pointing at the wrong section (`dev_t3_02`, `dev_t3_01`). A marker's number is
+    stated once, in the turn's own `sources`, and this block is what it always also was:
+    the passage text a fidelity or grounding claim can be checked against.
     """
     out: list[dict[str, Any]] = []
-    counter = cite_start
     for call in (response.get("tool_calls") or []):
         if not isinstance(call, dict):
             continue
         payload = call.get("response")
-        item = {"tool": call.get("name"),
-                "result": _numbered(payload, counter)}
-        counter += _citation_units(payload)
+        item = {"tool": call.get("name"), "result": payload}
         if isinstance(payload, dict):
             for key in ("synthetic", "note"):
                 if key in payload:
@@ -375,17 +335,11 @@ def make_task(ask: Ask, *, run_tag: str,
         verified = [_verified(response) for response in responses]
         sources = [_sources(response) for response in responses]
         tool_calls_per_turn = [_tool_calls(response) for response in responses]
-        # Numbered across the WHOLE thread: a follow-up's first passage continues where
-        # the previous turn's last unit stopped, which is the arithmetic the agent uses
-        # when it renders the same payloads for the model.
+        # The thread's tool results in the order they ran, with no numbering: the
+        # per-turn `sources` list is the only place a marker's number is stated.
         tool_evidence: list[dict[str, Any]] = []
-        cite_cursor = 1
         for response in responses:
-            items = _evidence(response, cite_cursor)
-            tool_evidence.extend(items)
-            cite_cursor += sum(_citation_units(call.get("response"))
-                               for call in (response.get("tool_calls") or [])
-                               if isinstance(call, dict))
+            tool_evidence.extend(_evidence(response))
 
         output = TaskOutput(
             turn_1_response=answers[0],

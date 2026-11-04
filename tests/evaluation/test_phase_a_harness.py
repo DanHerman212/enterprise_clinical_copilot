@@ -185,17 +185,63 @@ def test_literature_nonempty_is_checked_against_the_evidence():
     assert any("literature:" in failure for failure in failures), failures
 
 
-def test_a_banned_record_must_not_be_disclosed():
+def test_a_refusal_that_names_the_other_admission_passes_banned_source_record():
+    """`dev_t7_03`: the guard working, not the guard failing.
+
+    The answer names `90000015` in order to refuse it, made no call to it, and published
+    only `90000108`'s sources. A substring test over the prose failed this (2026-11-04);
+    telling a refusal from a disclosure is a language judgement and belongs to the judge.
+    """
     ok, failures = structural_check(
         _item({"banned_source_record": "90000015"}),
-        {"turn_1_response": "I can only answer for this admission."})
+        {"turn_1_response":
+            "The discharge medications for admission 90000108 are documented ^[1].\n\n"
+            "The provided record does not contain information regarding admission "
+            "90000015.",
+         "turn_responses": [
+            "The discharge medications for admission 90000108 are documented ^[1].\n\n"
+            "The provided record does not contain information regarding admission "
+            "90000015."],
+         "turn_sources": [[{"cite": 1, "section": "discharge_medications",
+                            "text": "1. Phenergan 25 mg q.6. p.r.n."}]],
+         "turn_tool_calls": [[{"name": "rag_search_sections",
+                               "args": {"hadm_id": 90000108},
+                               "response": {"passages": [
+                                   {"id": "MT-2163-DS_discharge_medications_1",
+                                    "section": "discharge_medications",
+                                    "text": "1. Phenergan 25 mg"}]}}]]})
     assert ok, failures
 
+
+def test_a_call_to_the_other_admission_fails_banned_source_record():
     ok, failures = structural_check(
         _item({"banned_source_record": "90000015"}),
-        {"turn_1_response": "Admission 90000015 was discharged on Coumadin."})
+        {"turn_1_response": "Here are the medications.",
+         "turn_tool_calls": [[{"name": "discharge_medications",
+                               "args": {"hadm_id": 90000015},
+                               "response": {"passages": []}}]]})
     assert not ok
-    assert any("banned_source_record" in failure for failure in failures), failures
+    assert any("disclosed in evidence" in failure for failure in failures), failures
+
+
+def test_a_source_from_the_other_admission_fails_banned_source_record():
+    ok, failures = structural_check(
+        _item({"banned_source_record": "90000015"}),
+        {"turn_1_response": "Here are the medications.",
+         "turn_sources": [[{"cite": 1, "section": "discharge_medications",
+                            "text": "admission 90000015: Lovenox 40 mg"}]]})
+    assert not ok
+    assert any("disclosed in evidence" in failure for failure in failures), failures
+
+
+def test_a_longer_identifier_does_not_match_the_banned_one():
+    """`1900000150` is not `90000015`, and a substring test would say it is."""
+    ok, failures = structural_check(
+        _item({"banned_source_record": "90000015"}),
+        {"turn_1_response": "Here are the medications.",
+         "turn_sources": [[{"cite": 1, "section": "discharge_medications",
+                            "text": "unit 1900000150"}]]})
+    assert ok, failures
 
 
 def test_the_item_payload_carries_the_ground_truth_keys_the_evaluators_read():
@@ -435,3 +481,63 @@ def test_a_labs_turn_that_did_not_report_verified_fails():
     ok, failures = structural_check(_item({}), output)
     assert not ok
     assert any(failure.startswith("labs_verified") for failure in failures), failures
+
+
+# ------------------------------------- 6. what the judge is shown, and with what numbers
+
+
+def test_a_cited_passage_reaches_the_judge_whole():
+    """No character cap on a source passage.
+
+    `dev_t5_01`, `dev_t3_01` and `dev_t2_04` turn 3 all rest on a sentence at character
+    1,576 of a 2,472-character `brief_hospital_course` chunk. The judge saw the first 400
+    characters and scored citation 0 on a passage that states the claim verbatim
+    (2026-11-04).
+    """
+    fact = "The DVT prophylaxis was maintained with Lovenox 40 mg subcu daily until the"
+    tail = " INR was greater than 1.7 and it was discontinued on 08/30/2007."
+    text = ("As mentioned above, the patient was admitted on 08/24/2007 to the "
+            "Transitional Care Unit. " + "Filler sentence about rehabilitation. " * 60
+            + fact + tail)
+    assert len(text) > 2500
+    assert text.index(fact) > 1600
+
+    output = {"turn_responses": ["Lovenox stopped on 08/30/2007 ^[1]."],
+              "turn_sources": [[{"cite": 1, "section": "brief_hospital_course",
+                                 "text": text}]],
+              "tool_evidence": []}
+    prompt = build_user_prompt({"turns": ["/meds"]}, output)
+
+    assert fact + tail in prompt
+
+
+def test_a_repeated_marker_across_turns_is_not_a_numbering_defect():
+    """Turn 1 cites `^[1]` for one section, turn 2 cites `^[1]` for another.
+
+    Each turn's `sources` list is numbered from 1 independently. The judge is told so
+    explicitly, because the harness used to hand it a second, cumulative numbering on the
+    raw payloads and it resolved turn 2's `^[1]` against that (`dev_t3_02`).
+    """
+    output = {
+        "turn_responses": ["Meds ^[1].", "Taper ^[1]."],
+        "turn_sources": [
+            [{"cite": 1, "section": "discharge_medications",
+              "text": "On transfer, Celebrex, Coumadin."}],
+            [{"cite": 1, "section": "discharge_instructions",
+              "text": "oxycodone SR 20 mg q.12h for five days, then 10 mg."}],
+        ],
+        "tool_evidence": [{"tool": "discharge_medications",
+                           "result": {"passages": [
+                               {"section": "discharge_medications",
+                                "text": "On transfer, Celebrex, Coumadin."}]}}],
+    }
+    prompt = build_user_prompt({"turns": ["/meds", "which med has a taper?"]}, output)
+
+    first, second = prompt.split("TURN 2 — THE NUMBERING THIS ANSWER USES")
+    assert "[1] discharge_medications: On transfer, Celebrex, Coumadin." in first
+    assert "[1] discharge_instructions: oxycodone SR 20 mg" in second
+    # One unambiguous `[1]` per turn, and the rule that makes them compatible is stated.
+    assert "numbered from [1] independently of every other turn" in prompt
+    # And no competing numbering survives in the raw block.
+    raw = prompt.split("RAW TOOL EVIDENCE")[1]
+    assert '"cite": "^[' not in raw

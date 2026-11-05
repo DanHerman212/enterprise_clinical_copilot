@@ -35,7 +35,9 @@ from services.agent.routing import routing  # noqa: E402
 from services.agent.engine import prompts  # noqa: E402
 from services.agent.engine.deterministic import (  # noqa: E402
     _NO_READMISSION,
+    _medication_sections,
     _presented_prediction,
+    meds_formatting_for,
     parse_medications,
     run_command,
 )
@@ -268,7 +270,17 @@ def test_the_formatting_turn_cannot_call_anything(command):
     assert isinstance(system, SystemMessage)
     # The command's own formatting instruction is what the model is given, not
     # the tool-choosing system prompt.
-    assert prompts.formatting_for(command.wire) in system.content
+    #
+    # `/meds` has two of them, because the question a record can answer depends on what
+    # its retrieval returned: a dedicated medication section is asked what the patient was
+    # sent home on, and a fallback narrative — which is what this fixture returns, since
+    # its passages carry no `discharge_medications` label — is asked what those sections
+    # name. Which one arrives is `meds_formatting_for`'s decision, and this asserts the
+    # turn was given a medication instruction at all rather than the reasoning prompt.
+    expected = (meds_formatting_for(_medication_sections(state["tool_calls"]))
+                if command.wire == "meds" else prompts.formatting_for(command.wire))
+    assert expected in system.content
+    assert prompts.SYSTEM_PROMPT not in system.content
 
 
 def test_the_supplementary_result_reaches_the_formatting_turn():

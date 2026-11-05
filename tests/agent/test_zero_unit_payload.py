@@ -154,11 +154,22 @@ def test_a_result_with_no_citations_array_is_returned_unchanged():
     Stamping `citable: false` on every zero-unit payload was the first cut of this
     change, and it reached too far: it also denied a marker that a literature turn is
     entitled to write.
+
+    A literature payload is the one exception, and it is a different annotation: it gains
+    a `cite` and a `cite_header` on each record — so the model has a number to write that
+    is the record's position — and still contributes NO citable unit. `passage_total`
+    staying 0 is what keeps a marker into a note passage from shifting when a search
+    happens to sit beside it.
     """
     assert citations.render_numbered(PREDICTION) is PREDICTION
-    assert citations.render_numbered(LITERATURE) is LITERATURE
     assert citations.passage_total(PREDICTION) == 0
-    assert citations.passage_total(LITERATURE) == 0
+
+    rendered = citations.render_numbered(LITERATURE)
+    assert rendered is not LITERATURE, "the record copy carries the numbers, not the record"
+    assert "cite" not in LITERATURE["articles"][0]
+    assert [article["cite"] for article in rendered["articles"]] == [1]
+    assert citations.passage_total(rendered) == 0
+    assert citations.citable_passages(rendered) == []
 
 
 def test_a_literature_payload_keeps_its_pmid_markers_resolvable():

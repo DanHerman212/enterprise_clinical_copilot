@@ -1609,6 +1609,17 @@ def lab_modality(trend: dict[str, Any]) -> str:
     return f"STRUCTURED LAB TREND — {name}"
 
 
+def literature_modality(article: dict[str, Any]) -> str:
+    """The modality label for one published record.
+
+    The identifying field and nothing else: the prompt reads `cite_modality` to check that
+    a marker points at the KIND of evidence its sentence rests on, so this says what the
+    unit is. A title or a journal here would be a second thing to keep in step with the
+    payload, and the record already carries both.
+    """
+    return "PUBLISHED RECORD"
+
+
 def render_numbered(
     payload: Any,
     offset: int = 0,
@@ -1653,6 +1664,25 @@ def render_numbered(
             unit(trend, offset + index, lab_modality(trend))
             if isinstance(trend, dict) else trend
             for index, trend in enumerate(trends, start=1)
+        ])
+    articles = payload.get("articles")
+    if isinstance(articles, list) and any(isinstance(article, dict)
+                                         for article in articles):
+        # A published record is not a citable UNIT — `citable_passages` and
+        # `passage_total` key on `passages` and `trends` and must keep counting this
+        # payload as zero, because a marker into a note passage must not shift by three
+        # when a search happens to sit beside it. What it does need is a number to write.
+        #
+        # `LITERATURE_FORMATTING` tells the model that the FIRST record is `^[1]`, and
+        # until now the payload carried no `cite` at all: the only position available to
+        # the model was the order of its own sentences, so a summary that opened on the
+        # third record's finding wrote `^[1]` and the reader opened the first (2026-11-04).
+        # The number is stamped here, on the copy the model reads, so the record it names
+        # and the record it was given are the same position by construction.
+        return dict(payload, articles=[
+            {**article, **citation_fields(index, literature_modality(article))}
+            if isinstance(article, dict) else article
+            for index, article in enumerate(articles, start=1)
         ])
     if "passages" in payload or "trends" in payload:
         # The key is present but is not a usable array: still a retrieval result that

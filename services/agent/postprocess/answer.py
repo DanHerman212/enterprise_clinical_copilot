@@ -180,7 +180,8 @@ def medication_narrative(verified: list[dict[str, str]], returned_passages: int,
             "material that was retrieved")
         return (
             "The clinical record does not contain a dedicated discharge medications "
-            f"section. The medications it mentions in the {where} during this stay: "
+            f"section; the {where} documents the following medications administered or "
+            f"mentioned during the stay rather than a formal discharge medication list: "
             f"{', '.join(names)}{source}."
         )
     if returned_passages == 0:
@@ -194,7 +195,9 @@ def medication_narrative(verified: list[dict[str, str]], returned_passages: int,
         "material that was retrieved")
     return (
         "The clinical record does not contain a dedicated discharge medications section, "
-        f"and no medication could be read from the {where}{source}."
+        f"and no medication list is recorded in the {where}{source} (any medications "
+        "administered or prescribed elsewhere in the stay are documented in the clinical "
+        "course narrative rather than a dedicated medication section)."
     )
 
 

@@ -76,6 +76,8 @@ from services.agent.engine.prompts import SYSTEM_PROMPT
 from services.agent.engine.prompts import (
     EHR_RECORD_QUERY,
     FORMATTER_PREAMBLE,
+    MEDS_FALLBACK_FORMATTING,
+    MEDS_FORMATTING,
     OUTPATIENT_ENCOUNTER_NOTICE,
     formatting_for,
 )
@@ -135,6 +137,27 @@ def _medication_sections(recorded: list[RecordedToolCall]) -> tuple[str, ...]:
             if section and section not in sections:
                 sections.append(section)
     return tuple(sections)
+
+
+#: The section whose presence makes `/meds` a discharge-list question.
+_DISCHARGE_MEDS_SECTION = "discharge_medications"
+
+
+def meds_formatting_for(sections: tuple[str, ...]) -> str:
+    """The extraction instruction this record's own retrieval calls for.
+
+    One wire, two questions. Where a `discharge_medications` section came back, the
+    question is what the patient was sent home on and the arrival-list exclusion applies.
+    Where it did not, the retrieval fell back to narrative sections and the same exclusion
+    discards most of what they name — so the question becomes what those sections NAME.
+
+    Decided from the sections the tool returned rather than from the note's admission or
+    its prose: the retrieval is the one thing this layer can see without guessing, and the
+    narrative that follows is written from the rows this instruction produced.
+    """
+    if _DISCHARGE_MEDS_SECTION in sections:
+        return MEDS_FORMATTING
+    return MEDS_FALLBACK_FORMATTING
 
 
 def parse_medications(
@@ -730,10 +753,20 @@ async def run_command(
     #
     # `/ehr` and `/pubmed` are the other way round: the model's reply IS the answer, so
     # the turn streams and each chunk is announced on arrival.
+    #
+    # Which instruction the turn receives is decided BEFORE it runs, and for `/meds` that
+    # decision is the record's: a dedicated medication section is asked for the regimen to
+    # continue at home, a fallback narrative is asked what those sections name. Asking the
+    # discharge question of a record with no discharge list discarded most of the evidence
+    # and left the narrative counting what survived (2026-11-04).
+    sections = _medication_sections(recorded)
+    instruction = formatting_for(command.wire)
+    if command.wire == "meds":
+        instruction = meds_formatting_for(sections)
     response = await _formatting_turn(
         llm,
         [
-            SystemMessage(content=f"{FORMATTER_PREAMBLE}\n\n{formatting_for(command.wire)}"),
+            SystemMessage(content=f"{FORMATTER_PREAMBLE}\n\n{instruction}"),
             HumanMessage(content=_formatter_input(
                 tool_messages, outpatient, question,
                 command_extras.get("comparators"))),
@@ -811,11 +844,8 @@ async def run_command(
         source = _source_text(recorded)
         verified, dropped = parse_medications(text, source)
         returned = _passage_count(recorded)
-        # Which sections came back decides what the narrative is allowed to claim. A
-        # `discharge_medications` section is a formal list; a fallback that landed in the
-        # hospital course is a mention during the stay, and calling it a discharge
-        # medication list is the `dev_t1_04` defect (2026-11-04).
-        sections = _medication_sections(recorded)
+        # `sections` was read above, where it chose the instruction this turn was given;
+        # the narrative reports the same sections rather than re-reading them.
         state["command_payload"] = {
             "medications": verified,
             "dropped": dropped,

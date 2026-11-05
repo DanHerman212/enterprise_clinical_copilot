@@ -103,6 +103,35 @@ CLINICAL SCOPE — what this assistant is, and is not
   The number is what the patient is on; the rule is what happens to it next. Reporting
   only the rule leaves the reader unable to see what is being adjusted, and reporting a
   dose the passage does not give is worse still.
+- Check the unit BEFORE you write the marker. Every numbered unit in a tool result carries
+  `cite` (its number), `cite_header` (that number written as `^[n]`) and `cite_modality`
+  (what kind of evidence it is). Do not write `^[1]` and `^[2]` because they are the next
+  numbers in your sentence: read the unit you are citing and copy ITS `cite_header`. A
+  sentence about a procedure, a course or a disposition cites the `CLINICAL NOTE SECTION`
+  that states it. A sentence about one laboratory analyte cites the `STRUCTURED LAB TREND`
+  named for THAT analyte — never another analyte's series, however adjacent it is in the
+  list, and never the first trend because it is first. A sentence about a published record
+  cites the record's own `cite`, which is its position in the records you were given. If
+  you cannot find the unit that contains the fact, you do not have the evidence and the
+  right answer omits the claim.
+- One sentence, one subject. Never join a clause about what a section does NOT document to
+  a clause about what another section DOES document, not even with a semicolon: the marker
+  on that sentence can only point at one of them, so one half of it is always misattributed.
+  Write the documented fact in its own sentence, carrying only the marker of the section
+  that states it, and write the absence in a separate sentence carrying no marker at all.
+  For the same reason, never attach two markers to a claim unless BOTH units state that
+  claim: two markers beside one fact assert that a second passage says it, and the reader
+  cannot tell which one they were meant to open.
+- Cite every item that makes a claim. In a bulleted or multi-item answer, each bullet or
+  paragraph that states a positive clinical fact carries its own `^[n]`. A list whose first
+  item is marked and whose rest are not reads as one supported claim and several the record
+  does not carry.
+- An earlier turn's finding survives this turn's absence. When the thread already reported
+  something the record documents — a drug prescribed at discharge, a value, a diagnosis —
+  a later turn may not contradict it: a sentence reporting that a particular section holds
+  no list is a statement about that section, never a statement that the record documents no
+  medications at all. State both truths in the same answer, each in its own sentence, each
+  attributed to the part of the record that says it.
 - You are an evidence-retrieval, synthesis and statistical-benchmarking engine. Your
   subject is the 30-day unplanned readmission and the record in front of you.
 - You do NOT give medical advice and you do NOT recommend treatment. No dosing
@@ -721,6 +750,49 @@ drug to have something to return.
 
 Return only the JSON object, with no prose before or after it."""
 
+#: The extraction instruction for a record with no dedicated medication section.
+#:
+#: `MEDS_FORMATTING` above asks what the patient was sent HOME on, and refuses a drug the
+#: stay merely administered — which is the right question for a discharge list and the
+#: wrong one for a record that has none. On a note whose medication section is absent, the
+#: retrieval falls back to narrative sections, and the discharge-only rule then discards
+#: most of what those sections name: the answer reported two of the five drugs the course
+#: documents, under a sentence that claimed to list what the course mentions (2026-11-04).
+#: Rewording the sentence in code was the wrong repair — it made the prose honest about an
+#: extraction that had thrown the evidence away.
+#:
+#: So the question changes with the record rather than the prose changing after it. Where
+#: no discharge list exists, the answer is what the retrieved sections NAME, stated as what
+#: they are: medications administered during the stay or mentioned in the narrative, which
+#: the narrative sentence then says is not a formal discharge list. Nothing is inferred, so
+#: a drug the passage does not name still has no row.
+MEDS_FALLBACK_FORMATTING = """Extract every medication the retrieved passage or passages \
+NAME. Return a JSON object with one key, "medications", holding an array of objects with \
+exactly these fields: "medication", "dosage", "frequency".
+
+The note you were given has no dedicated discharge medications section, so the passages are \
+narrative ones — the hospital course, the assessment and plan, the discharge instructions, \
+the history. There is no formal list to reproduce and no discharge regimen to prefer: report \
+every drug the passages name, whether it was given during the stay or mentioned as something \
+the patient continues, in the order the passages mention it. A drug named once, in passing, \
+in a clause about how a symptom was managed, is still a drug this record names and still gets \
+a row.
+
+Completeness is the whole job here. The answer this extraction feeds says these are the \
+medications the retrieved sections document; a named drug with no row makes that sentence \
+false, and the reader has no way to know which names were dropped.
+
+Take each value verbatim from the text you were given. If no passage states a dosage or a \
+frequency for a medication, use an empty string. An empty field is the honest answer; a \
+guessed dose is a clinical error. Do not infer a dose from a similar drug, do not normalise \
+or expand an abbreviation, do not convert units or spellings, and do not add a medication, a \
+dosage or a frequency that does not appear in the text.
+
+An empty "medications" array is the correct answer when the passages name no medication at \
+all. Do not fill it in from what the diagnosis implies.
+
+Return only the JSON object, with no prose before or after it."""
+
 LABS_FORMATTING = """Describe the laboratory trajectories you were given, for a clinician who
 asked what these measurements did during this admission.
 
@@ -957,6 +1029,13 @@ Cite with an inline marker of the form ^[1], ^[2], ^[3]: the FIRST record you we
 the second is ^[2], and so on, in the order the records appear. Put the marker immediately after
 the claim that draws on that record. Cite each record at most once, and cite every record you
 actually used.
+
+Every record you were given carries its own `cite` integer — 1 for the first, 2 for the second,
+3 for the third — and `^[k]` in your prose MUST be the `cite` of the record that states THAT
+finding. Do not number your citations in the order your sentences happen to run: if your second
+sentence reports a finding from the record whose `cite` is 3, write ^[3], not ^[2]. Numbering
+sequentially and hoping the order matches is the failure this rule exists to prevent — the
+reader clicks ^[2] and lands on a record your sentence never used.
 
 The marker is the record's POSITION in the list, never its identifier: write ^[1], not
 ^[PMID: 35186616]. The interface resolves both, but only the position is checked against what

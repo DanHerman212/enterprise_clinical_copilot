@@ -341,6 +341,11 @@ def test_stream_sends_stages_then_one_answer_frame():
         # and a turn read back from the store both still have the run's own account of
         # itself.
         "steps",
+        # The numbering this answer's own markers were written in (2026-11-05). Published
+        # for the same reason `sources` is: a caller stores this turn, and a stored turn
+        # whose numbering cannot be translated back into the conversation's array is a turn
+        # whose citations a follow-up has to delete rather than inherit.
+        "citation_map",
     }
 
     # The steps ARE the frames' labels: the live tracker and the persisted one cannot be

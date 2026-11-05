@@ -70,6 +70,30 @@ def test_the_replayed_turn_still_satisfies_the_service_contract():
                              run_tag="t", turns=[turn]))
 
 
+def test_the_citation_map_travels_with_the_turn_that_shipped_it():
+    """The answer's markers are the reader's numbering; the map is the only thing that
+    turns them back into the array's. A replay without it has to delete the numbers, which
+    is what every replay did before the field existed."""
+    turn = replay_turn("/ehr", {
+        "answer": "the course was uncomplicated ^[1].",
+        "citation_map": {"1": 7},
+        "tool_calls": [],
+    })
+
+    assert turn["citation_map"] == {"1": 7}
+    validate_body(build_body(question="and then?", hadm_id=90000015,
+                             run_tag="t", turns=[turn]))
+
+
+def test_a_turn_that_shipped_no_map_replays_with_an_empty_one():
+    """A caller that stores turns and not maps is supported, and says so by omission."""
+    turn = replay_turn("/ehr", {"answer": "x", "tool_calls": []})
+
+    assert turn["citation_map"] == {}
+    validate_body(build_body(question="and then?", hadm_id=90000015,
+                             run_tag="t", turns=[turn]))
+
+
 # ------------------------------------------------------------ 2. intent and chip
 
 

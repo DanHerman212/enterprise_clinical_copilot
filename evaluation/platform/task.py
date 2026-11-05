@@ -186,8 +186,8 @@ def replay_turn(question: str, response: dict) -> dict:
     """Turn 1 as the service will accept it back in `turns`.
 
     The service's contract (`contracts.REPLAYED_TURN_FIELDS`) accepts exactly
-    `question`, `answer` and `tool_calls`, and a tool call is exactly
-    `{name, args, payload}` — it refuses anything else with `unsupported_field`
+    `question`, `answer`, `tool_calls` and an optional `citation_map`, and a tool call is
+    exactly `{name, args, payload}` — it refuses anything else with `unsupported_field`
     rather than ignoring it. The agent's own envelope returns `response`, not
     `payload`, so passing `tool_calls` through unchanged would make every Turn 2 fail
     with a 400. Limits are the contract's: 5 calls, 8000 characters of answer.
@@ -196,6 +196,13 @@ def replay_turn(question: str, response: dict) -> dict:
     estimate and the lab series). A derivable result is sent as `payload: None`, which
     is what the site stores and what makes the agent re-run the tool — the path a live
     follow-up takes.
+
+    `citation_map` travels with the answer for the same reason the site stores it: the
+    answer's markers are the reader's numbers (`1..K` in the order they are cited) while
+    the tool results keep the conversation array's positions, and a replay that cannot
+    translate one into the other has to delete the prior turn's numbers rather than
+    inherit them. Absent from an envelope that predates the field, in which case the agent
+    falls back to the deletion — which is what every replay did before it existed.
     """
     answer = (response.get("answer") or "")[:8000]
     calls: list[dict[str, Any]] = []
@@ -210,7 +217,11 @@ def replay_turn(question: str, response: dict) -> dict:
                        if _keeps_payload(call) else None,
         }
         calls.append(entry)
-    return {"question": question, "answer": answer, "tool_calls": calls}
+    citation_map = response.get("citation_map")
+    if not isinstance(citation_map, dict):
+        citation_map = {}
+    return {"question": question, "answer": answer, "tool_calls": calls,
+            "citation_map": citation_map}
 
 
 #: A turn whose wording is decided at runtime: the Nth entry of the follow-ups the

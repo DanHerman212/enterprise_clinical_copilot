@@ -331,9 +331,42 @@ def medication_narrative(verified: list[dict[str, str]], returned_passages: int)
 _NO_READMISSION = OUTPATIENT_ENCOUNTER_NOTICE
 
 
+def _context_block(admission_context: str, hadm_id: int | None = None) -> str:
+    """The pre-flight manifest, as the text that qualifies a prompt.
+
+    Appended rather than sent as a second system message: a turn then has exactly
+    one instruction message, which is what every provider accepts, and the block
+    reads as a continuation of the rules it is qualifying rather than as a peer
+    of them.
+
+    It lives here, in the layer that composes prompts, and BOTH paths use it: the
+    free-text loop appends it to `SYSTEM_PROMPT`, and `/ehr` appends it to the
+    formatting turn's input. Until 2026-11-05 it lived in `graph` and reached only the
+    free-text loop, so a command was formatted without the manifest and then graded
+    against it — two items with byte-identical `/ehr` answers and identical manifests
+    scored fidelity 3 and fidelity 1 in one run (`dev_t1_02`, `dev_t2_01`).
+
+    An OUTPATIENT record also gets `prompts.OUTPATIENT_ENCOUNTER_NOTICE` here, and
+    this is the only place the free-text path can learn it. `SYSTEM_PROMPT` is
+    admission-independent by construction, so without this the loop wrote "this
+    admission" and a hospital course about a speech-therapy visit — the identical
+    defect the command path had, on the path that has no `Outpatient` caveat in its
+    tool result because it has no formatter (90000073, "Summarize the note",
+    2026-10-21).
+    """
+    parts = [(admission_context or "").strip()]
+    if encounter.current_is_outpatient() is True:
+        parts.append("<encounter_notice>\n"
+                     f"{prompts.OUTPATIENT_ENCOUNTER_NOTICE}\n"
+                     "</encounter_notice>")
+    text = "\n\n".join(part for part in parts if part)
+    return f"\n\n{text}" if text else ""
+
+
 def _formatter_input(tool_messages: list[Any], outpatient: bool,
                      question: str | None = None,
-                     comparators: list[dict] | None = None) -> str:
+                     comparators: list[dict] | None = None,
+                     context_block: str = "") -> str:
     """What the formatting turn reads: the question, the tool results, the caveat.
 
     The QUESTION goes first, and it is not decoration. Until Phase 01 this turn could be
@@ -353,6 +386,11 @@ def _formatter_input(tool_messages: list[Any], outpatient: bool,
     them under this answer and the references list numbers them, and until 2026-11-02 the
     prose between the two had no idea they existed — the briefing stated this patient's
     estimate and stopped, beside a table comparing it against published rates (UX gap 3).
+
+    `context_block` is the pre-flight manifest, already rendered. It comes last because
+    it is the authority the passages are read against: the discharge disposition in it
+    outranks a facility a note names from an earlier encounter, and the rule that says so
+    (`EHR_FORMATTING`) can only be applied to a block the turn has been shown.
     """
     text = "\n\n".join(str(m.content) for m in tool_messages)
     if outpatient:
@@ -360,6 +398,8 @@ def _formatter_input(tool_messages: list[Any], outpatient: bool,
     block = comparator_block(comparators)
     if block:
         text = f"{text}\n\n{block}"
+    if (context_block or "").strip():
+        text = f"{text}{context_block}"
     asked = (question or "").strip()
     return f"Question asked: {asked}\n\n{text}" if asked else text
 
@@ -564,6 +604,7 @@ async def run_command(
     prose_stream: bool = False,
     trace_metadata: dict | None = None,
     extraction_llm: Any = None,
+    admission_context: str = "",
 ) -> dict[str, Any]:
     """Run one command to completion and return a state the pipeline understands.
 
@@ -579,6 +620,13 @@ async def run_command(
     honoured only for a command whose prose is pre-validated
     (`routing.Command.streams_prose`), and it defaults off: a caller that does not
     ask receives exactly the frames it received before streaming existed.
+
+    `admission_context` is the pre-flight manifest the request already carries. It is the
+    same string the free-text loop appends to its system prompt, and it reaches the
+    formatting turn here because a command is graded against it: an answer that named a
+    facility from an earlier encounter instead of the discharge disposition in the block
+    was scored as a fidelity failure twice in one run, on identical prose, and no prompt
+    on this path had ever been shown the block (`dev_t1_02`, `dev_t2_01`, 2026-11-05).
     """
 
     arguments = tool_arguments(command, hadm_id, topic)
@@ -658,13 +706,23 @@ async def run_command(
         hadm_id is not None and encounter.current_is_outpatient() is True
     )
 
-    # `/ehr` on an outpatient record with nothing in it. The record-wide search has now
-    # answered the only question that matters — nothing means the absence is real — so
-    # the answer is the encounter notice itself, in code, with no formatting turn
-    # (TF-6, 2026-10-23). Left to the formatter, this turn produced an abstention that
-    # named neither the encounter nor its consequence, and left the trace row empty
-    # because `graph.command_trace_output` reads the answer off this state.
-    if command.wire == "summarize" and outpatient_record and not _passage_count(recorded):
+    # `/ehr` on an outpatient record. The four headings describe a stay, and this record
+    # is a visit, so the command's answer is the encounter notice itself — the sentence
+    # stating what the record is and what it therefore cannot hold.
+    #
+    # It is decided here, in code, and not by the formatter. The instruction used to tell
+    # the model to write a renamed heading instead (`EHR_FORMATTING`: "write **Clinical
+    # course.** instead and omit the other three sections"), which the rubric calls a
+    # responsiveness defect — a command's answer shape is not the model's to renegotiate,
+    # and an item scored 1 for obeying its prompt is the clearest evidence of that
+    # (`dev_t7_01`, 2026-11-05). Gated on the RECORD, not on whether the record-wide
+    # search found text: a single speech-therapy passage is exactly what produced the
+    # summary this branch exists to replace.
+    #
+    # The tool calls stay on the state. They are what the turn retrieved, the trace row
+    # and the drawer show them, and a turn whose evidence vanished when its answer became
+    # deterministic would be a turn an audit cannot follow.
+    if command.wire == "summarize" and outpatient_record:
         return {
             "messages": [
                 SystemMessage(content=SYSTEM_PROMPT),
@@ -732,6 +790,17 @@ async def run_command(
             **command_extras,
         }
 
+    # The manifest, for the one command whose prose is graded against it. `/ehr` is the
+    # briefing: it states where the patient went and on what regimen, and both of those are
+    # administrative facts the block holds and the notes only sometimes state. Rendered
+    # here rather than passed in pre-rendered so that the block and the free-text path's
+    # block are one function's output — the outpatient notice included.
+    context_block = (
+        _context_block(admission_context, hadm_id)
+        if command.wire == "summarize" and not outpatient_record
+        else ""
+    )
+
     llm = model_gateway.build_llm(model)  # no bind_tools: a formatting turn cannot call anything
     config = {"callbacks": list(callbacks)} if callbacks else {}
     if trace_metadata:
@@ -769,7 +838,13 @@ async def run_command(
             SystemMessage(content=f"{FORMATTER_PREAMBLE}\n\n{instruction}"),
             HumanMessage(content=_formatter_input(
                 tool_messages, outpatient, question,
-                command_extras.get("comparators"))),
+                command_extras.get("comparators"),
+                # Only `/ehr` is shown the manifest. The command whose prose is graded
+                # against the block is the one that has to read it, and giving `/meds`
+                # or `/labs` an administrative header they have no use for is evidence
+                # in the window that no sentence may rest on.
+                context_block=context_block,
+            )),
         ],
         config=config,
         announce=_announce if streams and command.prose_is_model_output else None,

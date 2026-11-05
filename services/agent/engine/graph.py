@@ -72,7 +72,15 @@ from services.agent.engine.mcp_client import (  # noqa: F401 — re-exported
 # inside `ask()` while the whole test gate stayed green, because the suites that
 # drive `ask()` with a command are the live-marked ones CI deselects.
 # `test_every_module_binds_the_globals_it_uses` now makes that class visible.
-from services.agent.engine.deterministic import run_command  # noqa: E402
+#
+# `_context_block` is imported rather than defined here since 2026-11-05: `/ehr` needs the
+# same block the free-text loop appends to its system prompt, and the command path is a
+# module below this one. The name stays bound in this namespace because `_ask`'s free-text
+# branch and `tests/agent/test_prompt_contract.py` both read it from here.
+from services.agent.engine.deterministic import (  # noqa: E402
+    _context_block,
+    run_command,
+)
 
 from services.agent.telemetry.observability import MODEL_ID
 # Layer 4 lives in `model_runtime`; these names stay bound here because eleven
@@ -787,31 +795,6 @@ def build_graph(
     return graph.compile()
 
 
-def _context_block(admission_context: str, hadm_id: int | None = None) -> str:
-    """The pre-flight manifest, appended to the system prompt.
-
-    Appended rather than sent as a second system message: a turn then has exactly
-    one instruction message, which is what every provider accepts, and the block
-    reads as a continuation of the rules it is qualifying rather than as a peer
-    of them.
-
-    An OUTPATIENT record also gets `prompts.OUTPATIENT_ENCOUNTER_NOTICE` here, and
-    this is the only place the free-text path can learn it. `SYSTEM_PROMPT` is
-    admission-independent by construction, so without this the loop wrote "this
-    admission" and a hospital course about a speech-therapy visit — the identical
-    defect the command path had, on the path that has no `Outpatient` caveat in its
-    tool result because it has no formatter (90000073, "Summarize the note",
-    2026-10-21).
-    """
-    parts = [(admission_context or "").strip()]
-    if encounter.current_is_outpatient() is True:
-        parts.append("<encounter_notice>\n"
-                     f"{prompts.OUTPATIENT_ENCOUNTER_NOTICE}\n"
-                     "</encounter_notice>")
-    text = "\n\n".join(part for part in parts if part)
-    return f"\n\n{text}" if text else ""
-
-
 def _trace_metadata(
     hadm_id: int | None, question_kind: str | None, run_tag: str | None = None,
     turns: list[dict[str, str]] | None = None, intent: str | None = None,
@@ -988,6 +971,12 @@ async def ask(
                 callbacks=[tracing] if tracing is not None else None,
                 prose_stream=prose_stream,
                 trace_metadata=command_meta,
+                # The same block the free-text branch appends below. A command's prose is
+                # graded against the manifest — its discharge disposition outranks a
+                # facility a note names from an earlier encounter — and until this was
+                # passed, the one command that states a disposition had never been shown
+                # the field it was being marked against.
+                admission_context=admission_context,
             )
             # Stamped on both routes so every later reader sees the same field rather
             # than a key that exists on one path and is missing on the other. `/pubmed`
@@ -1339,6 +1328,11 @@ async def replay_messages(
     seen_pmids: set[str] = set()
     offset = 0
     for turn_index, turn in enumerate(turns or []):
+        # Where this turn's own units begin. Captured before its calls are rendered,
+        # because that is what the turn's `citation_map` is measured from: the map carries
+        # positions relative to the turn's first unit, and this is the number that puts
+        # them back into the conversation's array.
+        turn_offset = offset
         messages.append(HumanMessage(content=turn["question"]))
         for call_index, call in enumerate(turn.get("tool_calls") or []):
             payload = call.get("payload")
@@ -1383,16 +1377,18 @@ async def replay_messages(
                 "args": dict(call.get("args") or {}),
                 "response": payload if isinstance(payload, dict) else {"result": payload},
             })
-        # The prior answer keeps every clinical word and loses its numeric markers. The
-        # numbers in it are the PAGE's (`1..K`, compacted per turn for the reader) while
-        # every `cite` in the replayed tool results above is a position in the
-        # conversation's array — two schemes for one glyph, and the model was asked to
-        # copy the `cite` of the unit it means. `dev_t4_02` turn 3 inherited `^[2]` meaning
-        # `discharge_diagnosis` while the evidence stamped `cite: 2` on the hospital
-        # course, and wrote a sentence attributing one section's fact to another
-        # (2026-11-05). `^[PMID: ...]` badges survive: they name a record, not a position.
+        # The prior answer's numbers are restored into the conversation's own numbering,
+        # through the map the turn shipped with its answer. They used to be deleted, to
+        # stop the page's `1..K` colliding with the array's cumulative `cite` values — and
+        # deleting them also deleted the pattern the model imitates, so a follow-up whose
+        # earlier turns cited nothing answered without citing either (`dev_t2_02` turn 3,
+        # 2026-11-05). Restoration needs the map: a display number means nothing without
+        # the position it was compacted from. A turn whose caller sent no map — one stored
+        # before the field existed — gets the deletion, which is what it got before.
+        # `^[PMID: ...]` badges survive either way: they name a record, not a position.
         messages.append(AIMessage(
-            content=citations.strip_numeric_markers(turn.get("answer") or "")))
+            content=citations.restore_global_markers(
+                turn.get("answer") or "", turn.get("citation_map"), turn_offset)))
     return messages, calls, thread_articles
 
 

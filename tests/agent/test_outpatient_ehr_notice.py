@@ -182,13 +182,41 @@ class _PassageToolbox:
                                                     "condition.", "id": "p1"}]}
 
 
-def test_an_outpatient_record_with_a_note_is_still_summarised():
-    """The gate is empty-only: a record that has text keeps the formatting turn."""
-    used = _RecordingModel(reply="**Hospital course.** A short visit.")
+def test_an_outpatient_record_with_a_note_gets_the_notice_not_a_summary():
+    """The gate is the RECORD, not the emptiness of the retrieval.
+
+    Until 2026-11-05 this test asserted the opposite, and it was right about the code and
+    wrong about the contract: `/ehr` on an outpatient record with one readable passage
+    reached the formatter, which `EHR_FORMATTING` had been told to answer under a renamed
+    heading, and the rubric calls a renamed heading a responsiveness defect. A command's
+    answer shape is not the model's to renegotiate, so the branch is decided on the
+    encounter and the notice is served whatever the retrieval returned (`dev_t7_01`).
+
+    The retrieval still happened and its call is still on the state: the turn retrieved
+    something, and a trace that could not show what would be a turn an audit cannot follow.
+    """
+    used = _RecordingModel(reply="**Clinical course.** A short visit.")
     _classify(OUTPATIENT[0])
     with patch.object(model_gateway, "build_llm", lambda name: used):
         state = asyncio.run(run_command(
             _PassageToolbox(), SUMMARIZE, OUTPATIENT[0], question="/ehr",
+            model="test-model",
+        ))
+
+    assert used.calls == 0, "an outpatient /ehr answer is composed, not written"
+    assert state["deterministic_answer"] == answer.OUTPATIENT_EHR_NOTICE
+    assert state["command"] == "summarize"
+    assert state["tool_calls"], "the retrieval stays on the state"
+
+
+def test_an_inpatient_record_with_a_note_still_reaches_the_formatter():
+    """The counterpart, so the gate above is a rule about encounters rather than about
+    records that happen to have one passage."""
+    used = _RecordingModel(reply="**Presentation & diagnosis.** A short stay.")
+    _classify(90000015)
+    with patch.object(model_gateway, "build_llm", lambda name: used):
+        state = asyncio.run(run_command(
+            _PassageToolbox(), SUMMARIZE, 90000015, question="/ehr",
             model="test-model",
         ))
 

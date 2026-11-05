@@ -28,6 +28,7 @@ from services.agent.routing import admission_context
 from services.agent.routing import encounter
 from services.agent.telemetry import observability as chain
 from services.agent.postprocess import followups
+from services.agent.postprocess import citations
 from services.agent.engine import model as model_turn
 from services.agent.telemetry import observability
 from services.agent.routing import routing
@@ -400,6 +401,25 @@ async def compose_success(
     if presentation.get("scope_suppressed"):
         flags.append("chart_synthesis_without_citations")
 
+    # The numbering a later turn needs in order to replay THIS answer's markers.
+    #
+    # The prose below carries display numbers — `1..K`, the order the reader meets
+    # them — while every `cite` in the tool results is a position in the conversation's
+    # array. A caller that stores this turn and sends it back needs the map to translate
+    # one into the other, or the only safe thing to do with the prior answer on replay is
+    # delete its numbers (`citations.strip_numeric_markers`), which is what happened until
+    # 2026-11-05 and cost a follow-up the pattern it imitates.
+    #
+    # Turn-local, not absolute: positions are measured from this turn's first unit, so a
+    # replay that numbers the earlier turns differently still lands on the right integers.
+    # `graph.replay_messages` adds back the offset it is numbering that turn from.
+    turn_start = citations.citation_bound([], state.get("replayed_tool_calls") or [])
+    replay_citation_map = {
+        str(key): position - turn_start
+        for key, position in (state.get("citation_display_map") or {}).items()
+        if isinstance(position, int) and not isinstance(position, bool)
+    }
+
     payload = {
         "question": question,
         "answer": presentation["answer"],
@@ -423,6 +443,12 @@ async def compose_success(
         "command": state.get("command"),
         "routed_to": None,
         "sources": presentation["sources"],
+        # The display number → array position map the answer's own markers were written
+        # in, turn-local. Published for the same reason `sources` is: a caller stores this
+        # turn, and a stored turn whose numbering cannot be translated back is a turn whose
+        # citations a follow-up has to delete rather than inherit. Empty when the answer
+        # cites nothing, which is a real value and not a missing one.
+        "citation_map": replay_citation_map,
         # Published records the answer rests on, if it rests on any. Carried beside
         # `sources` rather than inside it: that list is the note-citation channel —
         # numbered, renumbered, and resolved against retrieved note passages — and a

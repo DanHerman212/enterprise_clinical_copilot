@@ -147,9 +147,40 @@ def test_earlier_turns_are_accepted_and_normalised():
     )
 
     assert parsed["turns"] == [
-        {"question": "why flagged?", "answer": "She was…", "tool_calls": []},
-        {"question": "by how much?", "answer": "0.31.", "tool_calls": []},
+        {"question": "why flagged?", "answer": "She was…", "tool_calls": [],
+         "citation_map": {}},
+        {"question": "by how much?", "answer": "0.31.", "tool_calls": [],
+         "citation_map": {}},
     ]
+
+
+def test_a_replayed_turn_carries_the_numbering_its_answer_was_written_in():
+    """The served page numbers a turn's citations `1..K`; the tool results keep the
+    conversation array's positions. The map is what lets a replay restore one to the
+    other instead of deleting the prior turn's numbers."""
+    parsed = parse_agent_request(
+        {
+            "question": "and the potassium?",
+            "turns": [{"question": "why flagged?", "answer": "She was… ^[1].",
+                        "citation_map": {"1": 7}}],
+        },
+        max_question_chars=2000,
+    )
+
+    assert parsed["turns"][0]["citation_map"] == {"1": 7}
+
+
+def test_a_citation_map_entry_that_is_not_a_whole_number_is_refused():
+    """A partly understood map is one where every later marker silently resolves to the
+    wrong passage, so it is refused rather than trimmed."""
+    with pytest.raises(AgentRequestError) as caught:
+        parse_agent_request(
+            {"question": "why?",
+             "turns": [{"question": "q", "answer": "a",
+                         "citation_map": {"1": "seven"}}]},
+            max_question_chars=2000,
+        )
+    assert caught.value.code == "invalid_request"
 
 
 def test_an_absent_turns_field_means_the_question_stands_alone():

@@ -179,12 +179,62 @@ CONVERSATION_FIELDS = frozenset(
 # only when it cannot be re-derived (a prediction score cannot), and is left out
 # when it can (a retrieval result is resolved again from the corpus, which is
 # what keeps clinical text out of the store).
-REPLAYED_TURN_FIELDS = frozenset({"question", "answer", "tool_calls"})
+REPLAYED_TURN_FIELDS = frozenset({"question", "answer", "tool_calls", "citation_map"})
 REPLAYED_TOOL_CALL_FIELDS = frozenset({"name", "args", "payload"})
 MAX_REPLAYED_TURNS = 6
 MAX_REPLAYED_TOOL_CALLS = 5
 MAX_TURN_ANSWER_CHARS = 8000
 MAX_TOOL_NAME_CHARS = 64
+#: How many `{display: position}` pairs one replayed turn may carry. Bounded for the
+#: same reason every other replayed value is: a map larger than any answer's citation
+#: count is not a map this service produced.
+MAX_CITATION_MAP_ENTRIES = 200
+
+
+def _parse_citation_map(value: Any, turn_index: int) -> dict[str, int]:
+    """The numbering a replayed answer's markers were written in.
+
+    The served page numbers a turn's citations `1..K` in the order they are used, while
+    the evidence array the conversation is numbered against keeps its own cumulative
+    positions. The two are different schemes for one glyph, and the model on a later turn
+    is told to copy the `cite` of the unit it means — so a prior answer sent back with its
+    page numbers intact handed it two incompatible answers to "what is 2"
+    (`dev_t4_02` turn 3, 2026-11-05).
+
+    Optional, and defaulted rather than required: a caller that stores a turn from before
+    this field existed replays exactly as it did, with the answer's numeric markers
+    stripped instead (`citations.restore_global_markers`).
+
+    Strict in the same way as the rest of the contract: an entry whose value is not a
+    whole number addresses no position, so the map is refused rather than trimmed. A
+    partially understood map is one where every marker after the bad entry silently
+    resolves to the wrong passage.
+    """
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise AgentRequestError(
+            "invalid_request",
+            f"'turns[{turn_index}].citation_map' must be an object",
+            400,
+        )
+    if len(value) > MAX_CITATION_MAP_ENTRIES:
+        raise AgentRequestError(
+            "invalid_request",
+            f"'turns[{turn_index}].citation_map' holds {len(value)} entries; at most "
+            f"{MAX_CITATION_MAP_ENTRIES} are replayed.",
+            413,
+        )
+    mapping: dict[str, int] = {}
+    for key, position in value.items():
+        if not isinstance(position, int) or isinstance(position, bool):
+            raise AgentRequestError(
+                "invalid_request",
+                f"'turns[{turn_index}].citation_map[{key!r}]' must be a whole number",
+                400,
+            )
+        mapping[str(key)] = position
+    return mapping
 
 
 def _parse_tool_calls(value: Any, turn_index: int) -> list[dict[str, Any]]:
@@ -285,7 +335,8 @@ def _parse_turns(value: Any, max_question_chars: int) -> list[dict[str, str]]:
             raise AgentRequestError(
                 "unsupported_field",
                 f"Unsupported field(s) in 'turns[{index}]': {named}. A replayed "
-                "turn carries 'question' and 'answer'.",
+                "turn carries 'question', 'answer', 'tool_calls' and optionally "
+                "'citation_map'.",
                 400,
             )
         question = turn.get("question")
@@ -328,6 +379,7 @@ def _parse_turns(value: Any, max_question_chars: int) -> list[dict[str, str]]:
             "question": question.strip(),
             "answer": answer.strip(),
             "tool_calls": _parse_tool_calls(turn.get("tool_calls"), index),
+            "citation_map": _parse_citation_map(turn.get("citation_map"), index),
         })
     return turns
 

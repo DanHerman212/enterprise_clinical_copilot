@@ -613,6 +613,79 @@ def strip_markers(answer: str) -> str:
     return _tidy_removed_markers(stripped)
 
 
+def restore_global_markers(
+    answer: str, citation_map: dict[str, int] | None, cite_offset: int = 0
+) -> str:
+    """A replayed answer's markers put back into the conversation's own numbering.
+
+    `compact_display_numbers` renumbers the served page to `1..K` per turn, so the
+    numbers a stored turn carries are the reader's, not the array's. `strip_numeric_markers`
+    resolved that by deleting them; deleting them also deleted the pattern a follow-up
+    imitates, and a turn that answered without citing because the earlier turns had no
+    markers in them is the cost (`dev_t2_02` turn 3, 2026-11-05).
+
+    The turn's own `citation_map` — `{display: position in the conversation's array}`,
+    shipped with the answer and handed back on replay — is what makes the deletion
+    unnecessary. This restores each number to the position the served answer actually
+    addressed.
+
+    `cite_offset` is where the turn's own units begin in the array the replay is
+    numbering against, so a map carrying turn-local positions lands on the same integers
+    the replayed tool results stamp. With the map shipped absolute and `cite_offset = 0`
+    the arithmetic is the identity, which is why the two conventions cannot drift apart.
+
+    A number the map does not hold — a marker the map's own answer never carried, a map
+    from a caller that predates this field — is DROPPED rather than kept: it addresses a
+    position nobody can resolve, and a marker that resolves to the wrong passage is the
+    failure this whole mechanism exists to prevent. When nothing in the answer can be
+    restored, the answer is `strip_numeric_markers`' output unchanged, which is what
+    every replay did before this field existed.
+
+    `^[PMID: ...]` badges are untouched: they name a record rather than a position, so
+    they mean the same thing to whoever reads them.
+    """
+    if "^[" not in (answer or ""):
+        return answer
+    mapping: dict[str, int] = {}
+    for key, position in (citation_map or {}).items():
+        if isinstance(position, int) and not isinstance(position, bool):
+            mapping[str(key)] = position
+    if not mapping:
+        return strip_numeric_markers(answer)
+
+    out: list[str] = []
+    last = 0
+    restored_any = False
+    for match in _ANY_MARKER_RE.finditer(answer):
+        body = match.group(1).strip()
+        if not _NUMERIC_BODY_RE.fullmatch(body):
+            continue
+        restored: list[str] = []
+        for number in _expand_citations(body):
+            position = mapping.get(str(number))
+            if position is None:
+                continue
+            absolute = cite_offset + position
+            if absolute >= 1 and str(absolute) not in restored:
+                restored.append(str(absolute))
+        start = match.start()
+        if not restored:
+            # The marker is being removed, so the space in front of it goes too — the
+            # same rule `strip_numeric_markers` applies, so a half-restored answer does
+            # not end a sentence with a trailing space before its full stop.
+            while start > last and answer[start - 1] in " \t":
+                start -= 1
+        out.append(answer[last:start])
+        if restored:
+            out.append(" ".join(f"^[{number}]" for number in restored))
+            restored_any = True
+        last = match.end()
+    out.append(answer[last:])
+    if not restored_any:
+        return strip_numeric_markers(answer)
+    return _tidy_removed_markers("".join(out))
+
+
 def strip_numeric_markers(answer: str) -> str:
     """Numeric markers removed; `^[PMID: ...]` badges left exactly as written.
 

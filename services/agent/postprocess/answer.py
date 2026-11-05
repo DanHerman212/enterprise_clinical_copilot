@@ -97,11 +97,12 @@ SAFETY_WITHHELD_SUMMARY = (
 #: does not hold, and what remains available; it invents no stay, no length of stay and no
 #: discharge list.
 OUTPATIENT_EHR_NOTICE = (
-    "This record is an outpatient encounter, not a hospital admission, so there is no "
-    "discharge summary to review: no hospital course, discharge diagnosis or discharge "
-    "medication list exists for this visit, and nothing here should be read as an "
-    "inpatient stay. Ask about this visit instead, or run the command on an inpatient "
-    "admission."
+    "This record is an outpatient encounter, not a hospital admission, so an "
+    "inpatient admission summary and readmission risk estimate do not apply: "
+    "no inpatient hospital course, inpatient discharge diagnosis or inpatient "
+    "discharge medication list exists for this visit, and nothing here should "
+    "be read as an inpatient stay. Ask about this visit instead, or run the "
+    "command on an inpatient admission."
 )
 
 

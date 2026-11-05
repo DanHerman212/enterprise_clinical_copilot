@@ -105,10 +105,14 @@ def test_the_notice_says_what_the_record_is_and_what_it_cannot_hold(hadm_id):
     notice = state["deterministic_answer"].lower()
 
     assert "outpatient encounter" in notice
-    assert "no discharge summary" in notice
-    # The absences are named, not implied by an abstention.
-    assert "no hospital course" in notice
-    assert "no discharge summary to review" in notice
+    # The absences are named, not implied by an abstention — and each is named as an
+    # INPATIENT absence. The notice used to say "there is no discharge summary to
+    # review", which the sectioned search falsifies on this very turn: a headingless
+    # note is returned as one passage labelled `discharge_summary`, so the refusal
+    # denied a section the evidence held (`dev_t7_01`, 2026-11-05).
+    assert "no inpatient hospital course" in notice
+    assert "inpatient discharge medication list" in notice
+    assert "discharge summary to review" not in notice
     # And no stay is asserted as existing.
     assert "should be read as an inpatient stay" in notice
 

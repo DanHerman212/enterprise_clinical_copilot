@@ -100,6 +100,41 @@ def _scenario_constraints(input_doc: dict[str, Any],
     return GROUND_TRUTH_RULES + json.dumps(block, indent=2, sort_keys=True) + "\n"
 
 
+def _conversation_scope(turn_count: int) -> str:
+    """The paragraph that says what is being evaluated, before any turn is printed.
+
+    `rubric.md` is written for one answer per call ("Scope. One answer, judged against the
+    evidence…", "you are given a question, the assistant's answer, and the evidence"),
+    while this function's caller prints every turn as a fully formatted peer. Nothing used
+    to say which reading governs, so the judge had to choose between them, and on
+    2026-11-05 it chose per-turn: `dev_t3_04` answered `"This is a meta-response to the
+    user's request. The actual evaluations are in the following array."` and the harness
+    scored the placeholder.
+
+    Stated once, before the turns, in the words the reply has to be shaped by. The
+    multi-turn form names the failure it prevents — separate objects, a deferred array —
+    because that is the exact shape the model produced twice.
+    """
+    if turn_count <= 1:
+        return (
+            "EVALUATION SCOPE — SINGLE-TURN INTERACTION (1 TURN): You are evaluating one "
+            "answer. Return ONE JSON evaluation object of the shape the system prompt "
+            "specifies, and nothing before or after it. Dimension 6 (context retention) "
+            "does not apply to a first-turn answer: score fidelity, grounding, "
+            "citation, safety and responsiveness.\n"
+        )
+    return (
+        f"EVALUATION SCOPE — MULTI-TURN CONVERSATION ({turn_count} TURNS): You are "
+        f"evaluating the assistant's performance across this entire {turn_count}-turn "
+        "conversation as a SINGLE unified evaluation object. Do NOT produce separate "
+        "evaluation objects per turn, and NEVER defer evaluation to a following array. "
+        "Grade fidelity, grounding, citation, safety, and responsiveness across all "
+        "assistant turns in the thread (a defect on any turn lowers that dimension's "
+        "score for the conversation), and grade context (Dimension 6) on how well TURN "
+        f"2..{turn_count} retain and remain consistent with earlier turns.\n"
+    )
+
+
 def build_user_prompt(input_doc: dict[str, Any], output: dict[str, Any],
                       expected_output: Any = None) -> str:
     """Everything the judge needs, with the manifest first.
@@ -116,15 +151,19 @@ def build_user_prompt(input_doc: dict[str, Any], output: dict[str, Any],
     manifest = json.dumps(input_doc.get("patient_manifest") or {}, indent=2,
                           sort_keys=True)
     evidence = json.dumps(output.get("tool_evidence") or [], indent=2)[:120000]
-    turns = _turn_questions(input_doc, output)
+    turns = turn_questions(input_doc, output)
     answers = _turn_answers(output)
-
     parts = [MANIFEST_RULES + "\n" + manifest + "\n"]
     constraints = _scenario_constraints(input_doc, expected_output)
     if constraints:
         parts.append(constraints)
     if not turns:
         return "\n".join(parts + ["NO QUESTION RECORDED\n", "EVIDENCE:\n" + evidence])
+    # What is being evaluated, before the first turn is printed. The judge sees N
+    # complete question/answer pairs; without this paragraph the rubric's singular
+    # "one answer" and the prompt's plural `TURN n` headings are two readings with equal
+    # support, and the model resolved that conflict by refusing to choose.
+    parts.append(_conversation_scope(len(turns)))
     for index, question in enumerate(turns):
         answer = answers[index] if index < len(answers) else ""
         # Turn 1 is the conversation's opening; every later turn is a follow-up and is
@@ -202,7 +241,7 @@ def _cited_sources(output: dict[str, Any], turn_index: int) -> str:
     return "\n".join(lines)
 
 
-def _turn_questions(input_doc: dict[str, Any], output: dict[str, Any]) -> list[str]:
+def turn_questions(input_doc: dict[str, Any], output: dict[str, Any]) -> list[str]:
     """What was actually asked, per turn.
 
     `turn_prompts` is the truth: it holds a loop-back turn with the chip the service
@@ -210,6 +249,10 @@ def _turn_questions(input_doc: dict[str, Any], output: dict[str, Any]) -> list[s
     from it — neither of which exists in the dataset. The scripted `turns` are the
     fallback, and a declaration object there contributes its `prompt` rather than its
     repr.
+
+    Public because the harness asks the same question twice more: whether an item is a
+    thread (which decides the dimensions a PASS must satisfy) and whether the judge owes
+    a context score. One resolver, so those three answers cannot disagree.
     """
     prompts = output.get("turn_prompts")
     if isinstance(prompts, list) and prompts:
@@ -259,8 +302,13 @@ def make_judge_fn(client_factory: Callable[[], Any] | None = None) -> Callable[.
     def judge_fn(*, input: dict[str, Any], output: dict[str, Any],
                  expected_output: Any = None, **_kwargs) -> dict:
         user = build_user_prompt(input, output, expected_output=expected_output)
-        # `judge_client.judge` carries the ceiling and the quota-aware backoff, and
-        # applies the item pass rule from `schemas.PASS_DIMENSIONS`.
-        return judge_client.judge(_client(), RUBRIC, user)
+        # Whether the item is a thread decides whether a PASS has to clear `context` as
+        # well (Option A). Asked of the same resolver the prompt uses, so the instruction
+        # the judge reads and the rule its verdict is checked against cannot disagree.
+        multi_turn = len(turn_questions(input, output)) >= 2
+        # `judge_client.judge` carries the ceiling and the quota-aware backoff, validates
+        # that the reply is an evaluation rather than a plan, and applies the item pass
+        # rule from `schemas.pass_dimensions_for`.
+        return judge_client.judge(_client(), RUBRIC, user, multi_turn=multi_turn)
 
     return judge_fn

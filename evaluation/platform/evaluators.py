@@ -18,10 +18,12 @@ from typing import Any, Callable
 from langfuse import Evaluation
 
 from evaluation.platform import diagnostics
+from evaluation.platform.judge_call import turn_questions
 from evaluation.platform.schemas import (
     DIMENSIONS,
     MIN_PASS_RATE,
     PASS_DIMENSIONS,
+    pass_dimensions_for,
 )
 from services.agent.postprocess.citations import MARKER_PATTERN
 
@@ -93,6 +95,19 @@ def _executed_command(wire: str) -> str:
 ARTEFACT_TOKENS: tuple[str, ...] = (
     "evidence_found", "For admission 900", "Search PubMed for",
 )
+
+
+def _required_dimensions(input_doc: dict[str, Any],
+                         output: dict[str, Any]) -> tuple[str, ...]:
+    """The dimensions this item's PASS must clear — `context` included on a thread.
+
+    Asked once, of the resolver the judge's own prompt is built from. A single-turn
+    scenario is exempt from dimension 6, which is not applicable to a first-turn answer;
+    a thread is not, because contradicting an earlier turn is the failure the dimension
+    exists to catch and while it sat outside the pass rule an item could do exactly that
+    and still pass (`dev_t7_02`, 2026-11-05).
+    """
+    return pass_dimensions_for(len(turn_questions(input_doc or {}, output or {})))
 
 
 def dependency_failure(output: dict[str, Any]) -> str | None:
@@ -842,7 +857,8 @@ def make_judge_composite(judge_fn: Callable[..., dict]) -> Callable[..., list[Ev
                 dims[name] = float(value)
                 emitted.append(_score(name, float(value), comment=_explain(name)))
 
-        missing = [d for d in PASS_DIMENSIONS if d not in dims]
+        required = _required_dimensions(input or {}, output or {})
+        missing = [d for d in required if d not in dims]
         if missing:
             emitted.append(_score(
                 VERDICT, 0.0,
@@ -850,7 +866,7 @@ def make_judge_composite(judge_fn: Callable[..., dict]) -> Callable[..., list[Ev
                         (f" — {reasoning[:400]}" if reasoning else "")))
             return emitted
 
-        below = {d: dims[d] for d in PASS_DIMENSIONS if dims[d] < 2.0}
+        below = {d: dims[d] for d in required if dims[d] < 2.0}
         label = " | ".join(flags) or "verdict"
         verdict_comment = f"[{label}] {reasoning}".strip()
         if below:
@@ -905,6 +921,7 @@ def make_composite_evaluator() -> Callable[..., Evaluation]:
     def composite(*, input=None, output=None, expected_output=None, metadata=None,
                   evaluations=None, **_kwargs) -> Evaluation:
         scores = {e.name: e.value for e in (evaluations or [])}
+        required = _required_dimensions(input or {}, output or {})
 
         if DEPENDENCY_ERROR in scores:
             # Before the structural branch: a dependency error emits no structural score,
@@ -923,13 +940,13 @@ def make_composite_evaluator() -> Callable[..., Evaluation]:
             return _score(JUDGE_ERROR, 1.0,
                           comment="unscored — judge error, no verdict to trust")
 
-        missing = [d for d in PASS_DIMENSIONS
+        missing = [d for d in required
                    if not isinstance(scores.get(d), (int, float))]
         if missing:
             # Fail closed: a PASS nobody can verify from the scores is not a PASS.
             return _score(VERDICT, 0.0, comment=f"missing dimensions: {missing}")
 
-        below = {d: scores[d] for d in PASS_DIMENSIONS if float(scores[d]) < 2.0}
+        below = {d: scores[d] for d in required if float(scores[d]) < 2.0}
         if below:
             return _score(VERDICT, 0.0, comment=f"below 2: {below}")
         return _score(VERDICT, 1.0, comment="pass rule satisfied")

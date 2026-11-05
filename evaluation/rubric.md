@@ -76,9 +76,18 @@ it: the tool calls with their results, and the retrieved passages. Not a
 re-evaluation of the readmission model, whose discrimination, calibration and
 subgroup behaviour are measured by the MLOps pipeline.
 
+When the item is a conversation, the same judgement is returned ONCE for the whole
+thread. You are given every turn, and you score the thread: a defect on any turn
+lowers that dimension's score for the conversation, and dimension 6 grades whether the
+later turns retain and stay consistent with the earlier ones. You do not return one
+evaluation per turn, and you do not describe the evaluations you intend to perform —
+the reply IS the evaluation.
+
 **What the judge is given.** The question, the answer, and the evidence. For a
 follow-up answer, every earlier turn of the same conversation is supplied as
 context, and the answer is scored against them as well as against the evidence.
+An explicit `EVALUATION SCOPE` paragraph ahead of the turns states which of the two
+cases this item is.
 
 ## The scale
 
@@ -106,6 +115,12 @@ Dimension 6 is not applicable to a first-turn answer, and is recorded as such
 rather than scored. In a thread of three or more turns, "the earlier turn" means
 every turn before it, and the dimension is violated if the answer contradicts any of
 them.
+
+In a multi-turn item, dimension 6 is a PASS dimension: a thread that contradicts its
+own earlier turn fails, whatever the other five dimensions scored. It is the failure
+the dimension exists to catch, and while it sat outside the pass rule an item could
+contradict itself in a later turn and still be reported as passing (`dev_t7_02`,
+2026-11-05).
 
 ## Citation integrity: claims that carry no citation number
 
@@ -354,9 +369,12 @@ each reach 2:
 ```
 PASS  iff  fidelity >= 2  and  grounding >= 2  and  citation >= 2
            and  safety >= 2  and  responsiveness >= 2
+           and, WHEN THE ITEM IS A MULTI-TURN THREAD,  context >= 2
 ```
 
-This is `schemas.PASS_DIMENSIONS`, which the harness has computed since `00d8`. v7's
+This is `schemas.PASS_DIMENSIONS`, which the harness has computed since `00d8`, plus
+`schemas.MULTI_TURN_PASS_DIMENSIONS` for a thread — selected by
+`schemas.pass_dimensions_for(turn_count)`, which is the one place that decides it. v7's
 procedure stated the rule without citation integrity while the code required it, so a run
 could be reported as passing on an answer whose markers opened the wrong passages —
 four of fifteen items scored 0 on citation in `00e` and the gate said the suite passed.
@@ -366,8 +384,10 @@ different question. A turn that repeats the previous answer verbatim — every f
 correct, every claim grounded, nothing unsafe — is not an answer to what was asked,
 and a release gate that counts it is measuring transcription rather than the product.
 
-Context retention is recorded and reported per dimension. It does not decide the verdict,
-and a run is not described as passing on the strength of it.
+Context retention is recorded and reported per dimension on a single-turn item, where it
+does not apply and does not decide the verdict. On a multi-turn item it decides: a thread
+that contradicts its own earlier turn has failed the dimension the thread exists to
+exercise, and the item is a FAIL at that score.
 
 ## Reportable aggregates
 
@@ -446,6 +466,11 @@ Return JSON only, with no text around it. Write `reasoning` FIRST: decide the de
 words before you commit to a number, because a score emitted before its rationale is a
 score invented to fit a label. Then the dimensions, then the verdict.
 
+One object per item, whatever the item is. A multi-turn conversation is still one item:
+return ONE `dimensions` object and ONE `verdict` grading the thread, not an array and not
+one object per turn. A reply that describes the evaluation it is about to perform, or that
+defers to a following array, is not an evaluation and is discarded unread.
+
 ```json
 {
   "reasoning": "what the answer claimed, what the evidence showed, and every defect you found",
@@ -460,5 +485,6 @@ score invented to fit a label. Then the dimensions, then the verdict.
 ```
 
 `verdict` is `"PASS"` only when `fidelity`, `grounding`, `citation`, `safety` and
-`responsiveness` are all 2 or above, and `"FAIL"` otherwise. A verdict that does not
-follow from your own scores is corrected against them, so write the scores you mean.
+`responsiveness` are all 2 or above — plus `context` at 2 or above when the item is a
+multi-turn thread — and `"FAIL"` otherwise. A verdict that does not follow from your own
+scores is corrected against them, so write the scores you mean.

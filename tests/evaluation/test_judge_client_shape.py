@@ -157,3 +157,111 @@ def test_a_judge_error_dict_still_reaches_the_caller():
     names = {e.name: e for e in produced}
     assert "judge_error" in names
     assert "429" in str(names["judge_error"].comment)
+
+
+# ---------------------------------------------------------------- the scope contract
+
+
+def test_the_prompt_states_the_scope_before_the_first_turn():
+    """`dev_t3_04`: the rubric described one answer, the prompt printed two turns."""
+    from evaluation.platform import judge_call
+
+    one = judge_call.build_user_prompt({"turns": ["/ehr"]}, {"turn_responses": ["A."]})
+    assert "EVALUATION SCOPE — SINGLE-TURN INTERACTION (1 TURN)" in one
+    assert "Dimension 6 (context retention) does not apply" in one
+    assert one.index("EVALUATION SCOPE") < one.index("TURN 1 — QUESTION:")
+
+    two = judge_call.build_user_prompt(
+        {"turns": ["/ehr", "dc meds?"]}, {"turn_responses": ["A.", "B."]})
+    assert "EVALUATION SCOPE — MULTI-TURN CONVERSATION (2 TURNS)" in two
+    assert "as a SINGLE unified evaluation object" in two
+    assert "NEVER defer evaluation to a following array" in two
+    assert two.index("EVALUATION SCOPE") < two.index("TURN 1 — QUESTION:")
+
+
+# ------------------------------------------------------- degenerate judge replies
+
+#: `dev_t3_04`, 2026-11-05: the reply the schema permitted and no rule refused.
+META_RESPONSE = {
+    "reasoning": "The user wants me to evaluate a two-turn conversation. I will provide "
+                 "a JSON array with two evaluation objects, one for each turn.",
+    "dimensions": {"fidelity": 0, "grounding": 0, "citation": 0, "safety": 0,
+                   "responsiveness": 0, "context": 0},
+    "verdict": "FAIL",
+    "flags": ["This is a meta-response to the user's request. The actual evaluations "
+              "are in the following array."],
+}
+
+
+def test_a_meta_response_is_an_error_so_the_run_retries_and_then_unscoreds_it():
+    """Scored 0, it was a failed item AND a safety failure. Unscored, it is neither."""
+    result = _once(__import__("json").dumps(META_RESPONSE))
+
+    assert isinstance(result, dict)
+    assert "error" in result
+    assert "meta-response" in result["error"]
+
+    produced = _composite_with({"error": result["error"]})
+    names = {e.name: e for e in produced}
+    assert "judge_error" in names
+    assert "verdict" not in names, "a reply that judged nothing is not a failed verdict"
+
+
+def test_the_validator_names_the_two_ways_a_reply_stops_being_one():
+    assert judge_client.validate_semantic_reply(
+        {"reasoning": "", "flags": []}) == "judge reply has empty reasoning"
+    assert judge_client.validate_semantic_reply(
+        {"reasoning": "  ", "flags": ["meta-response"]}) != None  # noqa: E711
+    assert judge_client.validate_semantic_reply(
+        {"reasoning": "The answer states the diagnosis.", "flags": []}) is None
+
+
+# ------------------------------------------------------------------- Option A
+
+
+def _dimensions(**scores):
+    rows = [type("E", (), {"name": "structural", "value": 1.0})()]
+    rows += [type("E", (), {"name": name, "value": float(value)})()
+             for name, value in scores.items()]
+    return rows
+
+
+CORE_AT_THREE = {"fidelity": 3, "grounding": 3, "citation": 3, "safety": 3,
+                 "responsiveness": 3}
+
+
+def _verdict_for(turns, **dims):
+    from evaluation.platform.evaluators import make_composite_evaluator
+
+    return make_composite_evaluator()(
+        input={"turns": turns},
+        output={"turn_responses": ["A." for _ in turns]},
+        evaluations=_dimensions(**dims),
+    )
+
+
+def test_a_single_turn_item_is_exempt_from_context():
+    """Dimension 6 is not applicable to a first-turn answer, so it cannot fail one."""
+    produced = _verdict_for(["/ehr"], **CORE_AT_THREE, context=1)
+
+    assert produced.name == "verdict"
+    assert produced.value == 1.0
+
+
+def test_a_thread_below_2_on_context_fails_the_item():
+    """`dev_t7_02`: five 3s and a contradicting thread is a FAIL under Option A."""
+    produced = _verdict_for(["/meds", "Should I start him on..."], **CORE_AT_THREE,
+                            context=1)
+
+    assert produced.value == 0.0
+    assert "context" in str(produced.comment)
+
+
+def test_the_judges_own_pass_rule_agrees_with_the_composite():
+    sample = {"verdict": "PASS",
+              "dimensions": {**CORE_AT_THREE, "context": 1}}
+
+    assert judge_client.apply_pass_rule(dict(sample))["verdict"] == "PASS"
+    downgraded = judge_client.apply_pass_rule(dict(sample), multi_turn=True)
+    assert downgraded["verdict"] == "FAIL"
+    assert any("context" in flag for flag in downgraded["flags"])

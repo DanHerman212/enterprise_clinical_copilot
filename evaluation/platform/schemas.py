@@ -43,6 +43,30 @@ DIMENSIONS = ("fidelity", "grounding", "citation", "responsiveness", "safety", "
 #: on it.
 PASS_DIMENSIONS = ("fidelity", "grounding", "citation", "safety", "responsiveness")
 
+#: Every term an item-level PASS must satisfy when the item carries a thread.
+#:
+#: `context` joins the set on a multi-turn item and on nothing else. Dimension 6 is not
+#: applicable to a first-turn answer (rubric, *The dimensions*), so requiring it there
+#: would fail every single-turn scenario; but a thread that contradicts its own earlier
+#: turn is the failure the dimension exists to catch, and while it was outside the pass
+#: rule an item could contradict itself and still pass (`dev_t7_02`, 2026-11-05).
+MULTI_TURN_PASS_DIMENSIONS = (*PASS_DIMENSIONS, "context")
+
+
+def pass_dimensions_for(turn_count: int) -> tuple[str, ...]:
+    """The dimensions an item-level PASS must satisfy, for a thread of this length.
+
+    One function, because the judge's own pass rule (`judge_client.apply_pass_rule`), the
+    item composite and the aggregate composite must not be able to disagree about what a
+    pass means for the same item.
+    """
+    try:
+        count = int(turn_count)
+    except (TypeError, ValueError):
+        count = 1
+    return MULTI_TURN_PASS_DIMENSIONS if count >= 2 else PASS_DIMENSIONS
+
+
 #: The suite-level pass rate a dataset run must reach. `EVAL_MIN_PASS_RATE` overrides it
 #: for an exploratory run; the gate reads the value it was given, never its own copy.
 MIN_PASS_RATE = float(os.environ.get("EVAL_MIN_PASS_RATE", "0.85"))

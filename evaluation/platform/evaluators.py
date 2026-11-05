@@ -29,6 +29,23 @@ STRUCTURAL = "structural"
 VERDICT = "verdict"
 JUDGE_VERDICT = "judge_verdict"
 JUDGE_ERROR = "judge_error"
+#: The backend could not be reached, so the item was never measured. Distinct from
+#: `judge_error` because the two report different faults — one is the scorer, one is the
+#: evidence — and both mean "no verdict to trust" rather than "the answer was wrong".
+DEPENDENCY_ERROR = "dependency_error"
+
+#: The tool errors that mean the deployment is degraded, not that the agent asked badly.
+#:
+#: Closed on purpose. A payload carrying `error` is not automatically infrastructure: an
+#: `invalid_argument` is the agent's own mistake and must be scored as one, or the gate
+#: goes blind to the agent misusing a tool. Everything outside this set is evaluated
+#: normally.
+INFRASTRUCTURE_ERROR_CODES: frozenset[str] = frozenset({
+    "prediction_failed",
+    "mcp_unavailable",
+    "service_unavailable",
+    "timeout",
+})
 
 
 def _score(name: str, value: float, comment: str | None = None,
@@ -76,6 +93,30 @@ def _executed_command(wire: str) -> str:
 ARTEFACT_TOKENS: tuple[str, ...] = (
     "evidence_found", "For admission 900", "Search PubMed for",
 )
+
+
+def dependency_failure(output: dict[str, Any]) -> str | None:
+    """The first infrastructure error a turn's tool calls returned, if any.
+
+    `dev_t4_03` on 2026-11-04 asked for a readmission estimate, was told
+    `{"error": "prediction_failed"}`, and the `/ehr` answer correctly omitted the risk
+    section it had no estimate for — at which point the heading check failed the item for
+    a section the evidence could not support. A degraded backend is a measurement the run
+    did not obtain, so it is reported as such and kept out of the pass-rate denominator,
+    the same way a judge failure is.
+    """
+    for turn_index, calls in enumerate(output.get("turn_tool_calls") or []):
+        for call in calls or []:
+            if not isinstance(call, dict):
+                continue
+            response = call.get("response")
+            if not isinstance(response, dict):
+                continue
+            code = str(response.get("error") or "").strip()
+            if code in INFRASTRUCTURE_ERROR_CODES:
+                return (f"{DEPENDENCY_ERROR}: {call.get('name')} returned {code} "
+                        f"on turn {turn_index + 1}")
+    return None
 
 
 def _artefact_failures(output: dict[str, Any]) -> list[str]:
@@ -281,8 +322,18 @@ def _ehr_required_headings(output: dict[str, Any], turn_index: int) -> list[str]
             if calls and not (supported & sections):
                 continue
         elif heading == "Readmission risk & trajectory":
-            if calls and not any(call.get("name") == "predict_readmission"
-                                 for call in calls):
+            # An estimate that FAILED is not an estimate this turn was given, and
+            # `EHR_FORMATTING` requires the section only "where a readmission-risk
+            # estimate was given to you". The check tested the call rather than its
+            # result, so a `{"error": "prediction_failed"}` reply made the heading
+            # mandatory over evidence that did not exist and failed `dev_t4_03` for
+            # omitting a section it could not write (2026-11-04).
+            if calls and not any(
+                call.get("name") == "predict_readmission"
+                and isinstance(call.get("response"), dict)
+                and not call["response"].get("error")
+                for call in calls
+            ):
                 continue
         required.append(heading)
     return required
@@ -710,6 +761,15 @@ def make_judge_composite(judge_fn: Callable[..., dict]) -> Callable[..., list[Ev
 
     def composite(*, input=None, output=None, expected_output=None, metadata=None,
                   evaluations=None, **_kwargs) -> list[Evaluation]:
+        # A degraded backend is checked before anything else, because a heading or a
+        # command assertion failing on evidence the tool never returned is the harness
+        # blaming the answer for the deployment.
+        dependency = dependency_failure(output or {})
+        if dependency:
+            diagnostics.record(input=input or {}, output=output or {}, result=None,
+                               reason=dependency)
+            return [_score(DEPENDENCY_ERROR, 1.0, comment=dependency)]
+
         scores = {e.name: e.value for e in (evaluations or [])}
 
         if float(scores.get(STRUCTURAL, 0.0)) < 1.0:
@@ -724,6 +784,13 @@ def make_judge_composite(judge_fn: Callable[..., dict]) -> Callable[..., list[Ev
         # 2026-11-04).
         result = judge_fn(input=input or {}, output=output or {},
                           expected_output=expected_output)
+        # The judge's shape is not guaranteed by anything upstream: the client rejects a
+        # non-object reply now, but this is the boundary that ran `.get` on a list and took
+        # the whole run down with it at item 6 of 26 (2026-11-04). One item that cannot be
+        # measured is an unscored item; it is never a reason to stop measuring the other
+        # twenty-five.
+        if not isinstance(result, dict):
+            result = {"error": f"non-dict judge result: {type(result).__name__}"}
         if result.get("error"):
             # UNSCORED, not failed — and the difference is the whole point.
             #
@@ -800,6 +867,10 @@ def make_quality_evaluator(judge_fn: Callable[..., dict]) -> Callable[..., list[
 
     def evaluator(*, input, output, expected_output=None, metadata=None,
                   **_kwargs) -> list[Evaluation]:
+        dependency = dependency_failure(output or {})
+        if dependency:
+            return [_score(DEPENDENCY_ERROR, 1.0, comment=dependency)]
+
         ok, failures = structural_check(input or {}, output or {})
         evaluations = [_score(STRUCTURAL, 1.0 if ok else 0.0,
                               comment="ok" if ok else "; ".join(failures))]
@@ -809,6 +880,8 @@ def make_quality_evaluator(judge_fn: Callable[..., dict]) -> Callable[..., list[
 
         result = judge_fn(input=input or {}, output=output or {},
                           expected_output=expected_output)
+        if not isinstance(result, dict):
+            result = {"error": f"non-dict judge result: {type(result).__name__}"}
         if result.get("error"):
             evaluations.append(_score(JUDGE_ERROR, 1.0, comment=str(result["error"])))
             return evaluations
@@ -832,6 +905,12 @@ def make_composite_evaluator() -> Callable[..., Evaluation]:
     def composite(*, input=None, output=None, expected_output=None, metadata=None,
                   evaluations=None, **_kwargs) -> Evaluation:
         scores = {e.name: e.value for e in (evaluations or [])}
+
+        if DEPENDENCY_ERROR in scores:
+            # Before the structural branch: a dependency error emits no structural score,
+            # and reading that absence as 0.0 would score an outage as a failed answer.
+            return _score(DEPENDENCY_ERROR, 1.0,
+                          comment="unscored — backend dependency failed")
 
         if float(scores.get(STRUCTURAL, 0.0)) < 1.0:
             return _score(VERDICT, 0.0,
@@ -894,10 +973,11 @@ def summarise_item_results(item_results: list[Any]) -> dict[str, Any]:
                 safety_failures += 1
             elif name == STRUCTURAL and isinstance(value, (int, float)) and float(value) < 1:
                 structural_failures += 1
-        if not judged and JUDGE_ERROR in names:
+        if not judged and (JUDGE_ERROR in names or DEPENDENCY_ERROR in names):
+            key = JUDGE_ERROR if JUDGE_ERROR in names else DEPENDENCY_ERROR
             errors = [getattr(e, "comment", "") for e in evaluations
-                      if getattr(e, "name", None) == JUDGE_ERROR]
-            unscored.append(str(errors[0] if errors else "judge error"))
+                      if getattr(e, "name", None) == key]
+            unscored.append(str(errors[0] if errors else key))
 
     passed = int(sum(verdicts))
     return {

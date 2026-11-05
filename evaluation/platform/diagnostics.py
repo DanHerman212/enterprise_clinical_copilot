@@ -64,6 +64,14 @@ def _turns(input_doc: dict[str, Any], output: dict[str, Any]) -> list[dict[str, 
     calls = output.get("turn_tool_calls")
     if not isinstance(calls, list):
         calls = []
+    # Whether the service marked the turn as grounded in this patient's record. Read from
+    # the product's own response rather than inferred afterwards: it is a structural
+    # assertion on several scenarios (`verified: true`), and a report that cannot say why
+    # it failed forces the reader to guess between the guardrail, the composer and the
+    # citation layer (2026-11-04).
+    verified = output.get("turn_verified")
+    if not isinstance(verified, list):
+        verified = []
     out: list[dict[str, Any]] = []
     for index in range(max(len(questions), len(answers))):
         out.append({
@@ -72,6 +80,7 @@ def _turns(input_doc: dict[str, Any], output: dict[str, Any]) -> list[dict[str, 
             "answer": answers[index] if index < len(answers) else "",
             "sources": sources[index] if index < len(sources) else [],
             "tool_calls": calls[index] if index < len(calls) else [],
+            "verified": verified[index] if index < len(verified) else None,
         })
     return out
 

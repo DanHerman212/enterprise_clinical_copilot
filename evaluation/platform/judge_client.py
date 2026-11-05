@@ -32,7 +32,7 @@ import time
 
 from google.genai import types
 
-from evaluation.platform.schemas import PASS_DIMENSIONS
+from evaluation.platform.schemas import DIMENSIONS, PASS_DIMENSIONS
 from services.mcp.config import JUDGE_LOCATION, JUDGE_MODEL, PROJECT  # noqa: F401
 
 #: The per-attempt ceiling, read at call time so a retry pass can raise it.
@@ -66,10 +66,19 @@ def apply_pass_rule(sample: dict) -> dict:
     `context` is deliberately not required — the rubric omits it for a first-turn answer,
     so requiring it would fail every opening turn.
 
+    A non-dict is answered with an `error` key rather than returned unchanged. It used to
+    pass straight through, so a JSON array from the model reached the caller as a
+    "successful" result whose only failure surfaced much later — as an `AttributeError`
+    inside the evaluator, which killed the whole run at item 6 of 26 (2026-11-04). An
+    unparseable shape is a failed attempt, and the retry ladder in `judge()` is what
+    answers a failed attempt.
+
     The dimension list is `schemas.PASS_DIMENSIONS`, declared once for the judge and for
     the suite gate, so the two cannot disagree about what a pass means.
     """
-    if not isinstance(sample, dict) or sample.get("error"):
+    if not isinstance(sample, dict):
+        return {"error": f"judge reply must be a JSON object, got {type(sample).__name__}"}
+    if sample.get("error"):
         return sample
     if sample.get("verdict") != "PASS":
         return sample
@@ -87,6 +96,42 @@ def apply_pass_rule(sample: dict) -> dict:
     return sample
 
 
+def reply_schema() -> "types.Schema":
+    """The shape the judge's reply must take, declared rather than described.
+
+    `response_mime_type="application/json"` constrains the reply to *valid JSON* and
+    nothing more, so a model that reads a multi-turn prompt as "one judgement per turn"
+    can answer with an array — valid JSON, wrong shape. That is what left `dev_t6_03`
+    unscored across six attempts on 2026-11-04. A schema makes the array unrepresentable
+    rather than merely discouraged; the rubric's prose template could not.
+
+    `flags` is required and may be empty: a dimension score with no stated defect is a
+    score nobody can act on, and the empty array is the honest way to say there were none.
+
+    `verdict` is an enum of the two values `apply_pass_rule` understands. A free string
+    let the model answer `"Pass"`, `"pass"` or `"PASSED"`, and `apply_pass_rule` compares
+    against `"PASS"` exactly — so a correct, well-scored judgement was read as a failure
+    by a capitalisation. The enum costs nothing and removes the case.
+    """
+    return types.Schema(
+        type=types.Type.OBJECT,
+        properties={
+            "reasoning": types.Schema(type=types.Type.STRING),
+            "dimensions": types.Schema(
+                type=types.Type.OBJECT,
+                properties={name: types.Schema(type=types.Type.INTEGER)
+                            for name in DIMENSIONS},
+                required=list(DIMENSIONS),
+            ),
+            "verdict": types.Schema(type=types.Type.STRING, enum=["PASS", "FAIL"]),
+            "flags": types.Schema(type=types.Type.ARRAY,
+                                  items=types.Schema(type=types.Type.STRING)),
+            "reason": types.Schema(type=types.Type.STRING),
+        },
+        required=["reasoning", "dimensions", "verdict", "flags", "reason"],
+    )
+
+
 def _judge_once(client, system: str, user: str) -> dict:
     """One synchronous judge call (no timeout on this client API)."""
     resp = client.models.generate_content(
@@ -95,13 +140,17 @@ def _judge_once(client, system: str, user: str) -> dict:
         config=types.GenerateContentConfig(
             system_instruction=system,
             response_mime_type="application/json",
+            response_schema=reply_schema(),
             temperature=0,
         ),
     )
     text = (resp.text or "").strip()
     if text.startswith("```"):
         text = text.strip("`").removeprefix("json").strip()
-    return apply_pass_rule(json.loads(text))
+    parsed = json.loads(text)
+    if not isinstance(parsed, dict):
+        return {"error": f"judge reply must be a JSON object, got {type(parsed).__name__}"}
+    return apply_pass_rule(parsed)
 
 
 def judge(client, system: str, user: str) -> dict:

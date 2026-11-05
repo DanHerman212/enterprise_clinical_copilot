@@ -16,6 +16,8 @@ Both are decided by the evidence in front of the turn, so both are testable with
 
 from __future__ import annotations
 
+import pytest
+
 from services.agent.engine import deterministic
 from services.agent.engine.prompts import (
     MEDS_FALLBACK_FORMATTING,
@@ -141,3 +143,55 @@ def test_a_dedicated_section_with_no_rows_still_blames_the_section():
 
     assert text == ("The discharge medications section was retrieved, but no medication "
                     "could be read from it ^[1].")
+
+
+# ------------------------------------------------- replay: which numbering survives
+
+
+def test_numeric_markers_are_stripped_and_pmid_badges_survive():
+    """The page's numbers are not the array's, so the page's numbers do not travel."""
+    text = ("The course states this ^[1], ^[2]. A rate held at 4.1% ^[PMID: 33534292].")
+
+    stripped = citations.strip_numeric_markers(text)
+
+    assert "^[1]" not in stripped and "^[2]" not in stripped
+    assert "^[PMID: 33534292]" in stripped, "a record badge means the same thing anywhere"
+    assert stripped == ("The course states this. A rate held at 4.1% ^[PMID: 33534292].")
+
+
+def test_a_text_with_no_numeric_markers_is_returned_unchanged():
+    assert citations.strip_numeric_markers("No markers here.") == "No markers here."
+    assert citations.strip_numeric_markers("Only a badge ^[PMID: 33534292].") == (
+        "Only a badge ^[PMID: 33534292].")
+
+
+@pytest.mark.anyio
+async def test_replayed_prose_loses_its_page_numbers_and_the_evidence_keeps_its_cites():
+    """`dev_t4_02`: a prior `^[2]` meant one section while `cite: 2` was another."""
+    from langchain_core.messages import AIMessage, ToolMessage
+
+    from services.agent.engine import graph
+
+    turns = [{
+        "question": "/ehr",
+        "answer": "The diagnosis is stated ^[1], and the cohort rate is ^[PMID: 33534292].",
+        "tool_calls": [{
+            "name": "rag_search_sections",
+            "args": {"hadm_id": 1},
+            "payload": {"passages": [
+                {"section": "history_of_present_illness", "text": "A."},
+                {"section": "brief_hospital_course", "text": "B."},
+            ]},
+        }],
+    }]
+
+    messages, _calls, _articles = await graph.replay_messages(None, turns)
+    replayed_answer = [m for m in messages if isinstance(m, AIMessage) and m.content]
+    tool_messages = [m for m in messages if isinstance(m, ToolMessage)]
+
+    assert replayed_answer, "the prior answer must be replayed"
+    assert "^[1]" not in replayed_answer[0].content
+    assert "^[PMID: 33534292]" in replayed_answer[0].content
+    assert tool_messages, "the replayed evidence must be replayed"
+    assert '"cite": 1' in tool_messages[0].content
+    assert '"cite": 2' in tool_messages[0].content

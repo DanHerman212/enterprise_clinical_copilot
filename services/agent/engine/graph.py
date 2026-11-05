@@ -1383,7 +1383,16 @@ async def replay_messages(
                 "args": dict(call.get("args") or {}),
                 "response": payload if isinstance(payload, dict) else {"result": payload},
             })
-        messages.append(AIMessage(content=turn["answer"]))
+        # The prior answer keeps every clinical word and loses its numeric markers. The
+        # numbers in it are the PAGE's (`1..K`, compacted per turn for the reader) while
+        # every `cite` in the replayed tool results above is a position in the
+        # conversation's array — two schemes for one glyph, and the model was asked to
+        # copy the `cite` of the unit it means. `dev_t4_02` turn 3 inherited `^[2]` meaning
+        # `discharge_diagnosis` while the evidence stamped `cite: 2` on the hospital
+        # course, and wrote a sentence attributing one section's fact to another
+        # (2026-11-05). `^[PMID: ...]` badges survive: they name a record, not a position.
+        messages.append(AIMessage(
+            content=citations.strip_numeric_markers(turn.get("answer") or "")))
     return messages, calls, thread_articles
 
 

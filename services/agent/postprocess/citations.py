@@ -613,9 +613,51 @@ def strip_markers(answer: str) -> str:
     return _tidy_removed_markers(stripped)
 
 
+def strip_numeric_markers(answer: str) -> str:
+    """Numeric markers removed; `^[PMID: ...]` badges left exactly as written.
+
+    The numbering a served answer shows is NOT the numbering the evidence carries.
+    `compact_display_numbers` renumbers the page to `1..K` per turn, while the tool
+    results the model is shown keep their positions in the conversation's array. Both
+    were replayed into one context, so a prior turn's `^[2]` (the page's second cited
+    passage) sat beside a replayed passage stamped `cite: 2` that was a different
+    section — and the model, told to copy the `cite` of the unit it means, had two
+    incompatible answers to "what is 2" (`dev_t4_02` turn 3, 2026-11-05).
+
+    On replay the prose keeps every clinical word and loses only the numbers that can no
+    longer be true. A `^[PMID: ...]` badge is a different fact: it names a record rather
+    than a position, so it means the same thing to whoever reads it and survives — which
+    is what lets a follow-up keep its published comparators (`dev_t2_03`).
+
+    Nothing is re-pointed and nothing is renumbered. A sentence that loses its marker
+    reads as a claim whose evidence sits in the replayed tool results beside it, which is
+    the truth of the situation: those results are the only numbered source in context.
+    """
+    if "^[" not in (answer or ""):
+        return answer
+    out: list[str] = []
+    last = 0
+    removed = False
+    for match in _ANY_MARKER_RE.finditer(answer):
+        body = match.group(1).strip()
+        if not _NUMERIC_BODY_RE.fullmatch(body):
+            # A literature badge, or a section name the model invented. Neither is a
+            # position in the array, and `_drop_unknown_markers` owns the second.
+            continue
+        start = match.start()
+        while start > last and answer[start - 1] in " \t":
+            start -= 1
+        out.append(answer[last:start])
+        last = match.end()
+        removed = True
+    if not removed:
+        return answer
+    out.append(answer[last:])
+    return _tidy_removed_markers("".join(out))
+
+
 def drop_unknown_markers(answer: str) -> str:
     """The vocabulary rule, for the settlement pass.
-
     Named publicly because `answer.sanitize_answer_markers` applies it at settlement —
     the one point the trace, the judge and the browser all read the answer from — and
     that pass may not reach for a private name. It lived only inside

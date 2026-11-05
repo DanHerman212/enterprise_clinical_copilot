@@ -733,6 +733,12 @@ async def run_command(
             "replayed_tool_calls": replayed_calls or [],
             "command": command.wire,
             "deterministic_answer": answer_text.outpatient_ehr_notice(),
+            # The manifest answered this turn. `encounter: outpatient` is the fact the
+            # notice states, and it came from the pre-flight block rather than from a
+            # passage — so the composer has to be told, or it reads a citation-free
+            # chart answer as synthesis nobody can vouch for and withholds `verified`
+            # from the one turn whose answer IS the record's type (`dev_t7_01`).
+            "manifest_answered": True,
         }
 
     # `/meds` cites with one marker, so the passages it cites have to be one passage.

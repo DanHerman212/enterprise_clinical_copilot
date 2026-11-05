@@ -695,4 +695,12 @@ async def run_chain(
                 # the call it always was, which is what keeps hydration an
                 # addition rather than a required new dependency of every turn.
                 options["admission_context"] = context
-            return await ask(box, parsed["question"], **options)
+            state = await ask(box, parsed["question"], **options)
+            # The manifest travels WITH the turn from here on. It is evidence the model
+            # was shown and no tool returned, and the guardrails judge a disposition
+            # against the evidence — so a state that does not carry it makes every
+            # sentence stating it look invented. Stamped once, here, rather than
+            # re-hydrated by the layer that reads it.
+            if context and isinstance(state, dict):
+                state["admission_context"] = context
+            return state

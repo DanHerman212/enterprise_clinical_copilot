@@ -466,8 +466,17 @@ def compose_presentation(question: str, answer: str,
     # the canvas is the answer, and the reader was never shown a claim needing
     # attribution.
     no_prose = not (answer or "").strip()
+    # `context_grounded` joins the exemption list because a manifest-answered turn is
+    # chart-grounded WITHOUT a citation: `discharge_location` is an administrative fact no
+    # discharge summary declares, and an outpatient refusal states the record's own type.
+    # Without it, the two turns whose evidence came from the pre-flight block were both
+    # reported as synthesis over unsupported prose — `verified` withdrawn and `scope`
+    # nulled on answers that were checked against the patient's row (`dev_t7_01` turn 2,
+    # 2026-11-05). It is the same exemption `/labs` and `/meds` already have, for the same
+    # reason: they too rest on something that publishes no passage.
     scope_suppressed = (scope == SCOPE_PATIENT and not record_sources
                         and not lab_evidenced and not payload_evidenced
+                        and not context_grounded
                         and not no_prose)
     if scope_suppressed:
         scope = None

@@ -114,13 +114,32 @@ def test_the_notice_says_what_the_record_is_and_what_it_cannot_hold(hadm_id):
 
 
 @pytest.mark.parametrize("hadm_id", OUTPATIENT)
-def test_the_notice_is_not_verified_against_the_chart(hadm_id):
-    state, _, _ = _run(hadm_id)
-    out = compose_presentation("/ehr", state["deterministic_answer"],
-                               state["tool_calls"], None, "summarize")
+def test_the_notice_is_verified_against_the_encounter(hadm_id):
+    """The refusal rests on the record, so it reports as checked against the record.
 
-    assert out["verified"] is False
-    assert out["scope"] is None
+    Until 2026-11-05 this test asserted the opposite (`verified is False`, `scope is
+    None`) and it described the code correctly: the notice cites no passage, so the
+    composer read it as synthesis nobody could vouch for and withdrew the badge. That is
+    the wrong ruling for this answer. `encounter: outpatient` came from the pre-flight
+    manifest — the row the readmission model was scored on — and the sectioned search
+    that established the record has nothing to summarise is on the turn. A refusal to
+    describe a stay is the correct answer to `/ehr` on a visit, and it is grounded.
+
+    The dataset says the same thing in `dev_t7_01`'s behaviour note: *"It reports
+    `verified: true`. That flag says the answer was checked against this patient's
+    record; it does not say an inpatient risk was verified, and none was."*
+    """
+    state, _, _ = _run(hadm_id)
+
+    assert state["manifest_answered"] is True
+    out = compose_presentation(
+        "/ehr", state["deterministic_answer"], state["tool_calls"], None, "summarize",
+        context_grounded=bool(state.get("manifest_answered")),
+    )
+
+    assert out["verified"] is True
+    assert out["scope"] == "patient_chart"
+    assert out["scope_suppressed"] is False
 
 
 @pytest.mark.parametrize("hadm_id", OUTPATIENT)

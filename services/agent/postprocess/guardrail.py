@@ -838,6 +838,18 @@ _NEGATION_WINDOW = 30
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 
 
+#: A paragraph break, as the formatting turns write one. `\n\n` is what every
+#: formatting instruction asks for; `\n` alone is accepted because a model that writes
+#: one label per line has still drawn sections, and joining those with a space is how a
+#: briefing became a wall of text.
+_PARAGRAPH_SPLIT = re.compile(r"\n\s*\n")
+
+#: A section's own label, opening the paragraph that carries it: `**Discharge plan &
+#: medications.** ` and nothing else in bold. Matched only at the start of a sentence,
+#: because that is where the renderer looks for it.
+_SECTION_HEADING = re.compile(r"^\s*\*\*[^*\n]+?\.\*\*")
+
+
 def _asserted(category: str, sentence: str, pattern: re.Pattern) -> bool:
     """True when this sentence claims the disposition, rather than denying it."""
     for match in pattern.finditer(sentence):
@@ -854,25 +866,66 @@ def verify_dispositions(answer: str, evidence_text: str) -> tuple[str, list[str]
     Grounding is by category, and the evidence is everything the conversation
     retrieved plus anything a tool returned — a disposition quoted from an earlier
     turn's passage is still a quoted disposition.
+
+    Two structural rules, and both exist because a sentence filter damaged something
+    that was not a sentence (2026-11-05):
+
+    * **A section label is not a sentence.** `**Discharge plan & medications.** The
+      patient was discharged to home.` is one split unit only because the character in
+      front of the space is `*` rather than `.`, and deleting the unit deleted the
+      label with it. `/ehr` was served a briefing with three headings out of four while
+      the model had written all four (`dev_t2_01`). The label is separated here, checked
+      with nothing but its body, and re-attached to the first sentence of its section
+      that survives — dropped only when nothing survives under it.
+    * **Paragraphs survive the pass.** The previous version split the whole answer on
+      single spaces and joined what remained the same way, so ONE removed sentence
+      turned every section of a briefing into one run-on block. Sections are rebuilt
+      per paragraph here, and a paragraph that loses every sentence is removed whole.
     """
     supported = {
         name for name, pattern in _DISPOSITIONS.items()
         if pattern.search(evidence_text or "")
     }
     flags: list[str] = []
-    kept: list[str] = []
-    for sentence in _SENTENCE_SPLIT.split(answer or ""):
-        unsupported = [
-            name for name, pattern in _DISPOSITIONS.items()
-            if name not in supported and _asserted(name, sentence, pattern)
-        ]
-        if unsupported:
-            flags.append(f"disposition_unsupported:{unsupported[0]}")
+    paragraphs: list[str] = []
+    for paragraph in _PARAGRAPH_SPLIT.split(answer or ""):
+        kept: list[str] = []
+        heading = ""
+        for sentence in _SENTENCE_SPLIT.split(paragraph):
+            if not sentence.strip():
+                continue
+            label = _SECTION_HEADING.match(sentence)
+            head = label.group(0).strip() if label else ""
+            body = sentence[label.end():] if label else sentence
+            # The body is what claims a disposition; a label names a section.
+            unsupported = [
+                name for name, pattern in _DISPOSITIONS.items()
+                if name not in supported and _asserted(name, body or sentence, pattern)
+            ]
+            if unsupported:
+                flags.append(f"disposition_unsupported:{unsupported[0]}")
+                if head:
+                    # The section lost its opening sentence. Its label waits for the
+                    # next one rather than going with it.
+                    heading = head
+                continue
+            if heading:
+                # The label belongs to the section, not to the sentence that was
+                # deleted, so it opens the first sentence that survives under it.
+                surviving = f"{heading} {sentence}".strip()
+                heading = ""
+            else:
+                surviving = sentence
+            kept.append(surviving)
+        if not kept:
+            # A paragraph whose every sentence was invented has no label worth keeping.
+            if heading:
+                flags.append("section_without_sentences")
             continue
-        kept.append(sentence)
+        paragraphs.append(" ".join(kept))
     if not flags:
         return answer, []
-    return " ".join(kept).strip(), flags
+    return "\n\n".join(paragraphs).strip(), flags
 
 
 def _value_present(number: str, haystack: str) -> bool:
@@ -1006,8 +1059,21 @@ def guard_answer(
     answer, f = verify_med_freqs_per_med(answer, med_source)
     flags += f
     # A disposition and a measurement are the two claims a reader will act on
-    # without re-reading the note, so both have to be in the note.
-    answer, f = verify_dispositions(answer, full_text)
+    # without re-reading the note, so both have to be in the evidence.
+    #
+    # That evidence is not the note text alone. `discharge_location` is an administrative
+    # fact no discharge summary declares — which is the whole reason the manifest is
+    # hydrated before the model runs — so a check that reads only retrieved passages
+    # deletes the sentence that states it. It did, twice in one run: the model wrote
+    # "discharged to home with home health" from the block on an `/ehr` briefing and on a
+    # cold-start free-text turn, and both sentences were removed as invented
+    # (`dev_t2_01` turn 1, `dev_t5_01` turn 1, 2026-11-05). A claim the model was GIVEN
+    # is not an invented claim.
+    disposition_evidence = "\n".join(
+        part for part in (full_text, (state or {}).get("admission_context") or "")
+        if part.strip()
+    )
+    answer, f = verify_dispositions(answer, disposition_evidence)
     flags += f
     answer, f = verify_lab_values(answer, full_text, _lab_text(evidence),
                                   json.dumps(evidence, default=str))

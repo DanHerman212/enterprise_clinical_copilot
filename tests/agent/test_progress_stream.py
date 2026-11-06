@@ -251,11 +251,13 @@ def test_a_spent_tool_is_refused_without_announcing_anything():
         {"name": "rag_search", "args": {"query": "second"}, "id": "2"},
     ]
 
-    _, recorded = _run(_execute_tool_calls(box, calls, events.append))
+    messages, recorded = _run(_execute_tool_calls(box, calls, events.append))
 
     assert [name for name, _ in box.calls] == ["rag_search"], "the cap did not hold"
-    assert len(recorded) == 2
-    assert recorded[1]["response"]["error"] == "tool_already_spent"
+    # Only the call that RAN is evidence. The refusal reaches the model and stops there,
+    # so the turn does not claim to have read a second time (Sprint 2.2).
+    assert len(recorded) == 1
+    assert "tool_already_spent" in messages[1].content
     assert [e["stage"] for e in events] == [stages.STAGE_TOOL, stages.STAGE_RESULT]
 
 

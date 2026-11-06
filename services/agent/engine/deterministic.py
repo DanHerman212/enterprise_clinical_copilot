@@ -56,6 +56,7 @@ from services.agent.routing import encounter
 from services.agent.telemetry import stages
 from services.agent.postprocess import citations
 from services.agent.postprocess import answer as answer_text
+from services.agent.postprocess import evidence_state as session_evidence
 from shared.labels import humanize
 from services.agent.engine.model import text_of
 from services.agent.engine import model as model_gateway
@@ -66,6 +67,7 @@ from services.agent.engine.mcp_client import (
     MCPToolbox,
     RecordedToolCall,
     _execute_tool_calls,
+    _presented_call,
     _presented_for_model,
     # Re-exported for the tests that assert the estimate's projection directly. The
     # module no longer calls it — it calls the dispatcher — but the seam it names is
@@ -366,7 +368,8 @@ def _context_block(admission_context: str, hadm_id: int | None = None) -> str:
 def _formatter_input(tool_messages: list[Any], outpatient: bool,
                      question: str | None = None,
                      comparators: list[dict] | None = None,
-                     context_block: str = "") -> str:
+                     context_block: str = "",
+                     session_block: str = "") -> str:
     """What the formatting turn reads: the question, the tool results, the caveat.
 
     The QUESTION goes first, and it is not decoration. Until Phase 01 this turn could be
@@ -391,6 +394,13 @@ def _formatter_input(tool_messages: list[Any], outpatient: bool,
     it is the authority the passages are read against: the discharge disposition in it
     outranks a facility a note names from an earlier encounter, and the rule that says so
     (`EHR_FORMATTING`) can only be applied to a block the turn has been shown.
+
+    `session_block` is the session record as it stood BEFORE this command ran — what the
+    thread already retrieved, and which sections it already read or found empty. It
+    comes before the manifest rather than after it for the reason above: it is more
+    evidence for the same question, while the manifest is the rule the evidence is read
+    under, and the rule goes last. This turn's own units are not in it; they are in
+    `tool_messages`, already numbered.
     """
     text = "\n\n".join(str(m.content) for m in tool_messages)
     if outpatient:
@@ -398,6 +408,8 @@ def _formatter_input(tool_messages: list[Any], outpatient: bool,
     block = comparator_block(comparators)
     if block:
         text = f"{text}\n\n{block}"
+    if (session_block or "").strip():
+        text = f"{text}\n\n{session_block.strip()}"
     if (context_block or "").strip():
         text = f"{text}{context_block}"
     asked = (question or "").strip()
@@ -505,7 +517,7 @@ extraction_llm_factory: Callable[[str], Any] = model_gateway.build_extraction_ll
 
 async def _readmission_comparators(
     toolbox: Any, model: str, recorded: list[RecordedToolCall], on_event,
-    *, extraction_llm: Any = None,
+    *, extraction_llm: Any = None, evidence_state: Any = None,
 ) -> tuple[list[dict], dict | None, list[RecordedToolCall], list[dict]]:
     """The published cohorts this admission's estimate is compared against.
 
@@ -569,6 +581,7 @@ async def _readmission_comparators(
         }
         _, recorded_calls = await _execute_tool_calls(
             toolbox, [call], on_event, project=_presented_for_model, traced=True,
+            evidence_state=evidence_state,
         )
         calls_made.extend(recorded_calls)
         response = recorded_calls[-1].get("response") if recorded_calls else {}
@@ -657,17 +670,32 @@ async def run_command(
     # now returns the note's sections as the note states them, so a hook that sorted them
     # into a second order is a second opinion about how a chart reads (2026-11-03).
     #
-    # Numbering continues from what the replayed turns already showed the model, because
-    # a marker is resolved against the whole conversation's citable units (TF-10) — and
-    # those units are counted by `citations.passage_total`, which knows that a laboratory
-    # panel contributes one per analyte as well as that a retrieval contributes one per
-    # passage. Counting `passages` here would restart the numbering at a number the
-    # replayed turns had already used (Phase E, 2026-10-26).
-    cite_offset = sum(
-        citations.passage_total(call.get("response"))
-        for call in (replayed_calls or [])
-        if isinstance(call.get("response"), dict)
+    # The session's evidence, hydrated from the replay BEFORE a single tool of this
+    # command runs. It is the numbering authority for the whole turn: `_execute_tool_calls`
+    # ingests each payload into it and stamps the positions it assigned, so a passage the
+    # thread already holds keeps its position instead of taking a new one.
+    #
+    # `prior_session_block` is captured now, not at the formatter, because by then the
+    # record also holds this turn's own units — and those are already in `tool_messages`,
+    # numbered. The formatter needs the evidence THIS turn has not shown it.
+    evidence_state = (
+        session_evidence.SessionEvidenceState.hydrate_from_calls(
+            hadm_id, [_presented_call(call) for call in (replayed_calls or [])])
+        if hadm_id is not None else None
     )
+    prior_session_block = ""
+    if evidence_state is not None and (
+        evidence_state.position_count()
+        or evidence_state.checked_sections
+        or evidence_state.prediction
+        or evidence_state.literature
+    ):
+        prior_session_block = evidence_state.render_for_prompt()
+    # Where this turn's own units begin, for `turn.compose_success`: the stored
+    # `citation_map` is measured from it, and a later replay adds it back to put the
+    # markers on the positions the record gives that evidence.
+    replay_positions = evidence_state.position_count() if evidence_state is not None else 0
+
     tool_messages, recorded = await _execute_tool_calls(
         toolbox, calls, on_event, project=_presented_for_model,
         # This path opens `command.<wire>` around the whole turn, so its tool spans
@@ -675,7 +703,9 @@ async def run_command(
         # produced a separate root trace per tool.
         traced=True,
         order=None,
-        cite_offset=cite_offset,
+        cite_offset=(evidence_state.position_count() if evidence_state is not None
+                     else 0),
+        evidence_state=evidence_state,
     )
 
     # `/ehr` asks for four named discharge-summary sections. An outpatient note has
@@ -693,7 +723,11 @@ async def run_command(
         extra_messages, extra_recorded = await _execute_tool_calls(
             toolbox, fallback, on_event, project=_presented_for_model, traced=True,
             order=None,
-            cite_offset=cite_offset + _passage_count(recorded),
+            # The record already holds whatever the numbered call registered, so its
+            # length is where the fallback's units begin.
+            cite_offset=(evidence_state.position_count()
+                         if evidence_state is not None else _passage_count(recorded)),
+            evidence_state=evidence_state,
         )
         tool_messages += extra_messages
         recorded += extra_recorded
@@ -705,6 +739,16 @@ async def run_command(
     outpatient_record = (
         hadm_id is not None and encounter.current_is_outpatient() is True
     )
+
+    def _session_evidence() -> Any:
+        """This turn's evidence record, or `None` when there is no admission to scope it to.
+
+        The object built before the first tool ran, now holding everything the command
+        executed: `_execute_tool_calls` ingests into it rather than into a copy, so the
+        three exits below each carry the same record and the numbering they hand the
+        caller is the numbering the renderer stamped.
+        """
+        return evidence_state
 
     # `/ehr` on an outpatient record. The four headings describe a stay, and this record
     # is a visit, so the command's answer is the encounter notice itself — the sentence
@@ -739,6 +783,9 @@ async def run_command(
             # chart answer as synthesis nobody can vouch for and withholds `verified`
             # from the one turn whose answer IS the record's type (`dev_t7_01`).
             "manifest_answered": True,
+            **
+            {"hadm_id": hadm_id, "evidence_state": _session_evidence(),
+             "replay_positions": replay_positions},
         }
 
     # `/meds` cites with one marker, so the passages it cites have to be one passage.
@@ -753,7 +800,8 @@ async def run_command(
     if command.wire == "summarize" and not outpatient_record:
         comparators, target_payload, literature_recorded, passes = \
             await _readmission_comparators(
-                toolbox, model, recorded, on_event, extraction_llm=extraction_llm)
+                toolbox, model, recorded, on_event, extraction_llm=extraction_llm,
+                evidence_state=evidence_state)
         recorded += literature_recorded
         command_extras["comparators"] = comparators
         command_extras["clinical_target"] = target_payload
@@ -793,6 +841,8 @@ async def run_command(
             # as a failed turn unless the state says the surface carries it.
             "deterministic_answer": "",
             "answer_in_surface": True,
+            **{"hadm_id": hadm_id, "evidence_state": _session_evidence(),
+               "replay_positions": replay_positions},
             **command_extras,
         }
 
@@ -850,6 +900,10 @@ async def run_command(
                 # or `/labs` an administrative header they have no use for is evidence
                 # in the window that no sentence may rest on.
                 context_block=context_block,
+                # What the thread held before this command ran, so a follow-up command
+                # can answer from evidence an earlier turn retrieved instead of reporting
+                # the record as undocumented.
+                session_block=prior_session_block,
             )),
         ],
         config=config,
@@ -878,6 +932,8 @@ async def run_command(
         # the answer is drawn as, and it is the only marker that distinguishes a
         # command's state from a free-text one downstream.
         "command": command.wire,
+        **{"hadm_id": hadm_id, "evidence_state": _session_evidence(),
+           "replay_positions": replay_positions},
         **command_extras,
     }
 

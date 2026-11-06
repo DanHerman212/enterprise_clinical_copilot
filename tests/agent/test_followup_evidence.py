@@ -28,10 +28,12 @@ import asyncio
 from langchain_core.messages import ToolMessage
 
 from services.agent.engine import graph
+from services.agent.engine.mcp_client import _presented_call
 from services.agent.ingress import http
 from services.agent.telemetry import stages
 from services.agent.presentation.a2ui import compose_presentation
 from services.agent.ingress.contracts import RE_DERIVABLE_TOOLS, RESULT_KEPT_TOOLS
+from services.agent.postprocess.evidence_state import SessionEvidenceState
 
 LABS = {
     "trends": [
@@ -94,12 +96,18 @@ class TestTheLabSeriesIsKept:
         }]
 
         messages, calls, _articles = asyncio.run(
-            graph.replay_messages(_MustNotBeCalled(), turns))
+            graph.replay_messages(_MustNotBeCalled(), turns, hadm_id=90000015))
 
         assert [call["name"] for call in calls] == ["get_lab_trends"]
         assert calls[0]["response"]["trends"][0]["label"] == "Creatinine"
-        rendered = "\n".join(m.content for m in messages if isinstance(m, ToolMessage))
+        # The series reaches the follow-up through the session record, which is what
+        # `agent_node` renders per round. A replayed turn contributes dialogue only.
+        record = SessionEvidenceState.hydrate_from_calls(
+            90000015, [_presented_call(call) for call in calls])
+        rendered = record.render_for_prompt()
         assert "Creatinine" in rendered
+        assert not any(isinstance(m, ToolMessage) for m in messages), (
+            "a replayed turn contributes its question and its answer, nothing else")
 
 
 # --- RC-2: the card is drawn by the turn that read the series -------------------

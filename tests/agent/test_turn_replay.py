@@ -24,6 +24,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from services.agent.engine import graph
+from services.agent.engine import prompts
 from services.agent.ingress.contracts import (
     MAX_REPLAYED_TURNS,
     AgentRequestError,
@@ -106,7 +107,10 @@ def test_the_prompt_stays_a_template_and_the_history_is_data(monkeypatch):
 
     messages = state["messages"]
     assert isinstance(messages[0], SystemMessage)
-    assert messages[0].content == graph.SYSTEM_PROMPT
+    # The Hub first, then whichever spokes this turn's bound tool set admitted. Since
+    # Phase 4 the instruction message is COMPOSED per turn, so the assertion is that it
+    # opens with the hub rather than that it equals a single constant.
+    assert messages[0].content.startswith(prompts.CORE_HUB_PROMPT.rstrip())
     assert [m.content for m in messages[1:-1]] == [
         "Why was this patient flagged?", "She was flagged at 0.31.",
         "And the potassium?", "Potassium was 3.2, low.",
@@ -154,27 +158,32 @@ RISK_TURN = [{
 
 
 def test_a_replayed_risk_turn_carries_its_drivers_into_the_transcript():
-    """Turn 2 must read the exact drivers and directions from the transcript.
+    """Turn 2 must read the exact drivers and directions from the record.
 
     The Phase 01 requirement is that a follow-up after `/risk` can explain the model's
-    attribution without a redundant call. That only holds if the replayed tool result
-    carries the whole `top_factors` list — projection here would leave the follow-up
-    describing values it can see and guessing at the reasoning it cannot.
+    attribution without a redundant call. Since Phase 1 Sprint 1.4 that attribution
+    reaches the next turn through the session record, not through a synthesised tool
+    body: `agent_node` renders the record per round, so the block below is what the
+    follow-up's model actually reads.
     """
-    from langchain_core.messages import ToolMessage
+    from services.agent.engine.mcp_client import _presented_call
+    from services.agent.postprocess.evidence_state import SessionEvidenceState
 
     messages, calls, _articles = asyncio.run(
-        graph.replay_messages(_NoToolbox(), RISK_TURN))
+        graph.replay_messages(_NoToolbox(), RISK_TURN, hadm_id=90000015))
 
     assert calls[0]["name"] == "predict_readmission"
     assert [f["feature"] for f in calls[0]["response"]["top_factors"]] == \
         ["rdw_max", "rbc_min"]
     assert calls[0]["response"]["top_factors"][1]["direction"] == "decreases"
+    assert not any("predict_readmission" in str(m.content) for m in messages), (
+        "the evidence is the record's, not a replayed tool body")
 
-    rendered = "\n".join(m.content for m in messages if isinstance(m, ToolMessage))
-    assert 'name="predict_readmission"' in rendered
+    record = SessionEvidenceState.hydrate_from_calls(
+        90000015, [_presented_call(call) for call in calls])
+    rendered = record.render_for_prompt()
     # Projected like a live call, so the driver names the model reads are the display
     # names rather than the model's own feature keys. The attribution is untouched — both
     # factors and both directions are still there; only the vocabulary changed.
-    assert '"direction": "decreases"' in rendered, rendered
-    assert '"rdw_max"' not in rendered, rendered
+    assert "direction=decreases" in rendered, rendered
+    assert "rdw_max" not in rendered, rendered

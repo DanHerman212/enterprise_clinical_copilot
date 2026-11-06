@@ -145,6 +145,73 @@ def test_a_clean_answer_is_returned_byte_for_byte():
 
 
 # ---------------------------------------------------------------------------
+# 2b. The same two structural rules, for the measurement guard
+# ---------------------------------------------------------------------------
+#
+# `verify_lab_values` sat one function below `verify_dispositions` with the joiner that
+# rule 2 replaced. One unsupported number rebuilt the whole answer with `" ".join(kept)`:
+# every `\n\n` collapsed, and the surviving sentences of section two were served under
+# section one's heading. A sentence is what this pass judges; it is not what the document
+# is made of.
+
+TWO_SECTIONS = ("**Hospital course & procedures.** She was admitted with sepsis.\n\n"
+                "**Discharge plan & medications.** Creatinine rose to 9.99 mg/dL on day "
+                "2.\nShe was discharged home.")
+
+
+def test_paragraphs_and_headings_survive_lab_value_removal_in_another_section():
+    kept, flags = g.verify_lab_values(
+        TWO_SECTIONS, "She was admitted with sepsis. She was discharged home.")
+
+    assert "lab_value_unsupported:9.99 mg/dL" in flags, flags
+    assert kept == ("**Hospital course & procedures.** She was admitted with sepsis."
+                    "\n\n**Discharge plan & medications.** She was discharged home."), kept
+
+
+def test_a_lab_pass_that_fires_nothing_returns_the_answer_byte_for_byte():
+    answer = TWO_SECTIONS.replace("9.99 mg/dL", "1.06 mg/dL")
+
+    assert g.verify_lab_values(
+        answer, "Creatinine peaked at 1.06 mg/dL. She was discharged home.")[0] == answer
+
+
+def test_a_headed_section_that_loses_every_sentence_takes_its_heading_with_it():
+    """A label over nothing is worse than no label: it claims a section was written."""
+    kept, flags = g.verify_lab_values(
+        "**Unrelated.** Text.\n\n**Discharge plan & medications.** Creatinine 9.99 mg/dL.",
+        "Text.")
+
+    assert "section_without_sentences" in flags, flags
+    assert "Discharge plan" not in kept, kept
+
+
+def test_manifest_numbers_survive_guard_answer_without_tool_calls():
+    """A number the block states is a number the system gave the model.
+
+    The manifest reached only `verify_dispositions` until 2026-11-05, so a cold-start turn
+    quoting its own scored row had the figures scraped out of the sentence as ungrounded.
+    """
+    out = g.guard_answer(
+        "Prior inpatient days were 18.5833.", [],
+        state={"admission_context": "- prior_inpatient_days: 18.5833"})
+
+    assert out["answer"] == "Prior inpatient days were 18.5833.", out
+    assert not [f for f in out["flags"] if "risk_number_unsupported" in f], out["flags"]
+
+
+def test_an_age_the_manifest_states_is_not_scraped_out_of_the_notes_redaction():
+    """The notes redact the age; the block states it. Grounded per age, not per call."""
+    redacted = _note("The patient is a ___ year old woman with hip pain.")
+    state = {"admission_context": "- age: 48"}
+
+    grounded = g.guard_answer("She is a 48-year-old woman. ^[1]", redacted, state=state)
+    assert "48-year-old" in grounded["answer"], grounded
+
+    invented = g.guard_answer("She is an 80-year-old woman. ^[1]", redacted, state=state)
+    assert "80-year-old" not in invented["answer"], invented
+
+
+# ---------------------------------------------------------------------------
 # 3. A manifest-answered turn is grounded without a citation
 # ---------------------------------------------------------------------------
 

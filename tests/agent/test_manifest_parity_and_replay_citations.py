@@ -299,3 +299,45 @@ def test_the_block_is_rendered_by_the_same_function_the_free_text_path_uses():
 
     assert graph._context_block(MANIFEST, 90000015) == deterministic._context_block(
         MANIFEST, 90000015)
+
+
+# ---------------------------------------------------------------------------
+# The page's map, on the presentation side
+# ---------------------------------------------------------------------------
+#
+# The map travels with the answer so a REPLAY can restore it. It is also the only thing
+# that can turn a served display number back into the passage it addresses when the
+# composer resolves sources — and `resolve_sources` used to fall back to the raw number
+# when the map did not hold it. After turn 1 the array does not start at 1, so that
+# fallback opened an EARLIER turn's passage, and `resolve_source` accepted it because the
+# number was in range. The reader clicked a marker and landed on evidence the answer never
+# rested on, with no flag anywhere (2026-11-05).
+
+FOUR_PASSAGES = [{"name": "rag_search", "args": {"hadm_id": 1},
+                  "response": {"returned": 4, "passages": [
+                      {"section": f"section_{n}", "text": f"text {n}"}
+                      for n in (1, 2, 3, 4)]}}]
+
+
+def test_an_unmapped_display_number_does_not_open_an_earlier_turns_passage():
+    from services.agent.presentation import a2ui
+
+    # Settlement compacted `^[4]` to display `^[1]`; `^[2]` was never compacted and
+    # names nothing. Only the mapped marker may be drawn.
+    sources = a2ui.resolve_sources(
+        "A claim ^[1] and a stray marker ^[2].", {"1": 4}, {}, (),
+        evidence=FOUR_PASSAGES)
+
+    assert [row["cite"] for row in sources] == [1], sources
+    assert sources[0]["text"] == "text 4", sources[0]
+
+
+def test_without_a_map_the_numbers_are_positions_and_still_resolve():
+    """No compaction happened, so the answer's numbers ARE the array's — unchanged."""
+    from services.agent.presentation import a2ui
+
+    sources = a2ui.resolve_sources(
+        "A claim ^[2].", {}, {}, (), evidence=FOUR_PASSAGES)
+
+    assert [row["cite"] for row in sources] == [2], sources
+    assert sources[0]["text"] == "text 2", sources[0]

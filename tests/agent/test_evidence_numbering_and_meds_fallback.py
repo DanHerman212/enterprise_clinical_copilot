@@ -171,6 +171,8 @@ async def test_replayed_prose_loses_its_page_numbers_and_the_evidence_keeps_its_
     from langchain_core.messages import AIMessage, ToolMessage
 
     from services.agent.engine import graph
+    from services.agent.engine.mcp_client import _presented_call
+    from services.agent.postprocess.evidence_state import SessionEvidenceState
 
     turns = [{
         "question": "/ehr",
@@ -185,13 +187,17 @@ async def test_replayed_prose_loses_its_page_numbers_and_the_evidence_keeps_its_
         }],
     }]
 
-    messages, _calls, _articles = await graph.replay_messages(None, turns)
+    messages, calls, _articles = await graph.replay_messages(None, turns, hadm_id=1)
     replayed_answer = [m for m in messages if isinstance(m, AIMessage) and m.content]
-    tool_messages = [m for m in messages if isinstance(m, ToolMessage)]
 
     assert replayed_answer, "the prior answer must be replayed"
     assert "^[1]" not in replayed_answer[0].content
     assert "^[PMID: 33534292]" in replayed_answer[0].content
-    assert tool_messages, "the replayed evidence must be replayed"
-    assert '"cite": 1' in tool_messages[0].content
-    assert '"cite": 2' in tool_messages[0].content
+    assert not any(isinstance(m, ToolMessage) for m in messages), (
+        "the evidence is the record's now, not a replayed tool body")
+    # Two positions, assigned by the record, in the order the note gave the sections.
+    record = SessionEvidenceState.hydrate_from_calls(
+        1, [_presented_call(call) for call in calls])
+    assert record.ordered_citable_units()[0]["section"] == "history_of_present_illness"
+    assert [unit["text"] for unit in record.ordered_citable_units()] == ["A.", "B."]
+    assert "section=history_of_present_illness" in record.render_for_prompt()

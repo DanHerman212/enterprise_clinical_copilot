@@ -36,7 +36,6 @@ from langchain_core.messages import (
     BaseMessage,
     HumanMessage,
     SystemMessage,
-    ToolMessage,
 )
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, StateGraph
@@ -61,6 +60,8 @@ from services.agent.engine.mcp_client import (  # noqa: F401 — re-exported
     validate_recorded_tool_call,
     _is_number,
     _presented_factor,
+    _presented_call,
+    _record_text,
     _presented_for_model,
     _execute_tool_calls,
 )
@@ -97,6 +98,7 @@ from services.agent.engine.model import (
 from services.agent.telemetry.stages import emit as _emit
 from services.agent.postprocess import answer as answer_text
 from services.agent.postprocess import citations
+from services.agent.postprocess import evidence_state as session_evidence
 
 from services.agent.engine.prompts import SYSTEM_PROMPT
 from services.agent.engine import prompts
@@ -113,6 +115,13 @@ class AgentState(TypedDict):
 
     messages: Annotated[list[BaseMessage], operator.add]
     tool_calls: Annotated[list[RecordedToolCall], operator.add]
+    #: How many calls this turn has ASKED for, refusals included — the loop budget.
+    #:
+    #: `tool_calls` is evidence: a call the executor refused before dispatch never ran, so
+    #: it is not a call the turn made (Sprint 2.2). The budget cannot be read off it any
+    #: more, because a model that re-asks a capped tool would then stay bound for ever.
+    #: A refused call still cost a model round, so the round is what is counted here.
+    tool_attempts: Annotated[int, operator.add]
     # The replayed turns' calls, seeded before the run and never written by a
     # node: they are evidence the answer is guarded against, not a record of what
     # this turn did. Kept out of `tool_calls` so the caller's stored turn stays
@@ -133,11 +142,31 @@ class AgentState(TypedDict):
     # — so a search replayed into this turn's transcript can be cited by this turn and by
     # nothing else. See `turn_is_about_literature`.
     wants_literature: bool
-    #: Set once the run has told the model what the transcript already holds
-    #: (`prompts.TRANSCRIPT_NOTICE`). One shot, because it describes the replay and the
-    #: replay does not change mid-run; repeating it every round would spend the context it
-    #: is trying to save.
-    transcript_notice_sent: bool
+    #: How many positions the REPLAYED turns had already registered when the engine
+    #: hydrated the record. It is the number this turn's `citation_map` is measured from:
+    #: the map ships turn-local offsets so a stored answer can be put back into the
+    #: conversation's numbering, and a later replay adds this same count back
+    #: (`citations.restore_global_markers(answer, map, turn_offset)`). Stamped rather than
+    #: re-derived downstream, because `turn.py` may not hydrate a record of its own (the
+    #: root orchestrator may not import `postprocess.evidence_state`).
+    replay_positions: int
+    #: The admission this turn is about, carried on the state because the evidence record
+    #: is scoped to it. It arrives as an `ask` parameter and is needed downstream by
+    #: anything that has to decide what "this patient" means. `None` for a turn with no
+    #: admission — an unserved-id refusal, a literature-only question — and every reader
+    #: of it must be null-safe.
+    hadm_id: int | None
+    #: The session's evidence, as a record rather than a re-derivation: every citable
+    #: unit the conversation has produced, under a permanent position, plus the sections
+    #: that were read and came back empty. Hydrated from the replay at turn start and
+    #: appended to as this turn's tools run. `None` when there is no admission to scope it
+    #: to.
+    #:
+    #: It is the authority for what a marker means. The numbering it owns reaches the model
+    #: through a non-persisted overlay (`agent_node`), `_execute_tool_calls` stamps its
+    #: positions onto every tool result, settlement and the guardrail bound against it, and
+    #: the presentation layer resolves markers through it.
+    evidence_state: Any
 
 
 # Spend bounds (ECC-02). One question is one tool call in every designed flow;
@@ -318,6 +347,12 @@ def _outbound_patient_identifier(
     patient text in a literature query. A prompt is a request; this is the one
     disclosure that cannot be taken back, because an identifier sent to a third party
     cannot be recalled, so it is checked rather than asked for.
+
+    Since Phase 2 the model is no longer SHOWN the argument (`_model_schema` strips it and
+    `_execute_tool_calls` injects the session's), so the mismatch branch is defence in
+    depth against a model that writes one anyway. What it does not replace is the third
+    rule below: a patient-scoped tool on a turn with no admission has nothing to read, and
+    the call is refused here rather than dispatched to fail inside the tool.
     """
     requested = args.get("hadm_id")
     if requested is not None and str(requested) != str(hadm_id):
@@ -336,7 +371,23 @@ def _outbound_patient_identifier(
                 "be answered here."
             ),
         }
-    if name != "search_literature" or hadm_id is None:
+    if name != "search_literature":
+        # A patient-scoped tool on a turn with no patient. Audit Finding 2 (2026-11-05):
+        # the mismatch check above passes when the call omits the admission entirely, and
+        # an omitted argument is not a safe one — it used to be dispatched, and what the
+        # tool did with it depended on the tool's own validation. There is no admission
+        # for this turn to read, so there is no call to make.
+        if hadm_id is None:
+            return {
+                "error": "patient_scope_refused",
+                "message": (
+                    "The call was not run: this turn is about no admission, and "
+                    f"{name} reads one admission's record. Ask a question that names "
+                    "the patient's stay, or use a command instead."
+                ),
+            }
+        return None
+    if hadm_id is None:
         return None
     if str(hadm_id) not in str(args.get("query") or ""):
         return None
@@ -443,6 +494,23 @@ def names_a_command(answer: str) -> bool:
     return any(f"/{wire}" in (answer or "") for wire in routing.BY_WIRE)
 
 
+def _spent(state: AgentState) -> int:
+    """How much of the tool budget this turn has used.
+
+    The larger of what EXECUTED and what was ATTEMPTED, because the two answer different
+    questions and only one of them bounds a loop. `tool_calls` is evidence — a refused
+    call is not a call the turn made — and `tool_attempts` is the budget: a refusal still
+    cost a model round.
+
+    `max` rather than the attempt count alone, for two reasons. A state seeded before this
+    field existed has attempts of zero and its executed calls are the only number there
+    is; and a caller that drives `_execute_tool_calls` directly never accumulates attempts
+    at all. In a real turn attempts is always the larger, since every executed call was
+    first an attempt.
+    """
+    return max(len(state.get("tool_calls") or []), state.get("tool_attempts") or 0)
+
+
 def _budget_exhausted_turn(response: AIMessage) -> AIMessage:
     """The turn's answer, with a lookup request that cannot be honoured removed.
 
@@ -501,18 +569,140 @@ def _still_bound(allowed: frozenset[str], state: AgentState) -> frozenset[str]:
 
 
 def _transcript_carries_attribution(state: AgentState) -> bool:
-    """Whether the replayed turns already hold the model's risk attribution.
+    """Whether the session already holds the model's risk attribution.
 
-    Read from `replayed_tool_calls`, not from `tool_calls`: the latter records only
-    this turn, so it is empty exactly when the answer came from memory, which is the
-    case this asks about. A follow-up that reuses the stored score has the scoring
-    call in its replay and the score in the transcript; nothing a note search returns
-    can add to that.
+    Read from the RECORD first, because the record is what the model was shown and what
+    the scorer actually produced. `prediction` is set by ingestion, so it survives the
+    turn that made it and is present on every turn after — which is the question this
+    asks.
+
+    The replay scan is the fallback for a turn with no record, which is a turn with no
+    admission. Such a turn cannot reach a chart tool at all (the outbound guard refuses
+    it), so the fallback exists for callers that drive the router without one.
     """
+    record = state.get("evidence_state")
+    if record is not None:
+        return record.prediction is not None
     return any(
         call.get("name") == "predict_readmission"
         for call in state.get("replayed_tool_calls") or []
     )
+
+
+def _session_holds_evidence(
+    state: AgentState,
+    *,
+    wants_literature: bool = False,
+    risk_driver_question: bool = False,
+    risk_score_question: bool = False,
+) -> bool:
+    """Whether the session already holds the evidence THIS question needs.
+
+    The single authority behind `route`'s exemption from the forced retrieval. Before
+    this, the same question was answered three different ways from the shape of the
+    replay — "the replay holds `rag_search_sections`", "the replay is not empty", "the
+    replay holds a prediction" — and each of them was a guess about evidence standing in
+    for the evidence itself. The record states it: what was read, what came back empty,
+    what the scorer produced, which records were retrieved.
+
+    The mode matters, and it is the QUESTION's mode rather than the thread's:
+
+      * a risk question needs the estimate, and a laboratory panel is not one;
+      * a literature question needs published records, and a discharge note is not one;
+      * every other question is a chart question, and any clinical evidence answers it.
+
+    `wants_literature` asks the record, and only the record. `thread_literature` is NOT a
+    second term there: it is populated from the answers a replay emitted, and
+    `citations.cited_articles` filters on the cited PMID alone — it does not know that a
+    `/ehr` comparison table's `search_literature` call was asked for a candidate cohort
+    (`scope == "readmission"`) rather than for published evidence. On a thread with a
+    comparator table in it, that made `thread_literature` non-empty while
+    `record.literature` was correctly empty, and a standalone literature question was
+    answered from a candidate pool instead of searched for. The record applies the scope
+    rule at ingest (`_is_candidate_pool`), so it is the one authority here. A session with
+    no record — a turn with no admission — has no such authority and falls back to the
+    replay scan, `thread_literature` included.
+    """
+    record = state.get("evidence_state")
+    if record is None:
+        if risk_driver_question or risk_score_question:
+            return _transcript_carries_attribution(state)
+        if wants_literature:
+            return bool(state.get("thread_literature")) or any(
+                str(call.get("name")) in routing.LITERATURE_TOOLS
+                for call in state.get("replayed_tool_calls") or []
+            )
+        return bool(state.get("replayed_tool_calls"))
+    if risk_driver_question or risk_score_question:
+        return record.prediction is not None
+    if wants_literature:
+        return bool(record.literature)
+    return bool(
+        record.position_count()
+        or record.checked_sections
+        or record.prediction is not None
+    )
+
+
+def _record_has_content(record: Any) -> bool:
+    """Whether this record says anything a model needs to be told.
+
+    A turn with an empty record — the first round of a first turn — gets no overlay at
+    all. An empty `<session_evidence_state>` and no block are the same statement about the
+    record, and the block is not free: it sits in the window on every round of every turn.
+    """
+    return bool(
+        record.position_count()
+        or record.checked_sections
+        or record.prediction
+        or record.literature
+    )
+
+
+def _working_memory(state: AgentState, allowed: frozenset[str]) -> str:
+    """The overlay a model round reads: what the session holds, and what it cannot ask for.
+
+    Two blocks and one reason to keep them together. The record is the evidence — every
+    citable unit under the position a marker addresses, plus which sections were read and
+    which came back empty. The withdrawn notice is the bound: a tool this turn may not
+    call is ABSENT from the request rather than refused, which is the bound that holds,
+    and a model that cannot see why keeps asking for it. Measured 2026-10-31, turn 2 of
+    the 90000023 thread: four model rounds, three requesting unavailable tools.
+
+    Rebuilt per round rather than said once, because both halves describe state that
+    changes: `tool_node` appends to the record between rounds, and the withdrawn set grows
+    with it.
+    """
+    parts: list[str] = []
+    record = state.get("evidence_state")
+    if record is not None and _record_has_content(record):
+        parts.append(record.render_for_prompt())
+    withdrawn = sorted(allowed - _still_bound(allowed, state))
+    if withdrawn:
+        parts.append(prompts.TRANSCRIPT_NOTICE.format(
+            contents=", ".join(
+                routing.RESULT_NOUNS.get(name, name) for name in withdrawn
+            ).lower(),
+        ))
+    return "\n\n".join(parts)
+
+
+def _with_overlay(conversation: list[BaseMessage], overlay: str) -> list[BaseMessage]:
+    """Place the overlay immediately before the message the model is answering.
+
+    Appended, unless the last message is the human turn — then before it, so a question
+    is not read with the record trailing after it. In a later round the last message is a
+    tool result and appending puts the record directly before the model's call, which is
+    where it belongs.
+
+    A `HumanMessage` and not a `SystemMessage`: the transcript already has exactly one
+    instruction message, every provider accepts one, and the record is data about this
+    patient's chart that the prompt's own rules mark as data.
+    """
+    message = HumanMessage(content=overlay)
+    if conversation and isinstance(conversation[-1], HumanMessage):
+        return [*conversation[:-1], message, conversation[-1]]
+    return [*conversation, message]
 
 
 def build_graph(
@@ -524,7 +714,6 @@ def build_graph(
     prose_stream: bool = False,
     manifest_answers_question: bool = False,
     risk_driver_question: bool = False,
-    risk_driver_declared: bool = False,
     wants_literature: bool = False,
     lab_driver_question: bool = False,
     follow_up_declared: bool = False,
@@ -622,28 +811,31 @@ def build_graph(
         # results you have", until the graph hit its recursion limit and the run failed
         # with a correct answer already on screen. Binding nothing is the same boundary
         # the command path uses — enforced by the absence of anything to call.
-        spent = len(state.get("tool_calls") or [])
+        #
+        # Read off ATTEMPTS since Sprint 2.2: `tool_calls` holds only executed calls now,
+        # so a model re-asking a capped tool would never reach the budget through it.
+        spent = _spent(state)
         if spent >= MAX_TOOL_CALLS_PER_TURN:
             answering_llm = chat_model
         else:
             answering_llm = bound_for(state)
-        # Say once what the transcript already holds, when the bound set is short of the
-        # standing one. A withdrawn tool is absent rather than refused — that is the right
-        # bound — but it leaves the model asking for a tool it cannot see, and asking
-        # again after a refusal it cannot learn from. Measured 2026-10-31, turn 2 of the
-        # 90000023 thread: four model rounds, three of them requesting unavailable tools,
-        # one executed call, and the answer's evidence already in the transcript.
+        # The transcript's evidence, as of THIS round: the session record rendered, and —
+        # when the bound set is short of the standing one — the note that a withdrawn tool
+        # will not run again. An overlay rather than a message: it is rebuilt from the
+        # record before every model call, so it is always current, and it is deliberately
+        # NOT returned into `messages`. Persisting it would append a second copy of the
+        # whole record on every round, and by the third tool call the window would be
+        # mostly repeated evidence.
+        #
+        # It replaces `prompts.TRANSCRIPT_NOTICE`'s one-shot message, which described the
+        # replay in prose and could not say what the replay CONTAINED. The record says
+        # both — `<evidence_items>` for what was retrieved, `<section_inventory>` for what
+        # was read and came back empty — which is what lets a turn answer from evidence an
+        # earlier turn fetched instead of searching for it again (`dev_t3_03`).
         conversation = list(state["messages"])
-        notice: list[BaseMessage] = []
-        if not state.get("transcript_notice_sent"):
-            withdrawn = sorted(allowed - _still_bound(allowed, state))
-            if withdrawn:
-                notice = [HumanMessage(content=prompts.TRANSCRIPT_NOTICE.format(
-                    contents=", ".join(
-                        routing.RESULT_NOUNS.get(name, name) for name in withdrawn
-                    ).lower(),
-                ))]
-                conversation.extend(notice)
+        overlay = _working_memory(state, allowed)
+        if overlay:
+            conversation = _with_overlay(conversation, overlay)
         if prose_stream and on_event is not None:
             response = await _streamed_turn(answering_llm, conversation, on_event)
         else:
@@ -654,9 +846,9 @@ def build_graph(
             # alternative is an empty turn that reads to the caller as a crash.
             response = _budget_exhausted_turn(response)
         return {
-            "messages": [*notice, response],
+            "messages": [response],
             "tool_calls": [],
-            "transcript_notice_sent": True,
+            "tool_attempts": 0,
         }
 
     async def tool_node(state: AgentState) -> dict:
@@ -677,20 +869,37 @@ def build_graph(
             # binding it is the first line; this refuses the call a model can still write
             # for a tool that is missing from its request.
             used_up=allowed - _still_bound(allowed, state),
-            # Numbering continues from every citable unit the conversation has shown:
-            # the replayed turns' note passages AND their laboratory panels, then the
-            # calls this turn has already made. `_citable_unit_total` is the same sum
-            # `replay_messages` advances by, so the transcript the model reads and the
-            # numbers its next tool result carries cannot disagree. Counting only
-            # `passages` here skipped a replayed `/labs` turn's nine analytes, and a
-            # follow-up's first passage was then stamped `^[1]` beside a panel that
-            # already held `^[1]`..`^[9]`, so a claim about the treatment course
-            # resolved to an analyte.
+            # Numbering is the RECORD's, not a running total: the executor ingests each
+            # payload before rendering it and stamps the positions the record assigned, so
+            # a passage the conversation retrieved in an earlier turn keeps the position
+            # it already had. `citation_bound` with the record is the same number — the
+            # record's length — and passing it keeps the fallback path (a payload whose
+            # units the record did not index) starting where the record ends.
             cite_offset=citations.citation_bound(
                 state.get("tool_calls") or [], state.get("replayed_tool_calls") or [],
+                evidence_state=state.get("evidence_state"),
             ),
+            evidence_state=state.get("evidence_state"),
+            # The session's admission. The model is not shown `hadm_id` in any tool
+            # schema, so the executor completes a patient-scoped call from here — and
+            # the guard above has already refused any admission the model wrote itself.
+            hadm_id=state.get("hadm_id"),
+            # The budget is attempts, not recordings, so the executor is told how many
+            # rounds have already been spent: a batch that starts past the budget is
+            # refused whole rather than half-executed.
+            attempted=state.get("tool_attempts") or 0,
         )
-        return {"messages": messages, "tool_calls": recorded}
+        # The turn's executed calls are registered inside the executor, before each result
+        # is rendered, because the render needs the positions the registration produced.
+        # What comes back here is only the messages the model reads.
+        #
+        # `tool_attempts` counts what the model ASKED for, which is what bounds the loop;
+        # `tool_calls` counts what ran, which is what the evidence is. They are two
+        # numbers because they are two facts, and a turn whose calls were all refused made
+        # no calls while still having spent its rounds.
+        return {"messages": messages, "tool_calls": recorded,
+                "tool_attempts": len(calls),
+                "evidence_state": state.get("evidence_state")}
 
     async def demand_retrieval_node(state: AgentState) -> dict:
         # A `HumanMessage` rather than a system instruction: a system message appended
@@ -713,11 +922,10 @@ def build_graph(
                 return END
             return "tools"
         # No tool call, so the turn is finished — unless it is an answer about the chart
-        # written without reading the chart. The six ways that is not the case: something
-        # was already retrieved, the demand has already been made once, the reply is the
-        # redirect the prompt asks for (a complete answer that calls no tool by design),
-        # there is no reply at all, the manifest is the evidence (see below), or a
-        # declared driver drill-down already holds its attribution in the replay.
+        # written without reading the chart. Five ways that is not the case: something
+        # was already retrieved this turn, the demand has already been made once, the
+        # reply is the redirect the prompt asks for (a complete answer that calls no tool
+        # by design), there is no reply at all, or the manifest is the evidence.
         if state["tool_calls"] or state["retrieval_demanded"]:
             return END
         answer = text_of(getattr(last, "content", ""))
@@ -736,47 +944,29 @@ def build_graph(
             # so the correct one is replaced by an abstention. See
             # `routing.asks_for_administrative_detail`.
             return END
-        if risk_driver_declared and _transcript_carries_attribution(state):
-            # A clicked driver bar asked what stands behind a factor it was already
-            # scored on, and the replayed turns carry that scoring call. The same
-            # argument as the manifest: the evidence for this question is already in
-            # the transcript, so a forced search buys nothing and costs the answer.
-            # Declared, not inferred from the wording — the drill-down knows what it
-            # is, and only that declaration distinguishes it from a first turn.
-            return END
-        if follow_up_declared and state.get("replayed_tool_calls"):
-            # A question this product generated from the record. `followups.suggest`
-            # offers a chip only when the data behind it is in the turn that offered it
-            # — that is the module's answerability invariant — and that turn is in the
-            # transcript by the time the chip is clicked, so there is nothing a forced
-            # retrieval can add.
+        if _session_holds_evidence(
+            state,
+            wants_literature=wants_literature,
+            risk_driver_question=risk_driver_question,
+            risk_score_question=risk_score_question,
+        ):
+            # The session already holds what this question needs, and the model was shown
+            # it: `agent_node` renders the record into the window on every round, and this
+            # round was bound to every tool the caps had not taken away. The model saw the
+            # evidence, saw what it could still call, and answered. Sending it back is the
+            # defect `dev_t3_03` describes — a correct answer replaced by the forced
+            # round's, because only the last message is settled.
             #
-            # Declared, like the drill-down above, and for the same reason: the agent
-            # cannot tell a generated question from a typed one by reading it. Two
-            # attempts to infer it from the wording failed in production on 2026-10-25 —
-            # the first let the demand fire on a chip whose own slot text ("Red blood
-            # cells") missed a singular-only vocabulary by one letter, and the second
-            # then removed the tool that would have answered it, so the turn answered
-            # from the notes that the labs were not documented. Provenance is a fact the
-            # client has; it sends it.
+            # This replaces three replay-shape exemptions (a `rag_search_sections` call in
+            # the replay, a declared follow-up with any replay at all, a prediction in the
+            # replay). Each asked a version of this question from the call log; the record
+            # answers it directly, and answers it for a thread whose evidence arrived
+            # through `/meds` or `/labs` as well as through `/ehr`.
             return END
-        if any(str(call.get("name")) == "rag_search_sections"
-               for call in state.get("replayed_tool_calls") or []):
-            # A typed follow-up in a thread that has already read the WHOLE note. The
-            # demand exists to stop a first turn answering the chart from memory (measured
-            # 2026-10-15: two turns in one thread answered with no call at all, and the
-            # markers were stripped as pointing at nothing). On a follow-up it did the
-            # opposite of its purpose: asked how the thread's published benchmark compared
-            # with the estimate, the model answered from the transcript — correctly, the
-            # evidence was there — and this branch spent a note search on its behalf whose
-            # reply then REPLACED that answer with one saying the notes document no
-            # peer-reviewed research (2026-11-04).
-            #
-            # The licence is full-chart synthesis specifically, not "a replay exists". A
-            # thread whose only call was a laboratory panel, or one narrow vector search,
-            # holds no account of the admission: a new chart question asked into it still
-            # needs the note read, and treating any replay as sufficient turned the one
-            # protection this path has into a hole (2026-11-04).
+        if not _still_bound(allowed, state):
+            # Nothing left to demand WITH. `bound_for` would hand back the unbound model
+            # and the forced round would ask a model to call a tool it does not have; the
+            # answer it writes then replaces this one for no gain.
             return END
         return "demand_retrieval"
 
@@ -1033,7 +1223,34 @@ async def ask(
     # note (2026-11-04). Built before the graph rather than after it, because ONE binding
     # decision reads it: whether the laboratory panel this turn is asked to rank is already
     # in hand (`_freetext_allowed`). The replay is the only place that fact lives.
-    replayed, replayed_calls, thread_literature = await replay_messages(toolbox, turns)
+    replayed, replayed_calls, thread_literature = await replay_messages(
+        toolbox, turns, hadm_id=hadm_id)
+
+    # The session's evidence, built from the replay before the run rather than derived
+    # again by every later reader, and extended by `_execute_tool_calls` as this turn's
+    # tools run. Its count at this moment is what this turn's `citation_map` is measured
+    # from, so it is captured before a single call is made.
+    #
+    # A turn with no admission gets no state. The record is scoped to one patient, and a
+    # record with no patient would be one whose positions could be fed from any chart.
+    session = (
+        session_evidence.SessionEvidenceState.hydrate_from_calls(
+            hadm_id, [_presented_call(call) for call in replayed_calls])
+        if hadm_id is not None else None
+    )
+    replayed_positions = (
+        session.position_count() if session is not None
+        else citations.citation_bound([], replayed_calls)
+    )
+
+    # The turn's question shape, computed once, because TWO readers depend on it:
+    # `_freetext_allowed` decides which tools are bound, and the same answers decide which
+    # spokes the model is given. Two expressions of one question is how a turn ends up
+    # told about a tool it cannot call.
+    risk_driver_question = routing.wants_risk_driver(question, intent)
+    risk_score_question = routing.asks_for_risk_score(question)
+    lab_driver_question = routing.asks_about_a_lab_analyte(question)
+    follow_up_declared = intent == "follow_up"
 
     graph = build_graph(
         toolbox, model=model, on_event=on_event, question_kind=question_kind,
@@ -1048,20 +1265,21 @@ async def ask(
         # reasoning about a driver, which is the only way `predict_readmission` enters
         # the free-text tool set (see `_freetext_allowed`). A clicked driver bar declares
         # that it is one, so the control decides instead of its label.
-        risk_driver_question=routing.wants_risk_driver(question, intent),
+        risk_driver_question=risk_driver_question,
         # And whether it asks for the estimate itself — "what is his readmission risk
         # score, and is it above threshold". The same tool, a different reason, and the
         # one that stops a cold-start thread being told to go and type a command.
-        risk_score_question=routing.asks_for_risk_score(question),
-        # The declaration on its own, kept separate from the question it also implies:
-        # `route` uses it to end a replay turn that already holds the attribution, and
-        # a question that merely reads like a driver question was never scored.
-        risk_driver_declared=intent == "risk_driver",
+        risk_score_question=risk_score_question,
         # The same shape for the product's own questions. A chip is generated from a
         # tool result in this conversation, so when it is clicked the evidence is already
         # in the transcript and a forced retrieval can only cost the answer. Declared by
         # the console that drew the chip, never inferred from its wording.
-        follow_up_declared=intent == "follow_up",
+        #
+        # Read by `_freetext_allowed` only. `route` used to read a second declaration
+        # (`risk_driver_declared`) — it is gone with the replay-shape exemptions: what
+        # ends a turn now is the record holding the question's evidence, which is a fact
+        # about the session rather than about how the question was submitted.
+        follow_up_declared=follow_up_declared,
         # The other half of `_freetext_allowed`: published evidence is searched only on
         # a turn that asked for it, so a chart question cannot come back with a
         # `LiteratureList` and no note citations.
@@ -1069,7 +1287,7 @@ async def ask(
         # And the half that WITHHOLDS a tool: a driver question about a count or a
         # disposition is not documented by a lab series, so asking for one put a panel in
         # the turn's evidence and a lab chip under an answer about utilization.
-        lab_driver_question=routing.asks_about_a_lab_analyte(question),
+        lab_driver_question=lab_driver_question,
     )
 
     config: dict = {"recursion_limit": RECURSION_LIMIT}
@@ -1107,15 +1325,47 @@ async def ask(
         f"free_text.turn{trace_meta.get('turn', 1)}",
         trace_metadata=None if turn_root is not None else trace_meta,
     ) as root_span:
+        # The Hub plus only the spokes this turn can use. `_freetext_allowed` is asked
+        # HERE rather than only inside `build_graph`, because the bound set decides which
+        # rules the model needs: a turn that cannot call `get_lab_trends` and holds no
+        # panel is a turn the laboratory rules cannot apply to, and a rule that cannot
+        # apply is not free — it sits in the window beside the ones that can.
+        #
+        # `build_graph` still calls it too, for its own binding, from the same five
+        # flags. Two calls of one pure function, not two opinions.
+        allowed_for_prompt = _freetext_allowed(
+            risk_driver_question,
+            wants_literature,
+            lab_driver_question,
+            follow_up_declared,
+            risk_score_question,
+        )
+        system_prompt = prompts.compose_system_prompt(
+            allowed_tools=allowed_for_prompt,
+            wants_literature=wants_literature,
+            risk_driver_question=risk_driver_question,
+            risk_score_question=risk_score_question,
+            lab_driver_question=lab_driver_question,
+            has_prediction=(session is not None and session.prediction is not None),
+            has_labs=(
+                session is not None
+                and any(item.source_tool == "get_lab_trends"
+                        for item in session.items.values())
+            ),
+        )
         state = await graph.ainvoke(
             {
                 "messages": [
                     SystemMessage(
-                        content=SYSTEM_PROMPT + _context_block(admission_context, hadm_id)),
+                        content=system_prompt + _context_block(admission_context, hadm_id)),
                     *replayed,
                     HumanMessage(content=question),
                 ],
                 "tool_calls": [],
+                # The other half of the tool budget (Sprint 2.2): what the turn asked
+                # for, which is what bounds the loop, where `tool_calls` holds only what
+                # ran. Seeded per run like `retrieval_demanded`.
+                "tool_attempts": 0,
                 # The replayed turns' calls travel with the run so the answer can be
                 # guarded against the evidence it was actually given. Without them a
                 # follow-up reusing the stored score is served with the score
@@ -1137,10 +1387,19 @@ async def ask(
                 # opinion about one question (`turn_is_about_literature` explains why
                 # the three readers must agree).
                 "wants_literature": wants_literature,
-                # The notice about what the replay already holds is said once, on the
-                # first model turn (`agent_node`), and this is the flag that keeps it
-                # one-shot. Seeded per run like `retrieval_demanded`.
-                "transcript_notice_sent": False,
+                # The notice about what the replay already holds is not a message: it is
+                # rebuilt from the record before every model round (`agent_node`), so it is
+                # current rather than one-shot, and it is never persisted into `messages`.
+                #
+                # The admission this turn is about, and the evidence record scoped to it.
+                # The record is hydrated from the replay above, so a follow-up starts
+                # knowing what the thread has already read instead of re-deriving it.
+                "hadm_id": hadm_id,
+                "evidence_state": session,
+                # How many positions the replay already registered. Stamped here, where
+                # the record is built, because `turn.py` republishes this turn's
+                # `citation_map` measured from it and may not hydrate a record of its own.
+                "replay_positions": replayed_positions,
             },
             config=config,
         )
@@ -1173,7 +1432,10 @@ async def ask(
     # `answer.no_evidence_answer`). Set on the state, so both routes serve it and the
     # guardrails and citation layer treat it like any other answer.
     fallback = answer_text.no_evidence_answer(
-        question, state.get("tool_calls") or [], declined=reply.declined
+        question,
+        state.get("tool_calls") or [],
+        declined=reply.declined,
+        evidence_state=state.get("evidence_state"),
     )
     if fallback is not None:
         state["deterministic_answer"] = fallback
@@ -1248,50 +1510,19 @@ def _pruned_literature_payload(payload: dict, cited: list[dict]) -> dict:
     return pruned
 
 
-def _replayed_tool_messages(
-    call: dict[str, Any], call_id: str, payload: Any, *, offset: int = 0
-) -> list[BaseMessage]:
-    """One replayed tool call and its result, rendered exactly as a live pair is.
-
-    The same two message types in the same order the chain produces mid-turn: the
-    assistant turn that asked for the call, then the result. The result goes
-    through the same renderer a live one does, so the wrapper and the delimiter
-    guard apply identically — replaying a passage outside the wrapper would put
-    clinical text where the prompt says instructions live, which is the whole
-    reason the boundary exists.
-
-    It also goes through the same PROJECTION a live one does, which is the half this
-    function was missing. `tool_node` renders `project(payload)`; this rendered the raw
-    payload, so a follow-up turn saw a different result from the turn that fetched it.
-    What the projection adds is `probability_display` / `threshold_display` in place of
-    the estimate's floats, which is what keeps a number the model could paste out of its
-    hands — a replayed estimate without them handed the model the raw score.
-    """
-    asked = AIMessage(
-        content="",
-        tool_calls=[{"name": call["name"], "args": call.get("args") or {}, "id": call_id}],
-    )
-    body = _render_tool_result(
-        _presented_for_model(call["name"], payload),
-        offset=offset)
-    result = ToolMessage(
-        content=f'<tool_result name="{call["name"]}">\n{body}\n</tool_result>',
-        tool_call_id=call_id,
-        name=call["name"],
-    )
-    return [asked, result]
-
-
 async def replay_messages(
     toolbox: MCPToolbox, turns: list[dict[str, Any]] | None,
+    hadm_id: int | None = None,
 ) -> tuple[list[BaseMessage], list[RecordedToolCall], list[dict]]:
     """The earlier conversation, as the messages the model would have seen.
 
-    A turn is replayed in the order it happened: the question, then each tool
-    call with its result, then the answer. The result is the one the turn stored
-    when it has one — a prediction score cannot be recomputed to the same value —
-    and is otherwise resolved again by calling the tool, which is deterministic
-    here because the corpus is written offline and never mutated by a request.
+    A turn is replayed in the order it happened: the question, then the answer. The
+    RESULT of each tool call is not replayed as a message. It reaches the next turn through
+    the session record instead — `evidence_state.hydrate_from_calls(hadm_id, calls)` +
+    `render_for_prompt()`, injected as a per-round overlay by `agent_node` — because a
+    transcript of tool bodies is a second, positional account of evidence the record
+    already holds under permanent positions, and the two disagreed the moment a passage
+    was retrieved twice (`_replayed_tool_messages`, retired 2026-11-05).
 
     Re-resolving is the price of not storing passage text, and it is paid only
     for the calls that did not store a payload. Nothing is emitted as a progress
@@ -1326,15 +1557,28 @@ async def replay_messages(
     calls: list[RecordedToolCall] = []
     thread_articles: list[dict] = []
     seen_pmids: set[str] = set()
+    # The positions the turns replayed so far have registered. It is the number each
+    # turn's stored `citation_map` was measured from, so adding it back puts the answer's
+    # markers on the same integers the record gives the same evidence.
+    #
+    # A running record when the caller gave an admission, because positions have to be
+    # DEDUPLICATED to match what `_execute_tool_calls` will assign: a turn that retrieved a
+    # passage an earlier turn already held must not advance the count. Without an
+    # admission there is no record and the payload sum is the only count there is — and a
+    # thread with no admission is a thread with no citable units, so the two agree.
+    record = (
+        session_evidence.SessionEvidenceState(hadm_id=hadm_id)
+        if hadm_id is not None else None
+    )
     offset = 0
     for turn_index, turn in enumerate(turns or []):
-        # Where this turn's own units begin. Captured before its calls are rendered,
+        # Where this turn's own units begin. Captured before its calls are ingested,
         # because that is what the turn's `citation_map` is measured from: the map carries
         # positions relative to the turn's first unit, and this is the number that puts
         # them back into the conversation's array.
-        turn_offset = offset
+        turn_offset = record.position_count() if record is not None else offset
         messages.append(HumanMessage(content=turn["question"]))
-        for call_index, call in enumerate(turn.get("tool_calls") or []):
+        for call in turn.get("tool_calls") or []:
             payload = call.get("payload")
             if payload is None:
                 logger.info(
@@ -1346,10 +1590,10 @@ async def replay_messages(
             if str(call.get("name")) in routing.LITERATURE_TOOLS:
                 # A search returns a pool; a turn rests on one or two of it. Only the
                 # records that turn's own answer CITED are part of the thread's evidence,
-                # so only those reach the transcript and `replayed_tool_calls`. Replaying
-                # all twenty-five abstracts let a follow-up quote figures from candidates
-                # nothing had displayed — and cite them, which settlement then stripped,
-                # leaving ungrounded numbers in the prose (90000069, 2026-11-04).
+                # so only those reach `thread_literature` and `replayed_tool_calls`.
+                # Replaying all twenty-five abstracts let a follow-up quote figures from
+                # candidates nothing had displayed — and cite them, which settlement then
+                # stripped, leaving ungrounded numbers in the prose (90000069, 2026-11-04).
                 #
                 # A search the turn cited nothing from is not replayed at all: it
                 # contributed no evidence to that answer, so there is nothing for a later
@@ -1363,15 +1607,19 @@ async def replay_messages(
                     if pmid and pmid not in seen_pmids:
                         seen_pmids.add(pmid)
                         thread_articles.append(article)
-            messages.extend(
-                _replayed_tool_messages(call, f"replay-{turn_index}-{call_index}", payload,
-                                        offset=offset)
-            )
-            # The numbering continues across turns, because the citation layer resolves
-            # a marker against every citable unit the conversation has shown. A
-            # published-records payload contributes none: `passage_total` counts note
-            # passages and laboratory analytes, and an article is addressed by its PMID.
-            offset += _passage_total(payload)
+            if record is not None:
+                # Registered here, in the same order the live executor would have, so the
+                # replay and the run agree on what position any given passage holds — and
+                # from the PROJECTED payload, because the record is rendered back into the
+                # model's window and must hold only what the projection allowed.
+                record.ingest_tool_output(
+                    str(call.get("name") or ""),
+                    call.get("args"),
+                    _record_text(_presented_for_model(
+                        str(call.get("name") or ""), payload)),
+                )
+            else:
+                offset += _passage_total(payload)
             calls.append({
                 "name": call["name"],
                 "args": dict(call.get("args") or {}),
@@ -1386,6 +1634,11 @@ async def replay_messages(
         # the position it was compacted from. A turn whose caller sent no map — one stored
         # before the field existed — gets the deletion, which is what it got before.
         # `^[PMID: ...]` badges survive either way: they name a record, not a position.
+        #
+        # An offset may be NEGATIVE here: an answer that cited a passage an EARLIER turn
+        # retrieved has a position below this turn's first unit, and `restore_global_markers`
+        # adds the offset back to land on the absolute position the record gives that
+        # passage. That is the mechanism by which a reused position survives a replay.
         messages.append(AIMessage(
             content=citations.restore_global_markers(
                 turn.get("answer") or "", turn.get("citation_map"), turn_offset)))
@@ -1422,6 +1675,12 @@ def _settle(state: dict, *, prose: str | None) -> None:
         # that knew only this turn's evidence would delete a follow-up's citation of the
         # thread's own benchmark (2026-11-04).
         thread_literature=state.get("thread_literature") or [],
+        # And the record, which is the array the markers address. A passage the
+        # conversation retrieved twice occupies one position in it, so the bound this
+        # settles against is the record's length and the `display` map it returns carries
+        # record positions — which is what `presentation` resolves through and what
+        # `turn.py` republishes for the next turn's replay.
+        evidence_state=state.get("evidence_state"),
     )
     message = final_message(state)
     if message is not None and settled.prose is not None:

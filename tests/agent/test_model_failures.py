@@ -28,6 +28,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import pytest  # noqa: E402
 from langchain_core.messages import AIMessage  # noqa: E402
 from langchain_google_genai.chat_models import GoogleRateLimitError  # noqa: E402
 from starlette.testclient import TestClient  # noqa: E402
@@ -226,3 +227,124 @@ def test_a_safety_finish_is_reported_as_a_refusal_with_its_category(caplog):
     record = _record(caplog)
     assert record["finish_reason"] == "SAFETY"
     assert record["filtered"] == ["HARM_CATEGORY_DANGEROUS_CONTENT"]
+
+
+# --- the tool transport retries what a retry can fix --------------------------
+#
+# One attempt used to be the whole policy: a stream reset between hops, or a read that
+# timed out at the transport while the tool was still working, reached the model as
+# `tool_call_failed` and the turn answered around a hole. What is bounded here is the
+# ladder — three attempts, doubling, no sleep in the tests.
+
+
+class _ScriptedSession:
+    """A session whose `call_tool` fails a scripted number of times and then answers."""
+
+    def __init__(self, failures, *, exc=None, result=None):
+        self.failures = failures
+        self.exc = exc or TimeoutError("read timed out")
+        self.result = result if result is not None else _ok_result()
+        self.calls = 0
+
+    async def call_tool(self, name, arguments, **_kwargs):
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise self.exc
+        return self.result
+
+
+class _Result:
+    def __init__(self, payload):
+        self.structured_content = payload
+        self.content = []
+        self.is_error = False
+
+
+def _ok_result(payload=None):
+    return _Result(payload or {"hadm_id": 90000015, "query": "q", "returned": 0,
+                               "passages": []})
+
+
+def _toolbox(session):
+    from services.agent.engine.mcp_client import MCPToolbox
+
+    box = MCPToolbox(session=session, base_delay_seconds=0.0)
+    box._tools = {"rag_search": _Schema()}
+    return box
+
+
+class _Schema:
+    description = "Retrieve passages from the discharge note."
+    input_schema = {"type": "object", "properties": {"query": {}}}
+
+
+def test_a_transient_failure_is_retried_until_it_answers():
+    session = _ScriptedSession(failures=2)
+
+    result = asyncio.run(_toolbox(session).call("rag_search", {"query": "q"}))
+
+    assert session.calls == 3
+    assert "error" not in result, result
+
+
+def test_a_connection_error_is_transient_too():
+    """`ConnectionError` and `TimeoutError` are both `OSError`; so is a reset socket."""
+    session = _ScriptedSession(failures=1, exc=ConnectionResetError("peer reset"))
+
+    result = asyncio.run(_toolbox(session).call("rag_search", {"query": "q"}))
+
+    assert session.calls == 2
+    assert "error" not in result
+
+
+def test_a_transport_stream_error_is_retried():
+    """The `mcp` transport reports a broken stream as a `RuntimeError` subclass.
+
+    Retried because nothing was decided: the call never reached the tool.
+    """
+    session = _ScriptedSession(failures=1, exc=RuntimeError("transport reset"))
+
+    result = asyncio.run(_toolbox(session).call("rag_search", {"query": "q"}))
+
+    assert session.calls == 2
+    assert "error" not in result
+
+
+def test_the_attempts_are_bounded_and_the_failure_is_reported():
+    """Three attempts, then the model is told. It must not invent a number."""
+    session = _ScriptedSession(failures=99)
+
+    result = asyncio.run(_toolbox(session).call("rag_search", {"query": "q"}))
+
+    assert session.calls == 3
+    assert result["error"] == "tool_call_failed"
+    assert "failed" in result["message"]
+
+
+def test_an_application_error_is_not_retried():
+    """A tool that said `unknown_patient` answered the question. Asking again is waste.
+
+    The distinction the ladder turns on: a transport that failed versus a tool that
+    replied. Only the first is worth another attempt, and only the first raises.
+    """
+    session = _ScriptedSession(
+        failures=0, result=_Result({"error": "unknown_patient", "message": "no row"}))
+
+    result = asyncio.run(_toolbox(session).call("rag_search", {"query": "q"}))
+
+    assert session.calls == 1
+    assert result["error"] == "unknown_patient"
+
+
+def test_a_cancelled_turn_is_not_retried():
+    """`CancelledError` is the caller's decision, not a transient fault.
+
+    Retrying it would outlive the request that asked for the call, so it is re-raised
+    rather than counted against the attempts.
+    """
+    session = _ScriptedSession(failures=1, exc=asyncio.CancelledError())
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(_toolbox(session).call("rag_search", {"query": "q"}))
+
+    assert session.calls == 1

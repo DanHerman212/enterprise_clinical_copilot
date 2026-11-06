@@ -21,6 +21,7 @@ import contextlib
 import json
 import logging
 import os
+import random
 import subprocess
 import sys
 import time
@@ -40,12 +41,13 @@ from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
 from services.agent.postprocess import citations
+from services.agent.postprocess import evidence_state as session_evidence
 from services.agent.routing import routing
 from shared.labels import humanize
 from services.agent.telemetry import observability, stages
 from services.agent.telemetry.stages import emit as _emit
 from shared.errors import AgentResponseError
-from typing import Any, Callable, TypedDict
+from typing import Any, Callable, Sequence, TypedDict
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +143,48 @@ def _clean_schema(node: Any) -> Any:
     return cleaned
 
 
+def _model_schema(name: str, schema: Any) -> Any:
+    """The schema the MODEL is shown: no admission id, because the session already has it.
+
+    A tool that takes one admission describes its subject, and the subject of a turn is
+    fixed by the request — never by the model. Advertising `hadm_id` asked the model to
+    generate a number it had no way to know and every reason to guess: measured
+    2026-11-05, a probe that named a real admission read another patient's discharge
+    summary during a turn about a different one, and the only thing standing in the way
+    was a refusal of the attempt after it had been made.
+
+    So the argument is removed from the copy the model reads. `MCPToolbox.call` still
+    receives it — `_execute_tool_calls` injects the session's admission — so the tool's
+    own signature, its validation and `_external_argument_refusal` are untouched. The
+    tool still declares `hadm_id`; only the model is not told about it.
+
+    Structured as "does this tool declare the argument" rather than as a list of tool
+    names, so a patient-scoped tool added tomorrow is covered without a second registry
+    (`routing` owns the names, and `search_literature` declares no admission at all).
+
+    A tool left with no properties becomes `{"type": "object", "properties": {}}` with no
+    `required` list, which is the shape LangChain and Gemini accept for a call that takes
+    no arguments — `rag_search_sections`, `discharge_medications` and
+    `predict_readmission` are exactly that, once the admission is gone.
+    """
+    cleaned = _clean_schema(schema)
+    if not isinstance(cleaned, dict):
+        return cleaned
+    properties = cleaned.get("properties")
+    if not isinstance(properties, dict) or "hadm_id" not in properties:
+        return cleaned
+    remaining = {key: value for key, value in properties.items() if key != "hadm_id"}
+    if not remaining:
+        return {"type": "object", "properties": {}}
+    bound = {key: value for key, value in cleaned.items() if key != "required"}
+    bound["properties"] = remaining
+    required = [entry for entry in (cleaned.get("required") or [])
+                if entry != "hadm_id"]
+    if required:
+        bound["required"] = required
+    return bound
+
+
 def _unwrap(payload: dict) -> dict:
     """Unwrap the single-key envelope a union return type produces.
 
@@ -185,6 +229,20 @@ def _payload(result: Any) -> dict:
     return {}
 
 
+#: The failures a retry can help with. `TimeoutError` and `ConnectionError` are `OSError`
+#: subclasses, and anyio — which the `mcp` transport is built on — reports a broken or
+#: closed stream as a `RuntimeError` subclass, so these roots cover the transport surface
+#: without naming SDK internals a dependency bump would invalidate. A bare `Exception`
+#: would also catch a programming error and retry it three times.
+_TRANSIENT_TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
+    OSError, RuntimeError, EOFError,
+)
+
+#: How much of the backoff delay may be added as jitter, as a fraction of it. Bounded so
+#: the ladder still fits inside `call_timeout_seconds` and the caller's `ask` deadline.
+_JITTER_FRACTION = 0.25
+
+
 @dataclass
 class MCPToolbox:
     """The MCP tools of one session, exposed as Gemini function declarations."""
@@ -195,6 +253,18 @@ class MCPToolbox:
     # ordering against the model leg is enforced by `timeout_chain`.
     call_timeout_seconds: float = timeout_chain().tool
     _tools: dict[str, Any] = field(default_factory=dict)
+    #: How many times ONE call is attempted before it is reported as failed.
+    #:
+    #: Three, because the failures this exists for are bursts rather than outages: a
+    #: Cloud Run instance that just scaled, a stream reset between hops, a read that
+    #: timed out at the transport while the tool was still inside its own deadline. A
+    #: call that failed three times across a second and a half is a real failure and
+    #: the model is told so — inventing a number is the outcome this must not have.
+    max_attempts: int = 3
+    #: The first backoff, doubled per attempt. Deliberately small: the whole retry
+    #: ladder has to fit inside `call_timeout_seconds` and the caller's `ask` deadline,
+    #: or a retry budget becomes a timeout instead of a recovery.
+    base_delay_seconds: float = 0.25
 
     async def load(self) -> "MCPToolbox":
         result = await self.session.list_tools()
@@ -214,7 +284,7 @@ class MCPToolbox:
                 types.FunctionDeclaration(
                     name=tool.name,
                     description=(tool.description or "").strip(),
-                    parameters=_clean_schema(tool.input_schema),
+                    parameters=_model_schema(tool.name, tool.input_schema),
                 )
                 for tool in self._tools.values()
                 if tool.name not in PREFLIGHT_TOOLS
@@ -240,12 +310,8 @@ class MCPToolbox:
             # kind of thing that must not reach a log line.
             _LOG.error("MCP tool %s refused: undeclared argument(s) in the call", name)
             return refusal
-        try:
-            result = await self.session.call_tool(
-                name, arguments, read_timeout_seconds=self.call_timeout_seconds
-            )
-        except Exception as exc:
-            _LOG.error("MCP tool %s call failed", name, exc_info=exc)
+        result = await self._call_with_backoff(name, arguments)
+        if result is None:
             return {
                 "error": "tool_call_failed",
                 "message": "The tool call failed before it returned a result.",
@@ -263,6 +329,60 @@ class MCPToolbox:
                 "message": "The tool refused the call before it ran.",
             }
         return _checked(name, payload)
+
+    async def _call_with_backoff(self, name: str, arguments: dict) -> Any | None:
+        """One transport call, retried while the failure looks transient.
+
+        Returns the SDK's result, or `None` once the attempts are spent. `None` rather
+        than an exception because the caller's contract is a dict the model can report —
+        an exception here would collapse the graph and lose the answer.
+
+        Two classes of failure, and only one is retried:
+
+          * **transient** — a timeout, a refused or reset connection, a stream the `mcp`
+            transport reports as a `RuntimeError`. Nothing was decided; the same call may
+            well succeed. `TimeoutError` and `ConnectionError` are `OSError` subclasses,
+            and anyio's broken/closed resource errors descend from `RuntimeError`, so the
+            two roots below cover the transport surface without a list of SDK internals
+            that a dependency bump would invalidate.
+          * **everything else** — a bug, a schema the SDK rejected, a call that cannot
+            work. Retried zero times, logged once, reported to the model.
+
+        `asyncio.CancelledError` is a `BaseException` and is re-raised first regardless,
+        because a cancelled turn is the caller's decision and retrying it would outlive
+        the request that asked for it.
+
+        The delay doubles per attempt and carries bounded jitter: two turns that hit the
+        same overloaded instance should not retry in lockstep. `base_delay_seconds=0.0`
+        makes the ladder a no-op, which is what a unit test wants.
+        """
+        attempts = max(1, self.max_attempts)
+        for attempt in range(1, attempts + 1):
+            try:
+                return await self.session.call_tool(
+                    name, arguments, read_timeout_seconds=self.call_timeout_seconds
+                )
+            except asyncio.CancelledError:
+                raise
+            except _TRANSIENT_TRANSPORT_ERRORS as exc:
+                if attempt >= attempts:
+                    _LOG.error(
+                        "MCP tool %s call failed after %d attempt(s)", name, attempts,
+                        exc_info=exc,
+                    )
+                    return None
+                delay = self.base_delay_seconds * (2 ** (attempt - 1))
+                if delay > 0:
+                    delay += random.uniform(0.0, delay * _JITTER_FRACTION)
+                    await asyncio.sleep(delay)
+                _LOG.warning(
+                    "MCP tool %s attempt %d/%d failed transiently; retrying in %.2fs: %s",
+                    name, attempt, attempts, delay, exc,
+                )
+            except Exception as exc:
+                _LOG.error("MCP tool %s call failed", name, exc_info=exc)
+                return None
+        return None
 
 
 def _mcp_child_environment() -> dict[str, str]:
@@ -483,6 +603,28 @@ def _call_key(name: str, arguments: dict[str, Any]) -> str:
     return f"{name}:{json.dumps(arguments, sort_keys=True, default=str)}"
 
 
+def _with_session_admission(name: str, arguments: dict[str, Any],
+                            hadm_id: int | None) -> dict[str, Any]:
+    """One call's arguments, with the session's admission where the tool expects it.
+
+    The model is no longer shown `hadm_id` (`_model_schema`), so a patient-scoped call
+    arrives without one and is completed here. Three properties this holds:
+
+      * a tool that publishes records rather than chart evidence — `search_literature` —
+        takes no admission and is never given one;
+      * an admission the model DID write is left exactly as written, so the refusal in
+        `_outbound_patient_identifier` can refuse it rather than have it replaced by the
+        correct value;
+      * a turn with no admission injects nothing, and the guard refuses the call. Filling
+        in `None` would send a call the tool cannot answer and blame the tool.
+    """
+    if hadm_id is None or name in routing.LITERATURE_TOOLS:
+        return arguments
+    if arguments.get("hadm_id") is not None:
+        return arguments
+    return {**arguments, "hadm_id": hadm_id}
+
+
 
 def _passage_total(payload: Any) -> int:
     """How many citation numbers a payload consumes.
@@ -524,7 +666,8 @@ def _render_passage(passage: dict[str, Any], *, keep_id: bool = False) -> dict[s
 
 
 
-def _render_tool_result(payload: Any, *, offset: int = 0) -> str:
+def _render_tool_result(payload: Any, *, offset: int = 0,
+                        ref_ids: Sequence[int] | None = None) -> str:
     """Render a tool result as the body the wrapper hands the model.
 
     The projection is built here rather than applied to the payload itself: the
@@ -539,6 +682,12 @@ def _render_tool_result(payload: Any, *, offset: int = 0) -> str:
     (`citations.citable_passages` concatenates the same units in the same order).
     Restarting at 1 per result meant `^[1]` named the first passage of whichever result
     the reader happened to look at (TF-10, 2026-10-23).
+
+    `ref_ids` is that numbering when the session record already decided it. The record
+    assigned a position to every unit it ingested and reports which, in payload order
+    (`IngestResult.slot_ids`), so a passage the conversation retrieved in an earlier turn
+    is stamped with the position it already has rather than with a second one counted
+    from `offset`. Given them, `offset` is not consulted.
     """
     if isinstance(payload, str):
         return _escape_delimiter(payload)
@@ -546,7 +695,8 @@ def _render_tool_result(payload: Any, *, offset: int = 0) -> str:
     # it is the module that will later resolve or delete a marker, so it also stamps the
     # numbers. `dress` is the shaping only this layer knows about — dropping the machine
     # id, refusing an over-long passage — and it runs before the numbers are attached.
-    rendered = citations.render_numbered(payload, offset, dress=_render_passage)
+    rendered = citations.render_numbered(payload, offset, dress=_render_passage,
+                                         ref_ids=ref_ids)
     return _escape_delimiter(json.dumps(rendered, ensure_ascii=False))
 
 
@@ -569,7 +719,7 @@ def _tools(toolbox: MCPToolbox,
         _MCPTool(
             name=name,
             description=(tool.description or "").strip(),
-            args_schema=_clean_schema(tool.input_schema),
+            args_schema=_model_schema(name, tool.input_schema),
             box=toolbox,
         )
         for name, tool in toolbox._tools.items()
@@ -746,6 +896,53 @@ def _presented_for_model(name: str, payload: Any) -> Any:
 
 
 
+def _presented_call(call: dict) -> dict:
+    """The call as the model was shown it, for building a session record.
+
+    The record renderer prints what it holds into the model's window, so it must hold
+    what the model is allowed to read. `_presented_for_model` is what withholds the
+    estimate's floats and the driver magnitudes; a record built from the raw response
+    would hand both back on the next model round, which is the leak the projection exists
+    to close.
+
+    The record's own DELIMITERS are not handled here. `evidence_state.render_for_prompt`
+    escapes them at the point it prints them, which is the only place that can cover every
+    value it interpolates — including the section names it takes from the model's own
+    arguments, which never pass through a payload projection at all.
+    """
+    return {
+        **call,
+        "response": _record_text(
+            _presented_for_model(str(call.get("name") or ""), call.get("response"))),
+    }
+
+
+def _record_text(payload: Any) -> Any:
+    """A payload as the session record may hold it, for ingestion only.
+
+    One shaping, and it has to happen before ingestion because the record IS the model's
+    copy: an over-long passage is refused in place, exactly as `_render_passage` refuses it
+    for a live result, so a whole-note chunk cannot put its full text into the window on
+    every round. The refusal keeps the passage's slot, so positions do not shift; `id` is
+    kept here because the record's identity for a note passage is the passage id.
+
+    Applied to the copy the record holds, never to the copy `recorded` stores or the one a
+    live `ToolMessage` carries: rewriting the tool's own result would make the record
+    disagree with what the tool said. A payload that is not a dict is left alone, which is
+    also what `ingest_tool_output` does with it.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    passages = payload.get("passages")
+    if not isinstance(passages, list):
+        return payload
+    return {**payload, "passages": [
+        _render_passage(passage, keep_id=True) if isinstance(passage, dict)
+        else passage
+        for passage in passages
+    ]}
+
+
 async def _execute_tool_calls(
     toolbox: MCPToolbox, calls: list[dict],
     on_event: Callable[[dict[str, Any]], None] | None = None,
@@ -756,6 +953,9 @@ async def _execute_tool_calls(
     order: Callable[[str, dict], dict] | None = None,
     cite_offset: int = 0,
     used_up: frozenset[str] = frozenset(),
+    evidence_state: session_evidence.SessionEvidenceState | None = None,
+    hadm_id: int | None = None,
+    attempted: int = 0,
 ) -> tuple[list[BaseMessage], list[RecordedToolCall]]:
     """Run one turn's tool calls, refusing those beyond the per-turn budget.
 
@@ -782,6 +982,27 @@ async def _execute_tool_calls(
     the first, and it is the one that holds; this catches the case the budget comments
     already name — a model that emits a call for a tool that is absent from its request.
     Such a call is refused rather than run, and announces no stage (rule 3).
+
+    `evidence_state` is the session record, and passing it is what makes the numbering the
+    RECORD's rather than a running total. Each payload is ingested before it is rendered,
+    so `_render_tool_result` can stamp the positions the record actually gave the units:
+    a passage this conversation retrieved in an earlier turn keeps its position instead of
+    being handed a second one. `numbered` then follows the record's high-water mark rather
+    than a payload sum, so the two cannot drift apart even when a call is deduplicated.
+
+    `hadm_id` is the session's admission, and it is what makes the model's job a smaller
+    one. The schema the model reads carries no `hadm_id` (`_model_schema`), so a call
+    arrives without one; it is added here, after the guard has seen what the model
+    actually wrote. Order matters and is the whole design: the guard must see a
+    HALLUCINATED admission — that is the only way the attempt is refused rather than
+    quietly replaced by the correct one — and the tool must receive a complete argument
+    list. So `guard` gets the model's arguments verbatim, and `toolbox.call` gets them with
+    the session's admission filled in.
+
+    `attempted` is how many calls this turn has already ASKED for, refusals included, and
+    it is what bounds the loop now that `recorded` holds only executed calls. The two
+    numbers answer two different questions: `recorded` is evidence, and a refused call is
+    not evidence; the attempt count is the budget, and a refused call still cost a round.
     """
     messages: list[BaseMessage] = []
     recorded: list[RecordedToolCall] = []
@@ -801,10 +1022,18 @@ async def _execute_tool_calls(
         made_name = str(made.get("name"))
         per_tool[made_name] = per_tool.get(made_name, 0) + 1
     for index, call in enumerate(calls):
-        arguments = dict(call.get("args") or {})
-        key = _call_key(str(call.get("name")), arguments)
-        spent_count = len(prior) + index
         name = str(call["name"])
+        # What the MODEL wrote, kept beside the complete arguments because the guard has
+        # to see it: an admission the model invented must be refused, not overwritten.
+        asked_for = dict(call.get("args") or {})
+        arguments = _with_session_admission(name, asked_for, hadm_id)
+        # Keyed on the complete arguments, because `prior` holds recorded calls and a
+        # recorded call carries the admission that was dispatched. Keying on what the
+        # model wrote would make the same call look new every round.
+        key = _call_key(name, arguments)
+        # Attempts, not executions: a refused call cost the model a round either way, and a
+        # budget that only counted dispatches let a model re-ask a capped tool for ever.
+        spent_count = max(len(prior), attempted) + index
         # Whether this call was turned away rather than run. A refusal must not consume a
         # capped tool's allowance: the model gets one honest call, not that call minus the
         # attempts nothing was ever dispatched for.
@@ -856,7 +1085,7 @@ async def _execute_tool_calls(
                 ),
             }
         else:
-            payload = guard(call["name"], arguments) if guard is not None else None
+            payload = guard(call["name"], asked_for) if guard is not None else None
             if payload is None:
                 refused = False
                 # Emitted HERE, one line above the call it describes: the stage is
@@ -901,12 +1130,49 @@ async def _execute_tool_calls(
         # markers stayed crossed in the other direction (TF-7, measured 2026-10-23).
         if order is not None and isinstance(payload, dict):
             payload = order(call["name"], payload)
-        recorded.append(validate_recorded_tool_call({
-            "name": call["name"], "args": arguments, "response": payload,
-        }))
         shown = project(call["name"], payload) if project is not None else payload
-        body = _render_tool_result(shown, offset=numbered)
-        numbered += _passage_total(shown)
+        # Only a call that actually DISPATCHED is evidence. A pre-dispatch refusal is a
+        # message to the model and nothing else: the tool never ran, so there is no result
+        # to record, no position to assign, no evidence for a guardrail to weigh and
+        # nothing for a later turn to replay.
+        #
+        # Recording it was not harmless. `a2ui.turn_scope` badges a turn `patient_chart`
+        # from `args.hadm_id` alone, so a REFUSED cross-patient attempt badged the turn as
+        # a chart read; `context_grounded` read the same call on replay; the PMID
+        # allowance counted a refused literature search; and the evaluator's
+        # `turn_tool_calls` check scored the attempt as a disclosure that never happened
+        # (`dev_t7_03`; audit §2.2). The budget does not regress either — it counts
+        # attempts now, not recordings (`attempted`, below).
+        executed = not refused
+        if executed:
+            recorded.append(validate_recorded_tool_call({
+                "name": call["name"], "args": arguments, "response": payload,
+            }))
+        # Ingested BEFORE the copy the model reads is built, because the record is what
+        # decides the numbers — and ingested as `shown`, because the record is rendered
+        # back into the model's window and must not hold anything the projection
+        # withheld. `recorded` keeps the tool's own payload; only the record the model
+        # reads is projected.
+        slot_ids: tuple[int, ...] = ()
+        if evidence_state is not None and executed:
+            slot_ids = evidence_state.ingest_tool_output(
+                str(call["name"]), arguments, _record_text(shown),
+            ).slot_ids
+        # The record's positions and the renderer walk the same array now, so the length
+        # check is a statement of that rather than a hope: a projection that added or
+        # dropped a passage would fall back to the running number instead of stamping a
+        # position onto the wrong passage.
+        use_ref_ids = (
+            slot_ids
+            if slot_ids and len(slot_ids) == citations.passage_total(shown)
+            else None
+        )
+        body = _render_tool_result(shown, offset=numbered, ref_ids=use_ref_ids)
+        numbered = (
+            evidence_state.position_count()
+            if evidence_state is not None
+            else numbered + _passage_total(shown)
+        )
         messages.append(
             ToolMessage(
                 content=(

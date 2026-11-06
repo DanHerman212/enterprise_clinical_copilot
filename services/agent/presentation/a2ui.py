@@ -58,6 +58,7 @@ from services.agent.postprocess.citations import (  # noqa: F401 — re-exported
     citation_remap,
     renumber_citations,
 )
+from services.agent.postprocess.evidence_state import SessionEvidenceState
 from services.agent.presentation.domain import (
     _LITERATURE_FIELDS,
     _usable_articles,
@@ -266,7 +267,8 @@ def compose_presentation(question: str, answer: str,
                          citation_map: dict[str, int] | None = None,
                          question_names_analyte: bool = False,
                          comparators: list[dict] | None = None,
-                         thread_literature: list[dict] | None = None) -> dict:
+                         thread_literature: list[dict] | None = None,
+                         evidence_state: SessionEvidenceState | None = None) -> dict:
     """The full presentation contract for an answered question.
 
     One call produces every field the browser consumes, so the answer's
@@ -304,6 +306,11 @@ def compose_presentation(question: str, answer: str,
     `sources`, in `references`, and in the scope badge. Defaults to False, which is the
     rule that a search belongs to the turn that made it (90000058).
 
+    `evidence_state` is the session record, when the caller has one. It is the authority
+    for what a marker means: the array is the record's positions, not a concatenation of
+    the tool results, so a passage retrieved twice occupies one position rather than two,
+    and the published records are numbered after the array the record actually holds.
+
     Pure — no I/O, no clock, no randomness — so it is fully testable without
     a browser or a live endpoint.
     """
@@ -326,7 +333,7 @@ def compose_presentation(question: str, answer: str,
     # One array, one count, one place the published records start (Phase 4; audit §2.3).
     # Both were derived here before — `sum(len(citable_passages(...)))` — which made the
     # presentation layer a second slot counter beside the guardrail's.
-    ledger = EvidenceLedger.of(evidence_calls)
+    ledger = EvidenceLedger.of(evidence_calls, evidence_state=evidence_state)
     literature_start = ledger.literature_start
     rag = rag_payload(evidence_calls)
     # The literature surface is the search THIS turn answers from: its own, or — for a
@@ -394,7 +401,8 @@ def compose_presentation(question: str, answer: str,
     # what `verified` is decided from is this one, and the two must not be confused by a
     # later edit that adds a channel.
     record_sources = resolve_sources(answer, citation_map or {}, rag, intent,
-                                     evidence=evidence_calls)
+                                     evidence=evidence_calls,
+                                     evidence_state=evidence_state)
     # What the reader is SHOWN as evidence, which for `/labs` is nothing at all
     # (2026-11-03). A laboratory turn already draws every reading it discusses — the
     # measurement, the reference interval, the course and the flag, one row per timepoint —
@@ -999,7 +1007,8 @@ def reference_rows(sources: list[dict]) -> list[dict]:
 
 def resolve_sources(answer: str, citation_map: dict[str, int],
                     rag: dict | None, sections: tuple[str, ...],
-                    evidence: list[dict] | None = None) -> list[dict]:
+                    evidence: list[dict] | None = None,
+                    *, evidence_state: SessionEvidenceState | None = None) -> list[dict]:
     """One resolved source per citation number in the (renumbered) answer.
 
     This is the list the browser renders on a footnote click: it looks up the
@@ -1014,8 +1023,16 @@ def resolve_sources(answer: str, citation_map: dict[str, int],
     then ten analytes from a lab drill-down — not only the passages of a single retrieval
     payload. Resolving against the retrieval alone left a lab citation pointing at a note
     passage or at nothing (Phase E, 2026-10-26).
+
+    `evidence_state` supersedes `evidence`, and is the same array built by the session
+    record rather than by concatenating the calls. The difference is a passage the
+    conversation retrieved twice: concatenation gives it two positions, the record gives
+    it the position it already had. A marker was written against one of those numbering
+    schemes, and it is the record's.
     """
-    if evidence is not None:
+    if evidence_state is not None:
+        passages = evidence_state.ordered_citable_units()
+    elif evidence is not None:
         passages = [
             passage for call in evidence
             for passage in citable_passages((call or {}).get("response"))
@@ -1029,12 +1046,36 @@ def resolve_sources(answer: str, citation_map: dict[str, int],
     if not cites:
         return []
     intent = sections if len(cites) == 1 else ()
-    return [
-        {"cite": n,
-         **resolve_source(passages, citation_map.get(str(n), n), intent),
-         "query": query}
-        for n in cites
-    ]
+
+    # A display number is a page number, not an array position. When settlement compacted
+    # the answer it published the map from one to the other, and that map is the only
+    # thing that can turn `^[1]` back into the passage it addresses.
+    #
+    # Falling back to the raw number — `citation_map.get(str(n), n)` — is wrong in the one
+    # direction that matters: after turn 1 the array does not start at 1, so an unmapped
+    # `^[2]` opened the passage at position 2, which is an EARLIER turn's passage, and
+    # `resolve_source` accepted it because the number was in range. The reader clicked a
+    # marker and landed on evidence the answer never rested on, with no flag anywhere
+    # (2026-11-05).
+    #
+    # So: with a map in hand, a number it does not hold resolves to nothing and is
+    # dropped. With NO map the answer was not compacted — the numbers are already array
+    # positions — and the direct lookup is the right one.
+    mapping = citation_map or None
+    resolved: list[dict] = []
+    for n in cites:
+        if mapping is None:
+            position: int | str = n
+        elif str(n) in mapping:
+            position = mapping[str(n)]
+        elif n in mapping:
+            position = mapping[n]
+        else:
+            continue
+        resolved.append({"cite": n,
+                         **resolve_source(passages, position, intent),
+                         "query": query})
+    return resolved
 
 
 # The section names as a clinician reads them. A separate vocabulary from

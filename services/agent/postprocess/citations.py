@@ -33,7 +33,7 @@ as bounding headers. One vocabulary, one drift surface (S7-02 / ECC-33).
 """
 
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -1119,18 +1119,35 @@ class EvidenceLedger:
     units: tuple[dict, ...] = ()
 
     @classmethod
-    def of(cls, *call_groups: "list[dict] | None") -> "EvidenceLedger":
+    def of(cls, *call_groups: "list[dict] | None",
+           evidence_state: Any = None) -> "EvidenceLedger":
         """Build a ledger from call groups, in the order the model was shown them.
 
         The order is the caller's, because two callers ask two different questions.
         `citation_bound` is asked what the answer may address and passes the replayed
         turns first, then this one — the numbering the model was given. The presentation
         layer is asked the same and passes the same.
+
+        `evidence_state` replaces that concatenation with the session's own array
+        (`SessionEvidenceState.ordered_citable_units`). The two disagree the moment a
+        passage is retrieved twice: concatenating gives it two positions, the record gives
+        it the position it already had. Only one of them can be the numbering a marker
+        was written against, and it is the record's — a marker written in turn 1 still
+        addresses the passage it was written for after turn 2 re-retrieves it. Passing the
+        state is therefore not an optimisation: it is the difference between one array and
+        two.
+
+        Duck-typed rather than annotated with the class: `evidence_state` imports this
+        module, so naming it here would close a cycle. `ordered_citable_units` is the
+        whole contract between the two.
         """
         calls = tuple(
             call for group in call_groups for call in (group or [])
             if isinstance(call, dict)
         )
+        if evidence_state is not None:
+            return cls(calls=calls,
+                       units=tuple(evidence_state.ordered_citable_units()))
         return cls(
             calls=calls,
             units=tuple(
@@ -1138,6 +1155,17 @@ class EvidenceLedger:
                 for unit in citable_passages(call.get("response"))
             ),
         )
+
+    @classmethod
+    def from_state(cls, evidence_state: Any,
+                   *call_groups: "list[dict] | None") -> "EvidenceLedger":
+        """The ledger of a session's record, with the calls it was built from.
+
+        `of(..., evidence_state=...)` is the same construction; this spelling exists so a
+        reader who has the record does not have to pass it as a keyword beside the calls
+        it already holds.
+        """
+        return cls.of(*call_groups, evidence_state=evidence_state)
 
     @property
     def passage_count(self) -> int:
@@ -1173,6 +1201,8 @@ def evidence_kind_mismatches(
     answer: str,
     tool_calls: list[dict] | None,
     conversation_calls: list[dict] | None = None,
+    *,
+    evidence_state: Any = None,
 ) -> list[str]:
     """Markers that cite laboratory series beside a claim about the note.
 
@@ -1188,10 +1218,16 @@ def evidence_kind_mismatches(
     Reported, not rewritten. Deleting or replacing the sentence needs a claim classifier
     this system does not have, and guessing at one is how a working answer gets damaged;
     a flag is what makes the defect visible to the reader and countable by the harness.
+
+    `evidence_state` is read for the same reason `enforce_citations` reads it: a number is
+    a position in ONE array, and this check must classify the unit at the position the
+    enforcement kept rather than at a position the payload concatenation happens to give
+    the same integer.
     """
     if not answer:
         return []
-    ledger = EvidenceLedger.of(conversation_calls, tool_calls)
+    ledger = EvidenceLedger.of(conversation_calls, tool_calls,
+                               evidence_state=evidence_state)
     if not ledger.units:
         return []
     flags: list[str] = []
@@ -1219,6 +1255,8 @@ def evidence_kind_mismatches(
 def citation_bound(
     tool_calls: list[dict] | None,
     conversation_calls: list[dict] | None = None,
+    *,
+    evidence_state: Any = None,
 ) -> int:
     """How many numbered citations this conversation's answer may address.
 
@@ -1233,8 +1271,12 @@ def citation_bound(
     first-turn `/labs` answer (`pilot-verify-20261028-205050`). It is now asked of the
     ledger rather than summed here, so there is one array and one length (Phase 4;
     audit §2.3).
+
+    With `evidence_state`, the length is the record's: a passage retrieved twice is one
+    position, not two.
     """
-    ledger = EvidenceLedger.of(conversation_calls, tool_calls)
+    ledger = EvidenceLedger.of(conversation_calls, tool_calls,
+                               evidence_state=evidence_state)
     return ledger.passage_count or literature_slots(tool_calls)
 
 
@@ -1447,7 +1489,22 @@ def cited_pmids(answer: str) -> list[str]:
     return found
 
 
-def cited_articles(payload: object, answer: str) -> list[dict]:
+def is_evidence_literature_call(call: dict[str, Any]) -> bool:
+    """Whether one `search_literature` call searched for the answer's evidence.
+
+    The canonical spelling of `_searched_for_evidence`, exposed because three separate
+    stages now have to ask the same question and only two of them had a name for it:
+    the settlement allowance, the record's ingest, and `cited_articles`. The third
+    asked nothing at all — it takes a payload and an answer, never the call — so a
+    comparator pool reached whatever called it.
+
+    See `_searched_for_evidence` for what the rule is and why the scope decides it.
+    """
+    return _searched_for_evidence(call)
+
+
+def cited_articles(payload: object, answer: str, *,
+                   call: dict[str, Any] | None = None) -> list[dict]:
     """The records one search returned that that turn's OWN answer addressed by PMID.
 
     A published record is thread evidence only when the turn that retrieved it also rested
@@ -1459,7 +1516,18 @@ def cited_articles(payload: object, answer: str) -> list[dict]:
     Read off the badges in the answer, because an identifier is how prose addresses a
     published record rather than a position in the array. An answer that cites no record
     contributes none, and the turn it came from is then not evidence for a later one.
+
+    `call` is the search this payload came from, and passing it is what applies the scope
+    rule: a call that declared `scope="readmission"` was made for the comparison table,
+    not for the answer, and contributes nothing here however many of its records the prose
+    names. Omitting it is the pre-2026-11-05 behaviour and is still correct for a caller
+    that has already established the call is an evidence search — `graph.replay_messages`
+    is the one such caller, and it must keep the cited cohorts, because the badge a
+    follow-up repeats has to resolve against the record the thread actually rested on
+    (`test_the_follow_up_sees_the_prediction_and_the_comparator_records`).
     """
+    if call is not None and not is_evidence_literature_call(call):
+        return []
     if not isinstance(payload, dict):
         return []
     named = set(cited_pmids(answer))
@@ -1738,8 +1806,9 @@ def literature_modality(article: dict[str, Any]) -> str:
 def render_numbered(
     payload: Any,
     offset: int = 0,
-    *,
     dress: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    *,
+    ref_ids: Sequence[int] | None = None,
 ) -> Any:
     """Stamp the citation numbers onto the copy of a tool result the model reads.
 
@@ -1747,6 +1816,14 @@ def render_numbered(
     already shown. Which payloads carry units is `citable_passages`' answer, and this
     function follows it exactly. A payload that carries `passages` or `trends` and
     contributes no unit gains `zero_unit_fields()`; anything else is returned unchanged.
+
+    `ref_ids` is those numbers when the caller already knows them: the session record
+    assigned a position to every unit it ingested and says which, in payload order
+    (`SessionEvidenceState` → `IngestResult.slot_ids`). Given them, the `i`-th unit is
+    stamped with `ref_ids[i]` and `offset` is not consulted. That is the difference
+    between a re-retrieved passage keeping the position it was first given and being
+    handed a second one, which would make a marker written in the earlier turn address
+    the wrong evidence in this one.
 
     `dress` is the caller's own per-unit shaping (dropping machine ids, refusing an
     over-long passage). It runs before the numbers are attached, so the numbers describe
@@ -1758,6 +1835,12 @@ def render_numbered(
     if not isinstance(payload, dict):
         return payload
 
+    def number_of(index: int) -> int:
+        """The position of the `index`-th (1-based) unit of this payload."""
+        if ref_ids is not None and 0 < index <= len(ref_ids):
+            return int(ref_ids[index - 1])
+        return offset + index
+
     def unit(item: dict[str, Any], number: int, modality: str) -> dict[str, Any]:
         shaped = dress(item) if dress is not None else dict(item)
         return {**shaped, **citation_fields(number, modality)}
@@ -1767,7 +1850,7 @@ def render_numbered(
         if not any(isinstance(passage, dict) for passage in passages):
             return {**payload, **zero_unit_fields()}
         return dict(payload, passages=[
-            unit(passage, offset + index, note_modality(passage.get("section")))
+            unit(passage, number_of(index), note_modality(passage.get("section")))
             if isinstance(passage, dict) else passage
             for index, passage in enumerate(passages, start=1)
         ])
@@ -1776,7 +1859,7 @@ def render_numbered(
         if not any(isinstance(trend, dict) for trend in trends):
             return {**payload, **zero_unit_fields()}
         return dict(payload, trends=[
-            unit(trend, offset + index, lab_modality(trend))
+            unit(trend, number_of(index), lab_modality(trend))
             if isinstance(trend, dict) else trend
             for index, trend in enumerate(trends, start=1)
         ])

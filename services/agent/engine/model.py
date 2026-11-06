@@ -44,6 +44,20 @@ from services.mcp.runtime import timeout_chain
 # needed for.
 MODEL_TIMEOUT_SECONDS = timeout_chain().model
 
+#: How many times the SDK retries one model call before the failure is ours.
+#:
+#: Three, which is what the client was already given — the number is now named so that
+#: removing it is a visible edit rather than a deleted keyword. It is not larger because
+#: the retries are bounded by `MODEL_TIMEOUT_SECONDS` on each attempt: a 429 burst that
+#: outlives three attempts inside sixty seconds is an outage, and a fourth attempt buys
+#: nothing but a longer wait before the caller is told.
+#:
+#: The policy itself belongs to the SDK (`langchain-google-genai` hands this to the
+#: google-api-core retry layer, which backs off on 429 and 503 and not on 4xx). This
+#: module's job is to state the bound and to make sure it is passed — see
+#: `tests/agent/test_model_bounds.py`, which reads it back off the constructed client.
+MODEL_MAX_RETRIES = 3
+
 
 def build_llm(model: str) -> ChatGoogleGenerativeAI:
     """The chat model, bound to the Vertex backend with our generation config."""
@@ -109,7 +123,7 @@ def _client(model: str, safety_settings: dict) -> ChatGoogleGenerativeAI:
         # 2.5 family rejects a level outright, and the 3.x family deprecates the
         # budget, so there is no value both accept.
         reasoning_effort=GEMINI_REASONING_EFFORT,
-        max_retries=3,
+        max_retries=MODEL_MAX_RETRIES,
         timeout=MODEL_TIMEOUT_SECONDS,
         # The content filters are set explicitly, per category, rather than left to
         # the model's default — which differs between models, and is `OFF` on the

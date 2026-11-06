@@ -99,8 +99,14 @@ class TestTheReplayCarriesEveryCall:
             _MustNotBeCalled(), turns))
 
         assert [call["name"] for call in calls] == ["search_literature"]
-        assert any("World Neurosurgery" in str(message.content)
-                   for message in messages)
+        # The records travel as EVIDENCE, not as a replayed tool body: `calls` hands the
+        # payload forward for the guardrail and the composer, and the session record
+        # renders it under `<literature>` for the model. Nothing is synthesised into the
+        # transcript any more (Phase 1 Sprint 1.4).
+        assert calls[0]["response"]["articles"][0]["pmid"] == ARTICLE["pmid"]
+        assert not any("World Neurosurgery" in str(message.content)
+                       for message in messages), (
+            "a replayed turn contributes its question and its answer, nothing else")
         # And the record the turn rested on is thread evidence, addressed by identifier.
         assert [article["pmid"] for article in articles] == [ARTICLE["pmid"]]
 

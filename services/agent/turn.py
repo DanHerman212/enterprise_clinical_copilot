@@ -170,6 +170,27 @@ def _response_fields(state: dict) -> dict:
 
 
 
+def _turn_start(state: dict) -> int:
+    """Where this turn's own units begin in the conversation's numbering.
+
+    The engine stamps how many positions the REPLAYED turns had registered before this
+    turn ran (`replay_positions`), and that is the number this turn's stored
+    `citation_map` is measured from. Read from the state rather than recomputed here by
+    hydrating a record: `turn.py` is the root orchestrator and may not import
+    `postprocess.evidence_state` (Charter 13 §5, enforced by `test_layer_separation`),
+    and the count the engine took is the only one that describes the same instant — a
+    count taken here would have to re-ingest the replay and could disagree about a
+    passage the replay and this turn both retrieved.
+
+    A turn with no admission has no record, so the ordinal payload count is the only
+    count there is, and it is the same number whenever the record would have been empty.
+    """
+    stamped = state.get("replay_positions")
+    if isinstance(stamped, int) and not isinstance(stamped, bool):
+        return stamped
+    return citations.citation_bound([], state.get("replayed_tool_calls") or [])
+
+
 async def compose_success(
     question: str, state: dict, trace: str, *, want_follow_ups: bool = False,
     outpatient: bool = False, asked: Sequence[str] = (),
@@ -301,6 +322,12 @@ async def compose_success(
         # this one, so the source table has to be the same concatenation (TF-10).
         evidence=[*(state.get("replayed_tool_calls") or []),
                   *(state.get("tool_calls") or [])],
+        # And the session record, when this turn has one. It supersedes `evidence` for
+        # what a marker ADDRESSES: the record's array gives a passage retrieved twice the
+        # single position it already had, where the concatenation above gives it two. The
+        # record is built in the engine (Sprints 1.1-1.2) and read here; this layer adds
+        # nothing to it.
+        evidence_state=state.get("evidence_state"),
         # The encounter is the orchestrator's fact to read (`00d7` Row 11): presentation
         # may not reach into `routing.encounter`'s process-global `ContextVar`, so the
         # boolean arrives as an argument.
@@ -412,8 +439,16 @@ async def compose_success(
     #
     # Turn-local, not absolute: positions are measured from this turn's first unit, so a
     # replay that numbers the earlier turns differently still lands on the right integers.
-    # `graph.replay_messages` adds back the offset it is numbering that turn from.
-    turn_start = citations.citation_bound([], state.get("replayed_tool_calls") or [])
+    # `graph.replay_messages` adds back the offset it is numbering that turn from, which is
+    # the same number (`replay_positions`) the engine stamped on this state.
+    #
+    # An offset may be ZERO or NEGATIVE, and both are correct. Zero is an answer citing the
+    # first unit of a turn that followed a turn with no citable evidence; negative is an
+    # answer citing a passage an EARLIER turn retrieved — a follow-up quoting the chart it
+    # was given. `restore_global_markers` adds the replay's offset back, so the arithmetic
+    # lands on the absolute position either way. Clamping these to 1 would silently move
+    # such a marker onto whatever evidence happened to hold position 1.
+    turn_start = _turn_start(state)
     replay_citation_map = {
         str(key): position - turn_start
         for key, position in (state.get("citation_display_map") or {}).items()

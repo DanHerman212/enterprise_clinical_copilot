@@ -106,10 +106,13 @@ def test_the_budget_counts_the_whole_turn_not_this_invocation():
     ))
 
     assert box.calls == [], "the call went out anyway, so the budget is not a budget"
-    assert recorded[0]["response"]["error"] == "tool_call_limit"
+    # The refusal reaches the MODEL and stops there: nothing ran, so there is nothing to
+    # record as evidence (Sprint 2.2).
+    assert recorded == []
+    assert "tool_call_limit" in messages[0].content
     # The refusal has to tell the model what to do, or it reads as a transient failure and
     # is retried — which is the loop this line closes.
-    assert "Answer from the results" in recorded[0]["response"]["message"]
+    assert "Answer from the results" in messages[0].content
 
 
 def test_a_repeated_identical_call_is_refused():
@@ -124,7 +127,8 @@ def test_a_repeated_identical_call_is_refused():
     ))
 
     assert box.calls == []
-    assert recorded[0]["response"]["error"] == "repeated_tool_call"
+    assert recorded == []
+    assert "repeated_tool_call" in messages[0].content
 
 
 def test_a_repeat_is_recognised_regardless_of_argument_order():
@@ -141,7 +145,7 @@ def test_a_repeat_is_recognised_regardless_of_argument_order():
     ))
 
     assert box.calls == []
-    assert recorded[0]["response"]["error"] == "repeated_tool_call"
+    assert recorded == []
 
 
 def test_a_different_argument_is_not_a_repeat():
@@ -177,9 +181,14 @@ def test_tools_declare_the_cleaned_mcp_input_schema():
     }
     (tool,) = gr._tools(toolbox)
     assert tool.name == "rag_search"
-    assert tool.args_schema["required"] == ["hadm_id", "query"]
-    assert set(tool.args_schema["properties"]) == {"hadm_id", "query"}
+    # The cleanup this test was written for: Gemini rejects `additionalProperties`.
     assert "additionalProperties" not in tool.args_schema
+    # And the rule Phase 2 puts on top of it (2026-11-05): a patient-scoped tool is
+    # shown to the model WITHOUT the admission argument. The session supplies it at
+    # execution time (`_with_session_admission`), so the model no longer generates a
+    # number it has no way to know.
+    assert set(tool.args_schema["properties"]) == {"query"}
+    assert tool.args_schema["required"] == ["query"]
 
 
 # --- what may enter the prompt (gap 3, G1) -------------------------------------

@@ -18,6 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from services.agent.engine import graph  # noqa: E402
+from services.agent.engine import model as model_gateway  # noqa: E402
 from services.mcp.config import (  # noqa: E402
     GEMINI_MAX_OUTPUT_TOKENS,
     GEMINI_REASONING_EFFORT,
@@ -64,3 +65,38 @@ def test_the_allowance_covers_thinking_it_has_not_done_yet():
     # candidates, and a probe at this pin's level spent 269 thinking tokens on one
     # question.
     assert GEMINI_MAX_OUTPUT_TOKENS >= 2048
+
+
+# --- retries: stated, bounded, and read back off the client -------------------
+#
+# `max_retries` was a bare keyword. Nothing asserted it, so nothing failed if it was
+# removed — and the failure that costs is the one it exists for: a Vertex 429 burst on
+# `dev_t2_03` reaching the caller as HTTP 502 because the attempts were never made.
+#
+# The policy belongs to the SDK (google-api-core backs off on 429 and 503 and not on 4xx);
+# what this file pins is that the bound is a named constant, that it is at least three, and
+# that the constructed client actually carries it.
+
+
+def test_the_retry_bound_is_named_and_at_least_three():
+    assert model_gateway.MODEL_MAX_RETRIES >= 3, (
+        "a transient 429 burst needs more than one attempt to survive")
+
+
+def test_the_client_is_built_with_the_retry_bound():
+    """Read back off the constructed client, not off the source.
+
+    A source check passes on a keyword that is written and then shadowed; the client is
+    what the SDK actually uses.
+    """
+    llm = model_gateway.build_llm(graph.MODEL_ID)
+
+    assert llm.max_retries == model_gateway.MODEL_MAX_RETRIES
+    assert llm.max_retries >= 3
+
+
+def test_the_extraction_client_carries_the_same_bound():
+    """One construction, so the two thresholds cannot diverge in the retry policy either."""
+    llm = model_gateway.build_extraction_llm(graph.MODEL_ID)
+
+    assert llm.max_retries == model_gateway.MODEL_MAX_RETRIES

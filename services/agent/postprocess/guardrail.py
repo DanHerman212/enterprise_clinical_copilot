@@ -187,13 +187,34 @@ def _source_has_redacted_age(passages: list[dict]) -> bool:
     return False
 
 
-def redact_invented_age(answer: str, passages: list[dict]) -> tuple[str, list[str]]:
-    """Drop a specific age the agent invented if the source age is redacted."""
+def redact_invented_age(answer: str, passages: list[dict],
+                        ground_truth_text: str = "") -> tuple[str, list[str]]:
+    """Drop a specific age the agent invented if the source age is redacted.
+
+    `ground_truth_text` is the `<admission_metadata>` block, when the turn carries one.
+    The block is verified ground truth — it is the feature row the model was scored on,
+    decoded into words — so an age it states is an age the system was GIVEN, and scraping
+    it out of the prose as invented is the guard deleting a fact it was handed.
+
+    Grounded per AGE rather than per call: the manifest stating 68 does not license an
+    answer that says 80. Each matched age is checked against the block by its own digits,
+    and the ones that are not there are still removed.
+    """
     if not _source_has_redacted_age(passages):
         return answer, []
     if not _ANSWER_AGE.search(answer):
         return answer, []
-    cleaned = _ANSWER_AGE.sub(" ", answer)
+
+    def _strip(match: re.Match) -> str:
+        if ground_truth_text:
+            digits = re.search(r"\d{1,3}", match.group(0))
+            if digits and _value_present(digits.group(0), ground_truth_text):
+                return match.group(0)
+        return " "
+
+    cleaned = _ANSWER_AGE.sub(_strip, answer)
+    if cleaned == answer:
+        return answer, []
     cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
     return cleaned, ["redacted_age_filled"]
 
@@ -954,22 +975,49 @@ def verify_lab_values(
     risk explanation quotes `top_factors`, which is the model reading a value the
     system itself computed, and grounding that only against notes and lab trends
     would delete correct prose.
+
+    Paragraphs and section headings survive the pass, on the same rules
+    `verify_dispositions` states and for the same reason (2026-11-05): this function
+    rebuilt the answer with `" ".join(kept)`, so ONE removed sentence turned a
+    four-section briefing into a single run-on block, lost every `\\n\\n`, and left the
+    surviving sentences of section two under section one's heading. A sentence is the
+    unit this pass decides about; it is not the unit the document is made of.
+
+    An answer with nothing removed is returned byte-for-byte, which is what makes the
+    reconstruction safe: it is only ever reached by text this pass has already changed.
     """
     haystack = f"{evidence_text or ''}\n{lab_text or ''}\n{payload_text or ''}"
     flags: list[str] = []
-    kept: list[str] = []
-    for sentence in _SENTENCE_SPLIT.split(answer or ""):
-        missing = [
-            m.group(0) for m in _LAB_VALUE.finditer(sentence)
-            if not _value_present(m.group(1), haystack)
-        ]
-        if missing:
-            flags.append(f"lab_value_unsupported:{missing[0].strip()}")
+    paragraphs: list[str] = []
+    for paragraph in _PARAGRAPH_SPLIT.split(answer or ""):
+        # The heading opens the paragraph and belongs to it, not to the sentence the
+        # pass is about to judge — the same split `verify_dispositions` makes. A
+        # paragraph whose body loses every sentence loses its heading with it, rather
+        # than leaving a label over the next section's text.
+        label = _SECTION_HEADING.match(paragraph)
+        heading = label.group(0).strip() if label else ""
+        body = (paragraph[label.end():] if label else paragraph).strip()
+        kept: list[str] = []
+        for sentence in _SENTENCE_SPLIT.split(body):
+            if not sentence.strip():
+                continue
+            missing = [
+                m.group(0) for m in _LAB_VALUE.finditer(sentence)
+                if not _value_present(m.group(1), haystack)
+            ]
+            if missing:
+                flags.append(f"lab_value_unsupported:{missing[0].strip()}")
+                continue
+            kept.append(sentence.strip())
+        if not kept:
+            if heading:
+                flags.append("section_without_sentences")
             continue
-        kept.append(sentence)
+        text = " ".join(kept)
+        paragraphs.append(f"{heading} {text}".strip() if heading else text)
     if not flags:
         return answer, []
-    return " ".join(kept).strip(), flags
+    return "\n\n".join(paragraphs).strip(), flags
 
 
 def guard_answer(
@@ -1024,6 +1072,12 @@ def guard_answer(
     served.
     """
     evidence = [*(tool_calls or []), *(conversation_calls or [])]
+    # The session record, when the turn has one. Read for the two POSITIONAL passes below
+    # and for nothing else: every clinical check above and below reads `evidence`, the
+    # concatenation, because a check about what the notes say does not care which position
+    # a passage holds. What does care is a marker: it addresses one array, and since
+    # Phase 1 Sprint 1.4 that array is the record's.
+    evidence_state = (state or {}).get("evidence_state")
     if answer_text.reply_withheld(finish_reason):
         # `state` is read for the tools it holds when the caller passed them separately:
         # the count is what decides whether there is anything for the reader to open.
@@ -1045,12 +1099,24 @@ def guard_answer(
     full_text = "\n".join(p.get("text") or "" for p in passages)
     flags: list[str] = []
     original = answer
+    # The pre-flight manifest, when this turn carries one. Verified ground truth: the
+    # feature row the model was scored on, decoded into words. Every check below that
+    # asks "is this number in the record?" has to see it, because a discharge note never
+    # declares an administrative field — so searching the notes for one returns a false
+    # negative while the number sits in the block.
+    #
+    # It reached only `verify_dispositions` until 2026-11-05, which is why a cold-start
+    # turn stating "prior inpatient days were 18.5833" was served without the number.
+    admission_context = (state or {}).get("admission_context") or ""
+    manifest_evidence = "\n".join(
+        part for part in (full_text, admission_context) if part.strip()
+    )
 
     # Risk numbers first — the one guard that must act even with zero evidence.
-    answer, f = verify_risk_numbers(answer, evidence, full_text,
+    answer, f = verify_risk_numbers(answer, evidence, manifest_evidence,
                                     _literature_text(evidence), _lab_text(evidence))
     flags += f
-    answer, f = redact_invented_age(answer, passages)
+    answer, f = redact_invented_age(answer, passages, admission_context)
     flags += f
     # Verify med claims against the FULL retrieved evidence (see docstring).
     answer, f = verify_med_tokens(answer, full_text)
@@ -1069,14 +1135,12 @@ def guard_answer(
     # cold-start free-text turn, and both sentences were removed as invented
     # (`dev_t2_01` turn 1, `dev_t5_01` turn 1, 2026-11-05). A claim the model was GIVEN
     # is not an invented claim.
-    disposition_evidence = "\n".join(
-        part for part in (full_text, (state or {}).get("admission_context") or "")
-        if part.strip()
-    )
+    disposition_evidence = manifest_evidence
     answer, f = verify_dispositions(answer, disposition_evidence)
     flags += f
     answer, f = verify_lab_values(answer, full_text, _lab_text(evidence),
-                                  json.dumps(evidence, default=str))
+                                  json.dumps(evidence, default=str)
+                                  + "\n" + admission_context)
     flags += f
     answer, f = normalise_factor_values(answer, evidence)
     flags += f
@@ -1095,7 +1159,8 @@ def guard_answer(
     # module owns the clinical checks, not the citation arithmetic.
     answer, f = citations.enforce_citations(
         answer,
-        citations.citation_bound(tool_calls, conversation_calls),
+        citations.citation_bound(tool_calls, conversation_calls,
+                                 evidence_state=evidence_state),
         citations.literature_pmids(
             tool_calls, conversation_calls if literature_replay else None
         )
@@ -1117,7 +1182,8 @@ def guard_answer(
     # as a flag, never rewritten: an answer that cites a series beside a claim about the
     # chart is a defect a reader must be able to see and a run must be able to count, and
     # replacing it needs a claim classifier this module does not have.
-    flags += citations.evidence_kind_mismatches(answer, tool_calls, conversation_calls)
+    flags += citations.evidence_kind_mismatches(
+        answer, tool_calls, conversation_calls, evidence_state=evidence_state)
 
     if not answer.strip() and (original or "").strip():
         # Every claim the model made was unsupported, and what is left is nothing.

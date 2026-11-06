@@ -53,9 +53,11 @@ def test_tool_calls_beyond_the_per_turn_budget_are_refused():
     messages, recorded = _run(_execute_tool_calls(box, calls))
 
     assert len(box.calls) == MAX_TOOL_CALLS_PER_TURN
-    assert len(recorded) == n
-    for extra in recorded[MAX_TOOL_CALLS_PER_TURN:]:
-        assert extra["response"]["error"] == "tool_call_limit"
+    # Only what EXECUTED is recorded (Sprint 2.2). The calls past the cap are refused
+    # before dispatch, so they are messages to the model and not turn evidence.
+    assert len(recorded) == MAX_TOOL_CALLS_PER_TURN
+    assert len([m for m in messages if "tool_call_limit" in m.content]) == (
+        n - MAX_TOOL_CALLS_PER_TURN)
     # Every call — executed or refused — still yields a ToolMessage, keeping
     # the transcript aligned with the model's tool_call ids.
     assert len(messages) == n

@@ -299,19 +299,24 @@ def test_a_declared_driver_drilldown_answers_from_the_replayed_score():
     assert state["tool_calls"] == []
 
 
-def test_the_same_question_undeclared_still_has_its_retrieval_demanded():
-    """A scoring call is not a chart read, so an undeclared follow-up still retrieves.
+def test_the_same_question_undeclared_answers_from_the_recorded_estimate():
+    """The estimate is in the session record, so the question is answerable without a search.
 
-    The exemption is full-chart synthesis — `rag_search_sections` in the replay — not
-    "something was replayed". This turn's replay holds the estimate and nothing that
-    describes the admission, so the demand still fires, and the declaration is what stops
-    it (see the test above).
+    The old rule keyed the exemption on the DECLARATION (`risk_driver_declared`), so the
+    identical question asked by hand was sent back for a note search that could not
+    contain the answer. What matters is not how the question was submitted but whether the
+    session holds what it needs — and `record.prediction` says it does.
+
+    The other side of the same rule is
+    `test_a_declaration_without_a_replayed_score_still_retrieves` below: a declaration over
+    an empty record earns nothing.
     """
     model = _AnsweringModel("Prior admissions contributed most of the estimate.")
 
-    _ask(model, DRIVER_QUESTION, MANIFEST, turns=DRIVER_TURNS)
+    state = _ask(model, DRIVER_QUESTION, MANIFEST, turns=DRIVER_TURNS)
 
-    assert model.calls == 2
+    assert model.calls == 1, "the turn held the estimate and answered from it"
+    assert state["tool_calls"] == []
 
 
 def test_a_declaration_without_a_replayed_score_still_retrieves():

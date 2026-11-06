@@ -280,7 +280,10 @@ def test_the_formatting_turn_cannot_call_anything(command):
     expected = (meds_formatting_for(_medication_sections(state["tool_calls"]))
                 if command.wire == "meds" else prompts.formatting_for(command.wire))
     assert expected in system.content
+    # Neither the composed prompt nor its hub: a command's formatting turn is told how to
+    # write its own answer, not how to choose a tool.
     assert prompts.SYSTEM_PROMPT not in system.content
+    assert prompts.CORE_HUB_PROMPT not in system.content
 
 
 def test_the_supplementary_result_reaches_the_formatting_turn():

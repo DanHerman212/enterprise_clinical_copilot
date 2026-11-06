@@ -22,6 +22,7 @@ from langchain_core.messages import AIMessage
 from services.agent.engine import graph
 from services.agent.engine import model as model_gateway
 from services.agent.engine import model
+from services.agent.engine.mcp_client import PER_TOOL_CALL_LIMIT
 
 
 class _ToolHungryModel:
@@ -107,9 +108,18 @@ def test_the_budget_ends_the_loop_and_the_answer_survives():
 
     state = _run(model)
 
-    # It ended, it answered, and it spent exactly the budget — not one call more.
+    # It ended, it answered, and it spent exactly the budget — not one attempt more.
     assert graph.final_text(state) == "Answered from the results already retrieved."
-    assert len(state["tool_calls"]) == graph.MAX_TOOL_CALLS_PER_TURN
+    # Two numbers, two facts (Sprint 2.2). The loop is bounded by ATTEMPTS: the model asked
+    # `search_literature` five times, which is what stopped it. But only the first two ran —
+    # `PER_TOOL_CALL_LIMIT` refuses the third — so the turn's EVIDENCE is two calls.
+    #
+    # This assertion used to read `== MAX_TOOL_CALLS_PER_TURN` and passed for the wrong
+    # reason: three of those five entries were refusals the executor had already decided
+    # not to make, recorded as though the tool had been called.
+    assert state["tool_attempts"] == graph.MAX_TOOL_CALLS_PER_TURN
+    assert len(state["tool_calls"]) == PER_TOOL_CALL_LIMIT
+    assert [call["name"] for call in state["tool_calls"]] == ["search_literature"] * 2
     assert model.bound_turns == graph.MAX_TOOL_CALLS_PER_TURN
     assert model.unbound_turns == 1
 

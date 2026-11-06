@@ -58,8 +58,8 @@ Packages must respect a strict top-down dependency graph. Lower layers may never
 
 * **`ingress/`** → may import `turn.py`, `routing/`, `telemetry/`, `presentation/` (wire types only).
 * **`turn.py`** → may import `routing/`, `engine/`, `postprocess/`, `presentation/`, `telemetry/`, and `ingress/contracts.py` (response schema validation).
-* **`presentation/`** → may import `postprocess/citations.py` (read-only source resolution) and shared domain/label utilities. **May not** import `engine/`, `ingress/`, or `routing/encounter.py`.
-* **`engine/`** → may import `routing/`, `postprocess/citations.py` (for tool-result numbering), `postprocess/answer.py`, and `telemetry/`. **May not** import `presentation/` or `ingress/`.
+* **`presentation/`** → may import `postprocess/citations.py` (read-only source resolution), `postprocess/evidence_state.py` (read-only session evidence state), and shared domain/label utilities. **May not** import `engine/`, `ingress/`, or `routing/encounter.py`.
+* **`engine/`** → may import `routing/`, `postprocess/citations.py` (for tool-result numbering), `postprocess/answer.py`, `postprocess/evidence_state.py` (the session's evidence record), and `telemetry/`. **May not** import `presentation/` or `ingress/`.
 * **`postprocess/`** → may import `routing/` and `telemetry/`. **May not** import `engine/`, `presentation/`, or `ingress/`.
 * **`telemetry/`** → may import `routing/` (for tool label registries). **May not** import `ingress/`, `engine/`, `postprocess/`, or `presentation/`.
 * **`routing/`** → leaf foundation package. **May not** import `ingress/`, `engine/`, `postprocess/`, `presentation/`, or `telemetry/`.

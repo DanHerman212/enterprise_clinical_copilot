@@ -123,18 +123,31 @@ class TestADeclaredFollowUpIsAnsweredInOnePass:
 
         assert model.turns == [None, "any"]
 
-    def test_an_undeclared_lab_follow_up_still_gets_the_forced_retrieval(self):
-        """A laboratory panel is not the whole note, so a typed follow-up still retrieves.
+    def test_an_undeclared_lab_follow_up_answers_from_the_recorded_series(self):
+        """A typed follow-up into a thread that already holds the panel.
 
-        The evidence set is the standing free-text boundary plus whatever the question
-        earns: a lab follow-up is a question about the chart like any other. The exemption
-        from `demand_retrieval` is full-chart synthesis specifically — `rag_search_sections`
-        in the replay — because a series describes one measurement and says nothing about
-        the admission a new chart question asks about (2026-11-04).
+        The exemption used to be the replay's SHAPE — full-chart synthesis, meaning a
+        `rag_search_sections` call. It is now the record's CONTENT: the session holds a
+        laboratory panel, the model was shown it, and it answered. What the exemption
+        still is not: a licence to answer a question whose modality is missing, which is
+        `test_the_same_words_with_nothing_recorded_still_retrieve` below.
         """
         model = _AnswersInProse()
 
         _run(model, turns=LAB_TURN)
+
+        assert model.turns == [None], (
+            "the session already held the series and the model answered from it")
+
+    def test_the_same_words_with_nothing_recorded_still_retrieve(self):
+        """The 2026-10-15 protection, stated as a fact about the RECORD.
+
+        Nothing in the session, so there is no evidence for the answer and the turn is
+        sent back for it. Without this the change would be "never demand anything".
+        """
+        model = _AnswersInProse()
+
+        _run(model, turns=[])
 
         assert model.turns == [None, "any"]
 

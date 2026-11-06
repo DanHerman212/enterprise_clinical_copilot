@@ -208,18 +208,32 @@ def _transcript_text(model) -> str:
 def test_the_follow_up_sees_the_prediction_and_the_comparator_records():
     state, model = _ask(FOLLOW_UP, turns=[EHR_TURN])
 
+    # What the follow-up's model reads is the record overlay `agent_node` injects, plus
+    # the question. The replayed turns contribute no tool bodies (Phase 1 Sprint 1.4).
     transcript = _transcript_text(model)
-    # (a) The scoring payload, projected the way a live call is.
-    assert 'name="predict_readmission"' in transcript
-    assert "7.5%" in transcript
-    # And the record the comparator search returned and Turn 1 rested on.
-    assert "Predictors of thirty-day readmission" in transcript
-    assert "Spine" in transcript
+    assert "<session_evidence_state" in transcript
+    # (a) The scoring payload, projected the way a live call is: the display string, and
+    # no float it could paste.
+    assert "probability_display: 7.5%" in transcript
+    assert "0.075" not in transcript.replace("7.5%", "")
 
-    # The record the turn rested on is the thread's evidence; the pool is not.
+    # (b) The comparator abstracts are the THREAD's, not the record's. The `/ehr` table
+    # searches with `scope="readmission"`, and `citations._searched_for_evidence` rules
+    # that pool out of the answer's published evidence — so the record must not claim it
+    # either (Sprint 3.3, closing the 3.1 carry-forward). A record that held the pool
+    # answered a later literature question from a candidate list instead of searching.
+    assert "Predictors of thirty-day readmission" not in transcript
+    assert "Spine" not in transcript
+
+    # The record the turn rested on is the thread's evidence; the pool is not. Both reach
+    # the follow-up as data — `thread_literature` for the badge allowance and the composer,
+    # `replayed_tool_calls` for the guardrail — rather than through the model's window.
     assert [article["pmid"] for article in state["thread_literature"]] == ["24108298"]
     assert [call["name"] for call in state["replayed_tool_calls"]] == [
         "rag_search_sections", "predict_readmission", "search_literature"]
+    carried = state["replayed_tool_calls"][-1]["response"]["articles"]
+    assert [article["pmid"] for article in carried] == ["24108298"]
+    assert "Spine" in carried[0]["journal"]
 
 
 def test_a_replayed_search_does_not_consume_note_citation_numbers():
@@ -281,12 +295,18 @@ def test_a_first_turn_still_gets_the_forced_retrieval():
     assert model.turns == [None, "any"]
 
 
-def test_a_lab_only_thread_still_gets_the_forced_retrieval():
-    """A panel is not the whole note: the exemption is full-chart synthesis.
+def test_a_lab_only_thread_answers_from_its_own_evidence():
+    """A typed chart follow-up over a laboratory session: the record IS the evidence.
 
-    A thread whose only replay is a laboratory series holds no account of the admission,
-    so a new chart question asked into it still needs the note read. Bypassing the demand
-    for ANY replay turned the one protection this path has into a hole (2026-11-04).
+    This used to demand a note search, and the exemption was `rag_search_sections` in the
+    replay — a guess from the call log about whether the thread had read enough. The
+    record answers it directly: a panel is clinical evidence, the model was shown it in
+    `<session_evidence_state>`, every uncapped tool was bound, and it chose to answer.
+    Sending it back replaced that answer with the forced round's, because only the last
+    message is settled.
+
+    What still demands a retrieval is a question whose MODALITY the record does not hold —
+    see `test_a_risk_question_over_a_lab_only_thread_still_demands` below.
     """
     labs_turn = [{
         "question": "/labs",
@@ -298,8 +318,28 @@ def test_a_lab_only_thread_still_gets_the_forced_retrieval():
     state, model = _ask("What does the discharge note say about her course?",
                         turns=labs_turn)
 
-    assert model.turns == [None, "any"]
+    assert model.turns == [None], (
+        "the turn already held clinical evidence and answered from it")
     assert [call["name"] for call in state["replayed_tool_calls"]] == ["get_lab_trends"]
+
+
+def test_a_risk_question_over_a_lab_only_thread_still_demands():
+    """The record is a set of modalities, and this question needs one it has not got.
+
+    A panel says nothing about the estimate. `_session_holds_evidence` asks the question's
+    own mode of the record — `prediction` for a risk question — so an answer written
+    without one is still sent back for the tool that can produce it.
+    """
+    labs_turn = [{
+        "question": "/labs",
+        "answer": "Creatinine rose across the admission.",
+        "tool_calls": [{"name": "get_lab_trends", "args": {"hadm_id": HADM},
+                        "payload": LABS}],
+    }]
+
+    _, model = _ask("What is this patient's readmission risk score?", turns=labs_turn)
+
+    assert model.turns == [None, "any"]
 
 
 # --- Step 2: the badge survives settlement, the guardrail and composition ------

@@ -454,7 +454,8 @@ def test_a_literature_search_carrying_the_admission_id_is_not_dispatched():
     assert "patient_identifier_refused" in messages[0].content
     # Work that did not happen is not narrated, same rule as a refused budget call.
     assert events == []
-    assert recorded[0]["response"]["error"] == "patient_identifier_refused"
+    # And it is not EVIDENCE either: the tool never ran (Sprint 2.2).
+    assert recorded == []
 
 
 def test_a_clean_literature_query_is_dispatched():
@@ -488,7 +489,9 @@ def test_a_retrieval_naming_another_admission_is_not_dispatched():
 
     assert box.calls == [], "another patient's record was read"
     assert "patient_scope_refused" in messages[0].content
-    assert recorded[0]["response"]["error"] == "patient_scope_refused"
+    # The refusal reaches the model and stops there. Recording it made the turn look as
+    # though it had read another patient's chart, which is the opposite of what happened.
+    assert recorded == []
 
 
 def test_an_invented_admission_on_a_turn_about_no_patient_is_not_dispatched():
@@ -584,3 +587,214 @@ def test_the_graph_is_built_with_the_identifier_guard():
     assert "guard=lambda name, args: _outbound_patient_identifier(name, args, hadm_id)" in source
     assert "toolbox, calls, on_event, guard=guard" in source
 
+
+# --- Sprint 2.1: the admission is the session's, not the model's -------------
+#
+# A tool that reads one admission describes its SUBJECT, and the subject of a turn is
+# fixed by the request. Advertising `hadm_id` asked the model to generate a number it
+# could not know, and the only defence was a refusal of the attempt after it had been
+# made. The argument is now absent from the copy the model reads and supplied at
+# execution time; the guard stays as defence in depth for a model that writes one anyway.
+
+
+class _SchemaTool:
+    """An advertised tool carrying a real input schema."""
+
+    description = "reads one admission's record"
+
+    def __init__(self, schema, name="rag_search"):
+        self.input_schema = schema
+        self.name = name
+
+
+#: The three shapes that matter: a tool with other arguments, a tool whose ONLY argument
+#: is the admission, and a tool that takes none.
+_SCHEMAS = {
+    "rag_search": {
+        "type": "object",
+        "properties": {"hadm_id": {"type": "integer"},
+                       "query": {"type": "string"},
+                       "top_k": {"type": "integer"}},
+        "required": ["hadm_id", "query"],
+    },
+    "rag_search_sections": {
+        "type": "object",
+        "properties": {"hadm_id": {"type": "integer"}},
+        "required": ["hadm_id"],
+    },
+    "search_literature": {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+    },
+}
+
+
+def _schema_box():
+    box = MCPToolbox(session=object())
+    box._tools = {name: _SchemaTool(schema, name) for name, schema in _SCHEMAS.items()}
+    return box
+
+
+def test_the_model_is_never_shown_an_admission_argument():
+    """Both schema consumers: the LangChain binding and the Gemini declaration."""
+    box = _schema_box()
+
+    for tool in graph._tools(box):
+        schema = tool.args_schema or {}
+        assert "hadm_id" not in (schema.get("properties") or {}), tool.name
+        assert "hadm_id" not in (schema.get("required") or []), tool.name
+
+    declarations = {decl.name: decl for decl in box.gemini_tool.function_declarations}
+    for name in ("rag_search", "rag_search_sections"):
+        assert "hadm_id" not in dict(declarations[name].parameters.properties or {})
+    # What the tool DOES ask the model for is untouched: 2026-10-12 added the refusal of
+    # an argument the external tool does not declare, and this sprint must not have made
+    # the model unable to write the ones it does.
+    assert "query" in dict(declarations["search_literature"].parameters.properties or {})
+
+
+def test_a_tool_with_nothing_left_to_ask_for_becomes_a_zero_argument_schema():
+    """`rag_search_sections` takes one admission and nothing else.
+
+    Stripping it must leave a schema a zero-argument call is valid against — not an object
+    with an empty `properties` and a `required` list naming the argument that was removed.
+    """
+    box = MCPToolbox(session=object())
+    box._tools = {"rag_search_sections": _SchemaTool(
+        _SCHEMAS["rag_search_sections"], "rag_search_sections")}
+
+    (tool,) = graph._tools(box)
+
+    assert tool.args_schema == {"type": "object", "properties": {}}
+
+
+def _injected_call(tool, args, hadm_id):
+    """One call through the real executor, with the session's admission supplied."""
+    box = _RecordingBox()
+    guard = lambda name, a: graph._outbound_patient_identifier(name, a, hadm_id)  # noqa: E731
+    messages, recorded = asyncio.run(graph._execute_tool_calls(
+        box, [{"name": tool, "args": args, "id": "1"}],
+        [].append, guard=guard, hadm_id=hadm_id,
+    ))
+    return box, messages, recorded
+
+
+def test_a_call_without_an_admission_is_completed_by_the_session():
+    """The model writes `{"query": "chf"}`; the tool receives an admission too."""
+    box, _messages, recorded = _injected_call("rag_search", {"query": "chf"}, 90000010)
+
+    assert box.calls == [("rag_search", {"query": "chf", "hadm_id": 90000010})]
+    # The complete arguments, because this is the record of what the tool was asked.
+    assert recorded[0]["args"] == {"query": "chf", "hadm_id": 90000010}
+    assert not (recorded[0]["response"] or {}).get("error")
+
+
+def test_a_call_taking_no_arguments_at_all_is_completed_by_the_session():
+    box, _messages, recorded = _injected_call("rag_search_sections", {}, 90000010)
+
+    assert box.calls == [("rag_search_sections", {"hadm_id": 90000010})]
+    assert recorded[0]["args"]["hadm_id"] == 90000010
+
+
+def test_a_patient_call_on_a_turn_with_no_admission_is_refused():
+    """Audit Finding 2: an OMITTED admission used to be dispatched.
+
+    The mismatch check passes when the call carries no admission at all, so a
+    patient-scoped call on a turn about nobody reached the tool. There is no admission to
+    read, so there is no call to make.
+    """
+    box, messages, recorded = _injected_call("rag_search_sections", {}, None)
+
+    assert box.calls == [], "a patient-scoped tool ran on a turn about no patient"
+    assert "patient_scope_refused" in messages[0].content
+    assert recorded == []
+
+
+def test_a_literature_search_on_a_turn_with_no_admission_still_runs():
+    """The Finding 2 fix must not over-refuse: a literature turn reads no chart.
+
+    This is the case a blanket "no admission, no call" rule would have broken —
+    `search_literature` is deliberately not told which patient is under discussion.
+    """
+    box, _messages, recorded = _injected_call("search_literature", {"query": "sepsis"}, None)
+
+    assert box.calls == [("search_literature", {"query": "sepsis"})]
+    assert "hadm_id" not in recorded[0]["args"]
+    assert not (recorded[0]["response"] or {}).get("error")
+
+
+def test_an_invented_admission_is_still_refused_rather_than_replaced():
+    """Defence in depth: the guard sees what the model wrote, before any injection.
+
+    Injection must not become a silent correction. A model that names another admission
+    has attempted a cross-patient read, the attempt is what the guard is for, and the
+    refusal is what the evaluator and the operator count.
+    """
+    box, messages, recorded = _injected_call(
+        "rag_search", {"query": "notes", "hadm_id": 90000015}, 90000002)
+
+    assert box.calls == []
+    assert "patient_scope_refused" in messages[0].content
+    # And the foreign id is nowhere in the turn's evidence, so it cannot reach the wire,
+    # a replay, a scope badge or the evaluator's `banned_source_record` check.
+    assert recorded == []
+    assert "90000015" not in str(recorded)
+
+
+# --- Sprint 2.2: a refusal is a message, not evidence ------------------------
+#
+# `recorded` is what the turn DID. A call the executor refused before dispatch never ran,
+# so it has no result, no citation position and nothing for a later turn to replay. It
+# stays in the transcript as the model's answer to its own request, and stops there.
+#
+# The distinction is not cosmetic. `a2ui.turn_scope` badges a turn from `args.hadm_id`
+# alone, so a refused cross-patient attempt used to badge the turn `patient_chart`; the
+# evaluator's `turn_tool_calls` check scored the same attempt as a disclosure that never
+# happened (`dev_t7_03`).
+
+
+def test_a_refused_call_does_not_badge_the_turn_as_a_chart_read():
+    """The turn asked an unanswerable question and read nothing.
+
+    A `Patient Chart Synthesis` badge over an answer that rested on no passage is a claim
+    about evidence the turn does not have — the same defect the scope badge exists to
+    prevent, arriving through the refusal path.
+    """
+    from services.agent.presentation.a2ui import turn_scope
+
+    box, messages, recorded = _injected_call(
+        "rag_search", {"query": "notes", "hadm_id": 90000015}, 90000002)
+
+    assert box.calls == []
+    assert "patient_scope_refused" in messages[0].content
+    assert recorded == []
+    assert turn_scope(recorded) is None, "no tool ran, so the turn rested on nothing"
+
+
+def test_the_refused_call_carries_no_foreign_admission_into_the_turn_record():
+    """What `banned_source_record` reads is `turn_tool_calls`, which is `recorded`.
+
+    A cross-patient id that appears only inside a refusal message is not a disclosure: no
+    tool was asked for that admission, and nothing was returned for it.
+    """
+    box, messages, recorded = _injected_call(
+        "rag_search", {"query": "notes", "hadm_id": 90000015}, 90000002)
+
+    assert box.calls == []
+    assert "90000015" in messages[0].content, "the model is still told what it asked for"
+    assert "90000015" not in str(recorded)
+
+
+def test_an_executed_call_that_the_server_rejected_is_still_evidence():
+    """The line the separation draws: DISPATCHED, not successful.
+
+    The guard refuses before the tool is called; the tool's own `unknown_patient` arrives
+    after a call was made. The second is a tool call the turn made, and `_tool_error_codes`
+    exists to report it — so it stays in `recorded`, and only the pre-dispatch refusals
+    leave.
+    """
+    box, _messages, recorded = _injected_call("rag_search", {"query": "notes"}, 90000010)
+
+    assert box.calls == [("rag_search", {"query": "notes", "hadm_id": 90000010})]
+    assert len(recorded) == 1

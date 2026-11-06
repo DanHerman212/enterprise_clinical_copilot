@@ -351,6 +351,7 @@ def settle_answer(
     wants_literature: bool = False,
     comparators: list[dict] | None = None,
     thread_literature: list[dict] | None = None,
+    evidence_state: Any = None,
 ) -> Settlement:
     """Decide the answer's markers: vocabulary, bound, then the reader's numbering.
 
@@ -378,7 +379,13 @@ def settle_answer(
     search returns is not evidence, and `citations.cited_articles` is what decided which
     records of it a turn actually rested on.
     """
-    bound = citations.citation_bound(tool_calls or [], replayed_tool_calls or [])
+    # The array the answer's markers address. With `evidence_state` it is the session
+    # record's — a passage the conversation retrieved twice occupies one position, so the
+    # bound is the record's length rather than the payload sum — and the `display` map
+    # below is then `{page_number: record position}`, which is what `presentation`
+    # resolves through and what `turn.py` republishes for the next turn's replay.
+    bound = citations.citation_bound(tool_calls or [], replayed_tool_calls or [],
+                                     evidence_state=evidence_state)
     # The badge allowance follows the same rule the bound does, on the one axis where it
     # may: a turn that is itself about published records can cite the records the replay
     # showed it. `wants_literature` is stamped once by `graph.ask` — the decision that let
@@ -448,7 +455,13 @@ def settle_answer(
         compacted, deterministic_map = citations.compact_display_numbers(
             settled_deterministic)
         settled_deterministic = compacted
-        display = display or deterministic_map
+        # The deterministic answer WINS at the point of serving — `turn.compose_success`
+        # reads `deterministic_answer` in preference to the model's prose — so its map is
+        # the one that describes the numbers a reader will click. It used to be kept only
+        # when the prose carried no markers at all (`display = display or deterministic_map`),
+        # which meant a turn that had both served the deterministic sentence through the
+        # prose's numbering and drew the wrong passage behind every marker.
+        display = deterministic_map or display
 
     return Settlement(prose=settled_prose, deterministic=settled_deterministic,
                       display=display, flags=tuple(flags))
@@ -478,6 +491,8 @@ def sanitize_answer_markers(state: dict, text: str | None = None) -> None:
         # The adapter holds a state, so it reads the same rows `graph._settle` passes.
         comparators=state.get("comparators") or [],
         thread_literature=state.get("thread_literature") or [],
+        # And the record, for the same reason: the bound is a length of ONE array.
+        evidence_state=state.get("evidence_state"),
     )
     if message is not None and settled.prose is not None:
         message.content = settled.prose
@@ -495,7 +510,11 @@ def sanitize_answer_markers(state: dict, text: str | None = None) -> None:
 
 
 def no_evidence_answer(
-    question: str, tool_calls: list[dict], *, declined: bool = False
+    question: str,
+    tool_calls: list[dict],
+    *,
+    declined: bool = False,
+    evidence_state: Any = None,
 ) -> str | None:
     """The fixed sentence for a question the notes did not answer, or None.
 
@@ -530,6 +549,19 @@ def no_evidence_answer(
         outage as an absence is the same mistake in the other direction;
       * the literature was not consulted. An answer built on published evidence is an
         answer, and it is not a claim about this patient's notes.
+
+    `evidence_state` is the session record, and it is the second way a turn can hold
+    passages without having fetched one now: a follow-up turn replays the earlier turns'
+    calls into the record rather than re-running them, so `tool_calls` holds nothing while
+    the model is reading five passages out of `<session_evidence_state>`. Counting only
+    this turn's payloads called that an empty retrieval and replaced a correctly grounded
+    follow-up answer with the fixed absence sentence — a claim about the chart made against
+    evidence the session was holding.
+
+    The record is asked for NOTE passages specifically, not for any unit. A session that
+    holds only a laboratory panel has no passage about the discharge note, so an
+    unanswered note question in that session is still an absence — which is what the
+    `get_lab_trends`-only turn in EVIDENCE's own rule says.
     """
     names = [call.get("name") for call in tool_calls]
     if any(name in routing.LITERATURE_TOOLS for name in names):
@@ -546,6 +578,13 @@ def no_evidence_answer(
             return None
         if response.get("passages"):
             found_passages = True
+
+    if not found_passages and evidence_state is not None:
+        items = getattr(evidence_state, "items", None) or {}
+        found_passages = any(
+            getattr(item, "source_tool", None) in routing.PASSAGE_TOOLS
+            for item in items.values()
+        )
 
     if found_passages and not declined:
         return None

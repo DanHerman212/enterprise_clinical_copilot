@@ -353,6 +353,13 @@ async def compose_success(
         # thread's benchmark owes the reader a pill and a card for it, and does not owe
         # them a second comparison table (`_draws_matrix` is scoped to `/ehr`).
         thread_literature=state.get("thread_literature") or [],
+        # What the benchmark retrieval came to, as one bit for a layer that may not read
+        # the engine's outcome vocabulary: `presentation` takes `postprocess` only, so the
+        # word the engine stamped is translated HERE, at the orchestrator, and the table is
+        # told only whether the extraction completed.
+        comparison_degraded=(
+            state.get("comparator_outcome") == routing.OUTCOME_EXTRACTION_DEGRADED
+        ),
     )
 
     # The trace, written once, now that the answer is settled AND composed. Two records,

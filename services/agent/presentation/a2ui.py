@@ -268,7 +268,8 @@ def compose_presentation(question: str, answer: str,
                          question_names_analyte: bool = False,
                          comparators: list[dict] | None = None,
                          thread_literature: list[dict] | None = None,
-                         evidence_state: SessionEvidenceState | None = None) -> dict:
+                         evidence_state: SessionEvidenceState | None = None,
+                         comparison_degraded: bool = False) -> dict:
     """The full presentation contract for an answered question.
 
     One call produces every field the browser consumes, so the answer's
@@ -563,6 +564,12 @@ def compose_presentation(question: str, answer: str,
         comparators=comparators,
         eligible=admission_eligible(tool_calls, is_outpatient=is_outpatient),
         command=command,
+        # Whether the benchmark step finished, as the orchestrator read it off the engine.
+        # One bit, and it only chooses which sentence the table prints when it has no row:
+        # "the abstracts stated no rate" and "the extraction did not complete" are
+        # different statements about the literature, and this layer may not tell them
+        # apart from the rows, because an empty table is what both produce.
+        comparison_degraded=comparison_degraded,
     )
 
     # The comparison table's published cohorts, registered as citable sources and

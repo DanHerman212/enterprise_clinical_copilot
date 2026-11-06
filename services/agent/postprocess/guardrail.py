@@ -180,6 +180,20 @@ def _passage_sections(tool_calls: list[dict]) -> tuple[list[dict], str]:
     return passages, "\n".join(med_texts)
 
 
+def _record_med_source(record_items: list[dict]) -> str:
+    """The discharge-medication text the SESSION holds, when no call carries it.
+
+    The record is a second view of the same passages, and on a replayed turn a call can
+    arrive without its payload while the record still holds the unit. Still only the
+    dedicated section, for the reason `_passage_sections` gives: a whole note in a
+    medication blob parses numbered lists into junk rows.
+    """
+    return "\n".join(
+        str(item.get("text") or "") for item in record_items or []
+        if str(item.get("section") or "").lower() == "discharge_medications"
+    )
+
+
 def _source_has_redacted_age(passages: list[dict]) -> bool:
     for p in passages:
         if _REDACTED_AGE.search(p.get("text", "")):
@@ -881,7 +895,44 @@ def _asserted(category: str, sentence: str, pattern: re.Pattern) -> bool:
     return False
 
 
-def verify_dispositions(answer: str, evidence_text: str) -> tuple[str, list[str]]:
+def _manifest_field(admission_context: str, field: str) -> str:
+    """One `- field: value` line of the `<admission_metadata>` block, or ""."""
+    for line in (admission_context or "").splitlines():
+        text = line.strip()
+        if not text.startswith("- ") or ":" not in text:
+            continue
+        name, _, value = text[2:].partition(":")
+        if name.strip() == field:
+            return value.strip()
+    return ""
+
+
+def _manifest_dispositions(admission_context: str) -> set[str]:
+    """The dispositions the pre-flight row STATES, read as a field rather than as prose.
+
+    The manifest is the authority for where the patient went — that is the whole reason it
+    is hydrated before the model runs — and it states the destination as a FIELD. Searching
+    the block for phrases like "discharged to home" never matches a
+    `discharge_location: Home` line, so the block that answered the question could not
+    vouch for the answer stating it: on 2026-11-06 the three-part follow-up about
+    `90000069` lost its discharge paragraph to `disposition_unsupported:home` while
+    `discharge_location: Home` sat in the manifest the same turn was handed.
+
+    The value is composed into the sentence it stands for and matched against the ONE
+    disposition vocabulary this module owns, so there is no second table and no clinical
+    knowledge added here: the mapping from "Home with home health" to the `home` category
+    is the same pattern that recognises it in a note.
+    """
+    value = _manifest_field(admission_context, "discharge_location")
+    if not value:
+        return set()
+    phrase = f"discharged to {value}"
+    return {name for name, pattern in _DISPOSITIONS.items() if pattern.search(phrase)}
+
+
+def verify_dispositions(answer: str, evidence_text: str,
+                       supported_dispositions: set[str] | None = None,
+                       ) -> tuple[str, list[str]]:
     """Drop sentences that assert a disposition the record does not contain.
 
     Grounding is by category, and the evidence is everything the conversation
@@ -906,7 +957,7 @@ def verify_dispositions(answer: str, evidence_text: str) -> tuple[str, list[str]
     supported = {
         name for name, pattern in _DISPOSITIONS.items()
         if pattern.search(evidence_text or "")
-    }
+    } | set(supported_dispositions or ())
     flags: list[str] = []
     paragraphs: list[str] = []
     for paragraph in _PARAGRAPH_SPLIT.split(answer or ""):
@@ -1096,7 +1147,6 @@ def guard_answer(
         # silent withdrawal of text the reader already watched arrive.
         return {"answer": withheld, "flags": ["safety_withheld"]}
     passages, med_source = _passage_sections(evidence)
-    full_text = "\n".join(p.get("text") or "" for p in passages)
     flags: list[str] = []
     original = answer
     # The pre-flight manifest, when this turn carries one. Verified ground truth: the
@@ -1108,21 +1158,63 @@ def guard_answer(
     # It reached only `verify_dispositions` until 2026-11-05, which is why a cold-start
     # turn stating "prior inpatient days were 18.5833" was served without the number.
     admission_context = (state or {}).get("admission_context") or ""
+    # ONE corpus, and every verifier below reads it.
+    #
+    # The concatenation of this turn's calls and the replayed ones is not the whole of what
+    # the session established. The record holds units those calls may no longer carry (a
+    # payload the caller did not store is re-resolved, and a re-resolution that failed
+    # leaves the call without passages while the record still has them), the estimate is a
+    # field on the record rather than only a call response, and the manifest is a block
+    # rather than a call at all. Each verifier that read a narrower slice could delete a
+    # claim the session could actually support — the failure mode of 2026-11-06, where a
+    # three-part follow-up lost its discharge paragraph while the destination sat in the
+    # manifest.
+    #
+    # Assembled here rather than inside each check so that "what counts as evidence" has
+    # one answer. The list is passed whole; a check reads the projection of it that its own
+    # question needs, and no check assembles a second corpus of its own.
+    record_items = [
+        {"section": item.section or "", "text": item.text or ""}
+        for item in (getattr(evidence_state, "items", {}) or {}).values()
+    ]
+    record_text = "\n".join(item["text"] for item in record_items if item["text"].strip())
+    if getattr(evidence_state, "prediction", None):
+        # The estimate the session holds, in the shape the risk checks read. A follow-up
+        # answering from a stored score is quoting the session's own output, and the score,
+        # the threshold and the drivers are fields on the record. Adding them only when
+        # this turn's calls do not already carry them keeps the corpus a set: a replayed
+        # prediction call and the record's copy are one prediction, not two.
+        if not any(str(call.get("name")) == "predict_readmission"
+                   for call in evidence):
+            evidence = [*evidence, {"name": "predict_readmission", "args": {},
+                                    "response": evidence_state.prediction}]
+    full_text = "\n".join(
+        part for part in (
+            "\n".join(p.get("text") or "" for p in passages), record_text)
+        if part.strip()
+    )
     manifest_evidence = "\n".join(
         part for part in (full_text, admission_context) if part.strip()
     )
+
+    # Every check below is handed the SAME corpus, projected to the shape its question
+    # needs. Nothing here assembles a second one.
+    corpus_passages = [*passages, *record_items]
 
     # Risk numbers first — the one guard that must act even with zero evidence.
     answer, f = verify_risk_numbers(answer, evidence, manifest_evidence,
                                     _literature_text(evidence), _lab_text(evidence))
     flags += f
-    answer, f = redact_invented_age(answer, passages, admission_context)
+    answer, f = redact_invented_age(answer, corpus_passages, admission_context)
     flags += f
     # Verify med claims against the FULL retrieved evidence (see docstring).
     answer, f = verify_med_tokens(answer, full_text)
     flags += f
-    # Per-med freq verification against the med's OWN discharge entry (P3.2).
-    answer, f = verify_med_freqs_per_med(answer, med_source)
+    # Per-med freq verification against the med's OWN discharge entry (P3.2). The record's
+    # units are a second view of the same passages, so they are consulted only where a call
+    # no longer carries one.
+    answer, f = verify_med_freqs_per_med(answer, med_source or _record_med_source(
+        record_items))
     flags += f
     # A disposition and a measurement are the two claims a reader will act on
     # without re-reading the note, so both have to be in the evidence.
@@ -1135,16 +1227,21 @@ def guard_answer(
     # cold-start free-text turn, and both sentences were removed as invented
     # (`dev_t2_01` turn 1, `dev_t5_01` turn 1, 2026-11-05). A claim the model was GIVEN
     # is not an invented claim.
-    disposition_evidence = manifest_evidence
-    answer, f = verify_dispositions(answer, disposition_evidence)
+    #
+    # And the block states it as a FIELD. The corpus is searched for the phrase a note
+    # would use; `_manifest_dispositions` reads the field the row actually holds, which is
+    # the half that was missing on 2026-11-06.
+    answer, f = verify_dispositions(answer, manifest_evidence,
+                                    _manifest_dispositions(admission_context))
     flags += f
     answer, f = verify_lab_values(answer, full_text, _lab_text(evidence),
                                   json.dumps(evidence, default=str)
-                                  + "\n" + admission_context)
+                                  + "\n" + admission_context
+                                  + "\n" + record_text)
     flags += f
     answer, f = normalise_factor_values(answer, evidence)
     flags += f
-    flags += flag_invented_dates(answer, passages)
+    flags += flag_invented_dates(answer, corpus_passages)
     # Slots are the numbering the MODEL was shown, which since TF-10 runs across the
     # replayed turns and this one: the renderer numbers every citable unit in the
     # conversation continuously, and `a2ui.compose_presentation` resolves against the

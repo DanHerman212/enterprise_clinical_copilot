@@ -128,12 +128,22 @@ OUTPATIENT_LINE = (
 
 
 def render(hadm_id: int, profile: dict[str, Any]) -> str:
-    """The `<admission_metadata>` block for one admission, or "" if unusable."""
+    """The `<admission_metadata>` block for one admission, or "" if unusable.
+
+    The block names what the row IS, not which row it is: no admission id, because this
+    text goes into the model's window and the identifier is the one value in it that must
+    never be repeated back. The model was reading it out of the tag and writing it into
+    tool arguments — `discharge_medications({"hadm_id": "90000069"})`, measured 2026-11-06
+    — which the session then had to accept or refuse on a value it had already supplied;
+    the number is the session's to know, and a turn that cannot see it cannot mis-state it.
+    The argument is still accepted and still names the admission in the log line below,
+    because a reader of this function's signature is entitled to know what it is about.
+    """
     if not isinstance(profile, dict) or not profile:
         return ""
     outpatient = encounter.is_outpatient(encounter.classify(profile)) is True
     lines = [
-        f'<admission_metadata hadm_id="{int(hadm_id)}" source="feature store row '
+        f'<admission_metadata source="feature store row '
         f'scored by the readmission model">'
     ]
     if outpatient:

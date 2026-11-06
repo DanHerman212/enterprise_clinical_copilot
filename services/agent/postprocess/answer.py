@@ -110,6 +110,15 @@ def _normalise(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip().lower()
 
 
+#: Where a turn's own evidence numbering starts when no session record sits behind it.
+#:
+#: A command always has an admission and therefore always has a record, so this is the
+#: value for a pure call with no conversation: one passage returned, and it is the first
+#: unit of an array numbered from one. It is NOT a fallback for a caller that forgot to
+#: supply `cite` — such a caller passes the position it was given.
+_FIRST_TURN_POSITION = 1
+
+
 def _distinct_medications(verified: list[dict[str, str]]) -> list[str]:
     """The medication names in `verified`, once each, in first-seen order.
 
@@ -133,7 +142,8 @@ def _distinct_medications(verified: list[dict[str, str]]) -> list[str]:
 
 
 def medication_narrative(verified: list[dict[str, str]], returned_passages: int,
-                         sections: tuple[str, ...] = ()) -> str:
+                         sections: tuple[str, ...] = (),
+                         *, cite: int | None = None) -> str:
     """What the narrative says for a medications command.
 
     The prose names the medications as well as counting them. It used to say only "N
@@ -154,6 +164,14 @@ def medication_narrative(verified: list[dict[str, str]], returned_passages: int,
     note with no such section, 2026-11-04). The sentence states the absence and rooms what
     it does say in the section that says it.
 
+    `cite` is the POSITION the session record gave the passage this sentence reports on,
+    and it is the caller's to supply because only the caller holds the record. It used to
+    be the literal `^[1]`, on the reasoning that `/meds` retrieves one passage — true of
+    the turn and false of the conversation: after an `/ehr` that had already numbered four
+    sections, `^[1]` addressed the discharge diagnosis while the drug list sat at `^[4]`.
+    A marker that names the wrong passage is worse than none, so a caller with no position
+    writes none.
+
     The fallback sentence reserved for a genuinely empty result is used only when the tool
     returned no passages at all. A tool that returned text this module could not verify is
     a different failure, and the prose states that failure clinically: what was retrieved,
@@ -163,11 +181,13 @@ def medication_narrative(verified: list[dict[str, str]], returned_passages: int,
     """
     names = _distinct_medications(verified)
     # The sentence reports on the passage the tool returned, so it carries that passage's
-    # marker like any other claim: the citation layer resolves `^[1]` against this turn's
-    # retrieved passages, and the judge reads a provenance-poor answer as one that cited
+    # marker like any other claim: the citation layer resolves the position against the
+    # record's array, and the judge reads a provenance-poor answer as one that cited
     # nothing (5fa503f6 and e5558ec7 passed with `citation_missing`, 2026-10-21). Only
-    # when a passage exists — a marker pointing at nothing is worse than none.
-    source = " ^[1]" if returned_passages else ""
+    # when a position exists — a marker pointing at nothing is worse than none.
+    position = cite if cite is not None else (
+        _FIRST_TURN_POSITION if returned_passages else 0)
+    source = f" ^[{int(position)}]" if position else ""
     dedicated = "discharge_medications" in sections
     if names:
         if dedicated:

@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import random
+import re
 import subprocess
 import sys
 import time
@@ -125,6 +126,18 @@ _ALLOWED_SCHEMA_KEYS = {
     "properties", "required", "items", "minimum", "maximum",
 }
 
+#: Whether the model-facing object schema is CLOSED.
+#:
+#: `additionalProperties: false` is the JSON-Schema way to say "these are the only keys",
+#: and whether it reaches Gemini depends on this flag because the SDK's Schema message has
+#: no such field: sending it is a 400 at generate time. The probe that decides is
+#: `tests/agent/test_remediation_2026_11_06.py::test_the_model_schema_can_carry_a_closed_object`
+#: plus one live call; until that call is made, the honest state is "the schema does not
+#: claim to be closed", and the argument is withheld by omission instead — which the
+#: inspectable half of the same fix does: the description no longer names it and the hub
+#: forbids writing it.
+_CLOSE_MODEL_SCHEMA = False
+
 
 def _clean_schema(node: Any) -> Any:
     """Recursively drop schema keys Gemini does not accept."""
@@ -172,17 +185,54 @@ def _model_schema(name: str, schema: Any) -> Any:
         return cleaned
     properties = cleaned.get("properties")
     if not isinstance(properties, dict) or "hadm_id" not in properties:
-        return cleaned
+        return _closed(cleaned)
     remaining = {key: value for key, value in properties.items() if key != "hadm_id"}
     if not remaining:
-        return {"type": "object", "properties": {}}
+        return _closed({"type": "object", "properties": {}})
     bound = {key: value for key, value in cleaned.items() if key != "required"}
     bound["properties"] = remaining
     required = [entry for entry in (cleaned.get("required") or [])
                 if entry != "hadm_id"]
     if required:
         bound["required"] = required
-    return bound
+    return _closed(bound)
+
+
+def _closed(schema: Any) -> Any:
+    """The same schema, declaring that no other keys are accepted.
+
+    Applied on EVERY branch, including the tool left with no properties at all — that is
+    the branch the model reads for `discharge_medications`, and a schema that says
+    `{"type": "object", "properties": {}}` and nothing else announces no constraint,
+    which is what let a decoder emit `{"hadm_id": null}` for a tool that takes no
+    arguments.
+
+    Off by default (`_CLOSE_MODEL_SCHEMA`) because the SDK's Schema message has no such
+    field: whether Gemini accepts it is one live call away and unmeasured, and a schema
+    keyword that 400s would break every bound tool at once. See the note on the flag.
+    """
+    if not _CLOSE_MODEL_SCHEMA or not isinstance(schema, dict):
+        return schema
+    if schema.get("type") != "object":
+        return schema
+    return {**schema, "additionalProperties": False}
+
+
+#: The argument-and-description hygiene that does NOT depend on the API's schema subset.
+#:
+#: A tool description is prose in the prompt, and a description that says "Requires
+#: hadm_id" tells the model the argument exists after the schema stopped advertising it.
+#: The sentence is removed rather than rewritten: this function may not author clinical or
+#: contract prose, and a rewritten sentence is a second claim about the tool.
+_WITHHELD_ARGUMENT = "hadm_id"
+
+
+def _model_description(text: str) -> str:
+    """A tool's description without the sentences that name the withheld argument."""
+    sentences = re.split(r"(?<=[.!?])\s+", (text or "").strip())
+    kept = [sentence for sentence in sentences
+            if _WITHHELD_ARGUMENT not in sentence.lower()]
+    return " ".join(kept).strip()
 
 
 def _unwrap(payload: dict) -> dict:
@@ -238,6 +288,38 @@ _TRANSIENT_TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
     OSError, RuntimeError, EOFError,
 )
 
+
+def _transient_transport(exc: BaseException) -> bool:
+    """Whether a failure is the transport misbehaving rather than the call being wrong.
+
+    `BaseExceptionGroup` is the shape anyio reports a task-group failure in, and it is not
+    an `OSError` or a `RuntimeError`, so a stream that closed mid-call arrived here as an
+    opaque group and was classified as "everything else": zero retries, one log line, and a
+    failed turn. The group is unwrapped: if every leaf is a transport failure the call can
+    be made again; if any leaf is not, this is a bug and is not retried.
+
+    A group holding a cancellation is never transient. `CancelledError` is a
+    `BaseException`, it is the caller's decision, and retrying it would outlive the request
+    that asked for it.
+    """
+    if isinstance(exc, asyncio.CancelledError):
+        return False
+    leaves: list[BaseException] = []
+
+    def collect(error: BaseException) -> None:
+        nested = getattr(error, "exceptions", None)
+        if nested:
+            for inner in nested:
+                collect(inner)
+        else:
+            leaves.append(error)
+
+    collect(exc)
+    return bool(leaves) and all(
+        isinstance(leaf, (*_TRANSIENT_TRANSPORT_ERRORS, BaseExceptionGroup))
+        for leaf in leaves
+    )
+
 #: How much of the backoff delay may be added as jitter, as a fraction of it. Bounded so
 #: the ladder still fits inside `call_timeout_seconds` and the caller's `ask` deadline.
 _JITTER_FRACTION = 0.25
@@ -277,13 +359,44 @@ class MCPToolbox:
     def names(self) -> list[str]:
         return list(self._tools)
 
+    def model_arguments(self, name: str, arguments: dict) -> dict:
+        """`arguments` without the one argument this tool's schema withheld from the model.
+
+        The mirror of `_model_schema`: the schema the model is shown has no `hadm_id`, and
+        this is the other half of that promise — an argument the model was never offered is
+        not carried into the call. The admission is the session's to supply, and a call
+        that arrives carrying one is a model repeating a number it should not have had.
+
+        Narrow on purpose. It removes `hadm_id` and stops there: the question is whether
+        the model supplied an argument the schema hid, not whether every key it wrote is
+        declared. A tool whose schema advertises no properties still receives whatever the
+        model sent, because dropping an argument a tool needs is a worse failure than
+        tolerating one it ignores — `_external_argument_refusal` is the rule for the tool
+        where an undeclared key actually leaves the building.
+
+        A tool that declares no admission at all is returned untouched: nothing was
+        withheld from the model, so there is nothing to take back.
+        """
+        tool = self._tools.get(name)
+        if tool is None:
+            return arguments
+        declared = (tool.input_schema or {}).get("properties") or {}
+        if "hadm_id" not in declared:
+            return arguments
+        schema = _model_schema(name, tool.input_schema)
+        properties = schema.get("properties") if isinstance(schema, dict) else None
+        if isinstance(properties, dict) and "hadm_id" in properties:
+            return arguments
+        return {key: value for key, value in (arguments or {}).items()
+                if key != "hadm_id"}
+
     @property
     def gemini_tool(self) -> types.Tool:
         return types.Tool(
             function_declarations=[
                 types.FunctionDeclaration(
                     name=tool.name,
-                    description=(tool.description or "").strip(),
+                    description=_model_description(tool.description or ""),
                     parameters=_model_schema(tool.name, tool.input_schema),
                 )
                 for tool in self._tools.values()
@@ -364,6 +477,25 @@ class MCPToolbox:
                 )
             except asyncio.CancelledError:
                 raise
+            except BaseExceptionGroup as group:
+                if not _transient_transport(group):
+                    _LOG.error("MCP tool %s call failed in a task group", name,
+                               exc_info=group)
+                    raise
+                if attempt >= attempts:
+                    _LOG.error(
+                        "MCP tool %s call failed after %d attempt(s)", name, attempts,
+                        exc_info=group,
+                    )
+                    return None
+                delay = self.base_delay_seconds * (2 ** (attempt - 1))
+                if delay > 0:
+                    delay += random.uniform(0.0, delay * _JITTER_FRACTION)
+                    await asyncio.sleep(delay)
+                _LOG.warning(
+                    "MCP tool %s attempt %d/%d failed in a transport group; "
+                    "retrying in %.2fs", name, attempt, attempts, delay,
+                )
             except _TRANSIENT_TRANSPORT_ERRORS as exc:
                 if attempt >= attempts:
                     _LOG.error(
@@ -493,14 +625,40 @@ async def http_toolbox(url: str | None = None):
     # the SDK vendors alongside the ordinary httpx other libraries pull in.
     # Transport timeout sits just above the per-call read timeout so the tool
     # deadline fires first with a structured error.
-    async with httpx2.AsyncClient(headers=headers, timeout=110) as http_client:
-        async with streamable_http_client(f"{base}/mcp", http_client=http_client) as (
-            read,
-            write,
-        ):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                yield await MCPToolbox(session).load()
+    #
+    # Every exit below is wrapped, because the failure this exists for happens in an
+    # `__aexit__` and not in a call. Measured 2026-11-06, twice: a lab turn died with
+    # `ExceptionGroup: unhandled errors in a TaskGroup` raised by the HTTP stream's
+    # teardown after the tool result had already been captured and used. The turn's answer
+    # was thrown away by the closing of a socket. A session that tears down badly AFTER the
+    # body finished has nothing left to report: the caller already has what it asked for,
+    # so the teardown is logged and the body's result stands. A teardown that happens while
+    # the body is failing is not swallowed — `finished` is only set when the body returned
+    # normally, and anything else is re-raised untouched, including cancellation.
+    finished = False
+    try:
+        async with httpx2.AsyncClient(headers=headers, timeout=110) as http_client:
+            async with streamable_http_client(f"{base}/mcp", http_client=http_client) as (
+                read,
+                write,
+            ):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    box = await MCPToolbox(session).load()
+                    try:
+                        yield box
+                    except BaseException:
+                        raise
+                    else:
+                        finished = True
+    except BaseExceptionGroup as group:
+        if not finished:
+            raise
+        _LOG.warning(
+            "MCP session teardown failed after the turn completed (%s); "
+            "discarding the teardown error, the result is already returned",
+            type(group).__name__,
+        )
 
 
 @contextlib.asynccontextmanager
@@ -718,7 +876,7 @@ def _tools(toolbox: MCPToolbox,
     return [
         _MCPTool(
             name=name,
-            description=(tool.description or "").strip(),
+            description=_model_description(tool.description or ""),
             args_schema=_model_schema(name, tool.input_schema),
             box=toolbox,
         )
@@ -1026,7 +1184,27 @@ async def _execute_tool_calls(
         # What the MODEL wrote, kept beside the complete arguments because the guard has
         # to see it: an admission the model invented must be refused, not overwritten.
         asked_for = dict(call.get("args") or {})
-        arguments = _with_session_admission(name, asked_for, hadm_id)
+        # Projected onto what the model was SHOWN before the session completes it. The
+        # schema hides the admission and this is the other half of that: `asked_for` stays
+        # untouched, because the cross-patient check below reads what the model WROTE and
+        # an attempt to name another admission must be refused rather than corrected.
+        #
+        # Gated on the session's own admission, because projection is only safe where
+        # something will put the admission back. The command path builds its calls from
+        # `routing.tool_arguments` and passes no session admission here — its arguments
+        # already carry one, and a filter with nothing to re-add would strip the admission
+        # out of every command's tool call (measured immediately: `/ehr` dispatched
+        # `rag_search_sections({})` and the tool refused it).
+        #
+        # Named `argument_filter` rather than `project`: `project` is this function's own
+        # parameter, the projector that shapes a RESULT for the model, and a local of the
+        # same name silently replaced it — every tool result was then projected onto an
+        # argument schema and reached the record as an empty payload.
+        argument_filter = getattr(toolbox, "model_arguments", None)
+        offered = (argument_filter(name, asked_for)
+                   if argument_filter is not None and hadm_id is not None
+                   else asked_for)
+        arguments = _with_session_admission(name, offered, hadm_id)
         # Keyed on the complete arguments, because `prior` holds recorded calls and a
         # recorded call carries the admission that was dispatched. Keying on what the
         # model wrote would make the same call look new every round.
@@ -1122,7 +1300,8 @@ async def _execute_tool_calls(
         done.add(key)
         if not refused:
             per_tool[name] = per_tool.get(name, 0) + 1
-            if name in ONCE_PER_TURN:
+            if name in ONCE_PER_TURN and routing.spends_turn_allowance(
+                    name, arguments):
                 spent.add(name)
         # `order` rewrites the payload BEFORE the model is shown it and before it is
         # recorded, so one order governs both. Doing it afterwards reordered the

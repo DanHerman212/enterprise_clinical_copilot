@@ -370,7 +370,11 @@ def test_hydration_from_both_call_shapes_renders_deterministically():
 
     assert rendered == SessionEvidenceState.hydrate_from_calls(
         HADM, replayed, current).render_for_prompt()
-    assert rendered.startswith(f'<session_evidence_state hadm_id="{HADM}">')
+    # The model-facing header carries no admission id: the record is bound to one at
+    # construction and the only value the model could do with the number is write it back
+    # into a tool call (2026-11-06). The binding itself is still on the state.
+    assert rendered.startswith("<session_evidence_state>")
+    assert str(HADM) not in rendered
     assert "[^[1] | tool=rag_search_sections | section=brief_hospital_course]" in rendered
     assert "[^[3] | tool=get_lab_trends | section=alpha | synthetic=true]" in rendered
     assert "<section_inventory>" in rendered

@@ -192,7 +192,8 @@ def _draws_matrix(command: str | None, *, has_estimate: bool,
 
 
 def _comparative_matrix(estimate: dict | None,
-                        comparators: list[dict] | None) -> dict | None:
+                        comparators: list[dict] | None,
+                        *, extraction_degraded: bool = False) -> dict | None:
     """This patient's estimate set against the published cohorts, or None.
 
     Rows are the comparators the engine verified on this turn — retrieved for this
@@ -234,11 +235,25 @@ def _comparative_matrix(estimate: dict | None,
         "baseline_note": "",
     }
     if not rows:
-        # The honest empty. The patient's own estimate is still worth drawing and still
-        # the answer to the question that was asked; what is absent is a published cohort
-        # for THIS condition, and saying so is the only alternative to borrowing a cohort
-        # for a different one.
+        # The honest empty, and there are two of them.
+        #
+        # A pass that READ its abstracts and verified none is a fact about the literature:
+        # no retrieved cohort reports a 30-day rate for this condition at this admission's
+        # population. A pass that never read them — a reply withheld, truncated or
+        # unparseable — established nothing about the literature, and the sentence below
+        # used to be served for both. Measured 2026-11-06: the same admission, query and
+        # session drew this notice on one `/ehr` (the extraction came back
+        # `finish_reason=MAX_TOKENS`) and two verified cohorts four minutes later.
+        #
+        # `extraction_degraded` is one bit, computed by the layer that ran the extraction
+        # and passed down through the composer: this surface states what it was told and
+        # never re-reads the passes to decide for itself.
         component["baseline_note"] = (
+            "The benchmark extraction did not complete on this run, so no published "
+            "30-day readmission rate could be read for this admission's condition. This "
+            "table shows the patient's own estimate alone; the comparison is missing, "
+            "not empty. No cohort has been substituted."
+            if extraction_degraded else
             "No published 30-day readmission rate for this admission's primary condition "
             "was stated in the abstracts retrieved for it, so this table shows the "
             "patient's own estimate alone. No cohort has been substituted."
@@ -273,7 +288,8 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
                         narrative: dict | None = None,
                         comparators: list[dict] | None = None,
                         command: str | None = None,
-                        eligible: bool = True) -> dict:
+                        eligible: bool = True,
+                        comparison_degraded: bool = False) -> dict:
     """Turn one predict (+ rag) payload into the A2UI risk-canvas envelope.
 
     predict is None when the question did not request a readmission estimate
@@ -382,7 +398,8 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
     # here rather than at either placement so no surface can draw the table on a turn that
     # did not ask for it.
     comparison = (
-        _comparative_matrix(estimate, comparators)
+        _comparative_matrix(estimate, comparators,
+                            extraction_degraded=comparison_degraded)
         if _draws_matrix(command, has_estimate=estimate is not None,
                          has_comparators=bool(comparators),
                          eligible=eligible) else None

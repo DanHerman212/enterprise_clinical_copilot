@@ -150,6 +150,18 @@ class AgentState(TypedDict):
     #: re-derived downstream, because `turn.py` may not hydrate a record of its own (the
     #: root orchestrator may not import `postprocess.evidence_state`).
     replay_positions: int
+    #: The question this turn is answering, as the caller asked it.
+    #:
+    #: Carried on the state because the per-round overlay is rebuilt from the state between
+    #: rounds, and one line of it is about the QUESTION rather than about the evidence: a
+    #: question that names two laboratory values, and a session that has read one of them,
+    #: owes the next round a statement of what is still unread. Prose in the prompt cannot
+    #: do that, because only the state knows which values the session has actually read.
+    question: str
+    #: The tools this turn may call, as the prompt composer and the binder were given them.
+    #: Read by `_unqueried_analytes` so the overlay never names an analyzer the model cannot
+    #: fetch — an instruction it cannot obey is worse than silence.
+    allowed_tools: frozenset[str]
     #: The admission this turn is about, carried on the state because the evidence record
     #: is scoped to it. It arrives as an `ask` parameter and is needed downstream by
     #: anything that has to decide what "this patient" means. `None` for a turn with no
@@ -557,7 +569,16 @@ def _still_bound(allowed: frozenset[str], state: AgentState) -> frozenset[str]:
     loop `MAX_TOOL_CALLS_PER_TURN` exists to end, and the absence of anything to call is
     the only bound that holds (see `ONCE_PER_TURN`).
     """
-    spent = {str(call.get("name")) for call in state.get("tool_calls") or []}
+    spent = {
+        str(call.get("name"))
+        for call in state.get("tool_calls") or []
+        # Argument-aware: reading one analyte leaves the rest of the panel unread, so a
+        # filtered `get_lab_trends` does not spend its allowance. The rule is
+        # `routing.spends_turn_allowance`, and the executor's own bookkeeping asks the same
+        # function — two layers, one definition (2026-11-06).
+        if routing.spends_turn_allowance(
+            str(call.get("name")), call.get("args") or {})
+    }
     replayed = [
         call for call in state.get("replayed_tool_calls") or [] if isinstance(call, dict)
     ]
@@ -640,6 +661,7 @@ def _session_holds_evidence(
     return bool(
         record.position_count()
         or record.checked_sections
+        or record.checked_labs
         or record.prediction is not None
     )
 
@@ -654,6 +676,7 @@ def _record_has_content(record: Any) -> bool:
     return bool(
         record.position_count()
         or record.checked_sections
+        or record.checked_labs
         or record.prediction
         or record.literature
     )
@@ -677,6 +700,15 @@ def _working_memory(state: AgentState, allowed: frozenset[str]) -> str:
     record = state.get("evidence_state")
     if record is not None and _record_has_content(record):
         parts.append(record.render_for_prompt())
+    unread = _unqueried_analytes(state)
+    if unread:
+        # Said in the round's own overlay rather than left to the prompt's prose: the
+        # question named these values and the session has read none of them, so an answer
+        # that mentions one of them is an absent claim nobody tested. Naming them is the
+        # difference between a model that knows what it has not looked at and one that
+        # assumes a panel it has not run.
+        parts.append(prompts.UNQUERIED_ANALYTES_NOTICE.format(
+            analytes=", ".join(unread)))
     withdrawn = sorted(allowed - _still_bound(allowed, state))
     if withdrawn:
         parts.append(prompts.TRANSCRIPT_NOTICE.format(
@@ -685,6 +717,31 @@ def _working_memory(state: AgentState, allowed: frozenset[str]) -> str:
             ).lower(),
         ))
     return "\n\n".join(parts)
+
+
+def _unqueried_analytes(state: AgentState) -> list[str]:
+    """The analytes this question names that the session has not read or refused.
+
+    `get_lab_trends` reads one value per call. A question naming hemoglobin and creatinine
+    was answered from a call for hemoglobin alone, and the prose then reported creatinine as
+    undocumented — a statement about a value nobody had asked the record for (measured
+    2026-11-06). The inventory cannot correct that after the fact; it can only tell the next
+    round what is still unread, which is what this does.
+
+    Empty when the question names nothing, when every named value is in the record's
+    `<lab_inventory>` (present or absent), or when the tool is not available to this turn at
+    all: naming an analyzer the model cannot call would be an instruction it cannot obey.
+    """
+    question = str(state.get("question") or "")
+    named = routing.lab_analytes_named(question)
+    if not named:
+        return []
+    allowed = state.get("allowed_tools") or routing.FREETEXT_TOOLS
+    if "get_lab_trends" not in allowed:
+        return []
+    record = state.get("evidence_state")
+    read = set(getattr(record, "checked_labs", {}) or {}) if record is not None else set()
+    return [analyte for analyte in named if analyte not in read]
 
 
 def _with_overlay(conversation: list[BaseMessage], overlay: str) -> list[BaseMessage]:
@@ -1400,6 +1457,12 @@ async def ask(
                 # the record is built, because `turn.py` republishes this turn's
                 # `citation_map` measured from it and may not hydrate a record of its own.
                 "replay_positions": replayed_positions,
+                # The question, and the tools it may call. Both are carried on the state
+                # because the per-round overlay is rebuilt from the state between rounds:
+                # a question that named two analytes and a turn that read one of them has
+                # something to say to the next round, and saying it needs the question.
+                "question": question,
+                "allowed_tools": allowed_for_prompt,
             },
             config=config,
         )

@@ -111,3 +111,30 @@ def names_an_analyte(text: str) -> bool:
     """
     return bool(_LAB_ANALYTE.search(text or ""))
 
+
+def analytes_named(text: str) -> tuple[str, ...]:
+    """Every analyte this text names, as the vocabulary spells it, once each, in order.
+
+    The list form of `names_an_analyte`, for the caller that has to do something PER
+    analyte rather than decide a yes/no: a question asking about hemoglobin and creatinine
+    needs both read, and a turn that read one of them and then reported the other as
+    undocumented has stated an absence it never looked for (measured 2026-11-06 on
+    `90000069`: `get_lab_trends(analyte="hemoglobin")`, and the served answer said "the
+    record does not document a creatinine trend").
+
+    The vocabulary is the panel's, so a bundle naming the same value twice ("hb",
+    "hemoglobin") is one analyte here when the canonical words match. Synonyms that spell
+    the same measure differently are separate entries on purpose: this returns what the
+    text NAMED, and deciding that "hgb" and "hemoglobin" are one measurement is the
+    retrieval layer's judgement, not this function's.
+    """
+    found: list[str] = []
+    seen: set[str] = set()
+    for match in _LAB_ANALYTE.finditer(text or ""):
+        word = match.group(0).lower()
+        if word in seen:
+            continue
+        seen.add(word)
+        found.append(word)
+    return tuple(found)
+

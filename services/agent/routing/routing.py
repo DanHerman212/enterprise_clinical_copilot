@@ -59,7 +59,7 @@ from services.mcp.retrieval.sections import SUMMARY_SECTIONS
 # The analyte vocabulary is a shared label map, not a routing predicate: the presentation
 # layer needs the same answer and may not import this module (Charter 13 §5). Re-exported
 # through this namespace because this is where the tests and `graph` have always read it.
-from shared.labels import LAB_ANALYTE_WORDS, names_an_analyte  # noqa: F401 — re-exported
+from shared.labels import LAB_ANALYTE_WORDS, analytes_named, names_an_analyte  # noqa: F401 — re-exported
 
 class UnknownCommand(ValueError):
     """An intent arrived that this table does not define."""
@@ -634,6 +634,40 @@ def asks_about_a_lab_analyte(question: str) -> bool:
     return names_an_analyte(question)
 
 
+def lab_analytes_named(question: str) -> tuple[str, ...]:
+    """The analytes this question names, for the caller that has to read every one.
+
+    A question can name two values and be answered about one: `get_lab_trends` reads one
+    analyte per call, and a turn that fetched hemoglobin and then reported creatinine as
+    "not documented" stated an absence it never looked for (2026-11-06). The list is what
+    the engine compares against the record's `<lab_inventory>` to know which named values
+    are still unread.
+    """
+    return analytes_named(question)
+
+
+def spends_turn_allowance(name: str, arguments: dict | None) -> bool:
+    """Whether this call used up its tool's `ONCE_PER_TURN` allowance.
+
+    By name for most tools, because their result is a fact about the admission and a
+    second call can only return it again. For a tool whose result depends on an ARGUMENT
+    (`FULL_FETCH_UNFILTERED_TOOLS`), only the widest form of the call spends it: reading
+    creatinine leaves sodium unread, and a question about sodium is a different question.
+    The transcript rule has worked that way since `_fulfilled_by_replay`; the turn rule did
+    not, so one analyte per turn was all a turn could read — which is how an answer came to
+    declare a second analyte undocumented (2026-11-06).
+
+    Stated once, here, because two layers ask it: `graph._still_bound` decides whether the
+    tool is bound for the next round, and `mcp_client._execute_tool_calls` decides whether
+    a call is refused as already spent.
+    """
+    if name not in ONCE_PER_TURN_TOOLS:
+        return False
+    if name in FULL_FETCH_UNFILTERED_TOOLS:
+        return not (arguments or {}).get("analyte")
+    return True
+
+
 def _templated_arguments(args: dict, hadm_id: int | None,
                          command: Command) -> dict:
     """`args` over `hadm_id`, refusing when an admission is needed and absent.
@@ -892,6 +926,23 @@ LITERATURE_QUESTION_TOOLS: frozenset[str] = frozenset(
 #: wire contract and the retry policy are two readers of one fact, and a second copy is
 #: a place a tool rename has to be found twice.
 RESULT_KEPT_TOOLS: frozenset[str] = frozenset({"predict_readmission", "get_lab_trends"})
+
+#: What a benchmark retrieval pass came to.
+#:
+#: Three outcomes, not two, because "nobody verified a cohort" is not one fact. A pass
+#: that read its abstracts and found no comparable population is a statement about the
+#: literature and the reader may be told so. A pass whose reply was truncated, withheld
+#: or unparseable never read them, and telling that reader the abstracts stated no rate
+#: is a claim about the literature made out of a transport failure — measured on
+#: 2026-11-06, when the same admission, query and session produced `verified: 0` on one
+#: `/ehr` and `verified: 1` on the next four minutes later.
+#:
+#: The vocabulary lives here because two layers need the same three names and neither may
+#: import the other: the engine stamps the outcome, and the orchestrator turns it into the
+#: one bit the presentation layer is given.
+OUTCOME_VERIFIED: str = "verified"
+OUTCOME_VERIFIED_EMPTY: str = "verified_empty"
+OUTCOME_EXTRACTION_DEGRADED: str = "extraction_degraded"
 
 #: The one tool whose arguments leave our system: a search string goes to NCBI.
 #:

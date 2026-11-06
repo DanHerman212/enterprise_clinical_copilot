@@ -281,7 +281,7 @@ def _consolidate_medication_passages(recorded: list[RecordedToolCall]) -> None:
     `discharge_medications` returns every chunk of the medications section and then
     every chunk of the discharge instructions — deliberately, because the names are in
     the first and the doses are in the second, and the extraction needs both. But
-    `/meds` cites its narrative with a single `^[1]`, and `^[1]` addresses
+    `/meds` cites its narrative with a single marker, and that marker addresses
     `passages[0]`: the FIRST chunk of the medications section. A reader who clicked it
     saw a fragment of the list the grid had just shown them in full, and the guardrail
     compared the whole answer against one chunk of its evidence.
@@ -316,14 +316,44 @@ def _consolidate_medication_passages(recorded: list[RecordedToolCall]) -> None:
         response["returned"] = 1
 
 
-def medication_narrative(verified: list[dict[str, str]], returned_passages: int) -> str:
+def _medication_passage_position(recorded: list[RecordedToolCall],
+                                 evidence_state: Any) -> int | None:
+    """The position the session record gave the passage the narrative reports on.
+
+    Resolved from the record rather than counted here, because the two disagree the moment
+    the conversation has evidence in it: `/meds` retrieves one passage, and that passage may
+    be one the thread already read. `_execute_tool_calls` stamps the position it assigned or
+    REUSED — a passage `/ehr` retrieved keeps the position it had — and the marker the
+    narrative writes has to be that number, not this turn's first.
+
+    Read from the passage's own `id`, which is the key the record deduplicates on. `None`
+    when there is no record (no admission), or when the call returned no passage with an id;
+    the narrative then writes no marker rather than a wrong one.
+    """
+    if evidence_state is None:
+        return None
+    for call in recorded or []:
+        response = call.get("response")
+        if not isinstance(response, dict):
+            continue
+        for passage in response.get("passages") or []:
+            if not isinstance(passage, dict):
+                continue
+            passage_id = str(passage.get("id") or "").strip()
+            if passage_id:
+                return evidence_state.position_of_note_passage(passage_id)
+    return None
+
+
+def medication_narrative(verified: list[dict[str, str]], returned_passages: int,
+                         *, cite: int | None = None) -> str:
     """Deprecated forward: the narrative is written in `postprocess.answer`.
 
     Moved on 2026-10-29 (`00d7` Row 8). Answer prose belongs to `postprocess/`, and the
     engine's formatting turn only orders the sections. This stays one line so callers that
     still import it from here get identical prose; nothing in the engine calls it.
     """
-    return answer_text.medication_narrative(verified, returned_passages)
+    return answer_text.medication_narrative(verified, returned_passages, cite=cite)
 
 
 # The wording lives in `routing`, beside the set that decides which admissions are
@@ -518,7 +548,7 @@ extraction_llm_factory: Callable[[str], Any] = model_gateway.build_extraction_ll
 async def _readmission_comparators(
     toolbox: Any, model: str, recorded: list[RecordedToolCall], on_event,
     *, extraction_llm: Any = None, evidence_state: Any = None,
-) -> tuple[list[dict], dict | None, list[RecordedToolCall], list[dict]]:
+) -> tuple[list[dict], dict | None, list[RecordedToolCall], list[dict], str]:
     """The published cohorts this admission's estimate is compared against.
 
     Three steps, and each is somebody else's decision already stated: the condition comes
@@ -537,19 +567,23 @@ async def _readmission_comparators(
     """
     sections = note_sections(recorded)
     if not sections:
-        return [], None, [], []
+        # No chart text, so no condition and no query. Reported as a degraded benchmark
+        # rather than as a literature that offered nothing: nothing was asked of it.
+        return [], None, [], [], routing.OUTCOME_EXTRACTION_DEGRADED
 
     llm = extraction_llm if extraction_llm is not None else extraction_llm_factory(model)
     if llm is None:
         # No extraction client in this environment. Stated on the state rather than left
         # silent: `comparators: []` and "nobody looked" are different answers, and the
         # surface says which one it is drawing.
-        return [], {"source": "unavailable",
-                     "reason": "no extraction client is configured here"}, [], []
+        return ([], {"source": "unavailable",
+                     "reason": "no extraction client is configured here"}, [], [],
+                routing.OUTCOME_EXTRACTION_DEGRADED)
     derived = await derive_target(llm, sections)
     target = derived.target
     if target is None:
-        return [], {"source": derived.source, "reason": derived.reason}, [], []
+        return ([], {"source": derived.source, "reason": derived.reason}, [], [],
+                routing.OUTCOME_EXTRACTION_DEGRADED)
 
     calls_made: list[RecordedToolCall] = []
     counter = {"calls": 0}
@@ -597,10 +631,11 @@ async def _readmission_comparators(
     passes = [
         {"query": entry.query, "wide": entry.wide, "candidates": entry.candidates,
          "aligned": entry.aligned, "verified": entry.verified,
-         "excluded": entry.excluded}
+         "excluded": entry.excluded, "outcome": entry.outcome}
         for entry in result.passes
     ]
-    return result.rows, payload, calls_made, passes
+    return (result.rows, payload, calls_made, passes,
+            benchmark_outcome(result.passes))
 
 
 async def run_command(
@@ -798,7 +833,7 @@ async def run_command(
     # and recorded as tool calls like every other piece of evidence this turn rests on.
     command_extras: dict[str, Any] = {}
     if command.wire == "summarize" and not outpatient_record:
-        comparators, target_payload, literature_recorded, passes = \
+        comparators, target_payload, literature_recorded, passes, outcome = \
             await _readmission_comparators(
                 toolbox, model, recorded, on_event, extraction_llm=extraction_llm,
                 evidence_state=evidence_state)
@@ -806,6 +841,12 @@ async def run_command(
         command_extras["comparators"] = comparators
         command_extras["clinical_target"] = target_payload
         command_extras["comparator_passes"] = passes
+        # What the benchmark step came to, as a word rather than as a length. `[]` rows is
+        # a real answer and the surface has to know WHICH real answer: the orchestrator
+        # turns this into the one bit `presentation` is given, so the table can say the
+        # abstracts offered no cohort when that is what happened, and that the extraction
+        # did not complete when that is what happened.
+        command_extras["comparator_outcome"] = outcome
 
     # Every result this turn produced goes to the formatting turn, supplementary calls
     # included.
@@ -990,9 +1031,13 @@ async def run_command(
             "sections": list(sections),
         }
         # The narrative replaces the raw JSON: the grid renders the list, and the
-        # prose is what the guardrails and the citation layer expect to see.
+        # prose is what the guardrails and the citation layer expect to see. The marker
+        # is the position the RECORD gave this passage, not this turn's first: a passage
+        # the thread already read keeps the number it had, and a marker that names a
+        # different passage is worse than no marker at all (2026-11-06).
         state["deterministic_answer"] = answer_text.medication_narrative(
-            verified, returned, sections=sections)
+            verified, returned, sections=sections,
+            cite=_medication_passage_position(recorded, evidence_state))
         if streams:
             # Generated here from verified rows, so announcing it is not a preview of
             # unverified text: this IS the settled answer, arriving as soon as it
@@ -1672,6 +1717,25 @@ class ComparatorPass:
     #: Two passes, one extraction: without this a report showing two passes and one call
     #: would read as a lost pass.
     pooled: bool = False
+    #: What the pass came to — `verified`, `verified_empty` or `extraction_degraded`.
+    #: Carried so the surface can tell a literature that offered no comparable cohort
+    #: from an extraction that never read the abstracts.
+    outcome: str = routing.OUTCOME_VERIFIED_EMPTY
+
+
+def benchmark_outcome(passes: list["ComparatorPass"]) -> str:
+    """What the turn's benchmark retrieval came to, across every pass.
+
+    One row verified is `verified`, whatever happened in a pass that failed — the table
+    has something to draw. With no row verified, a single failed pass makes the whole turn
+    `extraction_degraded`, because a reader told "the abstracts stated no rate" would be
+    reading a statement about the literature that this turn never established.
+    """
+    if any(pass_.outcome == routing.OUTCOME_VERIFIED for pass_ in passes):
+        return routing.OUTCOME_VERIFIED
+    if any(pass_.outcome == routing.OUTCOME_EXTRACTION_DEGRADED for pass_ in passes):
+        return routing.OUTCOME_EXTRACTION_DEGRADED
+    return routing.OUTCOME_VERIFIED_EMPTY
 
 
 @dataclass(frozen=True)
@@ -1713,13 +1777,13 @@ async def extract_comparators(
     different facts, and each is reported rather than collapsed into "no rows".
     """
     candidates = await candidate_pass(search, target)
-    verified, refused_rows = await _extract_pass(
+    verified, refused_rows, outcome = await _extract_pass(
         llm, target, candidates.aligned, config)
     rejected = [*candidates.refused, *refused_rows]
     return ComparatorResult(
         rows=verified[:max_rows], rejected=rejected,
         passes=[candidates.report(verified=len(verified),
-                                  rejected=candidates.refused)],
+                                  rejected=candidates.refused, outcome=outcome)],
     )
 
 
@@ -1740,11 +1804,12 @@ class CandidatePass:
     refused: tuple[dict, ...]
     excluded: int
 
-    def report(self, *, verified: int, rejected: tuple[dict, ...]) -> ComparatorPass:
+    def report(self, *, verified: int, rejected: tuple[dict, ...],
+               outcome: str) -> ComparatorPass:
         return ComparatorPass(
             query=self.query, wide=self.wide, candidates=self.candidates,
             aligned=len(self.aligned), verified=verified,
-            rejected=tuple(rejected), excluded=self.excluded,
+            rejected=tuple(rejected), excluded=self.excluded, outcome=outcome,
         )
 
 
@@ -1781,33 +1846,125 @@ async def candidate_pass(search, target: ClinicalTarget) -> CandidatePass:
 
 
 
-async def _extract_pass(
-    llm, target: ClinicalTarget, aligned: tuple[dict, ...] | list[dict],
-    config: dict | None,
-) -> tuple[list[dict], list[dict]]:
-    """One model call over `aligned`, verified against the abstracts it came from.
+#: The output ceiling for one comparator extraction, in tokens.
+#:
+#: Twice the client's default (`GEMINI_MAX_OUTPUT_TOKENS`, 4096), because this is the one
+#: extraction whose reply grows with its input: twenty abstracts, each one either a row
+#: with a copied sentence or a one-line refusal. Measured 2026-11-06 on `90000069`: the
+#: reply came back `finish_reason=MAX_TOKENS`, `_extract_json_object` found no object, and
+#: a table that had two verifiable cohorts in it drew nothing — while the same query four
+#: minutes later, under the same prompt, returned `STOP` and one row. A ceiling is not a
+#: fix on its own (the reply is unbounded in principle), which is why `_extract_pass` also
+#: retries over halves; it removes the common case, and the retry removes the rest.
+COMPARATOR_REPLY_TOKENS = 8192
 
-    Returns `(rows, rejections)`. A withheld or malformed reply is a rejection with its
-    reason, never an exception and never an empty success: "the model declined" and "the
-    literature stated nothing" are different statements to the reader.
+#: How many abstracts one extraction call is given before the pool is split.
+#:
+#: Not a relevance cut and not an ordering — the pool is passed whole, and a split is the
+#: same pool read in two halves only when the first read failed. Twenty records is what one
+#: query returns; a split is used only to keep a truncated reply from deleting the pass.
+COMPARATOR_POOL_SPLIT_THRESHOLD = 1
+
+
+def _bounded(llm, tokens: int):
+    """The model with an explicit output ceiling, when it can carry one.
+
+    `bind` is how a LangChain chat model takes a per-call generation parameter, and the
+    callers that pass a fake model into this function do not have it. Asking for it and
+    falling back keeps the ceiling a property of the real client rather than a requirement
+    every test double has to implement.
     """
-    if not aligned:
-        return [], []
-    payload, why = await _structured_reply(
-        llm,
-        prompts.LITERATURE_COMPARATOR_PROMPT,
-        prompts.literature_comparator_input(target, aligned),
-        config,
-    )
-    if payload is None:
-        return [], [{"pmid": "", "reason": f"the extraction reply {reply_problem(why)}"}]
-    verified, rejected_rows = verify_comparators(
-        payload.get("comparators"), aligned, target)
+    binder = getattr(llm, "bind", None)
+    if binder is None:
+        return llm
+    return binder(max_output_tokens=tokens)
+
+
+def _reply_rows(payload: dict, pool: list[dict], target: ClinicalTarget,
+                rejected_rows: list[dict]) -> list[dict]:
+    """The rows one parsed reply verified, with its own refusals appended to the caller's.
+
+    The extraction PROPOSES and `verify_comparators` DISPOSES, exactly as before this was
+    split: a row survives only if its sentence appears in the abstract it names. The one
+    difference is that the refusals are collected across calls, because a retry over halves
+    reads the same pool and a reader is owed every reason it was refused.
+    """
+    verified, refused = verify_comparators(
+        payload.get("comparators"), pool, target)
     for item in payload.get("rejected") or []:
         if isinstance(item, dict):
             rejected_rows.append({
                 "pmid": str(item.get("pmid") or "").strip(),
                 "reason": " ".join(str(item.get("reason") or "").split())[:200],
             })
-    return verified, rejected_rows
+    rejected_rows.extend(refused)
+    return verified
+
+
+async def _extract_pass(
+    llm, target: ClinicalTarget, aligned: tuple[dict, ...] | list[dict],
+    config: dict | None,
+) -> tuple[list[dict], list[dict], str]:
+    """Read `aligned` and return `(rows, rejections, outcome)`.
+
+    A withheld, truncated or malformed reply is a rejection with its reason AND the
+    `extraction_degraded` outcome, never an empty success: "the model declined" and "the
+    literature stated nothing" are different statements to the reader, and a turn that
+    cannot tell them apart tells the reader the second when it means the first.
+
+    One retry, over two halves of the same pool. The failure this exists for is a reply cut
+    off by the output ceiling, which is a function of how much there is to say: half the
+    abstracts is half the reply, and each half is verified against its own records exactly
+    as the whole was. A half that fails too leaves the pass degraded — reported, not
+    collapsed.
+    """
+    pool = [article for article in aligned or [] if isinstance(article, dict)]
+    if not pool:
+        # Nothing was retrieved, so nothing was read. This is not a failed extraction: the
+        # query is what came back empty, and the pass reports it as such.
+        return [], [], routing.OUTCOME_VERIFIED_EMPTY
+    rows, rejected, degraded = await _extract_once(llm, target, pool, config)
+    if not degraded:
+        return rows, rejected, (routing.OUTCOME_VERIFIED if rows
+                                else routing.OUTCOME_VERIFIED_EMPTY)
+    if len(pool) > COMPARATOR_POOL_SPLIT_THRESHOLD:
+        middle = len(pool) // 2
+        halves = (pool[:middle], pool[middle:])
+        merged: list[dict] = []
+        every_rejection = list(rejected)
+        any_read = False
+        for half in halves:
+            if not half:
+                continue
+            half_rows, half_rejected, half_degraded = await _extract_once(
+                llm, target, half, config)
+            every_rejection.extend(half_rejected)
+            merged.extend(half_rows)
+            any_read = any_read or not half_degraded
+        if any_read:
+            seen: set[str] = set()
+            unique = [row for row in merged
+                      if not (row["pmid"] in seen or seen.add(row["pmid"]))]
+            return (unique, every_rejection,
+                    routing.OUTCOME_VERIFIED if unique
+                    else routing.OUTCOME_VERIFIED_EMPTY)
+        return [], every_rejection, routing.OUTCOME_EXTRACTION_DEGRADED
+    return [], rejected, routing.OUTCOME_EXTRACTION_DEGRADED
+
+
+async def _extract_once(
+    llm, target: ClinicalTarget, pool: list[dict], config: dict | None,
+) -> tuple[list[dict], list[dict], bool]:
+    """One extraction call. Returns `(rows, rejections, degraded)`."""
+    payload, why = await _structured_reply(
+        _bounded(llm, COMPARATOR_REPLY_TOKENS),
+        prompts.LITERATURE_COMPARATOR_PROMPT,
+        prompts.literature_comparator_input(target, pool),
+        config,
+    )
+    if payload is None:
+        return [], [{"pmid": "", "reason": f"the extraction reply {reply_problem(why)}"}], True
+    rejected: list[dict] = []
+    rows = _reply_rows(payload, pool, target, rejected)
+    return rows, rejected, False
 

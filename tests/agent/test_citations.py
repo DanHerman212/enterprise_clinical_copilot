@@ -330,37 +330,39 @@ class TestListCitationDeduplication:
 
 
 class TestRepeatedCitationCollapsing:
-    """One marker per run of one source inside a paragraph.
+    """One marker per run of one source inside a SENTENCE.
 
-    Measured on the live `/ehr` turn for 90000069 (2026-11-03): the hospital course was
-    cited four times in four consecutive sentences, so the paragraph read as four badges
-    with prose between them. The rule keeps the LAST marker of a run — the sentence that
-    closes the passage's evidence keeps its pill — and it is a run rather than a pair, so
-    three or four sentences on one passage lose all but one marker.
+    Measured on the live `/ehr` turn for 90000069 (2026-11-03): one paragraph stamped the
+    same pill on consecutive sentences. The rule of 2026-11-03 collapsed that by deleting
+    every marker but the last of a paragraph-wide run, which served four sentences about
+    one passage with one badge and three uncited claims (`citation_repeat_collapsed:^4`
+    on `90000069`, `:^7` and `:^9` on `90000015`, measured 2026-11-06).
+
+    The run is scoped to the sentence, which is the unit the marker belongs to. What
+    collapses is a marker repeated inside one sentence; what survives is the badge on
+    every later sentence that makes its own claim, and every marker in a new paragraph.
 
     What it must never do is delete a citation that carries information: a change of source
     ends the run, a return to a source after a different one is a new run, and a published
     record's PMID badge is not a section marker and is not touched.
     """
 
-    def test_back_to_back_sentences_on_one_passage_keep_the_last_marker(self):
+    def test_back_to_back_sentences_on_one_passage_each_keep_their_marker(self):
         answer = ("Postoperatively, the patient had shoulder pain managed with IV morphine "
                   "^[4]. The patient also had slight dysphagia treated with Decadron ^[4].")
 
         collapsed, flags = collapse_repeated_citations(answer)
 
-        assert collapsed == (
-            "Postoperatively, the patient had shoulder pain managed with IV morphine. "
-            "The patient also had slight dysphagia treated with Decadron ^[4].")
-        assert flags == ["citation_repeat_collapsed:^4"]
+        assert collapsed == answer
+        assert flags == []
 
-    def test_a_long_run_loses_every_marker_but_the_last(self):
+    def test_a_long_run_across_sentences_is_untouched(self):
         answer = "A ^[4]. B ^[4]. C ^[4]. D ^[4]."
 
         collapsed, flags = collapse_repeated_citations(answer)
 
-        assert collapsed == "A. B. C. D ^[4]."
-        assert flags == ["citation_repeat_collapsed:^4"] * 3
+        assert collapsed == answer
+        assert flags == []
 
     def test_a_repeat_inside_one_sentence_keeps_the_marker_at_its_end(self):
         answer = "The discharge was uneventful ^[4] and uncomplicated ^[4]."
@@ -414,11 +416,11 @@ class TestRepeatedCitationCollapsing:
         assert flags == []
 
     def test_a_marker_is_compared_as_a_set_not_as_spacing(self):
-        answer = "First ^[1, 2]. Second ^[1,2]."
+        answer = "First ^[1, 2] and again in the same breath ^[1,2]."
 
         collapsed, flags = collapse_repeated_citations(answer)
 
-        assert collapsed == "First. Second ^[1,2]."
+        assert collapsed == "First and again in the same breath ^[1,2]."
         assert flags == ["citation_repeat_collapsed:^1,2"]
 
     def test_prose_without_markers_passes_through_untouched(self):

@@ -107,10 +107,19 @@ def test_every_declared_field_is_present_in_the_profile():
     assert profile["encounter_type"] == "Not recorded"
 
 
-def test_the_block_names_the_admission_and_states_the_values():
+def test_the_block_states_the_values_and_never_names_the_admission():
+    """The block is what the MODEL reads, so it carries no record identifier.
+
+    Until 2026-11-06 the opening tag named the admission, and the model read it back out
+    and wrote it into tool arguments — `discharge_medications({"hadm_id": "90000069"})`.
+    The session supplies the admission; the model is shown clinical facts only. Asserted as
+    an absence because the value is the one thing in the block that must never be echoed.
+    """
     block = admission_context.render(90000015, decode_profile(_row()))
 
-    assert block.startswith('<admission_metadata hadm_id="90000015"')
+    assert block.startswith("<admission_metadata source=")
+    assert "hadm_id" not in block
+    assert "90000015" not in block
     assert block.rstrip().endswith("</admission_metadata>")
     assert "- admission_type: Urgent (URGENT)" in block
     assert "- age: 61" in block

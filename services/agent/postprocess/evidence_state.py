@@ -188,6 +188,11 @@ class IngestResult:
     refused: bool = False
     #: Section keys this call settled, as `section` or `section: present|absent`.
     checked: tuple[str, ...] = ()
+    #: Analytes this call settled, as `analyte: present|absent`. Separate from `checked`
+    #: because the two inventories answer different questions and a reader of one must not
+    #: have to filter the other: a note section and a laboratory measurement are not the
+    #: same kind of thing to look for.
+    lab_checked: tuple[str, ...] = ()
 
 
 @dataclass
@@ -207,6 +212,12 @@ class SessionEvidenceState:
     hadm_id: int
     items: dict[int, EvidenceItem] = field(default_factory=dict)
     checked_sections: dict[str, str] = field(default_factory=dict)
+    #: Analytes this session has read values for, and analytes it asked for and did not
+    #: get. The laboratory twin of `checked_sections`, and the reason it exists: the model
+    #: was asked for hemoglobin and creatinine, read one of them, and then stated that the
+    #: record did not document the other (2026-11-06) — an absence about a value nobody
+    #: had looked for. An inventory cannot be talked around the way prose can.
+    checked_labs: dict[str, str] = field(default_factory=dict)
     literature: dict[str, EvidenceItem] = field(default_factory=dict)
     prediction: dict[str, Any] | None = None
     #: `dedup_key` -> `ref_id`, derived state. Rebuilt on load rather than trusted.
@@ -355,6 +366,7 @@ class SessionEvidenceState:
                     tool_args: Mapping[str, Any] | None) -> IngestResult:
         units = citations.citable_passages(raw_output)
         synthetic = bool(raw_output.get("synthetic", False))
+        checked_labs: list[str] = []
         trends = [trend for trend in (raw_output.get("trends") or [])
                   if isinstance(trend, Mapping)]
         # `citable_passages` maps one analyte to one unit in the order the panel gave
@@ -390,8 +402,22 @@ class SessionEvidenceState:
             if ref_id is not None:
                 (reused if was_reused else assigned).append(ref_id)
                 slot_ids.append(ref_id)
+            if analyte:
+                checked_labs.extend(self._mark_lab(analyte, PRESENT))
+        # An analyte the call ASKED for and did not get back is the one absence this tool
+        # can establish: the measurement was requested of this admission's record and the
+        # record returned nothing for it. The request is read from the call's own
+        # arguments, never inferred from the panel: a panel that omits a value the caller
+        # never named says nothing about that value.
+        requested = ""
+        if isinstance(tool_args, Mapping):
+            requested = str(tool_args.get("analyte") or "").strip()
+        if requested and requested.lower() not in {
+                key.lower() for key in self.checked_labs}:
+            checked_labs.extend(self._mark_lab(requested, ABSENT))
         return IngestResult(assigned=tuple(assigned), reused=tuple(reused),
-                            slot_ids=tuple(slot_ids), refused=False, checked=())
+                            slot_ids=tuple(slot_ids), refused=False, checked=(),
+                            lab_checked=tuple(checked_labs))
 
     def _ingest_literature(self, name: str,
                            raw_output: Mapping[str, Any]) -> IngestResult:
@@ -441,6 +467,22 @@ class SessionEvidenceState:
         if current == state:
             return []
         self.checked_sections[name] = state
+        return [f"{name}: {state}"]
+
+    def _mark_lab(self, analyte: str, state: str) -> list[str]:
+        """Record an analyte's state. Same monotonicity as `_mark`, for the same reason.
+
+        Keys are compared case-insensitively: a note writes `HbA1c` and a panel writes
+        `hba1c`, and an inventory that treated those as two measurements would let one
+        reading license an absence about the other.
+        """
+        name = str(analyte or "").strip().lower()
+        if not name:
+            return []
+        current = self.checked_labs.get(name)
+        if current == PRESENT or current == state:
+            return []
+        self.checked_labs[name] = state
         return [f"{name}: {state}"]
 
     def _settle_sections(self, name: str, seen: Iterable[str],
@@ -539,6 +581,24 @@ class SessionEvidenceState:
         """
         return len(self.items)
 
+    def position_of_note_passage(self, passage_id: str) -> int | None:
+        """The position a note passage holds, by the tool's own id, or None.
+
+        The lookup a caller uses when it must name the position of a passage it knows by
+        id rather than by order — `/meds` writes one sentence about one passage, and after
+        an `/ehr` that passage may already be at position 4. The key is the same one
+        `_ingest_passages` deduplicates on, so this cannot disagree with the numbering:
+        it reads the index that numbering is built from.
+
+        `None` means the passage is not in the record — a turn with no admission, or a
+        call that was refused. A caller that gets None writes no marker rather than
+        guessing one.
+        """
+        cleaned = str(passage_id or "").strip()
+        if not cleaned:
+            return None
+        return self._dedup_index.get(f"note:{cleaned}")
+
     # -- rendering ---------------------------------------------------------------
 
     def render_for_prompt(self) -> str:
@@ -549,8 +609,15 @@ class SessionEvidenceState:
         hold. Nothing is escaped on the way IN — `to_dict()` keeps the raw strings and a
         `dedup_key` hashes what the tool actually said, because escaping is a property of
         the rendering and not of the evidence.
+
+        The header carries no admission id. The record is bound to one at construction and
+        every unit in it is already scoped, so the number is not evidence the model needs —
+        and it is the one value it must never write back. Measured 2026-11-06: with the id
+        in the window, a free-text turn called
+        `discharge_medications({"hadm_id": "90000069"})` and the injector had to decide what
+        to do with an argument the model had no business supplying.
         """
-        lines = [f'<session_evidence_state hadm_id="{self.hadm_id}">']
+        lines = ["<session_evidence_state>"]
         lines.append("<evidence_items>")
         for ref_id in sorted(self.items):
             item = self.items[ref_id]
@@ -564,6 +631,16 @@ class SessionEvidenceState:
             lines.append(
                 f"{_escape(section)}: {_escape(self.checked_sections[section])}")
         lines.append("</section_inventory>")
+
+        # The laboratory inventory, when there is one. Separate from the note sections
+        # because it answers a different question — which VALUES this session asked about
+        # and what came back — and because an analyte that was never read is not the same
+        # statement as a note section that was read and held nothing.
+        if self.checked_labs:
+            lines.append("<lab_inventory>")
+            for analyte in sorted(self.checked_labs):
+                lines.append(f"{_escape(analyte)}: {_escape(self.checked_labs[analyte])}")
+            lines.append("</lab_inventory>")
 
         risk = self._render_prediction()
         if risk:
@@ -638,6 +715,7 @@ class SessionEvidenceState:
             "items": {str(ref_id): _item_to_dict(item)
                       for ref_id, item in sorted(self.items.items())},
             "checked_sections": dict(sorted(self.checked_sections.items())),
+            "checked_labs": dict(sorted(self.checked_labs.items())),
             "literature": {pmid: _item_to_dict(item)
                            for pmid, item in sorted(self.literature.items())},
             "prediction": self.prediction,
@@ -691,6 +769,17 @@ class SessionEvidenceState:
                 raise ValueError(
                     f"checked_sections[{section!r}] must be 'present' or 'absent'")
             state.checked_sections[str(section)] = value
+
+        # Optional, because a state written before the laboratory inventory existed is
+        # still a valid state: it holds no lab facts and says so by having none.
+        raw_labs = data.get("checked_labs") or {}
+        if not isinstance(raw_labs, Mapping):
+            raise ValueError("checked_labs must be an object")
+        for analyte, value in raw_labs.items():
+            if value not in (PRESENT, ABSENT):
+                raise ValueError(
+                    f"checked_labs[{analyte!r}] must be 'present' or 'absent'")
+            state.checked_labs[str(analyte)] = value
 
         raw_literature = data.get("literature") or {}
         if not isinstance(raw_literature, Mapping):

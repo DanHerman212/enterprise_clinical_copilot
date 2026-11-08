@@ -38,7 +38,12 @@ front-end registers, so one surface can use basic AND custom components
 together.
 """
 
+from __future__ import annotations
+
+import re
+
 from services.agent.postprocess.citations import (
+    MARKER_PATTERN,
     RETRIEVAL_TOOLS,
     EvidenceLedger,
     cited_numbers,
@@ -910,11 +915,13 @@ def register_comparator_sources(canvas: dict | None, start: int,
             )
             # The cohort and the sentence the rate was read from: what the popover and the
             # drawer show for the reader to weigh the comparison rather than take it.
-            passage = " — ".join(
+            # Bounded: a cohort summary plus a quoted sentence can still run long, and a
+            # drawer row is a row rather than a section of prose.
+            passage = _excerpt(" — ".join(
                 part for part in (str(row.get("cohort_summary") or "").strip(),
                                   str(row.get("excerpt") or "").strip())
                 if part
-            )
+            ))
             # Stamped on the row so the surface draws the pill from the same number,
             # rather than resolving a PMID back to an index a second time.
             row["source_index"] = index
@@ -1000,7 +1007,10 @@ def reference_rows(sources: list[dict]) -> list[dict]:
             "source": self_named,
             "title": title,
             "label": str(source.get("label") or "").strip() or f"{index} · {title}",
-            "excerpt": str(source.get("text") or ""),
+            # The drawer row is bounded like the hover card: a reader scrolling a reference
+            # list is looking for the record, and a section pasted under every row buries
+            # the list under the notes it came from.
+            "excerpt": _excerpt(str(source.get("text") or "")),
         }
         if subtitle:
             row["subtitle"] = subtitle
@@ -1261,7 +1271,7 @@ def narrative_surface(answer: str, citations: list[dict]) -> dict:
     return {"text": answer, "citations": citations}
 
 
-def note_citations(sources: list[dict]) -> list[dict]:
+def note_citations(sources: list[dict], *, answer: str = "") -> list[dict]:
     """One citation per resolved source, keyed by its renumbered marker.
 
     The citation layer renumbers `^[n]` to first-appearance order; reading the
@@ -1272,13 +1282,20 @@ def note_citations(sources: list[dict]) -> list[dict]:
     need to — every note passage is a discharge note and differs only by section — but a
     laboratory trajectory is not a note passage at all, and labelling it "Discharge note"
     would tell the reader their creatinine came out of the prose.
+
+    `answer` is the settled prose this list annotates. It is read for one purpose: the
+    popover shows the sentence the reader actually clicked on, found by locating the
+    marker in the answer and taking the claim it closes. Without it the popover had only
+    the section, and a "Brief hospital course" citation opened a 400-word section whole
+    (see `_focused_note_excerpt`).
     """
     citations = []
     for source in sources:
         title = str(source.get("cite_title") or "") or _section_label(
             source.get("section"))
+        cite = int(source["cite"])
         citations.append({
-            "index": int(source["cite"]),
+            "index": cite,
             # The channel the evidence came from. Note passages all share one channel
             # and differ by section, so the section becomes the title.
             "source": str(source.get("cite_source") or "Discharge note"),
@@ -1301,7 +1318,8 @@ def note_citations(sources: list[dict]) -> list[dict]:
             # its own evidence has taken a citation decision. `note` is a passage out of
             # this patient's own record; `literature` is somebody else's patients.
             "kind": "note",
-            "excerpt": str(source.get("text") or ""),
+            "excerpt": _focused_note_excerpt(
+                str(source.get("text") or ""), _claim_context(answer, cite)),
         })
     return citations
 
@@ -1380,9 +1398,15 @@ _CITE_EXCERPT_CHARS = 400
 
 
 def _excerpt(text: object) -> str:
-    """The opening of an abstract, bounded and marked as an opening."""
+    """The opening of an abstract, bounded and marked as an opening.
+
+    Idempotent on its own output: a string that already ends with the ellipsis this
+    function appends is an excerpt already, and re-cutting it would move the cut each time
+    it passes through another layer (a comparator's `text` reaches the drawer through
+    `reference_rows`, and the two must agree byte for byte).
+    """
     body = " ".join(str(text or "").split())
-    if len(body) <= _CITE_EXCERPT_CHARS:
+    if len(body) <= _CITE_EXCERPT_CHARS or body.endswith("…"):
         return body
     cut = body[:_CITE_EXCERPT_CHARS]
     stop = max(cut.rfind(". "), cut.rfind("? "), cut.rfind("! "))
@@ -1390,6 +1414,125 @@ def _excerpt(text: object) -> str:
         return cut[: stop + 1]
     space = cut.rfind(" ")
     return (cut[:space] if space > 0 else cut).rstrip(" ,.;:") + "…"
+
+
+#: How much of a CITED NOTE SECTION a popover or a reference row carries.
+#:
+#: A discharge-note section is not an abstract: `Brief hospital course` runs to four
+#: hundred words, and the hover card is 340px wide and floats over the sentence being
+#: read. What the reader wants when they open a marker is the sentence their claim came
+#: from — not the whole section it sits in — so the window is centred on the claim and
+#: bounded a little wider than an abstract excerpt because a clinical clause is longer
+#: than a citation line.
+_FOCUSED_EXCERPT_CHARS = 420
+
+#: Sentence boundaries that the notes and the model's prose actually use.
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+#: The letters a claim and a sentence share when they are about the same thing.
+_WORD_RE = re.compile(r"[a-z][a-z0-9'-]+")
+
+#: Words that carry no topic. Deliberately short: this is a relevance hint for a hover
+#: card, and an over-eager stoplist would stop matching the clinical nouns that matter.
+_EXCERPT_STOPWORDS = frozenset({
+    "the", "and", "for", "with", "was", "were", "that", "this", "his", "her",
+    "she", "him", "they", "their", "from", "are", "has", "had", "have", "not",
+    "but", "which", "who", "whom", "its", "been", "being", "into", "over",
+    "after", "before", "during", "than", "then", "also", "per", "all", "any",
+    "one", "two", "three", "day", "days", "patient", "patients", "noted",
+})
+
+
+def _content_words(text: object) -> set[str]:
+    """The topic words in a clause: lower-cased, plural-folded, stopwords removed."""
+    words: set[str] = set()
+    for match in _WORD_RE.finditer(str(text or "").lower()):
+        word = match.group(0)
+        if len(word) < 4 or word in _EXCERPT_STOPWORDS:
+            continue
+        words.add(word[:-1] if word.endswith("s") and len(word) > 4 else word)
+    return words
+
+
+def _claim_context(answer: str, cite: int) -> str:
+    """The sentence a marker closes on, for the number it shows.
+
+    Read from the settled prose rather than from a positional guess: the marker IS the
+    reader's pointer, so the sentence immediately before it is the claim the popover is
+    being asked to evidence. The LAST occurrence wins, because the marker the reader
+    clicks is the one nearest where they were reading, and a section cited earlier in the
+    answer has already been read past.
+
+    Empty when the answer carries no such marker — a `sources` entry composed from a
+    replayed turn, a diagnostic call, or a test fixture. The caller then gets the bounded
+    opening, which is the behaviour every call had before the claim window existed.
+    """
+    text = str(answer or "")
+    if not text or "^[" not in text:
+        return ""
+    end = -1
+    for match in MARKER_PATTERN.finditer(text):
+        body = match.group(1).strip()
+        if body.isdigit() and int(body) == cite:
+            end = match.start()
+    if end <= 0:
+        return ""
+    start = 0
+    for boundary in (". ", "? ", "! ", "\n"):
+        found = text.rfind(boundary, 0, end)
+        if found != -1:
+            start = max(start, found + len(boundary))
+    return " ".join(text[start:end].split())[:600]
+
+
+def _focused_note_excerpt(section_text: str, claim_context: str = "",
+                          max_chars: int = _FOCUSED_EXCERPT_CHARS) -> str:
+    """The part of a cited note section the claim was read from, bounded.
+
+    A section that fits is returned whole — there is nothing to focus, and cutting a
+    three-line section would hide evidence the card has room for.
+
+    A long section is windowed on the claim: each sentence is scored by the topic words it
+    shares with `claim_context`, the best sentence is taken with its immediate neighbours
+    while the budget allows, and the window is marked with an ellipsis at whichever end
+    was trimmed. When no sentence shares a topic word — a claim phrased in the clinician's
+    vocabulary rather than the note's, or a caller that passed no context at all — the
+    opening of the section is served from `_excerpt`, which cuts at a sentence or word
+    boundary. Both paths are bounded: a 400-word hospital course can never reach a hover
+    card whole.
+    """
+    body = " ".join(str(section_text or "").split())
+    if not body:
+        return ""
+    if len(body) <= max_chars:
+        return body
+    sentences = [part.strip() for part in _SENTENCE_SPLIT_RE.split(body) if part.strip()]
+    wanted = _content_words(claim_context)
+    if wanted and sentences:
+        scores = [len(wanted & _content_words(sentence)) for sentence in sentences]
+        best = max(range(len(sentences)), key=lambda index: (scores[index], -index))
+        if scores[best] > 0:
+            low = high = best
+            chosen = sentences[best]
+            # The sentence before the claim is the one that sets it up, so it is preferred
+            # when the budget can hold it; the following sentence is the fallback. Four
+            # characters are reserved for the two ellipses, so the window never exceeds the
+            # caller's bound by the marks that say it was trimmed.
+            budget = max(max_chars - 4, 1)
+            for candidate in (best - 1, best + 1, best - 2, best + 2):
+                if not 0 <= candidate < len(sentences):
+                    continue
+                joined = " ".join(sentences[min(low, candidate):max(high, candidate) + 1])
+                if len(joined) > budget:
+                    continue
+                low, high, chosen = min(low, candidate), max(high, candidate), joined
+            if len(chosen) > max_chars:
+                chosen = _excerpt(chosen)
+            else:
+                chosen = ("… " if low > 0 else "") + chosen + (
+                    " …" if high < len(sentences) - 1 else "")
+            return chosen
+    return _excerpt(body)
 
 
 def _article_record(article: dict, index: int) -> dict:
@@ -1584,7 +1727,7 @@ def _narrative(answer: str, sources: list[dict], literature: dict | None,
     """
     if not answer.strip():
         return None
-    notes = note_citations(sources)
+    notes = note_citations(sources, answer=answer)
     # `records` is the merged array the caller already numbered — this turn's records and
     # the thread's, once each. Passed rather than re-derived so the narrative's citations
     # and the turn's `sources` are one list under one set of numbers. Without it (the

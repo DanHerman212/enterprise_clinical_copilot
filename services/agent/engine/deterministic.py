@@ -46,7 +46,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -190,6 +190,7 @@ def parse_medications(
         name = _normalise(str(row.get("medication") or ""))
         dosage = _normalise(str(row.get("dosage") or ""))
         frequency = _normalise(str(row.get("frequency") or ""))
+        route = _normalise(str(row.get("route") or ""))
         if not name:
             continue
         reason = None
@@ -200,10 +201,14 @@ def parse_medications(
         if reason:
             dropped.append({"medication": row.get("medication", ""), "reason": reason})
             continue
+        # A route or indication is kept only when the passage states it. "IV" and "for
+        # pain" are short enough to appear in any clinical note by accident, so the same
+        # rule the dose gets applies: what the note does not say is not carried.
         verified.append({
             "medication": str(row.get("medication") or "").strip(),
             "dosage": str(row.get("dosage") or "").strip(),
             "frequency": str(row.get("frequency") or "").strip(),
+            "route": str(row.get("route") or "").strip() if route and route in source else "",
         })
     return verified, dropped
 
@@ -548,6 +553,7 @@ extraction_llm_factory: Callable[[str], Any] = model_gateway.build_extraction_ll
 async def _readmission_comparators(
     toolbox: Any, model: str, recorded: list[RecordedToolCall], on_event,
     *, extraction_llm: Any = None, evidence_state: Any = None,
+    admission_context: str = "",
 ) -> tuple[list[dict], dict | None, list[RecordedToolCall], list[dict], str]:
     """The published cohorts this admission's estimate is compared against.
 
@@ -564,12 +570,22 @@ async def _readmission_comparators(
 
     Returns (rows, target, calls, passes). Empty rows is a real answer and is reported as
     one — the reader is told the literature stated no 30-day rate for this condition.
+
+    `admission_context` is the pre-flight manifest, read here for the index patient's age
+    and sex and for nothing else. The comparison is a population match, and until those two
+    facts reached it the only thing matched was the condition: a knee-arthroplasty cohort
+    of octogenarians was accepted beside a 41-year-old with no objection from any layer.
     """
     sections = note_sections(recorded)
     if not sections:
         # No chart text, so no condition and no query. Reported as a degraded benchmark
         # rather than as a literature that offered nothing: nothing was asked of it.
         return [], None, [], [], routing.OUTCOME_EXTRACTION_DEGRADED
+
+    # Whose cohort this has to be, read from the manifest first and the note second. An
+    # unknown age filters nothing downstream, which is the honest behaviour: refusing a
+    # cohort because a number could not be read would trade a wrong cohort for no cohort.
+    patient_age, patient_sex = patient_demographics(admission_context, sections)
 
     llm = extraction_llm if extraction_llm is not None else extraction_llm_factory(model)
     if llm is None:
@@ -579,7 +595,8 @@ async def _readmission_comparators(
         return ([], {"source": "unavailable",
                      "reason": "no extraction client is configured here"}, [], [],
                 routing.OUTCOME_EXTRACTION_DEGRADED)
-    derived = await derive_target(llm, sections)
+    derived = await derive_target(llm, sections, patient_age=patient_age,
+                                  patient_sex=patient_sex)
     target = derived.target
     if target is None:
         return ([], {"source": derived.source, "reason": derived.reason}, [], [],
@@ -626,6 +643,8 @@ async def _readmission_comparators(
         "condition": target.condition,
         "procedure": target.procedure,
         "anchors": list(target.anchors),
+        "patient_age": target.patient_age,
+        "patient_sex": target.patient_sex,
         "source": derived.source,
     }
     passes = [
@@ -836,7 +855,8 @@ async def run_command(
         comparators, target_payload, literature_recorded, passes, outcome = \
             await _readmission_comparators(
                 toolbox, model, recorded, on_event, extraction_llm=extraction_llm,
-                evidence_state=evidence_state)
+                evidence_state=evidence_state,
+                admission_context=admission_context)
         recorded += literature_recorded
         command_extras["comparators"] = comparators
         command_extras["clinical_target"] = target_payload
@@ -1215,6 +1235,67 @@ def names_pediatric_population(*parts: Any) -> bool:
     return any(_PEDIATRIC_MARKERS.search(f" {str(part or '')} ") for part in parts)
 
 
+#: A cohort restricted to an older population: the words a paper uses when the rate it
+#: reports is not a general adult rate.
+#:
+#: Structural vocabulary only — no disease, no procedure, no rate — so this can refuse a
+#: cohort for being the wrong population and never for being the wrong condition. Measured
+#: 2026-11-08: a 41-year-old cervical-fusion admission was compared against a rate
+#: published for "Elderly patients (age >=65 years)", and every layer accepted it because
+#: the condition matched and nothing on the path knew the patient's age.
+#:
+#: The unit may be "an age not this one": a cohort of octogenarians is a real benchmark for
+#: an 82-year-old and the wrong one for a 41-year-old, so the decision is made against
+#: `patient_age` and never against the words alone.
+_ELDERLY_COHORT = re.compile(
+    r"\b(?:elderly|geriatric|octogenarian|nonagenarian|centenarian"
+    r"|(?:age|aged)\s*(?:>=|≥|>|over|above|of)?\s*(?:6[5-9]|7\d|8\d|9\d)"
+    r"|(?:6[5-9]|7\d|8\d)\s*(?:years?\s*)?(?:and\s*older|or\s*older|\+)"
+    r"|older\s+adults?|very\s+old)\b",
+    re.IGNORECASE,
+)
+
+#: A cohort restricted to a younger population, which is the same mismatch the other way
+#: round. Only the unambiguous forms: an age band that starts at 18 and runs to 40 is a
+#: young-adult cohort, and so is "adolescents and young adults".
+_YOUNG_ADULT_COHORT = re.compile(
+    r"\b(?:young\s+adults?|younger\s+adults?|adolescents?|pediatric|paediatric"
+    r"|under\s+(?:2\d|3\d|40|4\d|50)\b"
+    r"|(?:18|19|2\d)\s*(?:-|–|to|through)\s*(?:2\d|3\d|4\d)\b"
+    r"|non-?elderly)\b",
+    re.IGNORECASE,
+)
+
+
+def _cohort_matches_patient_age(cohort_text: Any, snippet_text: Any,
+                                patient_age: int | None) -> bool:
+    """Whether a published cohort is a population this patient could belong to.
+
+    The check `adult_cohorts` makes for children, made for the other two population
+    mismatches: an age-restricted subgroup that EXCLUDES the index patient. A rate
+    reported for the over-65 subgroup of a study is not the rate for a 41-year-old, even
+    though the study is about the same operation — and the estimate and the cohort sit in
+    adjacent cells, so the reader reads them as the same claim.
+
+    Read from the row's own `cohort_summary` and from the sentence it quotes, and nothing
+    else. The abstract is not scanned: a general-adult study that mentions the elderly in
+    its discussion is a valid comparison, and refusing it would be the token test this
+    module already removed once.
+
+    `patient_age` None is unknown, and an unknown age filters nothing. Only the
+    unambiguous forms are refused, because a false refusal costs the reader the comparison
+    entirely while a false acceptance is corrected by the extraction prompt.
+    """
+    if patient_age is None:
+        return True
+    text = f"{cohort_text or ''} {snippet_text or ''}"
+    if patient_age < 65 and _ELDERLY_COHORT.search(text):
+        return False
+    if patient_age >= 65 and _YOUNG_ADULT_COHORT.search(text):
+        return False
+    return True
+
+
 def is_pediatric_target(target: ClinicalTarget) -> bool:
     """Whether this admission says of itself that it is a child's.
 
@@ -1268,11 +1349,23 @@ class ClinicalTarget:
     contain for its cohort to be this patient's cohort, and they are the deterministic
     half of the alignment gate: the model's `clinical_match` is a judgement, and this is
     the part that can be re-read a year later and still mean the same thing.
+
+    `patient_age` and `patient_sex` are the index patient's own demographics, carried
+    beside the condition for one reason: a readmission cohort is a population, and a rate
+    published for octogenarians is not this patient's rate when this patient is 41. They
+    are facts the session already holds — the pre-flight manifest states both, and a
+    discharge note states them in its first line — and until they were carried here the
+    comparison was matched on condition alone.
     """
 
     condition: str
     procedure: str = ""
     anchors: tuple[str, ...] = ()
+    #: The index patient's age in years, when the session knows it. None means unknown, and
+    #: an unknown age filters nothing: a check that guessed would refuse correct cohorts.
+    patient_age: int | None = None
+    #: `male`, `female`, or empty when the record does not state it.
+    patient_sex: str = ""
 
     @property
     def search_terms(self) -> str:
@@ -1302,13 +1395,86 @@ def _usable_anchor(phrase: Any) -> str:
     return text
 
 
-def build_target(payload: dict | None) -> ClinicalTarget | None:
+#: The age and sex a cohort has to be compatible with, read from whatever this turn holds.
+#:
+#: Two sources, in descending order of authority. The `<admission_metadata>` block is the
+#: feature row the readmission model was scored on, so an age it states is the age the
+#: system was given. A chart that states the age in its own first line is the same fact
+#: from the document, and is used only when the manifest is absent — a record whose
+#: manifest was unreadable still has a patient in it.
+_MANIFEST_AGE = re.compile(r"^\s*-\s*age:\s*(\d{1,3})\s*$", re.MULTILINE | re.IGNORECASE)
+_MANIFEST_SEX = re.compile(r"^\s*-\s*gender:\s*(\S+)", re.MULTILINE | re.IGNORECASE)
+_NOTE_AGE = re.compile(r"\b(\d{2,3})[-\s]year[-\s]old\b", re.IGNORECASE)
+_NOTE_SEX = re.compile(
+    r"\b(\d{2,3})[-\s]year[-\s]old\s+(male|female|man|woman|gentleman|lady|boy|girl)\b",
+    re.IGNORECASE,
+)
+
+#: Words that name a sex the way a discharge summary writes one.
+_SEX_WORDS: dict[str, str] = {
+    "male": "male", "man": "male", "gentleman": "male", "boy": "male",
+    "female": "female", "woman": "female", "lady": "female", "girl": "female",
+}
+
+
+def _normalise_sex(value: Any) -> str:
+    word = str(value or "").strip().lower()
+    return _SEX_WORDS.get(word, word if word in ("male", "female") else "")
+
+
+def patient_demographics(admission_context: str,
+                         sections: dict | None) -> tuple[int | None, str]:
+    """The index patient's age and sex, from the manifest first and the note second.
+
+    Exists because the comparator step matched a population on condition alone, and a
+    thirty-day readmission rate published for octogenarians is not the rate a 41-year-old's
+    estimate should be drawn beside. Both facts are already in the turn — the pre-flight
+    manifest states them as fields, and a discharge note states them in its opening line —
+    so nothing here is inferred; the only decision is which source to read first.
+
+    Age is bounded to 0..120 before it is returned: a regex over prose can find a number
+    that looks like an age and is not one, and a wrong age would filter the right cohort
+    out rather than merely failing to filter.
+    """
+    context = str(admission_context or "")
+    age: int | None = None
+    sex = ""
+    manifest_age = _MANIFEST_AGE.search(context)
+    if manifest_age:
+        age = int(manifest_age.group(1))
+    manifest_sex = _MANIFEST_SEX.search(context)
+    if manifest_sex:
+        sex = _normalise_sex(manifest_sex.group(1))
+
+    if age is None or not sex:
+        note_text = " ".join(str(body or "") for body in (sections or {}).values())
+        if age is None:
+            stated = _NOTE_AGE.search(note_text)
+            if stated:
+                age = int(stated.group(1))
+        if not sex:
+            named = _NOTE_SEX.search(note_text)
+            if named:
+                if age is None:
+                    age = int(named.group(1))
+                sex = _normalise_sex(named.group(2))
+
+    if age is not None and not 0 <= age <= 120:
+        age = None
+    return age, sex
+
+
+def build_target(payload: dict | None, *, patient_age: int | None = None,
+                 patient_sex: str = "") -> ClinicalTarget | None:
     """The `ClinicalTarget` a reply describes, or None when it names no condition.
 
     None is a real answer: a record whose note names no condition has no search to run,
     and running one anyway would be searching for the patient's demographics. The caller
     draws no comparison, which is what "we have nothing to compare this against" looks
     like when it is honest.
+
+    The demographics are the caller's rather than the model's: the reply names a condition,
+    and age and sex are read from the record by `patient_demographics`.
     """
     if not isinstance(payload, dict):
         return None
@@ -1328,7 +1494,8 @@ def build_target(payload: dict | None) -> ClinicalTarget | None:
             break
     if not anchors:
         return None
-    return ClinicalTarget(condition=condition, procedure=procedure, anchors=tuple(anchors))
+    return ClinicalTarget(condition=condition, procedure=procedure, anchors=tuple(anchors),
+                          patient_age=patient_age, patient_sex=patient_sex)
 
 
 def note_sections(recorded: list[RecordedToolCall] | None) -> dict[str, str]:
@@ -1509,8 +1676,9 @@ def fallback_target_from_sections(sections: dict | None) -> ClinicalTarget | Non
     return None
 
 
-async def derive_target(llm, sections: dict | None, *,
-                        config: dict | None = None) -> TargetResult:
+async def derive_target(llm, sections: dict | None, *, config: dict | None = None,
+                        patient_age: int | None = None,
+                        patient_sex: str = "") -> TargetResult:
     """The admission's primary condition and index procedure, read from its own note.
 
     Three attempts, in descending order of what they can understand and ascending order of
@@ -1526,7 +1694,15 @@ async def derive_target(llm, sections: dict | None, *,
     diagnosis the note states and searches for that, where the model would have chosen the
     principal one. A chart that reaches it still gets a comparison attempt, and every check
     downstream still has to agree with the phrase it produced.
+
+    `patient_age` and `patient_sex` are stamped on whichever target survives, whatever
+    produced it: the demographics are a fact about the patient, not about the reply, so
+    the salvage path — which returns a target built with no knowledge of them — carries
+    them too.
     """
+    def _with_demographics(target: ClinicalTarget) -> ClinicalTarget:
+        return replace(target, patient_age=patient_age, patient_sex=patient_sex)
+
     payload, why = await _structured_reply(
         llm,
         prompts.LITERATURE_TARGET_PROMPT,
@@ -1534,7 +1710,7 @@ async def derive_target(llm, sections: dict | None, *,
         config,
     )
     if payload is not None:
-        target = build_target(payload)
+        target = build_target(payload, patient_age=patient_age, patient_sex=patient_sex)
         if target is not None:
             return TargetResult(target=target)
         why = "the reply named no condition"
@@ -1546,14 +1722,14 @@ async def derive_target(llm, sections: dict | None, *,
         config,
     )
     if retry is not None:
-        target = build_target(retry)
+        target = build_target(retry, patient_age=patient_age, patient_sex=patient_sex)
         if target is not None:
             return TargetResult(target=target, source="model_short_prompt")
 
     salvaged = fallback_target_from_sections(sections)
     if salvaged is not None:
         return TargetResult(
-            target=salvaged,
+            target=_with_demographics(salvaged),
             reason=(
                 "the model produced no condition "
                 f"(first reply {reply_problem(why)}; retry {reply_problem(retry_why)}); "
@@ -1611,6 +1787,18 @@ def verify_comparator(row: dict | None, articles: dict[str, dict],
     if row.get("clinical_match") is False:
         declined = " ".join(str(row.get("rationale") or "").split())[:160]
         return None, f"pmid {pmid} was declined: {declined or 'no rationale given'}"
+    # The population check the prompt asks the model to make and this layer makes again:
+    # a rate reported for an age-restricted subgroup the index patient is not in is not
+    # this patient's comparison, whatever the condition says. Deterministic because the
+    # failure is a number in a cell beside another number, and a judgement that can be
+    # read off the row costs nothing to apply twice.
+    if not _cohort_matches_patient_age(
+        row.get("cohort_summary"), row.get("rate_sentence"), target.patient_age
+    ):
+        return None, (
+            f"pmid {pmid} reports its rate for an age-restricted population that "
+            f"excludes this patient (age {target.patient_age})"
+        )
     try:
         horizon = int(row.get("horizon_days"))
     except (TypeError, ValueError):

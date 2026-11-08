@@ -574,6 +574,12 @@ def compose_risk_canvas(predict: dict | None, rag: dict | None,
                     "medication": str(row.get("medication") or ""),
                     "dosage": str(row.get("dosage") or ""),
                     "frequency": str(row.get("frequency") or ""),
+                    # The route, form or stated indication ("IV", "oral", "Dosepak",
+                    # "for pain") when the record gives one. It is what a ward
+                    # administration list has instead of a sig, and it is what tells the
+                    # reader which rows are take-home prescriptions and which are what the
+                    # hospital gave.
+                    "context": str(row.get("route") or ""),
                 }
                 for row in medications["medications"]
             ],

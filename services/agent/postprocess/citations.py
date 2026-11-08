@@ -238,18 +238,6 @@ MARKER_PATTERN = _ANY_MARKER_RE
 #: cited.
 _PARAGRAPH_BREAK = re.compile(r"\n[ \t]*\n")
 
-#: A sentence break between two markers, so a run cannot cross one.
-#:
-#: The unit a citation belongs to is the SENTENCE, not the paragraph. A run that crossed
-#: a boundary turned a paragraph of four sentences about one passage into one badge on the
-#: last of them, which is a valid marker deleted from three claims: measured 2026-11-06,
-#: `citation_repeat_collapsed:^4` on both admissions, `:^7` and `:^9` on admission B. The
-#: rule this restores is the one the module already states — a marker is a claim about the
-#: sentence it is attached to — and the collapse stays for what it was built for: the same
-#: marker repeated inside one sentence, or a paragraph that stamped the same pill on every
-#: sentence of one continuous thought.
-_SENTENCE_BREAK = re.compile(r"[.!?][\"')\]]*\s+")
-
 #: What a marker must look like to be KEPT: a note-passage number or set of them,
 #: or a literature PMID badge. Everything else is a model invention and is dropped.
 #: The PMID form is here deliberately — it is a citation the interface draws as its
@@ -398,39 +386,30 @@ def _marker_key(body: str) -> str:
 
 
 def collapse_repeated_citations(answer: str) -> tuple[str, list[str]]:
-    """Keep one marker out of a run of the same citation in one sentence.
+    """Keep one marker out of a run of the same citation in one paragraph.
 
     Reported from a printed `/ehr` (2026-11-02): one paragraph carried the same section's
-    pill on every sentence. The first rule collapsed a run of immediate repeats; the
-    revision of 2026-11-03 made the run cross sentence boundaries and keep only its last
-    marker, which fixed the wall of pills and broke the other direction — four sentences
-    citing one passage became one badge on the fourth, so three claims were served uncited
-    (`citation_repeat_collapsed:^4` on `90000069`, `:^7` and `:^9` on `90000015`, measured
-    2026-11-06).
+    pill on every sentence. A run is the SPAN of a paragraph that rests on one source, and
+    the unit a reader sees is the paragraph — four pills on four consecutive sentences about
+    one passage do not read as four citations, they read as four sources, which is the
+    misreading the citation contract exists to prevent. A reader can ignore a repeated
+    pill and cannot reopen a citation that was deleted, but a page where every sentence
+    wears the same badge is a page the clinician stops reading.
 
-    The run is scoped to the sentence now, which is the unit the marker belongs to: what
-    collapses is the accidental double stamp (`^[4] ^[4]`) and a sentence that repeats a
-    marker within itself, and what survives is the badge on every later sentence that makes
-    its own claim. A paragraph of four sentences on one passage still reads as four badges
-    rather than one; that is the cost, and it is the right side of the trade — a reader can
-    ignore a repeated pill, and cannot reopen a citation that was deleted. The rule lives here, not in the renderer, because this
-    module is the single owner of what a marker is and of whether it survives settlement —
-    a browser that decides not to draw one has taken a citation decision and left the
-    prose and the evidence disagreeing on the server.
+    So the run spans sentences and only a paragraph break ends it. What survives is the
+    LAST marker of the span, which is the badge that closes the thought; what collapses is
+    every earlier copy, including the accidental double stamp (`^[4] ^[4]`) and a sentence
+    that repeats a marker within itself.
 
-    A RUN, not a pair, and the LAST marker of it survives. That is the change of
-    2026-11-03: the earlier rule dropped a marker only when the one immediately before it
-    named the same source, and it kept the FIRST of the pair — so three consecutive
-    sentences on one passage lost two markers and the paragraph still opened with a badge,
-    and four sentences lost three. Keeping the last also subsumes the within-sentence case:
-    a sentence that wrote `^[4] ^[4]` keeps the one at its end.
+    A RUN, not a pair, and the LAST marker of it survives. The earlier rule kept the FIRST
+    of a pair — so three consecutive sentences on one passage lost two markers and the
+    paragraph still opened with a badge, and four sentences lost three.
 
     A run is broken by a different marker, by a paragraph break, or by a marker that is not
     a note passage at all. So `^[3]` then `^[4]` keeps both, `^[4]`, `^[3]`, `^[4]` keeps
-    all three — the run was interrupted, and the return to a source is a claim about the
-    sentence it is attached to — and a published record's `^[PMID: …]` is never collapsed,
-    because two sentences citing the same cohort study are two claims about that study
-    rather than one marker repeated.
+    all three — the run was interrupted, and the return to a source re-opens the span — and
+    a published record's `^[PMID: …]` is never collapsed, because two sentences citing the
+    same cohort study are two claims about that study rather than one marker repeated.
 
     The reference list is unaffected — it is built from `sources`, not from the prose — so
     the row is still there to be opened. Each removal is flagged, because a silent deletion
@@ -463,7 +442,6 @@ def collapse_repeated_citations(answer: str) -> tuple[str, list[str]]:
             close_run()
             run = []
         elif (_PARAGRAPH_BREAK.search(answer, previous_end, start)
-              or _SENTENCE_BREAK.search(answer, previous_end, start)
               or (run and run[-1][2] != body)):
             close_run()
             run = [(start, end, body)]

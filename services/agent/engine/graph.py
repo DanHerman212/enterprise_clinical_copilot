@@ -106,6 +106,11 @@ from services.agent.telemetry import observability
 from services.agent.routing import routing
 from services.agent.routing import encounter
 from services.agent.telemetry import stages
+# The feature vocabulary, from the shared leaf. Read by `_unqueried_analytes` to decide
+# whether an analyte a question names is already explained by the estimate's own drivers
+# (`rdw_max` is `red cell distribution width (RDW)`), which is a label question and not a
+# routing decision.
+from shared.labels import label_for
 
 logger = logging.getLogger(__name__)
 
@@ -719,6 +724,66 @@ def _working_memory(state: AgentState, allowed: frozenset[str]) -> str:
     return "\n\n".join(parts)
 
 
+def _held_analyte_vocabulary(record: Any) -> str:
+    """Every analyte word the session already has a statement about, as one haystack.
+
+    Three channels, because a clinician's follow-up can be grounded in any of them and the
+    notice only exists to stop an answer about a value nobody looked at:
+
+      * the estimate's own drivers — `rdw_max` and `monocytes_min` are measurements the
+        model scored, and a question asking why RDW matters is a question the session has
+        the evidence for;
+      * the laboratory units in the record, whose `section` IS the analyte key;
+      * the note passages, which name a measurement in prose even when no panel was read.
+
+    A haystack rather than a parsed set: the question is "does this record already say
+    something about this value", the answer is a substring test, and a second vocabulary of
+    analyte aliases here would be a second place for one to drift.
+    """
+    parts: list[str] = []
+    prediction = getattr(record, "prediction", None) or {}
+    for factor in prediction.get("top_factors") or []:
+        if not isinstance(factor, dict):
+            continue
+        feature = str(factor.get("feature") or "").strip()
+        if feature:
+            parts.append(feature.replace("_", " "))
+            parts.append(label_for(feature))
+    for item in (getattr(record, "items", {}) or {}).values():
+        section = str(getattr(item, "section", "") or "").strip()
+        if section:
+            parts.append(section.replace("_", " "))
+        text = str(getattr(item, "text", "") or "")
+        if text:
+            parts.append(text)
+    for analyte in (getattr(record, "checked_labs", {}) or {}):
+        parts.append(str(analyte))
+    return " ".join(parts).lower()
+
+
+def _session_names_analyte(analyte: str, record: Any) -> bool:
+    """Whether the session can already speak to this analyte.
+
+    Plural-folded on both sides, because a note writes "monocytes" and a panel key is
+    `monocytes` while a question writes "monocyte".
+    """
+    stem = str(analyte or "").strip().lower()
+    if not stem:
+        return False
+    haystack = _held_analyte_vocabulary(record)
+    if not haystack:
+        return False
+    if stem.rstrip("s") in haystack:
+        return True
+    # The other direction, for a question that writes a long form and a panel that keys a
+    # short one: any substantive word of the analyte's own name appearing in the record is
+    # the same measurement being spoken to.
+    for word in stem.replace("_", " ").split():
+        if len(word) > 3 and word.rstrip("s") in haystack:
+            return True
+    return False
+
+
 def _unqueried_analytes(state: AgentState) -> list[str]:
     """The analytes this question names that the session has not read or refused.
 
@@ -728,9 +793,19 @@ def _unqueried_analytes(state: AgentState) -> list[str]:
     2026-11-06). The inventory cannot correct that after the fact; it can only tell the next
     round what is still unread, which is what this does.
 
+    An analyte the session ALREADY holds a statement about is not unread, and the notice is
+    not served for it. Two cases, and both were the notice derailing a clinical follow-up
+    rather than helping it: a value the estimate scores as a driver (`rdw_max`,
+    `monocytes_min`) is evidence the answer can reason from without another call, and a
+    value the record has already read — as a panel unit or as a passage that names it — is
+    the same. Injecting "this session has not read them" over either told the model it was
+    missing evidence it was holding, and it spent the round re-reading instead of
+    explaining (2026-11-08).
+
     Empty when the question names nothing, when every named value is in the record's
-    `<lab_inventory>` (present or absent), or when the tool is not available to this turn at
-    all: naming an analyzer the model cannot call would be an instruction it cannot obey.
+    `<lab_inventory>` (present or absent), when the session can already speak to it, or when
+    the tool is not available to this turn at all: naming an analyzer the model cannot call
+    would be an instruction it cannot obey.
     """
     question = str(state.get("question") or "")
     named = routing.lab_analytes_named(question)
@@ -741,7 +816,11 @@ def _unqueried_analytes(state: AgentState) -> list[str]:
         return []
     record = state.get("evidence_state")
     read = set(getattr(record, "checked_labs", {}) or {}) if record is not None else set()
-    return [analyte for analyte in named if analyte not in read]
+    return [
+        analyte for analyte in named
+        if analyte not in read
+        and not (record is not None and _session_names_analyte(analyte, record))
+    ]
 
 
 def _with_overlay(conversation: list[BaseMessage], overlay: str) -> list[BaseMessage]:

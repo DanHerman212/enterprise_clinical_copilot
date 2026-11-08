@@ -147,8 +147,30 @@ def _source_freqs(text: str) -> set[str]:
 # --- Retrieval -------------------------------------------------------------
 
 
+#: Where a discharge prescription is written when the note has no dedicated list.
+#:
+#: The read-side projection of the set the `/meds` retrieval falls back to when a note
+#: carries no `discharge_medications` heading. The names are repeated here rather than
+#: imported because the retrieval lives in the MCP tool package, which the agent image does
+#: not ship — the same reason `_MEDICATION_SECTIONS` was restated in `evidence_state`.
+#:
+#: Without it, the per-medication frequency check below had nothing to check against on a
+#: fallback record: `med_source` was empty, so every frequency a follow-up repeated about a
+#: drug documented in the hospital course looked invented and was stripped — a supported
+#: statement deleted by a guard that could only see one section.
+_MEDICATION_FALLBACK_SECTIONS: tuple[str, ...] = (
+    "discharge_instructions",
+    "assessment_and_plan",
+    "brief_hospital_course",
+    "medications_on_admission",
+    "medications_on_transfer",
+    "history_of_present_illness",
+    "discharge_summary",
+)
+
+
 def _passage_sections(tool_calls: list[dict]) -> tuple[list[dict], str]:
-    """All (section, text) retrieved, plus concatenated discharge-meds text.
+    """All (section, text) retrieved, plus concatenated medication text.
 
     `discharge_medications` is included because the free-text loop can call it now
     (Phase 01): a typed question about medications is answered from the same
@@ -156,6 +178,9 @@ def _passage_sections(tool_calls: list[dict]) -> tuple[list[dict], str]:
     or the answer's doses go unverified. Its passages are labelled with the section
     when the tool says so; the tool is the section, so an unlabelled one is labelled
     here rather than dropped from verification.
+
+    When no `discharge_medications` passage exists, the narrative sections a note writes
+    its prescription in are the source instead — see `_MEDICATION_FALLBACK_SECTIONS`.
     """
     passages = []
     for tc in tool_calls or []:
@@ -167,31 +192,40 @@ def _passage_sections(tool_calls: list[dict]) -> tuple[list[dict], str]:
             if not section and name == "discharge_medications":
                 section = "discharge_medications"
             passages.append({"section": section, "text": p.get("text") or ""})
-    med_texts = []
-    for p in passages:
-        sec = (p.get("section") or "").lower()
-        # Per-med verification needs ONLY the discharge_medications section.
-        # Including medications_on_admission (or any passage whose body merely
-        # mentions "Discharge Medications") concatenates whole notes and makes
-        # _section_med_entries parse HPI/PMH numbered lists into junk entries
-        # (observed: 97 entries named 'nausea', 'htn', … in a 41k-char blob).
-        if sec == "discharge_medications":
-            med_texts.append(p["text"])
+    # Per-med verification needs ONLY the medication text, never the whole note: including
+    # a passage whose body merely mentions "Discharge Medications" concatenates whole notes
+    # and makes `_section_med_entries` parse HPI/PMH numbered lists into junk entries
+    # (observed: 97 entries named 'nausea', 'htn', … in a 41k-char blob).
+    med_texts = [
+        p["text"] for p in passages
+        if (p.get("section") or "").lower() == "discharge_medications"
+    ]
+    if not med_texts:
+        med_texts = [
+            p["text"] for p in passages
+            if (p.get("section") or "").lower() in _MEDICATION_FALLBACK_SECTIONS
+        ]
     return passages, "\n".join(med_texts)
 
 
 def _record_med_source(record_items: list[dict]) -> str:
-    """The discharge-medication text the SESSION holds, when no call carries it.
+    """The medication text the SESSION holds, when no call carries it.
 
     The record is a second view of the same passages, and on a replayed turn a call can
-    arrive without its payload while the record still holds the unit. Still only the
-    dedicated section, for the reason `_passage_sections` gives: a whole note in a
-    medication blob parses numbered lists into junk rows.
+    arrive without its payload while the record still holds the unit. The same two-tier
+    rule `_passage_sections` applies: the dedicated section when the note has one, and the
+    narrative sections the prescription is written in when it does not.
     """
-    return "\n".join(
+    items = [
         str(item.get("text") or "") for item in record_items or []
-        if str(item.get("section") or "").lower() == "discharge_medications"
-    )
+        if (item.get("section") or "").lower() == "discharge_medications"
+    ]
+    if not items:
+        items = [
+            str(item.get("text") or "") for item in record_items or []
+            if (item.get("section") or "").lower() in _MEDICATION_FALLBACK_SECTIONS
+        ]
+    return "\n".join(items)
 
 
 def _source_has_redacted_age(passages: list[dict]) -> bool:

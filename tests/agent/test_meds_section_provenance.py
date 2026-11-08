@@ -38,14 +38,22 @@ def test_a_dedicated_section_is_still_counted_as_a_discharge_medication_list():
 
 
 def test_a_fallback_section_is_never_called_a_discharge_medication_list():
-    """`dev_t1_04`: two drugs from the hospital course are not a discharge list."""
+    """`dev_t1_04`: two drugs from the hospital course are not a discharge list.
+
+    The provenance rule still holds — the sentence attributes the list to the section it
+    was read from — but it now says so in clinical words. The old wording opened with a
+    statement about the document's headings ("does not contain a dedicated discharge
+    medications section"), which read as an apology in an answer about drugs the record
+    does state (2026-11-08).
+    """
     text = answer_text.medication_narrative(
         _rows("Zithromax", "albuterol"), 1, sections=("brief_hospital_course",))
 
     assert "as recorded in the discharge note" not in text
-    assert "does not contain a dedicated discharge medications section" in text
-    assert "brief hospital course" in text
-    assert "Zithromax" in text and "albuterol" in text
+    assert "does not contain a dedicated discharge medications section" not in text
+    assert text == (
+        "Medications documented during the hospital course: "
+        "Zithromax, albuterol ^[1].")
 
 
 def test_the_sections_are_read_from_the_retrieval_not_guessed():

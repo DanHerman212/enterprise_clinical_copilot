@@ -141,6 +141,17 @@ def _distinct_medications(verified: list[dict[str, str]]) -> list[str]:
     return names
 
 
+def _course_only(sections: tuple[str, ...]) -> bool:
+    """Whether the only thing the retrieval could read was the hospital course.
+
+    The distinction the sentence makes: a discharge-instructions section is where a note
+    writes the prescription, so a list drawn from it is a discharge list; a hospital course
+    is where a note writes what was given, so a list drawn from it is what the stay
+    documented. One section in the tuple, and it is the course.
+    """
+    return tuple(sections) == ("brief_hospital_course",)
+
+
 def medication_narrative(verified: list[dict[str, str]], returned_passages: int,
                          sections: tuple[str, ...] = (),
                          *, cite: int | None = None) -> str:
@@ -189,6 +200,8 @@ def medication_narrative(verified: list[dict[str, str]], returned_passages: int,
         _FIRST_TURN_POSITION if returned_passages else 0)
     source = f" ^[{int(position)}]" if position else ""
     dedicated = "discharge_medications" in sections
+    where = ", ".join(section.replace("_", " ") for section in sections) or (
+        "material that was retrieved")
     if names:
         if dedicated:
             count = len(names)
@@ -197,12 +210,19 @@ def medication_narrative(verified: list[dict[str, str]], returned_passages: int,
                 f"{count} discharge {noun}, as recorded in the discharge note: "
                 f"{', '.join(names)}{source}."
             )
-        where = ", ".join(section.replace("_", " ") for section in sections) or (
-            "material that was retrieved")
+        # Direct clinical prose. The sentence used to open with a statement about the
+        # NOTE — "The clinical record does not contain a dedicated discharge medications
+        # section" — which is a fact about the document's headings, told to a clinician who
+        # asked what the patient is taking. It also read as an apology, and an apology in
+        # a medication answer is the one thing worse than a short list: it makes the answer
+        # sound uncertain about drugs the record does state.
+        if _course_only(sections):
+            return (
+                f"Medications documented during the hospital course: "
+                f"{', '.join(names)}{source}."
+            )
         return (
-            "The clinical record does not contain a dedicated discharge medications "
-            f"section; the {where} documents the following medications administered or "
-            f"mentioned during the stay rather than a formal discharge medication list: "
+            f"Medications documented for discharge in the {where}: "
             f"{', '.join(names)}{source}."
         )
     if returned_passages == 0:
@@ -212,14 +232,7 @@ def medication_narrative(verified: list[dict[str, str]], returned_passages: int,
             "The discharge medications section was retrieved, but no medication could be "
             f"read from it{source}."
         )
-    where = ", ".join(section.replace("_", " ") for section in sections) or (
-        "material that was retrieved")
-    return (
-        "The clinical record does not contain a dedicated discharge medications section, "
-        f"and no medication list is recorded in the {where}{source} (any medications "
-        "administered or prescribed elsewhere in the stay are documented in the clinical "
-        "course narrative rather than a dedicated medication section)."
-    )
+    return f"No medications are documented in the {where} for this admission{source}."
 
 
 def _final_message(state: dict) -> AIMessage | None:
@@ -609,5 +622,53 @@ def no_evidence_answer(
     if found_passages and not declined:
         return None
 
+    # The session may hold evidence this turn did NOT fetch. An interpretive follow-up —
+    # "why does this value drive her risk", "which of these labs is most concerning" — is
+    # answered from the record the earlier turns already established, and an auxiliary
+    # search that comes back empty says nothing about whether the answer is grounded: it
+    # says the corpus has no NEW passage matching the query, which is what a question
+    # about explanation rather than about documentation looks like.
+    #
+    # Replacing that answer with the fixed absence sentence was the defect: a clinician
+    # asked what a documented value means, the model explained it from the chart it was
+    # holding, and the turn served "There is no information in the patient's chart
+    # regarding that question" over the top of a correct answer (2026-11-08).
+    #
+    # The model's own decline still wins: `declined` is it saying it could not answer, and
+    # that is a fact about the turn rather than about the count.
+    if not declined and _session_holds_chart_evidence(evidence_state, question):
+        return None
+
     topic = _asked_about(question)
     return NO_EVIDENCE_TEMPLATE.format(topic=topic) if topic else NO_EVIDENCE_UNKNOWN_TOPIC
+
+
+def _session_holds_chart_evidence(evidence_state: Any, question: str = "") -> bool:
+    """Whether the session record already holds evidence that can answer this question.
+
+    The record is modal, and the question says which modality it needs. A note passage
+    answers a question about the chart; the estimate answers a question about risk; a
+    laboratory panel answers a question about a measurement — and a panel answers nothing
+    about whether the note documents an intubation, which is why a lab-only session is
+    still the absence the fixed sentence describes (EVIDENCE's own rule: "a turn that
+    called only `get_lab_trends` has not read the note at all").
+
+    So the test is not "does the record hold anything" but "does it hold what was asked
+    about", and the lab channel is credited only when the question invokes it.
+    """
+    if evidence_state is None:
+        return False
+    if getattr(evidence_state, "items", None):
+        for item in (evidence_state.items or {}).values():
+            if getattr(item, "source_tool", None) in routing.PASSAGE_TOOLS:
+                return True
+    # Any other unit in the record is a laboratory series, which answers a laboratory
+    # question and no other kind.
+    lab_question = bool(
+        routing.names_an_analyte(question) or re.search(r"\blabs?\b|\blaborator", question or "",
+                                                        re.IGNORECASE)
+    )
+    if lab_question and (getattr(evidence_state, "items", None)
+                         or getattr(evidence_state, "checked_labs", None)):
+        return True
+    return getattr(evidence_state, "prediction", None) is not None

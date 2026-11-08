@@ -417,9 +417,12 @@ def test_the_comparator_prompt_accepts_a_sub_cohort_and_requires_its_qualifier()
     prompt = " ".join(prompts.LITERATURE_COMPARATOR_PROMPT.split())
 
     assert "A SUB-COHORT of this patient's condition or procedure IS this patient's " \
-        "comparison" in prompt
+        "comparison ONLY when the patient could belong to it" in prompt
     assert "narrower population is a benchmark" in prompt
     assert "`cohort_summary` must state the qualifier" in prompt
+    # And the rule that a narrower population EXCLUDING this patient is a different one.
+    assert "AGE-BRACKET COMPATIBILITY" in prompt
+    assert "a narrower" in prompt and "population that EXCLUDES this patient" in prompt
 
 
 def test_the_extraction_client_is_temperature_zero():

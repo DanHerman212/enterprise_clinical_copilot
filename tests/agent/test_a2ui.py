@@ -162,9 +162,24 @@ class TestMedicationGrid:
 
         assert grid["component"] == "MedicationGrid"
         assert grid["medications"] == [
-            {"medication": "warfarin", "dosage": "4 mg", "frequency": "QD"}
+            {"medication": "warfarin", "dosage": "4 mg", "frequency": "QD",
+             "context": ""}
         ]
         assert grid["dropped_count"] == 0
+
+    def test_a_stated_route_reaches_the_row(self):
+        """A ward administration list has a route instead of a sig, and it travels."""
+        rows = {
+            "medications": [{"medication": "morphine", "dosage": "", "frequency": "",
+                             "route": "IV"}],
+            "dropped": [],
+            "returned_passages": 1,
+        }
+        grid = _by_id(compose_risk_canvas(None, None, medications=rows))["medications"]
+
+        assert grid["medications"] == [
+            {"medication": "morphine", "dosage": "", "frequency": "", "context": "IV"}
+        ]
 
     def test_no_rows_composes_no_grid_at_all(self):
         """An empty grid reads as "this patient takes nothing" — a clinical claim.
@@ -198,7 +213,7 @@ class TestMedicationGrid:
         grid = _by_id(compose_risk_canvas(None, None, medications=rows))["medications"]
 
         assert grid["medications"][0] == {
-            "medication": "aspirin", "dosage": "", "frequency": ""
+            "medication": "aspirin", "dosage": "", "frequency": "", "context": ""
         }
 
 

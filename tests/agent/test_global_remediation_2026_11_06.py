@@ -160,17 +160,21 @@ def test_a_record_unit_rounds_out_the_corpus_where_the_call_lost_its_payload():
 
 
 # --------------------------------------------------------------------------------------
-# Fix 2 — a citation belongs to a SENTENCE.
+# Fix 2 — a citation belongs to a PARAGRAPH's span, not to one sentence.
 # --------------------------------------------------------------------------------------
+# The sentence-scoped rule of 2026-11-06 left a paragraph of four sentences on one passage
+# wearing four identical pills, which is the wall the collapse exists to remove. The run
+# spans sentences again and only a paragraph break, a change of source or a PMID badge ends
+# it; the last marker of the span is the one kept (2026-11-08).
 
 
-def test_two_sentences_on_one_passage_each_keep_their_marker():
+def test_two_sentences_on_one_passage_collapse_to_the_last_marker():
     answer = "She had shoulder pain ^[4]. It was managed with morphine ^[4]."
 
     collapsed, flags = citations.collapse_repeated_citations(answer)
 
-    assert collapsed == answer
-    assert flags == []
+    assert collapsed == "She had shoulder pain. It was managed with morphine ^[4]."
+    assert flags == ["citation_repeat_collapsed:^4"]
 
 
 def test_a_double_stamp_inside_one_sentence_still_collapses():

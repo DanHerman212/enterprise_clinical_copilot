@@ -105,26 +105,38 @@ def test_a_fallback_retrieval_is_asked_what_the_sections_name():
     assert deterministic.meds_formatting_for(()) is MEDS_FALLBACK_FORMATTING
 
 
-def test_the_fallback_instruction_asks_for_every_named_drug():
-    """The instruction that replaced "exclude what was given in hospital" says so."""
+def test_the_fallback_instruction_asks_the_discharge_question_first():
+    """It asks what the patient goes home on, and refuses a ward administration."""
     lowered = MEDS_FALLBACK_FORMATTING.lower()
-    assert "every medication" in lowered
-    assert "whether it was given during the stay" in lowered
-    assert "exclude" not in lowered
+    assert "going home on" in lowered
+    assert "do not include an inpatient-only administration" in lowered
+    assert "if the passage names any discharge or take-home medications, extract only those" \
+        in lowered
+    # The escape hatch is deliberate: with no take-home drug anywhere, the inpatient list
+    # is what the record has, and it is reported as such rather than as nothing.
+    assert "only if the passage names no discharge or take-home medication" in lowered
 
 
 # ---------------------------------------------------------------- the narrative's wording
 
 
-def test_a_fallback_with_drugs_says_what_the_section_is():
+def test_a_fallback_with_drugs_state_what_the_section_documents():
     text = answer_text.medication_narrative(
         _rows("Plavix", "aspirin"), 1, sections=("brief_hospital_course",))
 
-    assert "does not contain a dedicated discharge medications section" in text
-    assert "rather than a formal discharge medication list" in text
-    assert "brief hospital course" in text
-    assert "Plavix" in text and "aspirin" in text
-    assert text.rstrip().endswith("^[1].")
+    assert "Medications documented during the hospital course: Plavix, aspirin ^[1]." == text
+    # No talk about the document's headings, and no apology around the drug names.
+    assert "does not contain a dedicated" not in text
+    assert "rather than a formal discharge medication list" not in text
+
+
+def test_a_fallback_from_the_instructions_is_a_discharge_list():
+    text = answer_text.medication_narrative(
+        _rows("Medrol", "Darvocet"), 1, sections=("discharge_instructions",))
+
+    assert text == (
+        "Medications documented for discharge in the discharge instructions: "
+        "Medrol, Darvocet ^[1].")
 
 
 def test_a_fallback_with_no_drugs_does_not_speak_for_the_whole_record():
@@ -132,9 +144,11 @@ def test_a_fallback_with_no_drugs_does_not_speak_for_the_whole_record():
     text = answer_text.medication_narrative(
         [], 1, sections=("discharge_instructions",))
 
-    assert "no medication list is recorded in the discharge instructions" in text
-    assert "documented in the clinical course narrative" in text
-    assert "in the discharge instructions during this stay" not in text
+    assert text == (
+        "No medications are documented in the discharge instructions for this "
+        "admission ^[1].")
+    # It reports the sections it read and stops. It never claims the whole record is empty.
+    assert "the record contains no" not in text.lower()
 
 
 def test_a_dedicated_section_with_no_rows_still_blames_the_section():

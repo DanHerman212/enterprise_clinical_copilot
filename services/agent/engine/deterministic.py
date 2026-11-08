@@ -1276,20 +1276,35 @@ MIN_COMPARATORS = 2
 _COMPARATOR_HORIZON_DAYS = 30
 
 _THIRTY_DAY = re.compile(
-    r"\b30[-\s]?day\b|\bthirty[-\s]day\b|\bwithin 30 days\b", re.IGNORECASE
+    r"\b30[\s-]?days?\b|\bthirty[\s-]?days?\b|\bwithin 30 days\b", re.IGNORECASE
 )
 #: A horizon that is NOT the one being compared. A record titled "predictors of
 #: thirty-day readmission" can still quote a sentence about its 90-day figure, and the
 #: quote is what the row publishes, so a conflicting horizon inside the quoted sentence is
 #: a refusal rather than a pass.
 _OTHER_HORIZON = re.compile(
-    r"\b(?:60|90|180|365)[-\s]?day\b"
-    r"|\b(?:six|nine|twelve)[-\s]month\b"
-    r"|\b(?:one|two|three|five|1|2|3|5)[-\s]year\b",
+    r"\b(?:60|90|180|365)[\s-]?days?\b"
+    r"|\b(?:six|nine|twelve|eighteen|twenty[\s-]?four)[\s-]?months?\b"
+    r"|\b(?:one|two|three|four|five|ten|\d{1,2})[\s-]?years?\b",
     re.IGNORECASE,
 )
 _NUMBER = re.compile(r"\d+(?:\.\d+)?")
 _PERCENT_IN_TEXT = re.compile(r"(\d+(?:\.\d+)?)\s*%")
+#: A readmission count stated as ZERO in words rather than as a figure.
+#:
+#: "…no patient was readmitted within 30 days after discharge" is a real result, and
+#: `38504222` states it that way. `_PERCENT_IN_TEXT` needs a numeral, so a true zero was
+#: unverifiable and the row was refused with "rate 0% is not the figure its own sentence
+#: states" — the check reporting that a sentence states no percentage when what it states
+#: is no readmissions (2026-11-08). Narrow on purpose: the negation AND a readmission word
+#: in the same clause, so "no difference in readmission" is not read as a zero rate.
+_VERBAL_ZERO = re.compile(
+    r"\bno\s+(?:patients?|cases?|subjects?|individuals?|persons?)\b[^.;]{0,80}?"
+    r"\b(?:readmitted|readmissions?)\b"
+    r"|\b(?:there\s+were|had)\s+no\s+readmissions?\b"
+    r"|\bzero\s+readmissions?\b",
+    re.IGNORECASE,
+)
 #: A rate that is stated as a span. Kept as one verified row rather than split into two,
 #: because the abstract states it as one figure and a row is a quotation — but the surface
 #: has to know, since a cell holding "1.0% to 1.4%" is not the same object as one holding
@@ -1310,7 +1325,46 @@ def _horizon_context(article: dict, sentence: str) -> str:
     abstract = " ".join(str(article.get("abstract") or "").split())
     index = abstract.find(sentence)
     window = abstract[max(0, index - 240):index] if index > 0 else ""
-    return f"{article.get('title') or ''} {window}".strip()
+    local = f"{article.get('title') or ''} {window}".strip()
+    if _THIRTY_DAY.search(local):
+        return local
+    # A paper states its horizon ONCE, in Methods ("30-day outcomes were assessed…"), and
+    # then reports figures in Results sentences that never repeat it. `33049410` has that
+    # shape: "unplanned readmissions (4.96% vs 3.72%)", with the horizon declared a
+    # paragraph earlier and outside the 240-character window — so the record was refused
+    # with "states no 30-day horizon" on 2026-11-08 while its Methods say 30-day outcomes.
+    #
+    # The horizon is a property of the STUDY and a quote is a sentence from it, so the
+    # whole abstract is consulted before refusing. What this does not relax: a sentence
+    # carrying its OWN conflicting horizon is refused before this is reached (see
+    # `verify_comparator`), so a record reporting both can never publish its 90-day figure
+    # as a 30-day rate.
+    return f"{local} {abstract}".strip()
+
+
+def _thirty_day_rate(sentence: str) -> str | None:
+    """The percentage the sentence attaches to its 30-day horizon, when it states one.
+
+    A range sentence carries two horizons and two figures: "Readmission rates for ACDF
+    ranged from 5.1% (30 days) to 7.7% (90 days postoperatively)" (`31528438`). The row
+    publishes ONE number, so it has to be the number the 30-day horizon owns — taking
+    whichever figure happens to sit beside the sentence would publish the 90-day rate as a
+    30-day one, which is the defect the whole check exists to prevent.
+
+    Nearest figure to the marker, by distance. That handles the range form (5.1% is seven
+    characters from "30 days", 7.7% is thirty), the ordinary form (one figure, one
+    horizon), and the sentence that leads with one horizon and reports the other later.
+    A sentence with no 30-day marker returns None and nothing is checked beyond what
+    already was.
+    """
+    marker = _THIRTY_DAY.search(sentence)
+    if marker is None:
+        return None
+    figures = [(match.start(), match.group(1))
+               for match in _PERCENT_IN_TEXT.finditer(sentence)]
+    if not figures:
+        return None
+    return min(figures, key=lambda entry: abs(entry[0] - marker.start()))[1]
 
 
 def rate_kind(reported_rate: Any) -> str:
@@ -2019,7 +2073,23 @@ def verify_comparator(row: dict | None, articles: dict[str, dict],
     if not figures:
         return None, f"pmid {pmid} states no numeric rate"
     if figures[0] not in _PERCENT_IN_TEXT.findall(sentence):
-        return None, f"pmid {pmid} rate {rate} is not the figure its own sentence states"
+        # A zero stated in words is a real result and publishes no numeral to match.
+        # `38504222` reports that no patient was readmitted within 30 days; the check
+        # called that "not the figure its own sentence states", which is true and beside
+        # the point — the sentence states a zero, in the only way it can (2026-11-08).
+        if not (figures[0] in {"0", "0.0"} and _VERBAL_ZERO.search(sentence)):
+            return None, f"pmid {pmid} rate {rate} is not the figure its own sentence states"
+    # When the sentence states more than one horizon, the published number must be the one
+    # the 30-day horizon owns. Only then: a sentence carrying ONE horizon has nothing to
+    # disambiguate, and a span rate ("1.0% to 1.4% within 30 days") is one horizon with two
+    # figures — reading its second figure as "the 30-day one" refused a correct row on
+    # 2026-11-08 (`test_a_span_rate_is_kept_and_marked_as_a_range`).
+    owned = _thirty_day_rate(sentence) if _OTHER_HORIZON.search(sentence) else None
+    if owned is not None and figures[0] != owned:
+        return None, (
+            f"pmid {pmid} rate {rate} is not the figure its 30-day horizon states "
+            f"({owned}%)"
+        )
 
     return {
         "pmid": pmid,
@@ -2061,6 +2131,12 @@ def verify_comparators(rows: list[dict] | None, articles: list[dict] | None,
             rejected.append({
                 "pmid": str((row or {}).get("pmid") or "").strip(),
                 "reason": reason,
+                # The quote goes with the refusal, because the reason alone cannot say
+                # whether the model quoted a bad sentence or the check misread a good one.
+                # `31528438` and `33049410` were refused on 2026-11-08 and neither refusal
+                # was answerable from the log without the sentence it referred to.
+                "sentence": " ".join(
+                    str((row or {}).get("rate_sentence") or "").split())[:300],
             })
     return verified, rejected
 
@@ -2319,8 +2395,11 @@ def _reply_rows(payload: dict, pool: list[dict], target: ClinicalTarget,
         len(verified), len(refused), len(pool),
     )
     for rejection in refused:
-        logger.info("comparator extraction: refused %s — %s",
-                    rejection.get("pmid") or "(no pmid)", rejection.get("reason") or "")
+        logger.info(
+            "comparator extraction: refused %s — %s | quoted=%r",
+            rejection.get("pmid") or "(no pmid)", rejection.get("reason") or "",
+            rejection.get("sentence") or "",
+        )
     return verified
 
 

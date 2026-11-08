@@ -562,18 +562,39 @@ def test_a_record_with_no_figure_is_read_beside_one_that_states_a_rate():
     assert result.passes[0].aligned == 2
 
 
-def test_the_pass_hands_the_pool_over_in_pubmed_order():
-    """The review is first in the reply and first in what the model reads.
+def test_the_pass_ranks_rate_bearing_abstracts_before_the_cap():
+    """Ranked before the cap, because PubMed's order is relevance for the QUERY.
 
-    Deliberately ordered with the rate-bearing record second: if any local ordering rule
-    were still in the pass, that record would have been promoted and this would fail.
+    Deliberately ordered with the rate-bearing record second: before 2026-11-08 the pass
+    handed the pool over untouched, so a pool whose first ten abstracts were generic
+    reviews never reached the record that states a 30-day rate — `cr` lost its only
+    usable cohort that way.
     """
     async def search(terms, wide):
         return {"query": "pooled", "articles": [NO_FIGURE_REVIEW, WITH_FIGURE]}
 
     pass_ = asyncio.run(deterministic.candidate_pass(search, FEMORAL_NECK))
 
-    assert [article["pmid"] for article in pass_.aligned] == ["30000030", "30000031"]
+    assert [article["pmid"] for article in pass_.aligned] == ["30000031", "30000030"]
+    assert pass_.pool_size == 2
+
+
+def test_pubmed_order_survives_as_the_tie_breaker():
+    """Two equally relevant abstracts stay in the order PubMed returned them.
+
+    The ranking is a stable sort over three facts the record states about itself, so it
+    cannot reorder records it knows nothing about — which is what makes a run
+    reproducible.
+    """
+    first = dict(WITH_FIGURE, pmid="30000040")
+    second = dict(WITH_FIGURE, pmid="30000041")
+
+    async def search(terms, wide):
+        return {"query": "pooled", "articles": [first, second]}
+
+    pass_ = asyncio.run(deterministic.candidate_pass(search, FEMORAL_NECK))
+
+    assert [article["pmid"] for article in pass_.aligned] == ["30000040", "30000041"]
 
 
 # --- F3: a cohort of children is not this adult's comparison ----------------

@@ -86,10 +86,10 @@ class TestTheNumbering:
         """The live drawer listed `4.` and no record. Numbering records from 1 would
         have given two different sources the same number and one of them no row.
 
-        The number is the record's position in the array, not its position in the drawer:
-        two records were retrieved and one was cited, so the cited one keeps `8` and the
-        drawer is not renumbered around it. Renumbering the survivor to `1` would break
-        the marker that points at it (`literature_sources`, 2026-10-31).
+        The base is one past the highest marker the answer shows — not one past the COUNT
+        of passages, and not the conversation's raw slot count. A note publishes under its
+        own number, so this turn's `4` and `7` push the record to `8` whatever order the
+        ledger happened to register the search in.
         """
         presentation = _presented()
         published = [row for row in presentation["references"] if row.get("pmid")]
@@ -123,7 +123,7 @@ class TestTheNumbering:
             [CHART, SEARCH])
         published = [row for row in presentation["references"] if row.get("pmid")]
 
-        assert [row["index"] for row in published] == [8, 9]
+        assert [row["index"] for row in published] == [1, 2]
 
     def test_a_record_never_shares_a_number_with_a_note_passage(self):
         presentation = _presented()

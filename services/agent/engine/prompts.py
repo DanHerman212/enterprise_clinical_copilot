@@ -1232,6 +1232,15 @@ Rules, and each one has been broken before:
   procedure (the operation the admission existed to perform) or its primary diagnosis, in
   an age-compatible adult population. A cohort of the same region or the same organ but a
   different operation, or of a different disease, is refused and the reason names which.
+- A COHORT OF THE OPERATION IS THIS PATIENT'S POPULATION even when it was assembled for a
+  different indication. When the admission has a surgical procedure, a series of patients
+  who underwent that procedure and reports a 30-day readmission rate is a qualifying
+  comparator however its population was selected — a vaginal hysterectomy series drawn
+  from benign gynaecology is a benchmark for a hysterectomy performed for a microinvasive
+  cervical carcinoma, and a total knee replacement registry is a benchmark whatever the
+  indication for the knee. The operation is the exposure that drives readmission, and the
+  reader weighs the indication themselves. The reverse still holds: a cohort that did NOT
+  undergo this operation is refused, however similar its disease.
 - A different POPULATION is not a narrower one. Pediatric, paediatric, neonatal, infant and
   adolescent cohorts are refused for an adult admission, and an obstetric-only cohort is
   refused for any admission that is not about pregnancy: these are different patients, not

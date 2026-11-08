@@ -483,9 +483,15 @@ async def compose_success(
     # lands on the absolute position either way. Clamping these to 1 would silently move
     # such a marker onto whatever evidence happened to hold position 1.
     turn_start = _turn_start(state)
+    # The composer's map first: it knows the canonical ledger slot of every source it
+    # published, including the records a `search_literature` call registered — which
+    # settlement never saw and therefore never mapped. Falling back to the settlement map
+    # is what left a published record resolving to the display number it was shown under.
+    display_map = (presentation.get("citation_map")
+                   or state.get("citation_display_map") or {})
     replay_citation_map = {
         str(key): position - turn_start
-        for key, position in (state.get("citation_display_map") or {}).items()
+        for key, position in display_map.items()
         if isinstance(position, int) and not isinstance(position, bool)
     }
 

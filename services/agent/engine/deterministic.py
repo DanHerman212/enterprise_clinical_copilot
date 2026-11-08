@@ -770,9 +770,11 @@ async def _readmission_comparators(
     # apart from a Cloud Run log alone.
     for entry in result.passes:
         logger.info(
-            "comparators: query=%r wide=%s candidates=%d aligned=%d verified=%d "
+            "comparators: query=%r wide=%s candidates=%d pool_size=%d "
+            "sent_to_extractor=%d aligned=%d verified=%d "
             "excluded=%d outcome=%s",
-            entry.query, entry.wide, entry.candidates, entry.aligned,
+            entry.query, entry.wide, entry.candidates, entry.pool_size,
+            entry.aligned, entry.aligned,
             entry.verified, entry.excluded, entry.outcome,
         )
     logger.info(
@@ -1305,6 +1307,28 @@ _VERBAL_ZERO = re.compile(
     r"|\bzero\s+readmissions?\b",
     re.IGNORECASE,
 )
+
+
+def _shares_a_percent_sign(figures: list[str], sentence: str) -> bool:
+    """Whether every figure is stated in a clause that carries a percentage marker.
+
+    "The 30-day readmission rate decreased to 1.2 from 1.3%" states two figures and one
+    `%`. `_PERCENT_IN_TEXT` needs the sign on the figure itself, so `1.2` was "not the
+    figure its own sentence states" and the row was refused on both `cp` runs
+    (2026-11-08) — a true invariant reported through a surface-grammar rule.
+
+    The bound stays tight in the direction that matters: every figure the row publishes
+    has to appear in the sentence, and the sentence has to state a percentage at all. A
+    sentence quoting bare integers is not a rate.
+    """
+    if not figures:
+        return False
+    if "%" not in sentence and not re.search(r"\bpercent\b", sentence, re.IGNORECASE):
+        return False
+    return all(
+        re.search(rf"(?<![\d.]){re.escape(figure)}(?![\d])", sentence)
+        for figure in figures
+    )
 #: A rate that is stated as a span. Kept as one verified row rather than split into two,
 #: because the abstract states it as one figure and a row is a quotation — but the surface
 #: has to know, since a cell holding "1.0% to 1.4%" is not the same object as one holding
@@ -2077,7 +2101,9 @@ def verify_comparator(row: dict | None, articles: dict[str, dict],
         # `38504222` reports that no patient was readmitted within 30 days; the check
         # called that "not the figure its own sentence states", which is true and beside
         # the point — the sentence states a zero, in the only way it can (2026-11-08).
-        if not (figures[0] in {"0", "0.0"} and _VERBAL_ZERO.search(sentence)):
+        # And a figure inside a clause that carries one sign for both numbers is stated.
+        if not (figures[0] in {"0", "0.0"} and _VERBAL_ZERO.search(sentence)) \
+                and not _shares_a_percent_sign(figures, sentence):
             return None, f"pmid {pmid} rate {rate} is not the figure its own sentence states"
     # When the sentence states more than one horizon, the published number must be the one
     # the 30-day horizon owns. Only then: a sentence carrying ONE horizon has nothing to
@@ -2168,6 +2194,14 @@ class ComparatorPass:
     #: half its records to the population filter is thin for a different reason than a pool
     #: whose records were all about another condition.
     excluded: int = 0
+    #: How many adult candidates there were before the extraction cap.
+    #:
+    #: `aligned` used to be the only number reported beside `candidates`, and it is the
+    #: CAP (`pool[:MAX_EXTRACTION_CANDIDATES]`), not a match count — which made "aligned=10,
+    #: excluded=0" read as "ten matched" when it meant "ten were read and nothing was
+    #: filtered". Reported separately so a thin pool and a capped read cannot be confused
+    #: again (`cr`, 2026-11-08).
+    pool_size: int = 0
     #: Whether this pass's records were merged with another's before the model read them.
     #: Two passes, one extraction: without this a report showing two passes and one call
     #: would read as a lost pass.
@@ -2258,13 +2292,19 @@ class CandidatePass:
     aligned: tuple[dict, ...]
     refused: tuple[dict, ...]
     excluded: int
+    #: How many adult candidates there were before the extraction cap. `aligned` is the
+    #: cap, not a match count, and reporting only that made "aligned=10, excluded=0" read
+    #: as "ten matched" when it meant "ten were read, nothing was filtered" (`cr`,
+    #: 2026-11-08).
+    pool_size: int = 0
 
     def report(self, *, verified: int, rejected: tuple[dict, ...],
                outcome: str) -> ComparatorPass:
         return ComparatorPass(
             query=self.query, wide=self.wide, candidates=self.candidates,
             aligned=len(self.aligned), verified=verified,
-            rejected=tuple(rejected), excluded=self.excluded, outcome=outcome,
+            rejected=tuple(rejected), excluded=self.excluded,
+            pool_size=self.pool_size, outcome=outcome,
         )
 
 
@@ -2286,6 +2326,27 @@ class CandidatePass:
 #: What is refused is reported, not silent: `ComparatorPass.candidates` still states what
 #: PubMed returned, so a table built from the top ten of twenty-five is visible as such.
 MAX_EXTRACTION_CANDIDATES = 10
+
+
+def _comparator_relevance(article: dict, target: ClinicalTarget) -> tuple:
+    """How likely this abstract is to state a usable 30-day rate for this admission.
+
+    Three facts, in the order a clinician would apply them, and no clinical judgement:
+    does it state a 30-day rate at all; is it about the operation this admission had;
+    is it about the diagnosis. Every term is a substring of text the record already
+    publishes, so two runs on the same payload rank identically and PubMed's own order
+    survives as the tie-breaker.
+    """
+    text = f"{article.get('title') or ''} {article.get('abstract') or ''}".lower()
+    states_rate = (bool(_THIRTY_DAY.search(text))
+                   and bool(_PERCENT_IN_TEXT.search(text)))
+    procedure = str(target.procedure or "").strip().lower()
+    condition = str(target.condition or "").strip().lower()
+    return (
+        not states_rate,
+        not (procedure and procedure in text),
+        not (condition and condition in text),
+    )
 
 
 async def candidate_pass(search, target: ClinicalTarget) -> CandidatePass:
@@ -2316,10 +2377,21 @@ async def candidate_pass(search, target: ClinicalTarget) -> CandidatePass:
     articles = [article for article in (result.get("articles") or [])
                 if isinstance(article, dict)]
     pool, refused = adult_cohorts(articles, target)
+    # Ranked BEFORE the extraction cap, because PubMed's order is a relevance order for
+    # the QUERY and not for this comparison. `cr` (2026-11-08) lost its one usable cohort
+    # this way: `38645981` — a vaginal-hysterectomy series reporting 2.7% and 4.0% at 30
+    # days — was candidate #4 of twenty, so it survived the cap; but on a pool whose
+    # first ten happened to be generic gynae-oncology papers, the file that states a
+    # 30-day rate sits at #11 and is never read. The score is what a reader would use to
+    # choose which ten abstracts to read: does it state a 30-day rate, is it about this
+    # admission's procedure, is it about its condition. PubMed's order survives as the
+    # tie-breaker, which is what makes the result reproducible.
+    ranked = sorted(pool, key=lambda article: _comparator_relevance(article, target))
     return CandidatePass(
         query=query, wide=True, candidates=len(articles),
-        aligned=tuple(pool[:MAX_EXTRACTION_CANDIDATES]),
+        aligned=tuple(ranked[:MAX_EXTRACTION_CANDIDATES]),
         refused=tuple(refused),
+        pool_size=len(pool),
         excluded=len(refused),
     )
 

@@ -423,8 +423,18 @@ def compose_presentation(question: str, answer: str,
     # Only the published channel is emptied, so the answer stays a patient-chart answer with
     # no citations rather than becoming an uncited one.
     shown_sources = [] if command == "labs" else record_sources
+    # Where the published records start in the READER's numbering: one past the HIGHEST
+    # marker this turn shows, not one past the COUNT of them. A note passage publishes
+    # under its own number, so a count is only the same value when settlement has already
+    # compacted the passages to `1..N` — and on a turn where it has not (a mixed answer
+    # citing sections `4` and `7`) a count of two numbered the first record `3` and the
+    # second `4`, which the note passage already owned. One base, read by both channels
+    # below, because the narrative's pills and the drawer's rows are two views of one list
+    # (2026-11-08).
+    published_start = max(
+        (int(source.get("cite") or 0) for source in shown_sources), default=0) + 1
     narrative = _narrative(answer, shown_sources, literature,
-                           literature_start=literature_start,
+                           literature_start=published_start,
                            records=published_records)
 
     scope = turn_scope(evidence_calls)
@@ -607,7 +617,8 @@ def compose_presentation(question: str, answer: str,
     # and the answer rests on one; publishing all three told the reader two papers had been
     # used (patient 90000069, turn 3, 2026-10-31 — two rows nothing pointed at).
     published_sources = literature_sources(
-        published_records, start=literature_start,
+        published_records, start=published_start,
+        ledger_start=literature_start,
         cited=cited_numbers_of_records)
     sources = shown_sources + published_sources
 
@@ -649,7 +660,8 @@ def compose_presentation(question: str, answer: str,
     for source in published:
         cite = int(source.get("cite") or 0)
         if cite > 0:
-            resolved_map.setdefault(str(cite), cite)
+            canonical = int(source.get("ledger_position") or cite)
+            resolved_map.setdefault(str(cite), canonical)
     references = reference_rows(published)
 
     return {
@@ -1702,7 +1714,8 @@ def literature_citations(articles: list[dict], start: int = 1) -> list[dict]:
 
 
 def literature_sources(articles: list[dict], start: int = 1,
-                       *, cited: list[str] | None = None) -> list[dict]:
+                       *, cited: list[str] | None = None,
+                       ledger_start: int | None = None) -> list[dict]:
     """The retrieved records as `sources` entries, numbered from `start`.
 
     A literature turn had no `sources` at all: the records lived in the `literature`
@@ -1736,6 +1749,13 @@ def literature_sources(articles: list[dict], start: int = 1,
         record = _article_record(article, number)
         sources.append({
             "cite": record["index"],
+            # Where this record sits in the conversation's own array. `cite` is the
+            # reader's number and is compacted; this is the ledger's and is not. The two
+            # are recorded together because replay needs one and the page needs the other,
+            # and deriving either from the other is what produced `1, 2, 10, 11, 12`
+            # (2026-11-08).
+            **({"ledger_position": ledger_start + offset}
+               if ledger_start is not None else {}),
             "kind": record["kind"],
             "badge": record["badge"],
             "title": record["title"],
@@ -1768,6 +1788,13 @@ def _narrative(answer: str, sources: list[dict], literature: dict | None,
     the article's badge and the note badges address the same `sources` array, which is
     why the record numbers continue after the note numbers (`literature_sources(start=…)`
     and `literature_citations(start=…)` agree by the same argument).
+
+    `literature_start` is therefore the READER's numbering, not the ledger's: the caller
+    passes one past the highest marker this turn shows, the same base it hands
+    `literature_sources`. The two were briefly different — the narrative numbered records
+    from the conversation's slot count while the drawer numbered them from this turn's
+    passages — and a follow-up printed a pill marked `3` over a reference row numbered `1`
+    (2026-11-08).
 
     This chose one channel or the other until 2026-10-30, on the reasoning that a
     literature turn cites its articles "and nothing else". That holds for a turn whose

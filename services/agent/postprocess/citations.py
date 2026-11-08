@@ -123,6 +123,33 @@ def extract_section(note_text: str, section: str) -> str | None:
 MARKER_OPEN = r"\^\["
 MARKER_CLOSE = r"\]"
 
+#: The same opening token with the caret OPTIONAL, because a model writes both forms.
+#:
+#: `[PMID: 39592196]` without the caret was printed verbatim to a clinician on 2026-11-08
+#: (`cp`, turn 2) while the drawer listed the same record as row 10: every pass in this
+#: module requires `\^\[`, so a caret-less badge was not rewritten, not stripped, not
+#: counted as a citation, and not resolvable — it was prose. One spelling is the contract;
+#: the one the model actually emits is normalised into it at the boundary by
+#: `normalise_carets`, rather than every downstream reader learning a second spelling.
+MARKER_OPEN_OPTIONAL = r"\^?\["
+
+#: A bracketed PMID badge written without its caret. Matched to be REPAIRED, never kept.
+_CARETLESS_PMID_RE = re.compile(
+    r"(?<!\^)\[\s*PMID\s*:?\s*\d+(?:\s*[,;]\s*(?:PMID\s*:?\s*)?\d+)*\s*\]",
+    re.IGNORECASE,
+)
+
+
+def normalise_carets(answer: str) -> str:
+    """Put the caret back on a PMID badge the model wrote without one.
+
+    Idempotent, and a no-op on prose that has none. Applied at the top of every function
+    that reads markers, so the caret-less form cannot survive to a reader.
+    """
+    if not answer or "[" not in answer:
+        return answer
+    return _CARETLESS_PMID_RE.sub(lambda match: "^" + match.group(0), answer)
+
 
 def _marker_re(body: str, flags: int = 0) -> "re.Pattern[str]":
     """Compile a marker pattern from its BODY: everything between the two tokens."""
@@ -326,7 +353,10 @@ def rewrite_pmid_markers(answer: str, pmid_to_number: Mapping[str, int]) -> str:
     it is either an earlier turn's record or an invented identifier, and neither is this
     function's to adjudicate.
     """
-    if not answer or "^[" not in answer or not pmid_to_number:
+    if not answer or not pmid_to_number:
+        return answer
+    answer = normalise_carets(answer)
+    if "^[" not in answer:
         return answer
     wanted: dict[str, int] = {}
     for pmid, number in pmid_to_number.items():
@@ -390,8 +420,9 @@ def enforce_citations(
     alone here: `_drop_unknown_markers`, reached through `renumber_citations`, owns that
     vocabulary. One regex, two rules about what a marker may say, no third opinion.
     """
-    if "^[" not in (answer or ""):
+    if "^[" not in normalise_carets(answer or ""):
         return answer, []
+    answer = normalise_carets(answer)
     # A badge that named two records is two badges before anything reads it. Done first
     # because every step below classifies a marker by its body, and the grouped shape
     # classifies as nothing — which is how a real citation came to be deleted.
@@ -1522,7 +1553,7 @@ def cited_pmids(answer: str) -> list[str]:
     retrieved records", which is what this function can tell apart.
     """
     found: list[str] = []
-    for match in _ANY_MARKER_RE.finditer(answer or ""):
+    for match in _ANY_MARKER_RE.finditer(normalise_carets(answer or "")):
         body = match.group(1).strip()
         if not _PMID_LIST_BODY_RE.fullmatch(body):
             continue

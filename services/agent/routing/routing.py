@@ -925,7 +925,19 @@ LITERATURE_QUESTION_TOOLS: frozenset[str] = frozenset(
 #: Declared here rather than in `ingress/contracts.py`, which is where it lived: the
 #: wire contract and the retry policy are two readers of one fact, and a second copy is
 #: a place a tool rename has to be found twice.
-RESULT_KEPT_TOOLS: frozenset[str] = frozenset({"predict_readmission", "get_lab_trends"})
+#:
+#: `search_literature` joined on 2026-11-08, and the reason it took so long is a wrong
+#: reading of "reproducible". Asking PubMed the same question does return the same
+#: articles — but not for free, and not before the turn can start. The replay re-runs
+#: every derivable call to rebuild the transcript, so a thread that had ever run `/ehr`
+#: or `/pubmed` paid a live NCBI E-utilities round trip on EVERY later turn, before the
+#: model was asked anything and with no stage emitted to say the wait was happening.
+#: Reproducible is not the same as cheap, and a thread should not re-ask a third party
+#: what it already recorded. The records are public literature metadata — a PMID, a
+#: title, an abstract — so none of the reason `PASSAGE_TOOLS` is re-derived applies:
+#: there is no note text in this payload for the store to be careful with.
+RESULT_KEPT_TOOLS: frozenset[str] = frozenset(
+    {"predict_readmission", "get_lab_trends", "search_literature"})
 
 #: What a benchmark retrieval pass came to.
 #:

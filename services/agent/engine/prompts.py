@@ -1176,11 +1176,11 @@ Return ONE JSON object and nothing else:
     "rate_sentence": "<the sentence from the abstract that states it, copied exactly>",
     "cohort_summary": "<population, sample size as n=..., and setting>",
     "evidence_tier": "<the study design the abstract states>"}
- ],
- "rejected": [
-   {"pmid": "<pmid>", "reason": "<why this cohort is not this patient's population, or
-    why it states no 30-day readmission rate>"}
  ]}
+
+Only the abstracts that qualify appear in `comparators`. An abstract you did not use is
+omitted entirely: no entry, and no written explanation of the refusal. `comparators` is
+`[]` when none qualify.
 
 Rules, and each one has been broken before:
 
@@ -1250,9 +1250,9 @@ Rules, and each one has been broken before:
 - At most two comparators. If more qualify, keep the two whose cohorts are closest to
   this patient.
 - ANSWER COMPACTLY. No preamble, no summary of how many you read, no commentary on an
-  abstract you refused beyond its one-line `reason`. This reply is machine-read and a
-  reply cut off by the output ceiling is discarded whole — a missing row costs the reader
-  a comparison, and an extra sentence costs them every row.
+  abstract you refused. This reply is machine-read and a reply cut off by the output
+  ceiling is discarded whole — a missing row costs the reader a comparison, and an extra
+  sentence costs them every row.
 - Never use knowledge from outside these abstracts. A rate you remember from the
   literature is not in the abstract in front of you and cannot be quoted."""
 

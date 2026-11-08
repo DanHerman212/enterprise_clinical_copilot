@@ -26,6 +26,7 @@ from langchain_core.messages import AIMessage
 
 from services.agent.engine import graph
 from services.agent.engine import model as model_gateway
+from services.agent.engine import deterministic
 from services.agent.engine.mcp_client import MCPToolbox
 from services.agent.postprocess import answer as answer_text
 from services.agent.postprocess import citations
@@ -422,7 +423,6 @@ def test_the_badge_resolves_to_a_pill_and_a_reference_row():
     )
 
     narrative = _narrative(out["a2ui"])
-    assert "^[PMID: 24108298]" in narrative["text"]
     resolving = [entry for entry in narrative["citations"]
                  if str(entry.get("pmid") or "") == "24108298"]
     assert len(resolving) == 1
@@ -432,6 +432,11 @@ def test_the_badge_resolves_to_a_pill_and_a_reference_row():
     assert len(rows) == 1
     assert rows[0]["index"] == resolving[0]["index"]
     assert "Spine" in rows[0]["subtitle"]
+    # The inherited record's badge addresses the index it is published under rather than
+    # its identifier, so the pill in the prose, the drawer row and the source entry name
+    # the paper with one number (Stage 1, 2026-11-08).
+    assert f"^[{resolving[0]['index']}]" in narrative["text"]
+    assert "^[PMID:" not in narrative["text"]
 
 
 def test_the_follow_up_draws_no_comparison_table():
@@ -492,3 +497,88 @@ def test_a_chart_follow_up_numbers_its_passages_from_the_thread():
 
     assert [source["section"] for source in out["sources"]] == [
         "brief_hospital_course", "discharge_diagnosis"]
+
+
+# --- a mid-thread COMMAND inherits the same thread ----------------------------
+
+#: The tool result a `/meds` turn retrieves, with an id no earlier turn registered — so
+#: where it lands in the record says what numbering the command was running under.
+MEDS = {
+    "hadm_id": HADM,
+    "returned": 1,
+    "passages": [
+        {"id": "MT-2_discharge_medications_1", "section": "discharge_medications",
+         "text": "Discharge Medications: aspirin 81 mg daily."},
+    ],
+}
+
+#: One `/ehr` turn, stored the way the site stores it: the retrieval payload is
+#: re-derivable, so the caller kept none of it and the replay resolves it again.
+THREAD_TURN = {
+    "question": "/ehr For admission 90000069.",
+    "answer": "The course was uncomplicated ^[1].",
+    "tool_calls": [
+        {"name": "rag_search_sections", "args": {"hadm_id": HADM}, "payload": None},
+    ],
+}
+
+
+def _numbered_box(payloads: dict) -> MCPToolbox:
+    """A toolbox that answers each tool from its own payload, recording what was asked."""
+    box = MCPToolbox(session=None)
+    box._tools = {name: _Tool() for name in payloads}
+    box.calls = []
+
+    async def call(name, arguments):
+        box.calls.append(name)
+        return payloads[name]
+
+    box.call = call
+    return box
+
+
+def test_a_mid_thread_command_replays_the_thread_before_its_own_tools_run():
+    """Stage 3 §2: `/meds` on turn 2 continues the thread instead of starting a new one.
+
+    The command branch of `ask` used to return before `replay_messages`, so a command
+    invoked inside a thread began from an EMPTY record. Two things followed from that: the
+    command's first unit took position 1 — an integer the earlier turn's passage already
+    owned, so a marker written against one addressed the other — and `replayed_tool_calls`
+    was absent from the state, so settlement and the guardrail measured the answer against
+    a thread that had, in their account, never read the chart (2026-11-08).
+
+    The numbering is asserted through the record itself rather than through a marker: the
+    command's own passage must land at `N+1`, where `N` is what the thread had already
+    registered. A reset would put it at 1.
+    """
+    box = _numbered_box({"rag_search_sections": SECTIONS,
+                         "discharge_medications": MEDS})
+    real = deterministic.run_command
+    captured: dict = {}
+
+    async def spy(*args, **kwargs):
+        record = kwargs.get("evidence_state")
+        captured["replayed_calls"] = list(kwargs.get("replayed_calls") or [])
+        captured["record"] = record
+        captured["positions_before"] = record.position_count() if record else 0
+        return await real(*args, **kwargs)
+
+    with patch.object(model_gateway, "build_llm", lambda name: _AnswersInProse()), \
+            patch.object(graph, "run_command", spy):
+        state = asyncio.run(graph.ask(
+            box, "and the discharge medications?", hadm_id=HADM, model="test",
+            turns=[THREAD_TURN], question_kind="meds",
+        ))
+
+    # (a) The replay ran, and it is the thread's call that reached `run_command`.
+    assert [call["name"] for call in captured["replayed_calls"]] == ["rag_search_sections"]
+    # (b) The command was handed the record the replay built, already holding the thread's
+    #     two passages — not a fresh empty one it would have to hydrate again.
+    assert captured["record"] is not None
+    assert captured["positions_before"] == 2
+    # (c) So the command's own passage is numbered from N+1, not from 1.
+    assert captured["record"].position_of_note_passage(
+        "MT-2_discharge_medications_1") == 3
+    # (d) And the thread survives on the state every later layer reads.
+    assert [call["name"] for call in state["replayed_tool_calls"]] == ["rag_search_sections"]
+    assert [call["name"] for call in state["tool_calls"]] == ["discharge_medications"]

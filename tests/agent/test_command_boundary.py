@@ -496,11 +496,18 @@ def test_no_command_is_a_widget_only_turn_any_more():
 def test_a_command_reports_each_tool_before_the_review_stage(command):
     """The run reads as: plan, run the tools, review.
 
-    One `tool`/`result` pair per call, in the order the table declares them. A
-    supplementary call is work that happened, so it announces like any other: a
-    command that listed stages in another order would be narrating work it did not
-    do, and silencing the second call would hide half of what `/ehr` ran. The
-    record-wide fallback announces on the same terms, for the same reason.
+    Within one batch, every `tool` stage is announced before any `result`, because a
+    command's independent calls are dispatched concurrently and the announcement is made at
+    dispatch (Stage 2, 2026-11-08). Batches still run in sequence — a call that needs an
+    earlier result is dispatched after it — so `/ehr` streams `tool, tool, result, result`
+    for its two chart reads and then `tool, result` for the literature search derived from
+    them.
+
+    What has to hold either way is that every declared call is announced exactly once, in
+    the order the table declares them, that its own result follows it, and that both finish
+    before the review stage. A command that listed stages in another order would be
+    narrating work it did not do, and silencing the second call would hide half of what
+    `/ehr` ran. The record-wide fallback announces on the same terms, for the same reason.
     """
     seen = []
     box = _RecordingToolbox()
@@ -512,13 +519,20 @@ def test_a_command_reports_each_tool_before_the_review_stage(command):
             on_event=seen.append,
         ))
 
-    assert [event["stage"] for event in seen] == (
-        ["planning"] + ["tool", "result"] * len(_expected_calls(command))
-        + ["reviewing"]
-    )
-    assert [event["tool"] for event in seen if event["stage"] == "tool"] == (
-        _expected_calls(command)
-    )
+    calls = _expected_calls(command)
+    stages = [event["stage"] for event in seen]
+    assert stages[0] == "planning"
+    assert stages[-1] == "reviewing", "a tool stage leaked past the review stage"
+    assert stages.count("tool") == len(calls)
+    assert stages.count("result") == len(calls)
+    # Each call announced once, in declaration order, and each result once in the same
+    # order — so a result belongs to the call at the same index.
+    assert [event["tool"] for event in seen if event["stage"] == "tool"] == calls
+    assert [event["tool"] for event in seen if event["stage"] == "result"] == calls
+    # And no result is announced before the call it reports has been announced.
+    announced = [index for index, stage in enumerate(stages) if stage == "tool"]
+    returned = [index for index, stage in enumerate(stages) if stage == "result"]
+    assert all(call_at < result_at for call_at, result_at in zip(announced, returned))
 
 
 def test_the_topic_reaches_the_tool_exactly_as_the_caller_wrote_it():

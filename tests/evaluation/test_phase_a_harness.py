@@ -49,7 +49,18 @@ def test_a_derivable_result_is_stripped_and_a_kept_result_is_not():
 
 
 def test_the_tool_name_classification_is_the_fallback_when_the_flag_is_absent():
-    """An envelope that predates `derivable` is classified by its tool name."""
+    """An envelope that predates `derivable` is classified by its tool name.
+
+    `search_literature` classifies as RESULT-KEPT from Stage 3 (2026-11-08). The records are
+    public PubMed metadata — a PMID, a title, an abstract — so none of the reason a chart
+    passage is re-resolved applies to them, and keeping them is what stops every later turn
+    of the thread paying a live NCBI E-utilities round trip before the model is asked
+    anything. `predict_readmission` was already kept, for the other reason: an estimate
+    cannot be re-run to the same value.
+
+    A chart passage is still stripped, which the test above pins — the two branches of the
+    fallback stay verified together.
+    """
     turn = replay_turn("/ehr", {
         "answer": "x",
         "tool_calls": [
@@ -57,8 +68,10 @@ def test_the_tool_name_classification_is_the_fallback_when_the_flag_is_absent():
              "response": {"articles": [{"pmid": "1"}]}},
             {"name": "predict_readmission", "args": {}, "response": {"probability": 0.2}},
         ]})
-    assert [call["payload"] for call in turn["tool_calls"]] == [None,
-                                                               {"probability": 0.2}]
+    assert [call["payload"] for call in turn["tool_calls"]] == [
+        {"articles": [{"pmid": "1"}]},
+        {"probability": 0.2},
+    ]
 
 
 def test_the_replayed_turn_still_satisfies_the_service_contract():

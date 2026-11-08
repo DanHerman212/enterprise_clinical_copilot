@@ -185,16 +185,25 @@ def test_a_stage_is_announced_for_each_executed_tool_call():
 
     _run(_execute_tool_calls(box, calls, events.append))
 
-    # A tool stage and then its result, per executed call.
+    # A tool stage per executed call, then its result. The calls in one batch are dispatched
+    # together, so both stages are announced before either result arrives — the sequence the
+    # reader actually experiences once the calls overlap (Stage 2, 2026-11-08). Order within
+    # each group is the order the model wrote the calls in, which is what keeps the evidence
+    # numbering deterministic.
     assert [e["stage"] for e in events] == [
-        stages.STAGE_TOOL, stages.STAGE_RESULT,
-        stages.STAGE_TOOL, stages.STAGE_RESULT,
+        stages.STAGE_TOOL, stages.STAGE_TOOL,
+        stages.STAGE_RESULT, stages.STAGE_RESULT,
     ]
-    assert [e["label"] for e in events][0::2] == [
+    tool_events = [e for e in events if e["stage"] == stages.STAGE_TOOL]
+    assert [e["label"] for e in tool_events] == [
         stages.TOOL_LABELS["predict_readmission"],
         stages.TOOL_LABELS["rag_search"],
     ]
-    assert [e["tool"] for e in events][0::2] == ["predict_readmission", "rag_search"]
+    assert [e["tool"] for e in tool_events] == ["predict_readmission", "rag_search"]
+    # And one result per call, in the same order.
+    assert [e["tool"] for e in events if e["stage"] == stages.STAGE_RESULT] == [
+        "predict_readmission", "rag_search",
+    ]
 
 
 def test_a_refused_call_announces_nothing():

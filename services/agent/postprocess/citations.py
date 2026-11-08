@@ -33,7 +33,7 @@ as bounding headers. One vocabulary, one drift surface (S7-02 / ECC-33).
 """
 
 import re
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -232,12 +232,6 @@ _ANY_MARKER_RE = _marker_re(r"([^\]]*)")
 #: evaluation harness both scan prose for markers, and both used to spell the token out.
 MARKER_PATTERN = _ANY_MARKER_RE
 
-#: What separates one paragraph from the next. Used by `collapse_repeated_citations`,
-#: which compares a marker only with the marker before it IN THE SAME PARAGRAPH: a section
-#: opened two paragraphs later is a new citation, however recently the same source was
-#: cited.
-_PARAGRAPH_BREAK = re.compile(r"\n[ \t]*\n")
-
 #: What a marker must look like to be KEPT: a note-passage number or set of them,
 #: or a literature PMID badge. Everything else is a model invention and is dropped.
 #: The PMID form is here deliberately — it is a citation the interface draws as its
@@ -300,6 +294,60 @@ def normalise_grouped_pmid_markers(answer: str) -> str:
         return " ".join(f"^[PMID: {pmid}]" for pmid in ordered)
 
     return _GROUPED_PMID_RE.sub(_split, answer)
+
+
+#: A marker whose body is ONE literature identifier: `PMID: 35186616`. A badge naming
+#: several records is `normalise_grouped_pmid_markers`' case and is split before this
+#: reads it.
+_SINGLE_PMID_BODY_RE = re.compile(r"\s*PMID\s*:?\s*(\d+)\s*", re.IGNORECASE)
+
+
+def rewrite_pmid_markers(answer: str, pmid_to_number: Mapping[str, int]) -> str:
+    """Point a `^[PMID: …]` badge at the number the record was published under.
+
+    The prose and the citation shelf are numbered by two different rules, and only one of
+    them can be drawn. A note passage is cited by POSITION (`^[1]`), so settlement can
+    compact it to `1..K`; a published cohort is cited by IDENTIFIER (`^[PMID: 24108298]`),
+    and the browser's marker regex reads a single number (`static/js/a2ui/shared.js`,
+    `MARKER`). A badge in that form is therefore unrenderable where it stands — the reader
+    sees the literal token, or nothing — while the comparison table beside it and the
+    references drawer both print the plain sequential index the record was registered
+    under.
+
+    So the identifier is translated to that index at composition time: the badge, the
+    table's source cell and the drawer row then name the record with one number, which is
+    the whole of the `1..K` contract (Charter 13 Law 1 — the marker vocabulary is this
+    module's, so the rewrite is this module's, and `presentation` calls it rather than
+    compiling a second pattern).
+
+    Only a badge naming ONE record is rewritten. A badge naming several is left for
+    `normalise_grouped_pmid_markers`, which emits one badge per identifier so each can be
+    numbered on its own; a badge whose identifier is not in the map is left as written —
+    it is either an earlier turn's record or an invented identifier, and neither is this
+    function's to adjudicate.
+    """
+    if not answer or "^[" not in answer or not pmid_to_number:
+        return answer
+    wanted: dict[str, int] = {}
+    for pmid, number in pmid_to_number.items():
+        identifier = str(pmid or "").strip()
+        try:
+            index = int(number or 0)
+        except (TypeError, ValueError):
+            continue
+        if identifier and index > 0:
+            wanted[identifier] = index
+    if not wanted:
+        return answer
+
+    def _replace(match: "re.Match[str]") -> str:
+        found = _SINGLE_PMID_BODY_RE.fullmatch(match.group(1))
+        if not found:
+            return match.group(0)
+        index = wanted.get(found.group(1))
+        return match.group(0) if index is None else f"^[{index}]"
+
+    return _ANY_MARKER_RE.sub(_replace, answer)
 
 
 def enforce_citations(
@@ -386,34 +434,27 @@ def _marker_key(body: str) -> str:
 
 
 def collapse_repeated_citations(answer: str) -> tuple[str, list[str]]:
-    """Keep one marker out of a run of the same citation in one paragraph.
+    """Remove a marker the model stamped twice in a row: `^[1]^[1]` -> `^[1]`.
 
-    Reported from a printed `/ehr` (2026-11-02): one paragraph carried the same section's
-    pill on every sentence. A run is the SPAN of a paragraph that rests on one source, and
-    the unit a reader sees is the paragraph — four pills on four consecutive sentences about
-    one passage do not read as four citations, they read as four sources, which is the
-    misreading the citation contract exists to prevent. A reader can ignore a repeated
-    pill and cannot reopen a citation that was deleted, but a page where every sentence
-    wears the same badge is a page the clinician stops reading.
+    Every other repeated marker survives, including one on every sentence of a paragraph.
+    This function used to collapse a whole paragraph's run of one marker down to its last
+    occurrence, on the reasoning that four identical pills on four consecutive sentences
+    read as four sources (a printed `/ehr`, 2026-11-02). The reading was wrong and the
+    repair cost more than the noise: `CORE_HUB_PROMPT` asks that "every sentence that
+    states a positive clinical fact from the chart carries its OWN marker", so the
+    collapsed sentences were served as uncited clinical claims, and every removal was
+    reported as `citation_repeat_collapsed`, which `http._prose_settled` reads as evidence
+    that prose was withdrawn — a visible "Reconciled with medical record" badge over an
+    answer nothing had been removed from. Per-sentence attribution is what a citation shelf
+    is FOR; a paragraph that cites each claim is the document working, not a defect.
 
-    So the run spans sentences and only a paragraph break ends it. What survives is the
-    LAST marker of the span, which is the badge that closes the thought; what collapses is
-    every earlier copy, including the accidental double stamp (`^[4] ^[4]`) and a sentence
-    that repeats a marker within itself.
+    What is left is the one shape that is unambiguously a typographical slip: the same
+    marker twice with nothing between them but spaces or a citation separator. That is a
+    duplicated control, not a clinical statement, so it is collapsed SILENTLY — `flags` is
+    always empty, and no guardrail can mistake a formatting repair for damaged prose.
 
-    A RUN, not a pair, and the LAST marker of it survives. The earlier rule kept the FIRST
-    of a pair — so three consecutive sentences on one passage lost two markers and the
-    paragraph still opened with a badge, and four sentences lost three.
-
-    A run is broken by a different marker, by a paragraph break, or by a marker that is not
-    a note passage at all. So `^[3]` then `^[4]` keeps both, `^[4]`, `^[3]`, `^[4]` keeps
-    all three — the run was interrupted, and the return to a source re-opens the span — and
-    a published record's `^[PMID: …]` is never collapsed, because two sentences citing the
-    same cohort study are two claims about that study rather than one marker repeated.
-
-    The reference list is unaffected — it is built from `sources`, not from the prose — so
-    the row is still there to be opened. Each removal is flagged, because a silent deletion
-    of a citation is the kind of change this layer exists to make visible.
+    A repeated `^[PMID: …]` badge is left alone for the same reason as ever: two sentences
+    naming the same cohort study are two claims about that study.
     """
     if "^[" not in (answer or ""):
         return answer, []
@@ -425,45 +466,30 @@ def collapse_repeated_citations(answer: str) -> tuple[str, list[str]]:
         return answer, []
 
     removals: list[tuple[int, int]] = []
-    flags: list[str] = []
-    run: list[tuple[int, int, str]] = []
-
-    def close_run() -> None:
-        """Every marker of a run but the last one goes."""
-        for start, end, body in run[:-1]:
-            removals.append((start, end))
-            flags.append(f"citation_repeat_collapsed:^{body}")
-
-    previous_end = 0
+    previous: tuple[int, int, str] | None = None
     for start, end, body in markers:
-        # A published record's badge is not a section marker: a paragraph naming the same
-        # cohort twice is making two claims, so it breaks the run and joins none.
-        if not _NUMERIC_BODY_RE.fullmatch(body or ""):
-            close_run()
-            run = []
-        elif (_PARAGRAPH_BREAK.search(answer, previous_end, start)
-              or (run and run[-1][2] != body)):
-            close_run()
-            run = [(start, end, body)]
-        else:
-            run.append((start, end, body))
-        previous_end = end
-    close_run()
+        # Adjacent means adjacent: nothing between the two markers but the separator a
+        # cluster uses. A full stop, a newline or any prose ends the run, because a marker
+        # across that boundary cites a different sentence.
+        if (previous is not None and previous[2] == body
+                and _CLUSTER_GAP_RE.fullmatch(answer[previous[1]:start])):
+            removals.append((start, end))
+        previous = (start, end, body)
 
     if not removals:
         return answer, []
     out: list[str] = []
     last = 0
     for start, end in removals:
-        # The space in front of a removed marker goes with it, so removing the marker
-        # before a full stop does not leave "morphine ." behind.
+        # The space in front of a removed marker goes with it, so the doubled stamp does
+        # not leave a double space behind.
         cut = start
         while cut > last and answer[cut - 1] in " \t":
             cut -= 1
         out.append(answer[last:cut])
         last = end
     out.append(answer[last:])
-    return _tidy_removed_markers("".join(out)), flags
+    return _tidy_removed_markers("".join(out)), []
 
 
 
@@ -1203,6 +1229,7 @@ def evidence_kind_mismatches(
     conversation_calls: list[dict] | None = None,
     *,
     evidence_state: Any = None,
+    citation_display_map: Mapping[str, int] | None = None,
 ) -> list[str]:
     """Markers that cite laboratory series beside a claim about the note.
 
@@ -1223,9 +1250,24 @@ def evidence_kind_mismatches(
     a position in ONE array, and this check must classify the unit at the position the
     enforcement kept rather than at a position the payload concatenation happens to give
     the same integer.
+
+    `citation_display_map` is `compact_display_numbers`' `{display: position}` map, and it
+    is needed because this check runs on the SETTLED prose. Settlement compacts the page to
+    `1..K` while the evidence array keeps its cumulative numbering, so a marker that reads
+    `^[1]` addresses array position 5 on a second turn. Looking up the display number
+    directly inspected the wrong unit: a sentence resting on a note passage was checked
+    against whatever analyte happened to hold position 1, and a laboratory series cited at
+    position 14 was reported as a note citation (or the reverse) with nothing wrong in the
+    prose. Translate before the lookup, and the flag means what it says.
     """
     if not answer:
         return []
+    display_to_position: dict[int, int] = {}
+    for display, position in (citation_display_map or {}).items():
+        try:
+            display_to_position[int(display)] = int(position)
+        except (TypeError, ValueError):
+            continue
     ledger = EvidenceLedger.of(conversation_calls, tool_calls,
                                evidence_state=evidence_state)
     if not ledger.units:
@@ -1239,7 +1281,8 @@ def evidence_kind_mismatches(
                 cited.extend(_expand_citations(body))
         if not cited:
             continue
-        units = [ledger.unit(number) for number in cited]
+        units = [ledger.unit(display_to_position.get(number, number))
+                 for number in cited]
         # Every marker in the sentence must land on a laboratory series. A sentence
         # resting on both kinds is the mixed case the prompt allows, and flagging it
         # would flag correct prose.

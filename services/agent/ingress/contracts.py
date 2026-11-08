@@ -85,12 +85,15 @@ from services.mcp.contracts import LiteratureArticle, LiteratureResult  # noqa: 
 # The two sets are exhaustive over the tools the MCP server registers, and a test
 # holds them to that: a tool that is added without being classified makes the
 # suite fail rather than quietly deciding by default.
-# `search_literature` is derivable in the ordinary sense the comment above means:
-# asking PubMed the same question again produces the same articles, so a stored turn
-# gains nothing by holding on to them. It is also the one tool with no admission
-# attached, so there is no note text among its results for the store to be careful
-# with in the first place.
-RE_DERIVABLE_TOOLS = routing.PASSAGE_TOOLS | routing.LITERATURE_TOOLS
+#
+# `search_literature` moved OUT of this set on 2026-11-08 and into `RESULT_KEPT_TOOLS`.
+# It was derivable in the narrow sense — asking PubMed twice returns the same articles —
+# but the replay pays that round trip on every later turn of the thread, before the model
+# is asked anything, and nothing is emitted to say the wait is happening. Reproducible is
+# not cheap. What is left here is the note text: a passage carries the patient's chart, and
+# that is what a stored turn must never hold raw. `RESULT_KEPT_TOOLS` holds public
+# literature metadata, an estimate and a generated series — none of it note prose.
+RE_DERIVABLE_TOOLS = routing.PASSAGE_TOOLS
 #: Results a caller must keep if it wants to replay a turn cheaply.
 #:
 #: `predict_readmission` was alone here until Phase 5C. `get_lab_trends` joined it on

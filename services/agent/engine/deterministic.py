@@ -672,6 +672,7 @@ async def run_command(
     trace_metadata: dict | None = None,
     extraction_llm: Any = None,
     admission_context: str = "",
+    evidence_state: Any = None,
 ) -> dict[str, Any]:
     """Run one command to completion and return a state the pipeline understands.
 
@@ -732,11 +733,16 @@ async def run_command(
     # `prior_session_block` is captured now, not at the formatter, because by then the
     # record also holds this turn's own units — and those are already in `tool_messages`,
     # numbered. The formatter needs the evidence THIS turn has not shown it.
-    evidence_state = (
-        session_evidence.SessionEvidenceState.hydrate_from_calls(
-            hadm_id, [_presented_call(call) for call in (replayed_calls or [])])
-        if hadm_id is not None else None
-    )
+    # `evidence_state` is the record the caller's replay already built, when it has one.
+    # A mid-thread command runs against the thread's evidence, and the replay that restored
+    # that evidence has already ingested it — so hydrating the same calls a second time here
+    # would parse a whole note's worth of passages for nothing, before any tool of this
+    # command has run. The caller passes the record it made; a command with no thread, or a
+    # caller that holds no record, gets the hydration as before.
+    if evidence_state is None and hadm_id is not None:
+        evidence_state = session_evidence.SessionEvidenceState.hydrate_from_calls(
+            hadm_id, [_presented_call(call) for call in (replayed_calls or [])]
+        )
     prior_session_block = ""
     if evidence_state is not None and (
         evidence_state.position_count()
@@ -1695,6 +1701,16 @@ async def derive_target(llm, sections: dict | None, *, config: dict | None = Non
     principal one. A chart that reaches it still gets a comparison attempt, and every check
     downstream still has to agree with the phrase it produced.
 
+    The model goes FIRST even where the headers state a diagnosis, and the reason is the
+    index procedure (2026-11-08). `fallback_target_from_sections` names a condition and
+    nothing else, and `candidate_pass` searches `[condition, *anchors]`: without the
+    procedure the query loses "anterior cervical discectomy and fusion" and every synonym
+    the literature tool builds from it, which is what filled the 20-abstract pool on
+    `90000069`. Reading the header instead saved 12-17 s and removed the comparison the
+    `/ehr` canvas exists to draw. The cost in `_extract_once` was OUTPUT generation — a
+    written refusal per abstract — not input prefill, so the read that had to get shorter
+    is the reply, and the target extraction is not the place to spend the saving.
+
     `patient_age` and `patient_sex` are stamped on whichever target survives, whatever
     produced it: the demographics are a fact about the patient, not about the reply, so
     the salvage path — which returns a target built with no knowledge of them — carries
@@ -2023,10 +2039,16 @@ class CandidatePass:
 #:
 #: Not a relevance cut and not a local ranking — the pool arrives in PubMed's order and the
 #: model reads what it is given. It is an INPUT-SIZE bound, and it exists because the
-#: extraction reply grows one row (or one refusal) per abstract: twenty-five abstracts is a
-#: reply long enough to be cut off by the output ceiling, and a cut-off reply is discarded
-#: whole. Ten fills the table twice over — the surface draws at most two rows — and a
-#: ten-abstract reply fits comfortably inside `COMPARATOR_REPLY_TOKENS`.
+#: extraction reply grows one row per abstract: twenty-five abstracts is a reply long enough
+#: to be cut off by the output ceiling, and a cut-off reply is discarded whole. Ten fills
+#: the table twice over — the surface draws at most two rows — and a ten-abstract reply fits
+#: comfortably inside `COMPARATOR_REPLY_TOKENS` now that it carries rows alone.
+#:
+#: It was briefly cut to six (2026-11-08) on the theory that a smaller input makes a smaller
+#: reply. The reply did shrink, but for the reason it was going to shrink anyway — the
+#: `rejected` essays are gone — and six cost two cohorts that had already been read and
+#: verified correctly on `90000069`, because PubMed's ranking does not put them first. The
+#: cost is OUTPUT generation, not input prefill; the input bound is not where the time is.
 #:
 #: What is refused is reported, not silent: `ComparatorPass.candidates` still states what
 #: PubMed returned, so a table built from the top ten of twenty-five is visible as such.
@@ -2113,6 +2135,11 @@ def _reply_rows(payload: dict, pool: list[dict], target: ClinicalTarget,
     """
     verified, refused = verify_comparators(
         payload.get("comparators"), pool, target)
+    # `rejected` is OPTIONAL and empty by contract: the prompt stopped asking the model for
+    # a written refusal per abstract on 2026-11-08, because the essay was most of the reply
+    # and a long reply is one that gets cut off. The read stays for two reasons — a reply
+    # from a model that still writes one is not an error, and the refusal list is where the
+    # verifier's own reasons accumulate, which is what a reader is owed either way.
     for item in payload.get("rejected") or []:
         if isinstance(item, dict):
             rejected_rows.append({

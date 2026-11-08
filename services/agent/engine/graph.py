@@ -1293,6 +1293,20 @@ async def ask(
             command_name,
             trace_metadata=None if turn_root is not None else command_meta,
         ) as root_span:
+            # The thread's evidence, replayed BEFORE the command runs (Stage 3,
+            # 2026-11-08). This branch used to skip the replay entirely, so `/ehr` on
+            # turn 1 and `/meds` on turn 2 started from an EMPTY record: the second
+            # command's units were numbered from 1, colliding with the first turn's
+            # positions, and the first turn's calls were absent from
+            # `replayed_tool_calls` — so `_settle` and `guard_answer` measured the answer
+            # against a thread that had, in their account, never read the chart.
+            #
+            # The record comes back through `record_sink` and is handed to `run_command`,
+            # which uses it instead of hydrating the same calls again. An empty thread
+            # replays to an empty record and changes nothing: a turn 1 is unaffected.
+            replay_state: dict = {}
+            _, replayed_calls, _thread_published = await replay_messages(
+                toolbox, turns, hadm_id=hadm_id, record_sink=replay_state)
             command_state = await run_command(
                 toolbox,
                 routing.command_for(question_kind),
@@ -1310,6 +1324,11 @@ async def ask(
                 # passed, the one command that states a disposition had never been shown
                 # the field it was being marked against.
                 admission_context=admission_context,
+                # The thread this command is running inside: its calls are the array this
+                # turn's markers are numbered after (`cite_offset`), and its record is the
+                # one this turn's units are added to rather than a fresh one.
+                replayed_calls=replayed_calls,
+                evidence_state=replay_state.get("record"),
             )
             # Stamped on both routes so every later reader sees the same field rather
             # than a key that exists on one path and is missing on the other. `/pubmed`

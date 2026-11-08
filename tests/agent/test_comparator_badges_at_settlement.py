@@ -230,7 +230,6 @@ def test_the_surviving_badge_reaches_the_wire_and_resolves_to_its_row():
     )
 
     narrative = _narrative_component(out["a2ui"])
-    assert "^[PMID: 24108298]" in narrative["text"]
     resolving = [entry for entry in narrative["citations"]
                  if str(entry.get("pmid") or "") == "24108298"]
     assert len(resolving) == 1
@@ -239,3 +238,11 @@ def test_the_surviving_badge_reaches_the_wire_and_resolves_to_its_row():
     row = [row for row in out["references"] if row.get("pmid") == "24108298"]
     assert len(row) == 1
     assert row[0]["index"] == resolving[0]["index"]
+    # And the marker IS that number. The prose channel draws one number per pill (the
+    # browser's marker regex reads a single integer), so a badge left in its identifier
+    # form was unrenderable where it stood while the table cell and the drawer row beside
+    # it printed the index. Composition translates it, and the answer a caller receives is
+    # the same string the component draws (Charter 13 Law 5; Stage 1, 2026-11-08).
+    assert f"^[{resolving[0]['index']}]" in narrative["text"]
+    assert "^[PMID:" not in narrative["text"]
+    assert out["answer"] == narrative["text"]

@@ -53,6 +53,7 @@ from services.agent.postprocess.citations import (
     intent_sections,
     literature_articles,
     literature_calls,
+    rewrite_pmid_markers,
 )
 # The two numbering helpers stay importable from here, and are NOT used by this module:
 # callers that keep an answer in the expanded form — a stored transcript, a replayed
@@ -617,6 +618,18 @@ def compose_presentation(question: str, answer: str,
     # because this used to be assembled from the narrative's citations plus the table's
     # cohorts, and a literature turn's records were in neither of those two builders.
     published = sources + comparator_sources
+    # And every published record's badge is translated to the number it is published under,
+    # in the prose AND in the component that draws it. One identifier, one number: the pill
+    # in Section 4, the table's source cell and the drawer row now address the same record
+    # with the same index, and the `1..K` channel has no gaps a reader has to interpret.
+    pmid_numbers: dict[str, int] = {}
+    for source in published:
+        pmid = str(source.get("pmid") or "").strip()
+        number = int(source.get("cite") or 0)
+        if pmid and number and pmid not in pmid_numbers:
+            pmid_numbers[pmid] = number
+    answer = rewrite_pmid_markers(answer, pmid_numbers)
+    _rewrite_narrative_markers(canvas, pmid_numbers)
     references = reference_rows(published)
 
     return {
@@ -842,6 +855,31 @@ def add_comparator_citations(canvas: dict | None, sources: list[dict]) -> None:
             })
             known.add(index)
         return
+
+
+def _rewrite_narrative_markers(canvas: dict | None,
+                               pmid_numbers: dict[str, int]) -> str | None:
+    """Point the drawn prose's `^[PMID: …]` badges at the numbers its sources carry.
+
+    The `/ehr` narrative explains a comparison whose cohorts the table beside it publishes
+    under plain sequential indices, so a badge naming the identifier and a row naming the
+    index were two names for one record and only one of them could be drawn: the browser's
+    marker regex reads a single number, so the literal `^[PMID: 24108298]` stayed literal.
+
+    Rewritten in place on the component, and returned, because the same string is what the
+    turn publishes as its answer — a surface whose prose and whose `answer` disagreed about
+    one sentence is the drift Charter 13 Law 5 exists to forbid. Silent on a turn with no
+    prose or no numbered record: nothing is owed and nothing is invented.
+    """
+    if not pmid_numbers:
+        return None
+    for component in _surface_components(canvas):
+        if component.get("component") != "CitedNarrative":
+            continue
+        text = rewrite_pmid_markers(str(component.get("text") or ""), pmid_numbers)
+        component["text"] = text
+        return text
+    return None
 
 
 def register_comparator_sources(canvas: dict | None, start: int,

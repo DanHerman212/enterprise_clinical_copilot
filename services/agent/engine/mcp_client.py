@@ -1179,6 +1179,18 @@ async def _execute_tool_calls(
     for made in prior:
         made_name = str(made.get("name"))
         per_tool[made_name] = per_tool.get(made_name, 0) + 1
+    # --- Phase 1: decide each call, in input order -------------------------------
+    #
+    # Every rule that can refuse a call reads state the batch itself moves: the budget
+    # counts attempts, `done` grows as calls are accepted, and a once-per-turn tool is
+    # spent by the call that ran. Those decisions are therefore made HERE, sequentially
+    # and in the order the model wrote them, before anything is dispatched — the dispatch
+    # that follows is what runs concurrently, not the adjudication of what may run.
+    #
+    # It is one `/ehr` turn that made this worth doing: the two independent reads
+    # (`rag_search_sections` and `predict_readmission`) were awaited one after the other,
+    # so a reader waited 1.1 s plus 1.0 s for work with no order between it.
+    plans: list[dict[str, Any]] = []
     for index, call in enumerate(calls):
         name = str(call["name"])
         # What the MODEL wrote, kept beside the complete arguments because the guard has
@@ -1266,43 +1278,84 @@ async def _execute_tool_calls(
             payload = guard(call["name"], asked_for) if guard is not None else None
             if payload is None:
                 refused = False
-                # Emitted HERE, one line above the call it describes: the stage is
-                # derived from an execution that is about to happen, not from a
-                # script of what should happen. A refused call (the branches
-                # above) announces nothing, because nothing was called.
+                # Emitted HERE, before the dispatch it describes: the stage is derived
+                # from an execution that is about to happen, not from a script of what
+                # should happen. A refused call (the branches above) announces nothing,
+                # because nothing was called. With the batch dispatched together every
+                # accepted call announces before any of them returns — the truthful
+                # sequence once the calls overlap, and why a two-call turn streams
+                # TOOL, TOOL, RESULT, RESULT rather than alternating.
                 _emit(on_event, stages.tool_event(call["name"]))
-                # Spanned ONLY when the caller has an outer span open — the command
-                # path, which opens `command.<wire>` around the whole turn. In the
-                # reasoning loop the trace belongs to LangChain's callback handler and
-                # a span opened here does not inherit it: Langfuse gave each tool its
-                # own root and the list filled with `tool.rag_search` traces sharing
-                # one timestamp. Observed live 2026-10-17.
-                if traced:
-                    # The span carries the arguments as its input and the payload as
-                    # its output. A tool span with neither is a row saying a tool ran,
-                    # which is the one thing the reader already knew from the name.
-                    with observability.observation(
-                        f"tool.{call['name']}", input=arguments,
-                    ) as tool_span:
-                        payload = await toolbox.call(call["name"], arguments)
-                        observability.record_span_output(
-                            tool_span, payload,
-                            is_error=bool(
-                                isinstance(payload, dict) and payload.get("error")
-                            ),
-                        )
-                else:
-                    payload = await toolbox.call(call["name"], arguments)
-                # What came back, in the call's own terms. Emitted here because this
-                # is where the payload exists, and only for a call that actually
-                # ran: a refused call announces nothing, result included (rule 3).
-                _emit(on_event, stages.result_event(call["name"], payload))
         done.add(key)
         if not refused:
             per_tool[name] = per_tool.get(name, 0) + 1
             if name in ONCE_PER_TURN and routing.spends_turn_allowance(
                     name, arguments):
                 spent.add(name)
+        plans.append({
+            "call": call, "name": name, "arguments": arguments,
+            "payload": payload, "refused": refused,
+        })
+
+    # --- Phase 2: dispatch every accepted call concurrently -----------------------
+    #
+    # `gather` rather than a queue: the calls in one batch are independent by
+    # construction — an identical repeat is refused above, so no accepted call can depend
+    # on another's result — and gather returns in INPUT order, which is what keeps the
+    # evidence numbering of the settlement pass identical to the sequential version.
+    #
+    # Each call keeps its own span and its own error. `return_exceptions=True` is what
+    # stops one tool's failure from cancelling its siblings mid-flight; the exception is
+    # re-raised in the settlement pass, in input order, so a turn that fails still fails
+    # exactly as it did when the calls ran one at a time.
+    async def _dispatch(plan: dict[str, Any]) -> Any:
+        # Spanned ONLY when the caller has an outer span open — the command path, which
+        # opens `command.<wire>` around the whole turn. In the reasoning loop the trace
+        # belongs to LangChain's callback handler and a span opened here does not inherit
+        # it: Langfuse gave each tool its own root and the list filled with
+        # `tool.rag_search` traces sharing one timestamp. Observed live 2026-10-17.
+        if not traced:
+            return await toolbox.call(plan["name"], plan["arguments"])
+        # The span carries the arguments as its input and the payload as its output. A
+        # tool span with neither is a row saying a tool ran, which is the one thing the
+        # reader already knew from the name.
+        with observability.observation(
+            f"tool.{plan['name']}", input=plan["arguments"],
+        ) as tool_span:
+            result = await toolbox.call(plan["name"], plan["arguments"])
+            observability.record_span_output(
+                tool_span, result,
+                is_error=bool(isinstance(result, dict) and result.get("error")),
+            )
+            return result
+
+    dispatched = [plan for plan in plans if not plan["refused"]]
+    if dispatched:
+        outcomes = await asyncio.gather(
+            *(_dispatch(plan) for plan in dispatched), return_exceptions=True)
+        for plan, outcome in zip(dispatched, outcomes):
+            plan["payload"] = outcome
+
+    # --- Phase 3: settle, in input order -----------------------------------------
+    #
+    # The same bookkeeping the sequential loop did, in the same order: what the model is
+    # shown, what is recorded, what the session record ingests, and which position the
+    # citation for it takes. Concurrency is confined to the awaiting — nothing about a
+    # result's slot in the evidence array depends on when it came back.
+    for plan in plans:
+        call = plan["call"]
+        name = plan["name"]
+        arguments = plan["arguments"]
+        payload = plan["payload"]
+        refused = plan["refused"]
+        if isinstance(payload, BaseException):
+            # Raised here rather than inside the gather so a failed turn fails with the
+            # exception of the FIRST such call in input order, whatever the siblings did.
+            raise payload
+        # What came back, in the call's own terms, and only for a call that actually ran:
+        # a refused call announces nothing, result included (rule 3).
+        if not refused:
+            _emit(on_event, stages.result_event(name, payload))
         # `order` rewrites the payload BEFORE the model is shown it and before it is
         # recorded, so one order governs both. Doing it afterwards reordered the
         # citation layer while the formatter kept reading retrieval order, and the

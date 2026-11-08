@@ -330,51 +330,55 @@ class TestListCitationDeduplication:
 
 
 class TestRepeatedCitationCollapsing:
-    """One marker per run of one source inside a PARAGRAPH.
+    """Only an immediately adjacent duplicate is collapsed, and it is collapsed silently.
 
-    Reported from a printed `/ehr` (2026-11-02): one paragraph carried the same section's
-    pill on every sentence. A run is the span of a paragraph that rests on one source, and
-    four pills on four consecutive sentences about one passage read as four sources — the
-    misreading the citation contract exists to prevent.
+    A paragraph that rests on one passage cites it on every sentence, because
+    `CORE_HUB_PROMPT` asks that "every sentence that states a positive clinical fact from
+    the chart carries its OWN marker". Collapsing the run to its last marker served the
+    other sentences as uncited clinical claims and reported a
+    `citation_repeat_collapsed` flag for each removal, which the BFF reads as evidence that
+    prose was withdrawn — a visible "Reconciled with medical record" badge over an answer
+    nothing had been removed from (Stage 1, 2026-11-08).
 
-    The run therefore crosses sentence boundaries and only a paragraph break, a change of
-    source, or a non-numeric badge ends it. What survives is the mark that closes the span.
-
-    What it must never do is delete a citation that carries information: a change of source
-    ends the run, a return to a source after a different one re-opens it, a paragraph break
-    is a new claim, and a published record's PMID badge is not a section marker and is not
-    touched.
+    What is left is the typographical slip: the same marker twice with nothing between the
+    two but the separator a citation cluster uses. A duplication of one control is not a
+    clinical statement, so it is collapsed without a flag. A change of source, a paragraph
+    break, prose between two markers, and a published record's PMID badge all end the run.
     """
 
-    def test_back_to_back_sentences_on_one_passage_collapse_to_one_marker(self):
+    def test_back_to_back_sentences_on_one_passage_keep_their_own_markers(self):
         answer = ("Postoperatively, the patient had shoulder pain managed with IV morphine "
                   "^[4]. The patient also had slight dysphagia treated with Decadron ^[4].")
 
         collapsed, flags = collapse_repeated_citations(answer)
 
-        assert collapsed == (
-            "Postoperatively, the patient had shoulder pain managed with IV morphine. "
-            "The patient also had slight dysphagia treated with Decadron ^[4].")
-        assert flags == ["citation_repeat_collapsed:^4"]
+        assert collapsed == answer
+        assert flags == []
 
-    def test_a_long_run_across_sentences_keeps_only_the_last_marker(self):
+    def test_a_long_run_across_sentences_keeps_every_marker(self):
         answer = "A ^[4]. B ^[4]. C ^[4]. D ^[4]."
 
         collapsed, flags = collapse_repeated_citations(answer)
 
-        assert collapsed == "A. B. C. D ^[4]."
-        assert flags == [
-            "citation_repeat_collapsed:^4",
-            "citation_repeat_collapsed:^4",
-            "citation_repeat_collapsed:^4",
-        ]
+        assert collapsed == answer
+        assert flags == []
 
-    def test_a_repeat_inside_one_sentence_keeps_the_marker_at_its_end(self):
+    def test_a_repeat_inside_one_sentence_is_kept_on_both_claims(self):
         answer = "The discharge was uneventful ^[4] and uncomplicated ^[4]."
 
-        collapsed, _ = collapse_repeated_citations(answer)
+        collapsed, flags = collapse_repeated_citations(answer)
 
-        assert collapsed == "The discharge was uneventful and uncomplicated ^[4]."
+        assert collapsed == answer
+        assert flags == []
+
+    def test_an_adjacent_double_stamp_is_collapsed_without_a_flag(self):
+        """One control written twice is one control; nothing was withdrawn from the prose."""
+        answer = "The discharge was uneventful ^[4]^[4] and uncomplicated."
+
+        collapsed, flags = collapse_repeated_citations(answer)
+
+        assert collapsed == "The discharge was uneventful ^[4] and uncomplicated."
+        assert flags == []
 
     def test_two_different_sources_are_both_kept(self):
         answer = "She was anticoagulated ^[3]. The INR was therapeutic ^[4]."
@@ -421,12 +425,13 @@ class TestRepeatedCitationCollapsing:
         assert flags == []
 
     def test_a_marker_is_compared_as_a_set_not_as_spacing(self):
-        answer = "First ^[1, 2] and again in the same breath ^[1,2]."
+        """`^[1, 2]^[1,2]` is the same marker twice; the spelling does not make it two."""
+        answer = "First ^[1, 2]^[1,2] and again in the same breath."
 
         collapsed, flags = collapse_repeated_citations(answer)
 
-        assert collapsed == "First and again in the same breath ^[1,2]."
-        assert flags == ["citation_repeat_collapsed:^1,2"]
+        assert collapsed == "First ^[1, 2] and again in the same breath."
+        assert flags == []
 
     def test_prose_without_markers_passes_through_untouched(self):
         answer = "A sentence with no evidence markers at all."

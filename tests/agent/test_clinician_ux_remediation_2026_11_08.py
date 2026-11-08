@@ -3,8 +3,11 @@
 Four defects were reported against the served product, and this module holds one focused
 test per layer the fix touched:
 
-  1. a paragraph about one note section wore the same pill on every sentence, and the
-     marker's hover card opened the whole 400-word section;
+  1. a paragraph about one note section wore the same pill on every sentence and the
+     marker's hover card opened the whole 400-word section. The collapse that answered the
+     pills was withdrawn in Stage 1 (2026-11-08) — per-sentence attribution is the prompt's
+     own contract, and each removal raised a visible safety swap over untouched prose — so
+     what this module pins here is the hover card;
   2. `/ehr`'s literature comparison matched a population on condition alone, so a rate
      published for octogenarians sat beside a 41-year-old's estimate;
   3. `/meds` opened with a statement about the note's headings and listed IV morphine, an
@@ -31,15 +34,18 @@ HADM = 90000069
 
 
 # --------------------------------------------------------------------------------------
-# 1. One pill per paragraph-wide run, and a hover card that shows the claim.
+# 1. Every sentence keeps its own pill, and a hover card that shows the claim.
 # --------------------------------------------------------------------------------------
 
 
-def test_four_sentences_on_one_passage_collapse_to_the_last_marker():
-    """The reported wall: one paragraph, one section, four badges.
+def test_four_sentences_on_one_passage_keep_their_own_markers():
+    """One paragraph, one section, four claims: four pills, and no guardrail flag.
 
-    The run spans sentences now. What survives is the marker that closes the span, and the
-    claim it closes is the one a reader is left holding when they finish the paragraph.
+    The paragraph-scoped collapse of 2026-11-08 removed three of the four markers and
+    reported each removal as `citation_repeat_collapsed`, which the BFF reads as withdrawn
+    prose — a "Reconciled with medical record" badge over an untouched answer. What this
+    module keeps from that report is the hover card: the badge opens the claim, not the
+    section (Stage 1, 2026-11-08).
     """
     answer = (
         "She was admitted with cervical spondylosis ^[4]. "
@@ -50,17 +56,8 @@ def test_four_sentences_on_one_passage_collapse_to_the_last_marker():
 
     collapsed, flags = citations.collapse_repeated_citations(answer)
 
-    assert collapsed == (
-        "She was admitted with cervical spondylosis. "
-        "An anterior fusion was performed the next morning. "
-        "The postoperative course was uncomplicated. "
-        "She was discharged home on postoperative day two ^[4]."
-    )
-    assert flags == [
-        "citation_repeat_collapsed:^4",
-        "citation_repeat_collapsed:^4",
-        "citation_repeat_collapsed:^4",
-    ]
+    assert collapsed == answer
+    assert flags == []
 
 
 def test_a_paragraph_break_still_opens_a_new_citation():

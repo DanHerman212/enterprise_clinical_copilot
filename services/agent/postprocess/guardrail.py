@@ -1313,8 +1313,15 @@ def guard_answer(
     # as a flag, never rewritten: an answer that cites a series beside a claim about the
     # chart is a defect a reader must be able to see and a run must be able to count, and
     # replacing it needs a claim classifier this module does not have.
+    #
+    # The prose arriving here is SETTLED prose — `graph._settle` compacts the page to `1..K`
+    # before `compose_success` guards the answer — so its numbers are display numbers and
+    # the ledger's are array positions. The map settlement published is what translates one
+    # to the other; without it this check classified the wrong unit and reported a kind
+    # mismatch on prose that was correct.
     flags += citations.evidence_kind_mismatches(
-        answer, tool_calls, conversation_calls, evidence_state=evidence_state)
+        answer, tool_calls, conversation_calls, evidence_state=evidence_state,
+        citation_display_map=(state or {}).get("citation_display_map"))
 
     if not answer.strip() and (original or "").strip():
         # Every claim the model made was unsupported, and what is left is nothing.

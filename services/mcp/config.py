@@ -71,7 +71,28 @@ FEATURE_SOURCE = "bigquery"
 # where the same page says you "can't control or know which region your ML processing
 # requests are sent to" and that it doesn't support data residency requirements — not a
 # thing to select by omitting a value, for a service that reads clinical text.
-GEMINI_LOCATION = "us"
+#
+# 2026-11-08: `us` stopped answering. Every request came back `429 RESOURCE_EXHAUSTED`
+# ("Resource has been exhausted (e.g. check quota)") while the project was making a
+# handful of requests per hour — not a burst, and not another caller: neither
+# `eval-clinical` nor `eval-adversarial` has run since 2026-10-18/20, and the deployed
+# services are only the agent, the site, Langfuse and the MCP server. The `us`
+# multi-region endpoint for this model was saturated, and `/ehr` failed for a clinician
+# with no defect anywhere in the request path.
+#
+# `global` served the same `gemini-3.1-flash-lite`, at `temperature=0`, in the same
+# second — measured by addressing one 1-token request to each endpoint. That is the whole
+# reason for the move: the model, the sampling configuration and every determinism
+# argument resting on it are unchanged, and only the endpoint the request is addressed to
+# moves. `us-east1` is not an option: the model is not published there (404).
+#
+# What this gives up is the jurisdictional boundary above. That is a real loss and it is
+# recorded rather than dropped: requests are now routed to a region Google selects and
+# does not disclose, which is acceptable only while this service reads the demo cohort's
+# synthetic note text and its published literature. A deployment of real PHI has to
+# revisit this line — either obtain `us` capacity or put the model behind a boundary that
+# answers.
+GEMINI_LOCATION = "global"
 
 # Vertex serving
 ENDPOINT_NAME = os.environ.get("ENDPOINT_NAME", "readmission-endpoint")

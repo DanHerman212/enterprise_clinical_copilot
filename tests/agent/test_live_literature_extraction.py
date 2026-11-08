@@ -527,8 +527,15 @@ WITH_FIGURE = dict(
 )
 
 
-def test_every_adult_record_reaches_the_extraction_turn():
-    """No window: twelve records in, twelve records read."""
+def test_every_adult_record_up_to_the_input_bound_reaches_the_extraction_turn():
+    """No RELEVANCE window: nothing is dropped for what it says.
+
+    The one bound is the input size (`MAX_EXTRACTION_CANDIDATES`, 2026-11-08): the
+    extraction reply grows one row per abstract, and a reply cut off by the output ceiling
+    is discarded whole, so the pool is capped at the top of PubMed's own ranking. What the
+    cap dropped is still REPORTED — `candidates` stays 12 — which is the difference between
+    a bounded input and a silent relevance cut.
+    """
     pool = [dict(KNEE_ARTHROPLASTY, pmid=f"3000010{index}") for index in range(12)]
 
     async def search(terms, wide):
@@ -538,7 +545,9 @@ def test_every_adult_record_reaches_the_extraction_turn():
         _FakeLLM([_payload([])]), FEMORAL_NECK, search=search))
 
     assert result.passes[0].candidates == 12
-    assert result.passes[0].aligned == 12, "the pool was cut before the model read it"
+    assert result.passes[0].aligned == deterministic.MAX_EXTRACTION_CANDIDATES
+    assert result.passes[0].aligned < result.passes[0].candidates, (
+        "the bound is visible in the report rather than hidden")
 
 
 def test_a_record_with_no_figure_is_read_beside_one_that_states_a_rate():

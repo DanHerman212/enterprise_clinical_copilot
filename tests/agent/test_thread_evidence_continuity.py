@@ -217,13 +217,22 @@ def test_the_follow_up_sees_the_prediction_and_the_comparator_records():
     assert "probability_display: 7.5%" in transcript
     assert "0.075" not in transcript.replace("7.5%", "")
 
-    # (b) The comparator abstracts are the THREAD's, not the record's. The `/ehr` table
-    # searches with `scope="readmission"`, and `citations._searched_for_evidence` rules
-    # that pool out of the answer's published evidence — so the record must not claim it
-    # either (Sprint 3.3, closing the 3.1 carry-forward). A record that held the pool
-    # answered a later literature question from a candidate list instead of searching.
-    assert "Predictors of thirty-day readmission" not in transcript
-    assert "Spine" not in transcript
+    # (b) The comparator search's POOL is not the answer's evidence, and never reaches the
+    # follow-up — 25 candidates came back and one was used. What DOES reach it, since Seam
+    # 1 (2026-11-08), is the record the answer actually cited: `replay_messages` prunes the
+    # pool to the cited articles and drops the candidate-pool scope, so those survivors are
+    # thread evidence and render under `<literature>`.
+    #
+    # Before the fix the scope rode along in `args`, the record refused the pruned payload
+    # as a pool, and `<literature>` rendered empty — which is why a follow-up asking how
+    # this patient compares to "those cohorts" was answered by re-searching PubMed and
+    # reporting no matches.
+    assert "Predictors of thirty-day readmission" in transcript
+    assert "^[PMID: 24108298]" in transcript and "2.5%" in transcript
+    # The pool's other twenty-four candidates are still not evidence, and still not shown.
+    assert "A candidate this turn never cited" not in transcript
+    assert "99999999" not in transcript
+    assert "Candidate 3:" not in transcript
 
     # The record the turn rested on is the thread's evidence; the pool is not. Both reach
     # the follow-up as data — `thread_literature` for the badge allowance and the composer,

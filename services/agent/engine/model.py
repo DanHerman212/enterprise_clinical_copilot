@@ -89,6 +89,21 @@ CLINICAL_SAFETY_SETTINGS = {
 }
 
 
+#: The reasoning level the structured EXTRACTION calls run at.
+#:
+#: `derive_target` and `_extract_once` return a small JSON object read out of text that is
+#: already in front of them: a condition and a few anchor phrases, or a rate and the
+#: sentence it was stated in. Nothing in that is open-ended clinical reasoning, and at the
+#: synthesis level the model spends fifteen to thirty seconds thinking before it writes a
+#: twenty-token object — on `/ehr` twice, before the answer's own formatting turn has
+#: started.
+#:
+#: So the effort is a property of the JOB, passed at construction, and the served path
+#: keeps `GEMINI_REASONING_EFFORT`: a clinician's answer is the one place the thinking is
+#: doing work the reader will read.
+EXTRACTION_REASONING_EFFORT = "low"
+
+
 def build_extraction_llm(model: str) -> ChatGoogleGenerativeAI:
     """The chat model for structured extraction over clinical text.
 
@@ -96,11 +111,17 @@ def build_extraction_llm(model: str) -> ChatGoogleGenerativeAI:
     difference that matters, and the reason it is a separate constructor rather than a
     parameter: a caller that must remember to pass the right thresholds is a caller that
     will eventually pass the wrong ones.
+
+    The reasoning level is the second difference, and it is passed here rather than by the
+    callers for the same reason: the two extraction steps are inside `deterministic.py`
+    and neither should have to remember which effort its job wants.
     """
-    return _client(model, CLINICAL_SAFETY_SETTINGS)
+    return _client(model, CLINICAL_SAFETY_SETTINGS,
+                   reasoning_effort=EXTRACTION_REASONING_EFFORT)
 
 
-def _client(model: str, safety_settings: dict) -> ChatGoogleGenerativeAI:
+def _client(model: str, safety_settings: dict, *,
+            reasoning_effort: str = GEMINI_REASONING_EFFORT) -> ChatGoogleGenerativeAI:
     """One construction, so the two thresholds cannot diverge in anything else."""
     return ChatGoogleGenerativeAI(
         model=model,
@@ -122,7 +143,7 @@ def _client(model: str, safety_settings: dict) -> ChatGoogleGenerativeAI:
         # carries the measurements. The pin and this parameter move together: the
         # 2.5 family rejects a level outright, and the 3.x family deprecates the
         # budget, so there is no value both accept.
-        reasoning_effort=GEMINI_REASONING_EFFORT,
+        reasoning_effort=reasoning_effort,
         max_retries=MODEL_MAX_RETRIES,
         timeout=MODEL_TIMEOUT_SECONDS,
         # The content filters are set explicitly, per category, rather than left to

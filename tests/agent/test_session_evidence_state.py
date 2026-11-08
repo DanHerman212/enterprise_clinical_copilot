@@ -1563,36 +1563,46 @@ COMPARATOR_TURN = {
 }
 
 
-def test_a_cited_cohort_does_not_make_the_replay_literature():
-    """The premise: `thread_literature` is populated, the record is not.
+def test_a_cited_cohort_is_thread_evidence_after_the_prune():
+    """REVERSED 2026-11-08 (Seam 1), deliberately and narrowly.
 
-    Asserted rather than assumed, because the routing test below is only about the
-    comparator thread if the replay really does carry the record — and it does, which is
-    why the leak survived the record's exclusion.
+    Sprint 4.1's version of this test asserted that the comparator thread's cited cohort
+    reached `thread_literature` but never the record. The half that was wrong is the
+    record half, and only for a PRUNED search: `replay_messages` reduces the pool to the
+    records that turn's answer cited, and a cited cohort is evidence the thread rested on.
+    Leaving the candidate-pool scope on the call made `SessionEvidenceState` refuse the
+    pruned payload too, so `<literature>` rendered nothing and a follow-up asking how this
+    patient compares to "those cohorts" was told the thread held no published evidence.
+
+    The UNPRUNED pool is still refused, and that is asserted where it belongs —
+    `test_a_comparator_pool_leaves_the_literature_modality_unsatisfied`, which hydrates a
+    scoped call directly and still gets an empty record.
     """
     state = _routed(
         "What does the literature say about readmission after this procedure?",
         turns=[COMPARATOR_TURN], model=_BoundRecorder())
 
     assert [str(article.get("pmid")) for article in state["thread_literature"]] == ["111"]
-    assert state["evidence_state"].literature == {}
+    assert set(state["evidence_state"].literature) == {"111"}
 
 
-def test_a_comparator_thread_still_demands_a_real_literature_search():
-    """End to end through `route`, because the record term alone was never the leak.
+def test_a_comparator_thread_answers_in_one_pass():
+    """The question asks for published evidence, and the session holds exactly that.
 
-    The question asks for published evidence, the session holds none (`record.literature`
-    is empty and the cohort in `thread_literature` was never anyone's evidence), and the
-    one tool that can answer it is still bound — so the turn is sent back for it.
+    Before Seam 1 the record was empty by construction, so `route` sent the turn back for
+    a search: the model re-queried PubMed for a cohort it had been shown, got nothing, and
+    `LITERATURE_SPOKE` made it report that no indexed literature matched. The cohort was in
+    `<literature>` the whole time. One pass now, and the model is trusted to use it.
     """
     model = _BoundRecorder()
 
-    _routed("What does the literature say about readmission after this procedure?",
-            turns=[COMPARATOR_TURN], model=model)
+    state = _routed("What does the literature say about readmission after this procedure?",
+                    turns=[COMPARATOR_TURN], model=model)
 
-    assert model.turns == [None, "any"], (
-        "the literature question was answered from a candidate pool "
-        "`citations.cited_articles` carried into `thread_literature`")
+    assert model.turns == [None], (
+        "the turn went back to PubMed for a cohort the record already held")
+    assert state["tool_calls"] == []
+    assert set(state["evidence_state"].literature) == {"111"}
 
 
 def test_a_session_with_no_record_still_reads_the_replay():

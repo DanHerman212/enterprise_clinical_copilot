@@ -374,6 +374,13 @@ READMISSION RISK & DRIVER ATTRIBUTION
 #: phrased, and what a retrieved record may and may not be used to say.
 LITERATURE_SPOKE = """\
 PUBLISHED LITERATURE (`search_literature`)
+- READ THE RECORD BEFORE YOU SEARCH. When `<session_evidence_state>` already carries
+  `<literature>` records, they are published evidence this thread retrieved and its answer
+  rests on: comparing this patient's estimate or course to the cohorts an earlier turn
+  cited is answered from `<literature>`, `<readmission_risk>` and `<evidence_items>`
+  directly, with a `^[PMID: <id>]` badge copied from the record. Do not call
+  `search_literature` again for evidence you were already shown, and never answer such a
+  question by reporting that no indexed literature matched a fresh query.
 - Reach for `search_literature` ONLY when the question asks for external clinical
   evidence: published studies, guidelines, "what does the literature say", "what are the
   guidelines for". A question about this patient is not a literature question, and a

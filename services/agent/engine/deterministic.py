@@ -1715,6 +1715,24 @@ async def derive_target(llm, sections: dict | None, *, config: dict | None = Non
             return TargetResult(target=target)
         why = "the reply named no condition"
 
+    # Read the chart's own headers BEFORE paying for a second model call. The second call
+    # exists for one failure — a provider filter withholding a reply that the plainer
+    # wording can still elicit — and a malformed reply from a model that was not filtered is
+    # not that failure. On a note whose diagnosis block is right there, the retry was twenty
+    # seconds spent to produce what `fallback_target_from_sections` reads for nothing, on
+    # every `/ehr` (2026-11-08).
+    if why != REPLY_WITHHELD:
+        salvaged = fallback_target_from_sections(sections)
+        if salvaged is not None:
+            return TargetResult(
+                target=_with_demographics(salvaged),
+                reason=(
+                    f"the model produced no condition ({reply_problem(why)}); "
+                    "the condition was read from the chart's own headers"
+                ),
+                source="chart_headers",
+            )
+
     retry, retry_why = await _structured_reply(
         llm,
         prompts.LITERATURE_TARGET_FALLBACK_PROMPT,
@@ -2001,6 +2019,20 @@ class CandidatePass:
         )
 
 
+#: How many candidate abstracts one extraction call is given.
+#:
+#: Not a relevance cut and not a local ranking — the pool arrives in PubMed's order and the
+#: model reads what it is given. It is an INPUT-SIZE bound, and it exists because the
+#: extraction reply grows one row (or one refusal) per abstract: twenty-five abstracts is a
+#: reply long enough to be cut off by the output ceiling, and a cut-off reply is discarded
+#: whole. Ten fills the table twice over — the surface draws at most two rows — and a
+#: ten-abstract reply fits comfortably inside `COMPARATOR_REPLY_TOKENS`.
+#:
+#: What is refused is reported, not silent: `ComparatorPass.candidates` still states what
+#: PubMed returned, so a table built from the top ten of twenty-five is visible as such.
+MAX_EXTRACTION_CANDIDATES = 10
+
+
 async def candidate_pass(search, target: ClinicalTarget) -> CandidatePass:
     """The one readmission query this turn runs, and what it left to read.
 
@@ -2018,6 +2050,10 @@ async def candidate_pass(search, target: ClinicalTarget) -> CandidatePass:
     condition, state a percentage, name the operation — was a guess about clinical
     relevance standing where reading the abstract belongs. A token gate used to refuse
     records before the model saw them, which turned a synonym into a silent refusal.
+
+    The one bound that is not a judgement about relevance is `MAX_EXTRACTION_CANDIDATES`,
+    which is about how long the reply is: the top of PubMed's own ranking, sized so one
+    extraction call cannot truncate.
     """
     result = await search([target.condition, *target.anchors], True)
     result = result if isinstance(result, dict) else {}
@@ -2027,7 +2063,7 @@ async def candidate_pass(search, target: ClinicalTarget) -> CandidatePass:
     pool, refused = adult_cohorts(articles, target)
     return CandidatePass(
         query=query, wide=True, candidates=len(articles),
-        aligned=tuple(pool),
+        aligned=tuple(pool[:MAX_EXTRACTION_CANDIDATES]),
         refused=tuple(refused),
         excluded=len(refused),
     )
@@ -2036,15 +2072,13 @@ async def candidate_pass(search, target: ClinicalTarget) -> CandidatePass:
 
 #: The output ceiling for one comparator extraction, in tokens.
 #:
-#: Twice the client's default (`GEMINI_MAX_OUTPUT_TOKENS`, 4096), because this is the one
-#: extraction whose reply grows with its input: twenty abstracts, each one either a row
-#: with a copied sentence or a one-line refusal. Measured 2026-11-06 on `90000069`: the
-#: reply came back `finish_reason=MAX_TOKENS`, `_extract_json_object` found no object, and
-#: a table that had two verifiable cohorts in it drew nothing — while the same query four
-#: minutes later, under the same prompt, returned `STOP` and one row. A ceiling is not a
-#: fix on its own (the reply is unbounded in principle), which is why `_extract_pass` also
-#: retries over halves; it removes the common case, and the retry removes the rest.
-COMPARATOR_REPLY_TOKENS = 8192
+#: The client's default (`GEMINI_MAX_OUTPUT_TOKENS`, 4096), and it is enough now that the
+#: pool is bounded at `MAX_EXTRACTION_CANDIDATES`. It was raised to twice that when one
+#: call could be handed twenty-five abstracts: measured 2026-11-06 on `90000069`, the reply
+#: came back `finish_reason=MAX_TOKENS`, `_extract_json_object` found no object, and a table
+#: that had two verifiable cohorts in it drew nothing. Bounding the input fixes the cause;
+#: the retry over halves stays for the residue.
+COMPARATOR_REPLY_TOKENS = 4096
 
 #: How many abstracts one extraction call is given before the pool is split.
 #:
@@ -2111,11 +2145,16 @@ async def _extract_pass(
         # Nothing was retrieved, so nothing was read. This is not a failed extraction: the
         # query is what came back empty, and the pass reports it as such.
         return [], [], routing.OUTCOME_VERIFIED_EMPTY
-    rows, rejected, degraded = await _extract_once(llm, target, pool, config)
-    if not degraded:
+    rows, rejected, why = await _extract_once(llm, target, pool, config)
+    if not why:
         return rows, rejected, (routing.OUTCOME_VERIFIED if rows
                                 else routing.OUTCOME_VERIFIED_EMPTY)
-    if len(pool) > COMPARATOR_POOL_SPLIT_THRESHOLD:
+    # The retry halves the input so a reply that was CUT OFF becomes two replies that fit.
+    # That is the only failure it can repair, so it is the only failure it is spent on: a
+    # withheld reply is the provider's filter acting on the abstracts, and asking twice more
+    # in halves buys two more blocked calls and another twenty seconds of the reader's
+    # time (2026-11-08).
+    if len(pool) > COMPARATOR_POOL_SPLIT_THRESHOLD and why == REPLY_NOT_JSON:
         middle = len(pool) // 2
         halves = (pool[:middle], pool[middle:])
         merged: list[dict] = []
@@ -2124,11 +2163,11 @@ async def _extract_pass(
         for half in halves:
             if not half:
                 continue
-            half_rows, half_rejected, half_degraded = await _extract_once(
+            half_rows, half_rejected, half_why = await _extract_once(
                 llm, target, half, config)
             every_rejection.extend(half_rejected)
             merged.extend(half_rows)
-            any_read = any_read or not half_degraded
+            any_read = any_read or not half_why
         if any_read:
             seen: set[str] = set()
             unique = [row for row in merged
@@ -2142,8 +2181,14 @@ async def _extract_pass(
 
 async def _extract_once(
     llm, target: ClinicalTarget, pool: list[dict], config: dict | None,
-) -> tuple[list[dict], list[dict], bool]:
-    """One extraction call. Returns `(rows, rejections, degraded)`."""
+) -> tuple[list[dict], list[dict], str]:
+    """One extraction call. Returns `(rows, rejections, why_it_produced_nothing)`.
+
+    `why` is empty on a reply that parsed, whatever it contained: "the model read these
+    abstracts and found no cohort" is a successful pass with no rows, and conflating it
+    with a failure is what makes a table say the literature offered nothing when the truth
+    is that extraction never ran.
+    """
     payload, why = await _structured_reply(
         _bounded(llm, COMPARATOR_REPLY_TOKENS),
         prompts.LITERATURE_COMPARATOR_PROMPT,
@@ -2151,8 +2196,8 @@ async def _extract_once(
         config,
     )
     if payload is None:
-        return [], [{"pmid": "", "reason": f"the extraction reply {reply_problem(why)}"}], True
+        return [], [{"pmid": "", "reason": f"the extraction reply {reply_problem(why)}"}], why
     rejected: list[dict] = []
     rows = _reply_rows(payload, pool, target, rejected)
-    return rows, rejected, False
+    return rows, rejected, ""
 

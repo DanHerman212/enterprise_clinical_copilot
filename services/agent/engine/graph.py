@@ -24,6 +24,7 @@ guardrails that fired. Tracing is the working surface; the record is the
 evidence of record, and it survives the tracing stack being torn down.
 """
 
+import asyncio
 import json
 import logging
 import operator
@@ -662,7 +663,13 @@ def _session_holds_evidence(
     if risk_driver_question or risk_score_question:
         return record.prediction is not None
     if wants_literature:
-        return bool(record.literature)
+        # The record first, because it is the one authority on what was ingested. The
+        # thread's own cited records are the second term: they are the same set
+        # `replay_messages` prunes a search down to and hands to `record.ingest_tool_output`,
+        # so the two agree by construction — and a turn whose replay predates that ingest
+        # still knows the thread rested on published records rather than sending the model
+        # back to PubMed for a cohort it was already shown (2026-11-08).
+        return bool(record.literature) or bool(state.get("thread_literature"))
     return bool(
         record.position_count()
         or record.checked_sections
@@ -1359,21 +1366,17 @@ async def ask(
     # note (2026-11-04). Built before the graph rather than after it, because ONE binding
     # decision reads it: whether the laboratory panel this turn is asked to rank is already
     # in hand (`_freetext_allowed`). The replay is the only place that fact lives.
-    replayed, replayed_calls, thread_literature = await replay_messages(
-        toolbox, turns, hadm_id=hadm_id)
-
-    # The session's evidence, built from the replay before the run rather than derived
-    # again by every later reader, and extended by `_execute_tool_calls` as this turn's
-    # tools run. Its count at this moment is what this turn's `citation_map` is measured
-    # from, so it is captured before a single call is made.
+    # The session's evidence, built by the replay rather than derived again here. The
+    # replay ingests exactly these calls, in this order, through the same projection, so a
+    # second `hydrate_from_calls` over `replayed_calls` rebuilt the identical record — on
+    # every turn, before the model was asked anything (2026-11-08).
     #
     # A turn with no admission gets no state. The record is scoped to one patient, and a
     # record with no patient would be one whose positions could be fed from any chart.
-    session = (
-        session_evidence.SessionEvidenceState.hydrate_from_calls(
-            hadm_id, [_presented_call(call) for call in replayed_calls])
-        if hadm_id is not None else None
-    )
+    replay_state: dict = {}
+    replayed, replayed_calls, thread_literature = await replay_messages(
+        toolbox, turns, hadm_id=hadm_id, record_sink=replay_state)
+    session = replay_state.get("record") if hadm_id is not None else None
     replayed_positions = (
         session.position_count() if session is not None
         else citations.citation_bound([], replayed_calls)
@@ -1655,6 +1658,8 @@ def _pruned_literature_payload(payload: dict, cited: list[dict]) -> dict:
 async def replay_messages(
     toolbox: MCPToolbox, turns: list[dict[str, Any]] | None,
     hadm_id: int | None = None,
+    *,
+    record_sink: dict | None = None,
 ) -> tuple[list[BaseMessage], list[RecordedToolCall], list[dict]]:
     """The earlier conversation, as the messages the model would have seen.
 
@@ -1694,6 +1699,13 @@ async def replay_messages(
     search's POOL is not evidence — twenty-five candidates come back and one is cited —
     so only what an earlier turn actually rested on travels, and only that may be cited
     again.
+
+    `record_sink` is the caller's holder for the `SessionEvidenceState` this replay builds.
+    It exists so `ask` does not hydrate the same record a second time from the calls it was
+    just handed: both ingest the same projected payloads in the same order, so the second
+    pass produced the same object twice — and on a six-turn thread with a panel in it, that
+    is a whole note's worth of parsing done for nothing before the model is asked anything
+    (2026-11-08). The three-value return is unchanged, because tests and callers unpack it.
     """
     messages: list[BaseMessage] = []
     calls: list[RecordedToolCall] = []
@@ -1712,6 +1724,34 @@ async def replay_messages(
         session_evidence.SessionEvidenceState(hadm_id=hadm_id)
         if hadm_id is not None else None
     )
+    # Resolve every payload the caller did not store BEFORE the replay loop, concurrently.
+    # Two facts make this worth doing rather than awaiting inside the loop: the fetches are
+    # independent of one another, and they are all on the critical path of a turn that has
+    # not called the model yet. Measured on a turn-2 follow-up after `/ehr` + `/labs`, three
+    # stored-nothing calls were re-run in series before the model saw anything.
+    #
+    # Keyed by position rather than carried on the call dict, because `turns` belongs to
+    # the caller and a replay must not rewrite it.
+    pending: list[tuple[tuple[int, int], dict]] = []
+    for turn_index, turn in enumerate(turns or []):
+        for call_index, call in enumerate(turn.get("tool_calls") or []):
+            if isinstance(call, dict) and call.get("payload") is None:
+                pending.append(((turn_index, call_index), call))
+    resolved: dict[tuple[int, int], Any] = {}
+    if pending:
+        for (turn_index, _call_index), call in pending:
+            logger.info(
+                "re-resolving %r for replayed turn %d: its payload is not "
+                "stored, and the corpus it reads is deterministic",
+                call.get("name"), turn_index,
+            )
+        payloads = await asyncio.gather(*(
+            toolbox.call(str(call.get("name") or ""),
+                         dict(call.get("args") or {}))
+            for _key, call in pending
+        ))
+        for (key, _call), payload in zip(pending, payloads):
+            resolved[key] = payload
     offset = 0
     for turn_index, turn in enumerate(turns or []):
         # Where this turn's own units begin. Captured before its calls are ingested,
@@ -1720,15 +1760,11 @@ async def replay_messages(
         # them back into the conversation's array.
         turn_offset = record.position_count() if record is not None else offset
         messages.append(HumanMessage(content=turn["question"]))
-        for call in turn.get("tool_calls") or []:
-            payload = call.get("payload")
-            if payload is None:
-                logger.info(
-                    "re-resolving %r for replayed turn %d: its payload is not "
-                    "stored, and the corpus it reads is deterministic",
-                    call["name"], turn_index,
-                )
-                payload = await toolbox.call(call["name"], dict(call.get("args") or {}))
+        for call_index, call in enumerate(turn.get("tool_calls") or []):
+            payload = resolved.get((turn_index, call_index), call.get("payload"))
+            # The arguments this replay will carry, copied so the candidate-pool scope can
+            # be dropped from a PRUNED search without rewriting the caller's stored turn.
+            call_args = dict(call.get("args") or {})
             if str(call.get("name")) in routing.LITERATURE_TOOLS:
                 # A search returns a pool; a turn rests on one or two of it. Only the
                 # records that turn's own answer CITED are part of the thread's evidence,
@@ -1744,6 +1780,19 @@ async def replay_messages(
                 if not cited:
                     continue
                 payload = _pruned_literature_payload(payload, cited)
+                # The candidate-pool scope described the SEARCH, not what survives it.
+                # `/ehr` asks for the pool its comparison table may draw from, and
+                # `SessionEvidenceState` refuses such a call because a pool is not the
+                # answer's evidence. Once the payload is pruned to the records this turn
+                # actually cited, those records ARE the thread's evidence — but the scope
+                # still rode along in `args`, so the record refused them too and
+                # `<literature>` rendered nothing on the next turn: a follow-up asking how
+                # this patient compares to "those cohorts" was told the literature held
+                # nothing, re-searched PubMed, and reported no matches (2026-11-08).
+                # Dropping it here is the one place that distinction is still known: turn
+                # 1's unpruned pool is refused as before, because this line never runs for
+                # a call the caller did not cite from.
+                call_args.pop("scope", None)
                 for article in cited:
                     pmid = str(article.get("pmid") or "")
                     if pmid and pmid not in seen_pmids:
@@ -1756,7 +1805,7 @@ async def replay_messages(
                 # model's window and must hold only what the projection allowed.
                 record.ingest_tool_output(
                     str(call.get("name") or ""),
-                    call.get("args"),
+                    call_args,
                     _record_text(_presented_for_model(
                         str(call.get("name") or ""), payload)),
                 )
@@ -1764,7 +1813,7 @@ async def replay_messages(
                 offset += _passage_total(payload)
             calls.append({
                 "name": call["name"],
-                "args": dict(call.get("args") or {}),
+                "args": call_args,
                 "response": payload if isinstance(payload, dict) else {"result": payload},
             })
         # The prior answer's numbers are restored into the conversation's own numbering,
@@ -1784,6 +1833,12 @@ async def replay_messages(
         messages.append(AIMessage(
             content=citations.restore_global_markers(
                 turn.get("answer") or "", turn.get("citation_map"), turn_offset)))
+    if record_sink is not None:
+        # The record this replay built, for a caller that would otherwise hydrate the same
+        # payloads a second time. An empty record and `None` are different statements — the
+        # first is "this session was scoped to an admission and holds nothing yet" — so the
+        # sink carries the object itself.
+        record_sink["record"] = record
     return messages, calls, thread_articles
 
 

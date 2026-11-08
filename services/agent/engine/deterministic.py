@@ -48,7 +48,7 @@ import json
 import logging
 import random
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -402,11 +402,36 @@ def _context_block(admission_context: str, hadm_id: int | None = None) -> str:
     return f"\n\n{text}" if text else ""
 
 
+def _patient_estimate(recorded: list[RecordedToolCall] | None) -> float | None:
+    """The probability `predict_readmission` returned for this admission, or None.
+
+    Read off the recorded call rather than carried in a variable, because the estimate is
+    a tool result like every other fact this turn states: it reaches the prose as a tool
+    message, and the comparison's direction has to be computed from the same response the
+    widget draws. A second copy passed alongside the call is a second answer to "what is
+    this patient's risk" and the two would eventually disagree.
+
+    None when no tool ran or the response carries no usable figure, and then no relation
+    line is written: a direction needs two numbers.
+    """
+    for call in recorded or []:
+        if call.get("name") != "predict_readmission":
+            continue
+        response = call.get("response") or {}
+        value = response.get("probability") if isinstance(response, dict) else None
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        return float(value)
+    return None
+
+
 def _formatter_input(tool_messages: list[Any], outpatient: bool,
                      question: str | None = None,
                      comparators: list[dict] | None = None,
                      context_block: str = "",
-                     session_block: str = "") -> str:
+                     session_block: str = "",
+                     patient_estimate: float | None = None,
+                     fallback_literature: list[dict] | None = None) -> str:
     """What the formatting turn reads: the question, the tool results, the caveat.
 
     The QUESTION goes first, and it is not decoration. Until Phase 01 this turn could be
@@ -442,9 +467,19 @@ def _formatter_input(tool_messages: list[Any], outpatient: bool,
     text = "\n\n".join(str(m.content) for m in tool_messages)
     if outpatient:
         text = f"{text}\n\n{_NO_READMISSION}"
-    block = comparator_block(comparators)
+    block = comparator_block(comparators, patient_estimate=patient_estimate)
     if block:
         text = f"{text}\n\n{block}"
+    else:
+        # No verified cohort, but records were read. The second block is what keeps a turn
+        # that could not verify a rate from publishing nothing at all about the literature
+        # it retrieved: it asks for what those studies report, and says in its own header
+        # that there is no benchmark among them. Exactly one of the two blocks is ever
+        # given, so the prompt's rules for "a block is present" and "no block is present"
+        # cannot both be in play at once.
+        fallback = fallback_literature_block(fallback_literature)
+        if fallback:
+            text = f"{text}\n\n{fallback}"
     if (session_block or "").strip():
         text = f"{text}\n\n{session_block.strip()}"
     if (context_block or "").strip():
@@ -453,7 +488,8 @@ def _formatter_input(tool_messages: list[Any], outpatient: bool,
     return f"Question asked: {asked}\n\n{text}" if asked else text
 
 
-def comparator_block(comparators: list[dict] | None) -> str:
+def comparator_block(comparators: list[dict] | None,
+                     *, patient_estimate: float | None = None) -> str:
     """The verified cohorts as the formatting turn reads them, or "".
 
     One line per row, with everything the prose needs and nothing it does not: the PMID
@@ -468,6 +504,13 @@ def comparator_block(comparators: list[dict] | None) -> str:
 
     Stated here rather than sent as a tool result because no tool returned these rows:
     retrieval returned twenty-five candidates and an extraction turn verified these.
+
+    `patient_estimate` is the model's own predicted probability for this admission, and
+    passing it adds a `relation:` line to each row: the direction of the comparison, worked
+    out here rather than by the model. It was worked out by the model until 2026-11-08, and
+    a briefing stated that 9.0% sat "below" a published 3.8% — two figures in adjacent cells
+    and a word connecting them the wrong way round. A direction is arithmetic, so it is
+    computed where arithmetic is exact, and the prompt is told to use the field verbatim.
     """
     rows = [row for row in comparators or [] if isinstance(row, dict)]
     if not rows:
@@ -499,7 +542,106 @@ def comparator_block(comparators: list[dict] | None) -> str:
         lines.append(f"- PMID {pmid} · {source} · {rate} ({shape}){detail}")
         if cohort:
             lines.append(f"  cohort: {cohort}")
+        relation = _rate_relation(patient_estimate, rate, kind)
+        if relation:
+            lines.append(f"  relation: {relation}")
     lines.append("</verified_comparators>")
+    return "\n".join(lines)
+
+
+def _rate_relation(patient_estimate: float | None, reported_rate: str,
+                   rate_kind_value: str = "") -> str:
+    """Where this patient's estimate sits against one published rate, in one clause.
+
+    Arithmetic over the numbers each side already publishes, and nothing else: no rounding
+    invented, no averaging, no difference the record does not state. A two-arm row and a
+    range are compared against their SPAN rather than against one of their figures, because
+    "higher than 2.6% vs. 0.4%" is not a statement about either arm.
+
+    Empty when the estimate or the rate is missing, which is the honest answer: a direction
+    needs two figures, and a turn holding one of them has no comparison to state.
+    """
+    if patient_estimate is None:
+        return ""
+    figures = [float(value) for value in _NUMBER.findall(str(reported_rate or ""))]
+    if not figures:
+        return ""
+    estimate = patient_estimate * 100.0
+    shown = f"{estimate:.1f}%"
+    low, high = min(figures), max(figures)
+    if str(rate_kind_value or "") in ("range", "comparison") and len(figures) > 1:
+        span = " ".join(str(reported_rate or "").split())
+        if estimate > high:
+            return f"patient estimate ({shown}) is above the whole published span ({span})"
+        if estimate < low:
+            return f"patient estimate ({shown}) is below the whole published span ({span})"
+        return f"patient estimate ({shown}) is within the published span ({span})"
+    rate = f"{low:g}%"
+    if estimate > low:
+        return f"patient estimate ({shown}) is higher than the published rate ({rate})"
+    if estimate < low:
+        return f"patient estimate ({shown}) is lower than the published rate ({rate})"
+    return f"patient estimate ({shown}) equals the published rate ({rate})"
+
+
+#: How much of an abstract the fallback block carries.
+#:
+#: The formatter summarises what these studies report about readmission risk factors, so it
+#: needs the finding rather than the citation line — but a briefing sentence is not a
+#: literature review, and two full abstracts is a third of the turn's input. Six hundred
+#: characters reaches the results clause of a structured abstract and stops.
+_FALLBACK_ABSTRACT_CHARS = 600
+
+
+def fallback_literature_block(articles: list[dict] | None) -> str:
+    """The retrieved studies, as the formatting turn reads them when no cohort verified.
+
+    The other side of `comparator_block`, and the reason it exists: a `/ehr` turn on an
+    admission whose abstracts state no 30-day percentage used to publish NOTHING from the
+    literature. Eighteen records were retrieved, filtered, read by an extraction turn and
+    then dropped, because the only route a readmission-scope search had to the reader was a
+    verified matrix row (`90000030`, `90000047` — measured 2026-11-08). The reader was shown
+    a chart summary and a risk score with no literature at all, and no statement that any
+    had been found.
+
+    What this block does NOT do is imply a benchmark. Its header says in as many words that
+    none of these states a 30-day rate, because the section that draws on them must say that
+    too: a rate-shaped sentence beside a risk score, sourced to a paper that reported no
+    rate, is the failure the whole verification path exists to prevent.
+
+    Empty when there are no records, and then nothing is appended: a turn with no literature
+    says nothing about the literature.
+    """
+    records = [article for article in articles or [] if isinstance(article, dict)]
+    if not records:
+        return ""
+    lines = [
+        "<retrieved_readmission_literature>",
+        "Peer-reviewed studies retrieved from PubMed for this admission's condition and "
+        "procedure. NONE of them states a single 30-day readmission percentage for a "
+        "cohort this patient belongs to, so there is NO benchmark figure to set this "
+        "patient's estimate against. Summarise what they report about readmission risk, "
+        "post-discharge outcomes or clinical trajectory, and cite each study you use with "
+        "its PMID, written ^[PMID: <pmid>], immediately after the sentence that draws on "
+        "it.",
+    ]
+    for article in records:
+        pmid = str(article.get("pmid") or "").strip()
+        if not pmid:
+            continue
+        journal = str(article.get("journal") or "").strip()
+        year = str(article.get("pub_date") or "").strip()
+        title = " ".join(str(article.get("title") or "").split())
+        source = " · ".join(part for part in (journal, year) if part) or "record"
+        lines.append(f"- PMID {pmid} · {source}")
+        if title:
+            lines.append(f"  title: {title}")
+        abstract = " ".join(str(article.get("abstract") or "").split())
+        if abstract:
+            if len(abstract) > _FALLBACK_ABSTRACT_CHARS:
+                abstract = abstract[:_FALLBACK_ABSTRACT_CHARS].rstrip() + " …"
+            lines.append(f"  reports: {abstract}")
+    lines.append("</retrieved_readmission_literature>")
     return "\n".join(lines)
 
 
@@ -642,11 +784,49 @@ async def _formatting_turn(
 extraction_llm_factory: Callable[[str], Any] = model_gateway.build_extraction_llm
 
 
+def _pass_rows(passes: list["ComparatorPass"]) -> list[dict]:
+    """The passes as the turn state carries them, and the shape a log reader depends on.
+
+    `retrieved -> pool_size -> aligned -> verified` is the whole diagnostic: `candidates`
+    is what PubMed returned, `pool_size` what survived the population filter, `aligned`
+    what the extraction turn was given (the cap, so it stops at ten) and `verified` what
+    could be quoted. Without `pool_size` the line read "aligned=10, excluded=0", which
+    looks like ten matches and is really ten reads (`cr`, 2026-11-08).
+    """
+    return [
+        {"query": entry.query, "wide": entry.wide, "candidates": entry.candidates,
+         "aligned": entry.aligned, "verified": entry.verified,
+         "excluded": entry.excluded, "outcome": entry.outcome,
+         "pool_size": entry.pool_size}
+        for entry in passes or []
+    ]
+
+
+def _fallback_literature(rows: list[dict] | None,
+                         pool: list[dict] | None) -> list[dict]:
+    """The records a zero-row turn still publishes, or none.
+
+    Only when there are no verified rows. A turn WITH a cohort states the benchmark and
+    cites it; adding studies that reported no 30-day rate to the same paragraph would put
+    an unquantified paper beside a quantified one and invite the prose to average what one
+    of them never said.
+
+    The head of the RANKED pool, not of PubMed's reply: the ranking is the one that puts a
+    record about this admission's operation and condition first
+    (`_comparator_relevance`), which is the same order a reader would choose two papers in.
+    """
+    if rows:
+        return []
+    return [article for article in (pool or [])
+            if isinstance(article, dict)][:MAX_FALLBACK_LITERATURE]
+
+
 async def _readmission_comparators(
     toolbox: Any, model: str, recorded: list[RecordedToolCall], on_event,
     *, extraction_llm: Any = None, evidence_state: Any = None,
     admission_context: str = "", callbacks: list[Any] | None = None,
-) -> tuple[list[dict], dict | None, list[RecordedToolCall], list[dict], str]:
+) -> tuple[list[dict], dict | None, list[RecordedToolCall], list[dict], str,
+           list[dict]]:
     """The published cohorts this admission's estimate is compared against.
 
     Three steps, and each is somebody else's decision already stated: the condition comes
@@ -678,7 +858,7 @@ async def _readmission_comparators(
     if not sections:
         # No chart text, so no condition and no query. Reported as a degraded benchmark
         # rather than as a literature that offered nothing: nothing was asked of it.
-        return [], None, [], [], routing.OUTCOME_EXTRACTION_DEGRADED
+        return [], None, [], [], routing.OUTCOME_EXTRACTION_DEGRADED, []
 
     # Whose cohort this has to be, read from the manifest first and the note second. An
     # unknown age filters nothing downstream, which is the honest behaviour: refusing a
@@ -692,7 +872,7 @@ async def _readmission_comparators(
         # surface says which one it is drawing.
         return ([], {"source": "unavailable",
                      "reason": "no extraction client is configured here"}, [], [],
-                routing.OUTCOME_EXTRACTION_DEGRADED)
+                routing.OUTCOME_EXTRACTION_DEGRADED, [])
     derived = await derive_target(
         llm, sections, config={"callbacks": list(callbacks)} if callbacks else None,
         patient_age=patient_age, patient_sex=patient_sex,
@@ -703,7 +883,7 @@ async def _readmission_comparators(
             "comparators: no clinical target (%s: %s)", derived.source, derived.reason,
         )
         return ([], {"source": derived.source, "reason": derived.reason}, [], [],
-                routing.OUTCOME_EXTRACTION_DEGRADED)
+                routing.OUTCOME_EXTRACTION_DEGRADED, [])
 
     calls_made: list[RecordedToolCall] = []
     counter = {"calls": 0}
@@ -753,12 +933,19 @@ async def _readmission_comparators(
         "patient_sex": target.patient_sex,
         "source": derived.source,
     }
-    passes = [
-        {"query": entry.query, "wide": entry.wide, "candidates": entry.candidates,
-         "aligned": entry.aligned, "verified": entry.verified,
-         "excluded": entry.excluded, "outcome": entry.outcome}
-        for entry in result.passes
-    ]
+    passes = _pass_rows(result.passes)
+    # What the briefing is shown when nothing verified. The abstracts were retrieved,
+    # filtered by population and read; a turn whose verification produced no row has still
+    # found this patient's literature, and publishing none of it is the defect this
+    # directive exists to close (`90000030`: eighteen retrieved, zero published).
+    fallback_literature = _fallback_literature(result.rows, result.pool)
+    if fallback_literature:
+        logger.info(
+            "comparators: no verified row; %d retrieved record(s) published for the "
+            "narrative to cite: %s",
+            len(fallback_literature),
+            ", ".join(str(article.get("pmid") or "") for article in fallback_literature),
+        )
     outcome = benchmark_outcome(result.passes)
     # The pass, in one line, whether or not it produced a row.
     #
@@ -786,7 +973,7 @@ async def _readmission_comparators(
         logger.info("comparators: refused %s — %s",
                     rejection.get("pmid") or "(no pmid)",
                     rejection.get("reason") or "")
-    return result.rows, payload, calls_made, passes, outcome
+    return result.rows, payload, calls_made, passes, outcome, fallback_literature
 
 
 async def run_command(
@@ -990,7 +1177,8 @@ async def run_command(
     # and recorded as tool calls like every other piece of evidence this turn rests on.
     command_extras: dict[str, Any] = {}
     if command.wire == "summarize" and not outpatient_record:
-        comparators, target_payload, literature_recorded, passes, outcome = \
+        (comparators, target_payload, literature_recorded, passes, outcome,
+         fallback_literature) = \
             await _readmission_comparators(
                 toolbox, model, recorded, on_event, extraction_llm=extraction_llm,
                 evidence_state=evidence_state,
@@ -1002,6 +1190,11 @@ async def run_command(
         command_extras["comparators"] = comparators
         command_extras["clinical_target"] = target_payload
         command_extras["comparator_passes"] = passes
+        # The studies this turn retrieved and could not reduce to a 30-day rate. Read by
+        # the formatter (so the risk section can say what they report), by the guardrail
+        # (so their PMIDs survive `enforce_citations`) and by the composer (so they reach
+        # the reader's pills and references drawer). One array, three readers.
+        command_extras["fallback_literature"] = fallback_literature
         # What the benchmark step came to, as a word rather than as a length. `[]` rows is
         # a real answer and the surface has to know WHICH real answer: the orchestrator
         # turns this into the one bit `presentation` is given, so the table can say the
@@ -1106,6 +1299,13 @@ async def run_command(
                 # can answer from evidence an earlier turn retrieved instead of reporting
                 # the record as undocumented.
                 session_block=prior_session_block,
+                # The model's own estimate for this admission, so the comparison's
+                # DIRECTION is computed here rather than inferred by the prose. A section
+                # that states two figures and the wrong word between them is the defect
+                # this argument closes.
+                patient_estimate=_patient_estimate(recorded),
+                # And, when no cohort verified, the studies that were retrieved anyway.
+                fallback_literature=command_extras.get("fallback_literature"),
             )),
         ],
         config=config,
@@ -1271,6 +1471,21 @@ MAX_ANCHORS = 8
 #: one record is not a comparison — and the second pass costs two E-utilities calls and a
 #: model call, which is worth spending on a turn that has nothing to show.
 MIN_COMPARATORS = 2
+
+#: Below this many records, the strict readmission query is re-asked with the broadened
+#: outcome clause and the two pools are merged. Measured 2026-11-08: a salpingectomy
+#: admission (`90000047`) returned FOUR records from the strict query, because the horizon
+#: clause requires the abstract to spell "30-day" or "thirty days" and an ectopic-pregnancy
+#: series usually does not. Four abstracts is not a pool, and the matrix drew nothing from
+#: it. Eight is roughly the point at which the extraction cap has something to choose
+#: between rather than merely something to read.
+MIN_STRICT_CANDIDATES = 8
+
+#: How many ranked records a turn with no verified 30-day cohort still publishes. Two,
+#: because the section that draws on them is one paragraph: one study is an anecdote and
+#: three is a literature review, and the reader of a briefing wants the two most relevant
+#: papers, cited, not a survey.
+MAX_FALLBACK_LITERATURE = 2
 
 #: The horizon the comparison is made at. Stated as a constant so the check below reads as
 #: the rule it is: a five-year rate beside a 30-day estimate is two unrelated numbers in
@@ -2229,11 +2444,20 @@ def benchmark_outcome(passes: list["ComparatorPass"]) -> str:
 
 @dataclass(frozen=True)
 class ComparatorResult:
-    """Verified rows, every refusal with its reason, and the passes that produced them."""
+    """Verified rows, every refusal with its reason, and the passes that produced them.
+
+    `pool` is the ranked adult candidate array the extraction turn was given — the same
+    records, in the same order, that `CandidatePass.aligned` holds. It travels out of here
+    because a turn that verified NOTHING is not a turn that read nothing: the abstracts
+    were retrieved, filtered and read, and when no row survived there is still peer-reviewed
+    evidence about this patient's condition that the briefing can summarise and cite. The
+    caller decides how much of it to publish; this layer only says what was read.
+    """
 
     rows: list[dict]
     rejected: list[dict]
     passes: list[ComparatorPass]
+    pool: list[dict] = field(default_factory=list)
 
 
 async def extract_comparators(
@@ -2273,6 +2497,11 @@ async def extract_comparators(
         rows=verified[:max_rows], rejected=rejected,
         passes=[candidates.report(verified=len(verified),
                                   rejected=candidates.refused, outcome=outcome)],
+        # The array the extraction read, not the rows it produced. A caller that publishes
+        # the survivors of a failed verification is publishing what this patient's
+        # literature says about readmission, which is a different claim from a 30-day rate
+        # and is labelled as one wherever it is drawn.
+        pool=[article for article in candidates.aligned if isinstance(article, dict)],
     )
 
 
@@ -2349,6 +2578,17 @@ def _comparator_relevance(article: dict, target: ClinicalTarget) -> tuple:
     )
 
 
+def _articles_of(response: dict | None) -> list[dict]:
+    """The records a `search_literature` response carries, as a fresh list.
+
+    A named reader rather than an inline comprehension because the pool is now built from
+    two responses and the two must be read the same way; a second spelling of "the
+    articles, if it has any" is how one of them ends up accepting a malformed element.
+    """
+    return [article for article in (response or {}).get("articles") or []
+            if isinstance(article, dict)]
+
+
 async def candidate_pass(search, target: ClinicalTarget) -> CandidatePass:
     """The one readmission query this turn runs, and what it left to read.
 
@@ -2374,8 +2614,29 @@ async def candidate_pass(search, target: ClinicalTarget) -> CandidatePass:
     result = await search([target.condition, *target.anchors], True)
     result = result if isinstance(result, dict) else {}
     query = str(result.get("query") or "")
-    articles = [article for article in (result.get("articles") or [])
-                if isinstance(article, dict)]
+    articles = _articles_of(result)
+    # A strict query that found almost nothing is re-asked with the broader outcome clause,
+    # and what it adds joins the same pool. The two clauses ask the SAME question with
+    # different tolerances: the first requires the abstract to name the horizon ("30-day",
+    # "thirty days"), the second accepts any readmission phrase. For a common operation the
+    # first is right and returns twenty records; for a narrow one it returns four and the
+    # comparison is lost before any model reads an abstract (`90000047`, 2026-11-08).
+    #
+    # Merged rather than replaced, and the strict records keep their order: they are the
+    # ones whose abstracts state the horizon, and `_comparator_relevance` ranks on that
+    # fact, so putting them first costs nothing and keeps a run reproducible.
+    if len(articles) < MIN_STRICT_CANDIDATES:
+        broader = await search([target.condition], False)
+        broader = broader if isinstance(broader, dict) else {}
+        known = {str(article.get("pmid") or "").strip() for article in articles}
+        added = [article for article in _articles_of(broader)
+                 if str(article.get("pmid") or "").strip() not in known]
+        logger.info(
+            "comparators: strict query returned %d record(s), below the %d that make a "
+            "pool; the broadened query added %d more",
+            len(articles), MIN_STRICT_CANDIDATES, len(added),
+        )
+        articles += added
     pool, refused = adult_cohorts(articles, target)
     # Ranked BEFORE the extraction cap, because PubMed's order is a relevance order for
     # the QUERY and not for this comparison. `cr` (2026-11-08) lost its one usable cohort

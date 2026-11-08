@@ -368,6 +368,13 @@ async def compose_success(
         comparison_degraded=(
             state.get("comparator_outcome") == routing.OUTCOME_EXTRACTION_DEGRADED
         ),
+        # The studies a `/ehr` turn retrieved when no 30-day cohort verified out of them.
+        # They are published like any other source — pills, drawer rows, `1..K` after the
+        # note passages — but they are NOT the answer's literature channel: passing them as
+        # `literature` would draw the canvas as a literature turn and badge a chart answer
+        # General Medical Evidence. The distinction is the search's own `scope`, and it is
+        # preserved by handing the records over as an explicit argument (2026-11-08).
+        fallback_literature=state.get("fallback_literature") or [],
     )
 
     # The records this turn actually rested on, stamped onto the search that found them.

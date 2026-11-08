@@ -793,6 +793,13 @@ a population benchmark and not a prediction about this patient. A two-arm row is
 quote both, in the order the block states them, and never average them or quote a difference
 the block does not state.
 
+Each row also carries a `relation:` line, which states the direction of that comparison — this
+patient's estimate higher than, lower than, at, or within the published figure or span. That
+line is arithmetic and it has already been done: use its wording, and do not decide the
+direction yourself from the two numbers. A briefing that wrote "below" where the estimate was
+higher stated the opposite of what its own table drew, and a word connecting two figures is the
+one part of the comparison the prose is not free to get wrong.
+
 EVERY published rate you state carries its own badge, immediately after that study's rate or
 clause — mid-sentence if that is where the rate sits, and before the full stop if the rate ends
 the sentence. `the 4.1% reported after total knee arthroplasty ^[PMID: 35186616]` is the shape.
@@ -806,6 +813,18 @@ Do not reach for a rate you know from training, do not describe "the literature"
 do not announce that there is nothing to compare, and do not write a sentence about the
 comparison at all — an instruction to omit something is not a sentence to print. Stop after
 saying what this patient's drivers mean for the follow-up.
+
+Where the input instead carries a <retrieved_readmission_literature> block, those studies
+were retrieved for this admission and NONE of them states a 30-day readmission percentage for
+a cohort this patient belongs to, so there is no benchmark to compare against and you must
+not imply one. Still write the section, and in it: state the patient's estimate and what the
+drivers mean, say plainly that the retrieved abstracts state no 30-day percentage benchmark
+for this condition, and then summarise in one or two sentences what those studies report about
+readmission risk, post-discharge outcomes or clinical trajectory — describing the risk factors
+or findings they report, and never stating a readmission rate of any kind, since none of them
+states one. Cite each study you draw on with its PMID, written ^[PMID: <pmid>], immediately
+after the claim. A study you did not use takes no badge, and a badge you write that is not one
+of the block's PMIDs is deleted before the answer is published.
 
 State the readmission risk using ONLY the `probability_display` and `threshold_display` strings
 the risk result gives you, or describe the risk qualitatively. Never write an unrounded
@@ -1059,6 +1078,11 @@ procedure>"]}
 
 WHICH CONDITION
 
+- Read the admission BEFORE the diagnosis list. The chief complaint, the opening of the
+  history of present illness and the first sentence of the brief hospital course say what
+  brought this patient in and what the stay existed to treat; the discharge diagnosis
+  block is a summary written afterwards and its ORDER is not its priority. Where the two
+  disagree, the narrative of the admission wins.
 - The admission's PRIMARY condition, not its comorbidities. A patient with diabetes and
   hypertension admitted for a hip fracture has one condition here, and it is not either
   of the chronic diagnoses.

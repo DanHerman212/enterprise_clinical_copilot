@@ -275,7 +275,8 @@ def compose_presentation(question: str, answer: str,
                          comparators: list[dict] | None = None,
                          thread_literature: list[dict] | None = None,
                          evidence_state: SessionEvidenceState | None = None,
-                         comparison_degraded: bool = False) -> dict:
+                         comparison_degraded: bool = False,
+                         fallback_literature: list[dict] | None = None) -> dict:
     """The full presentation contract for an answered question.
 
     One call produces every field the browser consumes, so the answer's
@@ -379,7 +380,19 @@ def compose_presentation(question: str, answer: str,
         if isinstance(article, dict)
         and str(article.get("pmid") or "").strip() in named_thread_pmids
     ]
-    published_records = _published_records(literature, thread_records)
+    # And the studies a `/ehr` turn retrieved without finding a 30-day cohort in them.
+    # They are not this turn's `literature` payload — a readmission-scope search is not the
+    # answer's evidence channel, and publishing one as such would draw the canvas as a
+    # literature turn and badge a chart answer General Medical Evidence — but they are
+    # records this turn read and named, so they enter the same numbered array as every other
+    # published source. Without this a turn whose verification failed published NOTHING from
+    # the literature, which is the asymmetry a reader reported (2026-11-08).
+    fallback_records = [
+        article for article in fallback_literature or []
+        if isinstance(article, dict)
+    ]
+    published_records = _published_records(
+        literature, [*thread_records, *fallback_records])
     # The lab card reads THIS turn's calls, not the conversation's. `evidence_calls` is
     # the right array for what the answer rests on and for how its markers are numbered
     # (TF-10, 2026-10-23), but a chart is not a provenance statement — it is a drawing

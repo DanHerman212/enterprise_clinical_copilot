@@ -811,12 +811,17 @@ def test_one_query_and_one_extraction_per_turn():
     five-second extraction gaps, because the second pass ran whenever the first verified
     fewer than two rows — which was most admissions. One query with the broadened outcome
     clause and one extraction over its ranked pool is what that turn needed.
+
+    Stage 7 (2026-11-08) added a second retrieval, but it is not the one this test
+    forbids: it fires on a THIN POOL, before any model is called, so a healthy pool still
+    costs one query and one extraction. The fixture returns twenty records, above
+    `MIN_STRICT_CANDIDATES` — the recall case this test is about.
     """
     searched: list[tuple] = []
 
     async def search(terms, wide):
         searched.append((terms, wide))
-        return {"query": "pooled", "articles": _candidates(6)}
+        return {"query": "pooled", "articles": _candidates(20)}
 
     llm = _FakeLLM([_payload([_row(pmid="30000100")])])
 
@@ -844,7 +849,10 @@ def test_the_one_query_asks_for_the_condition_and_its_anchors():
     asyncio.run(deterministic.extract_comparators(
         _FakeLLM([_payload([])]), FEMORAL_NECK, search=search))
 
-    (terms, wide), = searched
+    # The FIRST search — the strict pass — because that is the one whose term list is
+    # under test here. A pool this thin is re-asked with the horizon-free clause since
+    # Stage 7, and that second call is `test_a_thin_pool...`'s subject, not this one.
+    (terms, wide), = searched[:1]
     assert wide is True, "the broadened outcome clause, because the exact phrases miss"
     assert list(terms)[0] == FEMORAL_NECK.condition
     assert set(FEMORAL_NECK.anchors) <= set(terms)

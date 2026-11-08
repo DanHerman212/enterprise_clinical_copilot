@@ -582,3 +582,89 @@ def test_a_mid_thread_command_replays_the_thread_before_its_own_tools_run():
     # (d) And the thread survives on the state every later layer reads.
     assert [call["name"] for call in state["replayed_tool_calls"]] == ["rag_search_sections"]
     assert [call["name"] for call in state["tool_calls"]] == ["discharge_medications"]
+
+
+# --- Stage 5: literature cited by NUMBER survives the replay ------------------
+
+#: The `/ehr` turn as the site actually stores it since Stage 1: the search response is
+#: kept (it is result-kept), and the answer addresses the cohort by its DISPLAY NUMBER —
+#: `^[5]` — because composition rewrote the PMID badge. No `PMID:` string survives in the
+#: prose, which is exactly what made `cited_articles` decide the turn had cited nothing.
+EHR_TURN_BY_NUMBER = {
+    "question": "/ehr For admission 90000069.",
+    "answer": (
+        "**Readmission risk & trajectory.** Her estimated risk is 7.5%, below the 11.0% "
+        "threshold. A retrospective cohort reported an ACDF readmission rate of 2.5% "
+        "^[5], though that cohort is a population benchmark rather than a prediction for "
+        "this patient."
+    ),
+    "citation_map": {"1": 1, "2": 2, "3": 3, "4": 4, "5": 5},
+    "tool_calls": [
+        {"name": "rag_search_sections", "args": {"hadm_id": HADM}, "payload": None},
+        {"name": "predict_readmission", "args": {"hadm_id": HADM}, "payload": None},
+        # Stamped at settlement from the turn's own references — the identifiers the prose
+        # no longer contains.
+        {"name": "search_literature",
+         "args": {"query": "Anterior cervical discectomy and fusion",
+                  "scope": "readmission"},
+         "payload": dict(COMPARATOR_SEARCH, cited_pmids=[ARTICLE["pmid"]])},
+    ],
+}
+
+
+def test_a_search_cited_by_display_number_survives_the_replay():
+    """The call is kept, so `replayed_calls` is 3 and the thread keeps its records.
+
+    Reading the citation off PMID badges alone dropped the call (`replayed_calls` 3 -> 2)
+    the moment Stage 1 began rewriting the badge to `^[5]`: the search, its records and the
+    comparison they exist for all vanished from the thread (2026-11-08).
+    """
+    state, _ = _ask(FOLLOW_UP, turns=[EHR_TURN_BY_NUMBER])
+
+    assert [call["name"] for call in state["replayed_tool_calls"]] == [
+        "rag_search_sections", "predict_readmission", "search_literature"]
+    assert [article["pmid"] for article in state["thread_literature"]] == [ARTICLE["pmid"]]
+
+
+def test_the_replayed_records_reach_the_session_record():
+    """The overlay is the second channel, and it fails with the first one when the call is
+    dropped — which is why the loss was total rather than partial."""
+    state, _ = _ask(FOLLOW_UP, turns=[EHR_TURN_BY_NUMBER])
+
+    rendered = state["evidence_state"].render_for_prompt()
+    assert "Predictors of thirty-day readmission" in rendered
+
+
+def test_a_follow_up_without_a_literature_word_may_still_cite_the_thread():
+    """`literature_replay` is a fact about the THREAD, not about the question's wording.
+
+    Gated on wording, a follow-up that quoted the thread had an empty PMID allowance and
+    `enforce_citations` deleted a correct citation.
+    """
+    answer = "That cohort reported 2.5% ^[PMID: 24108298]."
+
+    guarded = guard_answer(
+        answer, [], [], literature_replay=True,
+        finish_reason=None,
+        state={"thread_literature": [ARTICLE]},
+    )
+
+    assert "24108298" in guarded["answer"]
+    assert "citation_out_of_range" not in " ".join(guarded["flags"])
+
+
+def test_an_empty_exploratory_search_does_not_hide_the_thread():
+    """A fruitless search on a follow-up must not draw over records the thread holds."""
+    out = a2ui.compose_presentation(
+        "what does the literature say about cervical laminoplasty?",
+        "The cohort reported 2.5% ^[PMID: 24108298].",
+        [{"name": "search_literature",
+          "args": {"query": "cervical laminoplasty"},
+          "response": {"query": "cervical laminoplasty", "returned": 0, "articles": []}}],
+        None,
+        None,
+        thread_literature=[ARTICLE],
+    )
+
+    assert "LiteratureList" not in _components(out["a2ui"])
+    assert any(source.get("pmid") == ARTICLE["pmid"] for source in out["sources"])

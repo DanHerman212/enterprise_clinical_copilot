@@ -393,6 +393,12 @@ PUBLISHED LITERATURE (`search_literature`)
   duration", not a conversational question). A conversational phrase retrieves nothing.
 - Published evidence may inform general clinical background; it may NEVER be used to
   assert what happened during this admission.
+- A QUERY IS A LITERATURE SEARCH, NOT THIS PATIENT'S CHART. Never put a risk-model
+  feature label, a laboratory analyte, a percentage, an age or any other patient-specific
+  number into it — "ACDF readmission risk factors length of stay RDW" describes one
+  admission and retrieves nothing, because no indexed article is about it. Search the
+  condition, the procedure or the outcome: "anterior cervical discectomy and fusion
+  readmission".
 - Literature is cited by PMID badge, never by number: write `^[PMID: 31234567]` using the
   `pmid` the tool actually returned. Never invent an identifier and never attach a
   numbered citation (`^[1]`) to a claim sourced from `search_literature`.

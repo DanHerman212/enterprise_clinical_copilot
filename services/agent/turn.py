@@ -258,7 +258,14 @@ async def compose_success(
         # own question is about published records. The flag is stamped by the engine, so
         # this is a read of the decision that let the search into the transcript rather
         # than a second opinion about the question.
-        literature_replay=bool(state.get("wants_literature")),
+        #
+        # Widened on 2026-11-08 to any turn whose thread carries published records. Gating
+        # it on the question's own wording meant a follow-up that quoted the thread — "why
+        # was the rate 0% in that cohort?" — had an empty PMID allowance, so
+        # `enforce_citations` deleted the citation from a correct answer. The record is the
+        # authority on what the thread holds, and the question's wording is not.
+        literature_replay=bool(state.get("wants_literature")
+                               or state.get("thread_literature")),
         # Why the reply stopped, so a reply the provider's filter took away is resolved
         # here rather than in the engine: replacement is prose work and it has to happen
         # on both routes (Charter 13 Law 2; Phase 3 Contract 1). Read off the turn's own
@@ -335,7 +342,8 @@ async def compose_success(
         # The literature surface this turn draws: its own search, or — when the turn is
         # about published records and ran no search — the one already in the transcript.
         # Same flag as the guardrail's, read from the same state field.
-        literature_replay=bool(state.get("wants_literature")),
+        literature_replay=bool(state.get("wants_literature")
+                               or state.get("thread_literature")),
         # Settlement compacted the served markers to the order they are cited (`^[1]`,
         # `^[2]` …) while the evidence array kept its cumulative numbering. This is the
         # map between the two, computed once by `citations` in `sanitize_answer_markers`;
@@ -361,6 +369,25 @@ async def compose_success(
             state.get("comparator_outcome") == routing.OUTCOME_EXTRACTION_DEGRADED
         ),
     )
+
+    # The records this turn actually rested on, stamped onto the search that found them.
+    #
+    # `graph.replay_messages` prunes a replayed search to the records its turn cited, and it
+    # reads them off PMID badges in the stored answer. Since settlement began rewriting a
+    # badge to its display number (`^[5]`), no served answer contains one — so every `/ehr`
+    # search looked uncited on replay, the call was dropped (`replayed_calls` 3 -> 2), and
+    # the thread lost the comparison it had just drawn. The identifiers are known HERE,
+    # where the references were built, so they travel with the call.
+    cited_records = [str(row.get("pmid") or "").strip()
+                     for row in presentation.get("references") or []
+                     if str(row.get("pmid") or "").strip()]
+    if cited_records:
+        for call in trimmed_calls:
+            if call["name"] not in routing.LITERATURE_TOOLS:
+                continue
+            response = call.get("response")
+            if isinstance(response, dict) and "cited_pmids" not in response:
+                call["response"] = {**response, "cited_pmids": cited_records}
 
     # The trace, written once, now that the answer is settled AND composed. Two records,
     # and the order between them is the contract: what the turn asked for, and what the

@@ -1560,6 +1560,14 @@ def cited_articles(payload: object, answer: str, *,
     published record rather than a position in the array. An answer that cites no record
     contributes none, and the turn it came from is then not evidence for a later one.
 
+    `payload["cited_pmids"]` is the second reading, and since 2026-11-08 it is the one that
+    matters. A badge is rewritten to its display number at composition (`^[5]`), so the
+    SERVED answer no longer contains the identifier this function looks for — and a replay
+    reading only the prose concluded that an `/ehr` turn had cited nothing, dropped its
+    search, and lost the comparison table from the thread. The identifiers are stamped onto
+    the search at settlement, where the references are built and the answer's record is
+    known, so a turn's own evidence survives however its prose addresses it.
+
     `call` is the search this payload came from, and passing it is what applies the scope
     rule: a call that declared `scope="readmission"` was made for the comparison table,
     not for the answer, and contributes nothing here however many of its records the prose
@@ -1574,6 +1582,9 @@ def cited_articles(payload: object, answer: str, *,
     if not isinstance(payload, dict):
         return []
     named = set(cited_pmids(answer))
+    stamped = payload.get("cited_pmids")
+    if isinstance(stamped, list):
+        named |= {str(value).strip() for value in stamped if str(value or "").strip()}
     if not named:
         return []
     return [

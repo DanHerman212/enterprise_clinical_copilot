@@ -508,10 +508,18 @@ def compose_presentation(question: str, answer: str,
     # a correct chart answer arrived under a card saying no literature was found about a
     # question nobody asked of the literature (2026-10-22).
     articles = _usable_articles(literature or {})
+    # A search that found nothing does not get to hide a thread that found something.
+    # On a follow-up the `search_literature` call may be an exploratory one — bound because
+    # the question used a literature word — and an empty result drew a "PubMed found no
+    # articles" card over a thread that already held the studies the question was about
+    # (2026-11-08). The thread's records still reach `sources` and `references` through
+    # `_published_records`; what is withdrawn is the empty card.
     draws_literature = bool(articles) or (
         literature is not None and not record_sources and not lab_evidenced
         and not payload_evidenced
     )
+    if draws_literature and not articles and thread_literature:
+        draws_literature = False
     drawn_literature = literature if draws_literature else None
 
     # Whether the answer was verified against the patient record.
@@ -630,6 +638,18 @@ def compose_presentation(question: str, answer: str,
             pmid_numbers[pmid] = number
     answer = rewrite_pmid_markers(answer, pmid_numbers)
     _rewrite_narrative_markers(canvas, pmid_numbers)
+    # The map a caller needs to put this answer's numbers back on replay. Settlement
+    # compacted only the NOTE markers, so `^[5]` — a published record, numbered after the
+    # passages — is missing from it and a replay could not restore the badge. A published
+    # record's number IS its array position (`register_comparator_sources(start=...)`
+    # continues the same sequence), so recording it here is the identity, stated rather
+    # than assumed (2026-11-08).
+    resolved_map = (dict(citation_map) if citation_map
+                    else {str(n): n for n in cited_numbers(answer)})
+    for source in published:
+        cite = int(source.get("cite") or 0)
+        if cite > 0:
+            resolved_map.setdefault(str(cite), cite)
     references = reference_rows(published)
 
     return {
@@ -638,8 +658,7 @@ def compose_presentation(question: str, answer: str,
         # numbers the prose actually cites — unless settlement compacted them, in which
         # case it published the map and this is that map. Kept because the client
         # translates a clicked pill through it (Charter 13 Law 5).
-        "citation_map": (dict(citation_map) if citation_map
-                         else {str(n): n for n in cited_numbers(answer)}),
+        "citation_map": resolved_map,
         "intent_sections": list(intent),
         # Note passages and laboratory trajectories first, then the published records the
         # search returned, then the cohorts the comparison table draws. Each group is

@@ -43,8 +43,10 @@ prose and the widget cannot describe one factor two ways.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import random
 import re
 from dataclasses import dataclass, replace
 from typing import Any, Callable
@@ -501,6 +503,79 @@ def comparator_block(comparators: list[dict] | None) -> str:
     return "\n".join(lines)
 
 
+#: How hard this module tries before it gives up on a capacity refusal.
+#:
+#: `gemini-3.1-flash-lite` is reached on the multi-region endpoint (`GEMINI_LOCATION`),
+#: where capacity is shared and `429 RESOURCE_EXHAUSTED` arrives in bursts. Measured
+#: 2026-11-08: an `/ehr` turn whose formatting call took 5.19 s with identical token
+#: counts took 64.16 s under that pressure, and a run of turns failed outright — because
+#: `langchain_google_genai` retries 5xx and raises 429 immediately, so a capacity blip
+#: reached the clinician as "the agent failed to answer".
+#:
+#: Four attempts over roughly ten seconds turns a burst into a slower answer. It is
+#: bounded because the alternative is worse: an answer that arrives after the request has
+#: already timed out is not an answer.
+RETRY_MAX_ATTEMPTS = 4
+RETRY_BASE_SECONDS = 1.5
+RETRY_MAX_SECONDS = 20.0
+
+
+#: What a capacity refusal looks like in an exception, without importing the provider.
+#:
+#: Duck-typed on purpose: the same refusal arrives from `langchain_google_genai` as
+#: `GoogleRateLimitError`, from `google.genai` as `ClientError` with a 429 status, and from
+#: the transport as a plain server error carrying the phrase. Naming the class would make
+#: this module depend on which of the three raised it.
+_RATE_LIMIT_MARKERS = ("RESOURCE_EXHAUSTED", "RATE LIMIT", "RATELIMIT", "TOO MANY REQUESTS")
+
+
+def _rate_limited(exc: BaseException) -> bool:
+    """Whether the provider refused this call for capacity rather than for content."""
+    status = getattr(exc, "code", None)
+    if callable(status):
+        try:
+            status = status()
+        except Exception:  # noqa: BLE001 - a code that cannot be read is not a code
+            status = None
+    if status == 429:
+        return True
+    text = f"{type(exc).__name__} {exc}".upper()
+    return any(marker in text for marker in _RATE_LIMIT_MARKERS)
+
+
+async def _pause_before_retry(attempt: int, what: str) -> None:
+    """Wait, with jitter, before attempt `attempt + 1`.
+
+    Jitter matters more than the delay: four concurrent turns throttled at the same instant
+    would otherwise retry in lockstep and exhaust themselves together, which is the burst
+    they were waiting out.
+    """
+    ceiling = min(RETRY_BASE_SECONDS * (2 ** (attempt - 1)), RETRY_MAX_SECONDS)
+    wait = ceiling * (0.5 + random.random())
+    logger.warning(
+        "%s was refused for capacity (attempt %d of %d); retrying in %.1fs",
+        what, attempt, RETRY_MAX_ATTEMPTS, wait,
+    )
+    await asyncio.sleep(wait)
+
+
+async def _retrying(call: Callable[[], Any], *, what: str) -> Any:
+    """Await `call()`, retrying only a capacity refusal, a bounded number of times.
+
+    Anything that is not a 429 is re-raised on the first attempt: a content filter, a
+    malformed request and a real defect all need to surface as themselves, and retrying
+    them would turn a clear failure into a slow one.
+    """
+    for attempt in range(1, RETRY_MAX_ATTEMPTS + 1):
+        try:
+            return await call()
+        except Exception as exc:
+            if attempt >= RETRY_MAX_ATTEMPTS or not _rate_limited(exc):
+                raise
+            await _pause_before_retry(attempt, what)
+    raise AssertionError("unreachable: the loop returns or raises")
+
+
 async def _formatting_turn(
     llm: Any,
     prompt: list[Any],
@@ -525,22 +600,39 @@ async def _formatting_turn(
     this function answers. `Command.prose_is_model_output` decides whether the caller
     is offered this turn's output at all, and the guardrails' verdict on it lands
     after the turn has finished — which is what the swap protocol in `http` exists for.
+
+    A capacity refusal is retried, because this is the call the reader is waiting on and
+    it is 83% of an `/ehr` turn (64.16 s of 77.18 s, `826289ea`, 2026-11-08). Streaming
+    is retried only BEFORE the first frame: once a piece has been announced, a second
+    attempt would print the prose twice.
     """
     if announce is None:
-        return await llm.ainvoke(prompt, config=config)
+        return await _retrying(lambda: llm.ainvoke(prompt, config=config),
+                               what="the formatting turn")
 
-    turn: Any = None
-    async for chunk in llm.astream(prompt, config=config):
-        turn = chunk if turn is None else turn + chunk
-        # The chunk's own text, not its repr: Gemini answers in content blocks, so
-        # announcing `str(chunk.content)` would put the envelope on screen instead of
-        # the summary (see `model_turn.text_of`).
-        piece = text_of(chunk.content)
-        if piece:
-            announce(piece)
-    if turn is None:
-        raise RuntimeError("the formatting model returned no chunks")
-    return turn
+    attempt = 1
+    while True:
+        turn: Any = None
+        try:
+            async for chunk in llm.astream(prompt, config=config):
+                turn = chunk if turn is None else turn + chunk
+                # The chunk's own text, not its repr: Gemini answers in content blocks, so
+                # announcing `str(chunk.content)` would put the envelope on screen instead
+                # of the summary (see `model_turn.text_of`).
+                piece = text_of(chunk.content)
+                if piece:
+                    announce(piece)
+        except Exception as exc:
+            # Safe to retry only while nothing has been announced; see the docstring.
+            if (turn is not None or attempt >= RETRY_MAX_ATTEMPTS
+                    or not _rate_limited(exc)):
+                raise
+            await _pause_before_retry(attempt, "the formatting turn")
+            attempt += 1
+            continue
+        if turn is None:
+            raise RuntimeError("the formatting model returned no chunks")
+        return turn
 
 
 #: The client the comparator step extracts with, replaceable so a test can run this step
@@ -553,7 +645,7 @@ extraction_llm_factory: Callable[[str], Any] = model_gateway.build_extraction_ll
 async def _readmission_comparators(
     toolbox: Any, model: str, recorded: list[RecordedToolCall], on_event,
     *, extraction_llm: Any = None, evidence_state: Any = None,
-    admission_context: str = "",
+    admission_context: str = "", callbacks: list[Any] | None = None,
 ) -> tuple[list[dict], dict | None, list[RecordedToolCall], list[dict], str]:
     """The published cohorts this admission's estimate is compared against.
 
@@ -575,6 +667,12 @@ async def _readmission_comparators(
     and sex and for nothing else. The comparison is a population match, and until those two
     facts reached it the only thing matched was the condition: a knee-arthroplasty cohort
     of octogenarians was accepted beside a 41-year-old with no objection from any layer.
+
+    `callbacks` are the turn's tracing callbacks, and they are threaded into BOTH model
+    calls below. Neither used to receive them (`config=None`), so the two steps that decide
+    whether the table draws at all — the target extraction and the comparator extraction —
+    produced no Langfuse generation at all. On `826289ea` that left 8.59 s and 2.16 s of
+    model time visible only as gaps between stage events.
     """
     sections = note_sections(recorded)
     if not sections:
@@ -595,10 +693,15 @@ async def _readmission_comparators(
         return ([], {"source": "unavailable",
                      "reason": "no extraction client is configured here"}, [], [],
                 routing.OUTCOME_EXTRACTION_DEGRADED)
-    derived = await derive_target(llm, sections, patient_age=patient_age,
-                                  patient_sex=patient_sex)
+    derived = await derive_target(
+        llm, sections, config={"callbacks": list(callbacks)} if callbacks else None,
+        patient_age=patient_age, patient_sex=patient_sex,
+    )
     target = derived.target
     if target is None:
+        logger.warning(
+            "comparators: no clinical target (%s: %s)", derived.source, derived.reason,
+        )
         return ([], {"source": derived.source, "reason": derived.reason}, [], [],
                 routing.OUTCOME_EXTRACTION_DEGRADED)
 
@@ -638,7 +741,10 @@ async def _readmission_comparators(
         response = recorded_calls[-1].get("response") if recorded_calls else {}
         return response if isinstance(response, dict) else {}
 
-    result = await extract_comparators(llm, target, search=search)
+    result = await extract_comparators(
+        llm, target, search=search,
+        config={"callbacks": list(callbacks)} if callbacks else None,
+    )
     payload = {
         "condition": target.condition,
         "procedure": target.procedure,
@@ -653,8 +759,32 @@ async def _readmission_comparators(
          "excluded": entry.excluded, "outcome": entry.outcome}
         for entry in result.passes
     ]
-    return (result.rows, payload, calls_made, passes,
-            benchmark_outcome(result.passes))
+    outcome = benchmark_outcome(result.passes)
+    # The pass, in one line, whether or not it produced a row.
+    #
+    # "The table drew nothing" is three different facts — the abstracts stated no rate, the
+    # model proposed rows the verifier refused, or the extraction never read the abstracts —
+    # and until this line only the first was visible anywhere, because it is the one the
+    # matrix prints. `_reply_rows` records what the model proposed; this records what the
+    # retrieval and the outcome were, so the two together are enough to tell the three
+    # apart from a Cloud Run log alone.
+    for entry in result.passes:
+        logger.info(
+            "comparators: query=%r wide=%s candidates=%d aligned=%d verified=%d "
+            "excluded=%d outcome=%s",
+            entry.query, entry.wide, entry.candidates, entry.aligned,
+            entry.verified, entry.excluded, entry.outcome,
+        )
+    logger.info(
+        "comparators: condition=%r procedure=%r patient=%s/%s rows=%d outcome=%s",
+        target.condition, target.procedure, target.patient_age or "?",
+        target.patient_sex or "?", len(result.rows), outcome,
+    )
+    for rejection in result.rejected:
+        logger.info("comparators: refused %s — %s",
+                    rejection.get("pmid") or "(no pmid)",
+                    rejection.get("reason") or "")
+    return result.rows, payload, calls_made, passes, outcome
 
 
 async def run_command(
@@ -862,7 +992,10 @@ async def run_command(
             await _readmission_comparators(
                 toolbox, model, recorded, on_event, extraction_llm=extraction_llm,
                 evidence_state=evidence_state,
-                admission_context=admission_context)
+                admission_context=admission_context,
+                # The turn's tracing callbacks, so the target and comparator extractions
+                # are generations in the trace rather than gaps between stage events.
+                callbacks=callbacks)
         recorded += literature_recorded
         command_extras["comparators"] = comparators
         command_extras["clinical_target"] = target_payload
@@ -1543,6 +1676,14 @@ def note_sections(recorded: list[RecordedToolCall] | None) -> dict[str, str]:
 #: measurement this whole step exists to remove.
 REPLY_WITHHELD = "withheld"
 REPLY_NOT_JSON = "not_json"
+#: The endpoint refused for capacity, and it refused every attempt this module makes.
+#:
+#: A fourth reason rather than an exception, because the two callers below must DEGRADE on
+#: it: a briefing whose target extraction was throttled still has a chart with a diagnosis
+#: in its headers, and a comparison whose extraction was throttled still has an estimate to
+#: show alone. Letting the 429 propagate turned a capacity blip into "the agent failed to
+#: answer" (2026-11-08), which is the one outcome a clinician cannot act on.
+REPLY_RATE_LIMITED = "rate_limited"
 
 
 async def _structured_reply(
@@ -1553,11 +1694,26 @@ async def _structured_reply(
     The reply is asked for as JSON because everything downstream of it is checked rather
     than read: a condition becomes a query string, and a row becomes a claim that has to
     match the abstract it came from. Prose in either place would be unfalsifiable.
+
+    A capacity refusal is retried (`_retrying`) and, exhausted, reported as
+    `REPLY_RATE_LIMITED` rather than raised: both callers have a defined answer for a step
+    that could not run, and neither has one for an exception.
     """
-    response = await llm.ainvoke(
-        [SystemMessage(content=system), HumanMessage(content=human)],
-        config=config or {},
-    )
+    messages = [SystemMessage(content=system), HumanMessage(content=human)]
+    try:
+        response = await _retrying(
+            lambda: llm.ainvoke(messages, config=config or {}),
+            what="the literature extraction",
+        )
+    except Exception as exc:  # noqa: BLE001 - re-raised below unless it is capacity
+        if not _rate_limited(exc):
+            raise
+        logger.warning(
+            "literature extraction: the endpoint was rate limited on every attempt; "
+            "degrading this step instead of failing the turn (%s)",
+            str(exc)[:160],
+        )
+        return None, REPLY_RATE_LIMITED
     if answer_text.reply_withheld(
         model_turn.finish_reason(response),
         blocked=bool(model_turn.blocked_reason(response)),
@@ -1578,6 +1734,7 @@ async def _structured_reply(
 _REPLY_PROBLEM = {
     REPLY_WITHHELD: "was withheld by the model's safety filter",
     REPLY_NOT_JSON: "was not a JSON object",
+    REPLY_RATE_LIMITED: "was refused for capacity on every attempt",
 }
 
 
@@ -2147,6 +2304,23 @@ def _reply_rows(payload: dict, pool: list[dict], target: ClinicalTarget,
                 "reason": " ".join(str(item.get("reason") or "").split())[:200],
             })
     rejected_rows.extend(refused)
+    # What the model proposed and what survived, in one line.
+    #
+    # This is the line whose absence made an empty `ComparativeRiskMatrix` undiagnosable
+    # (`826289ea`, 2026-11-08). Twenty-one abstracts came back, extraction ran for 8.6 s,
+    # and the table drew nothing — and nothing anywhere recorded whether the model had
+    # answered `{"comparators": []}` or proposed rows the verifier refused. The two call
+    # for opposite responses, and the reply that would have told them apart is discarded by
+    # this function. Now it is written down before it is discarded.
+    proposed = payload.get("comparators")
+    logger.info(
+        "comparator extraction: %d proposed, %d verified, %d refused, over %d abstract(s)",
+        len(proposed) if isinstance(proposed, list) else 0,
+        len(verified), len(refused), len(pool),
+    )
+    for rejection in refused:
+        logger.info("comparator extraction: refused %s — %s",
+                    rejection.get("pmid") or "(no pmid)", rejection.get("reason") or "")
     return verified
 
 

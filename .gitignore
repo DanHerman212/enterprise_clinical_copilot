@@ -101,34 +101,22 @@ evaluation/agent/results/*/
 projects/agent-harness/eval/results/hybrid_notes.json
 evaluation/agent/results/hybrid_notes.json
 
-# don't sync obsidian json files
-docs/.obsidian 
-
-# --- UX workshop capture ---------------------------------------------------
-# The capture stays out: screenshots and verbatim turn outputs quote
-# discharge-note text directly — the same raw-text rule that keeps the hybrid
-# notes artifact out of git — and it is reproducible from the procedure document.
+# --- Docs: only the reference architecture is public -----------------------
+# Everything under docs/ other than docs/architecture/ is working material:
+# audit drives, remediation reports, debugging forensics, workshop captures and
+# evaluation reports. It stays on disk locally but is not published.
 #
-# The practice record IS tracked (2026-10-13): the strategy-and-tactics documents
-# and the capture procedure describe how the workshop was run, quote no note text,
-# and are the artifacts worth sharing.
-docs/ux_workshop/screenshots/
-docs/ux_workshop/turns/
-docs/ux_workshop/phase1/live/
+# `docs/*` and not `docs/`: the directory itself stays traversable so the
+# architecture subtree can be re-included below. A directory exclusion cannot be
+# undone for a file inside it, which is why this is not the single-line form.
+docs/*
+!docs/architecture/
+
 # Clean context archives (generated for review, never committed)
 /*-clean.zip
 
 # Plain-text context bundles (generated for review, never committed)
 *-code-bundle.txt
-
-# stuff that came from "evolutionary scar tissue"
-docs/adversarial_code_review/
-
-
-
-# Evaluation reports: working notes, not part of the product tree
-docs/agent_evaluation/
-
 
 # Local evaluation run artifacts: diagnostics JSONL, never committed
 evaluation/results/runs/

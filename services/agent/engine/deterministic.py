@@ -701,18 +701,27 @@ async def _pause_before_retry(attempt: int, what: str) -> None:
     await asyncio.sleep(wait)
 
 
-async def _retrying(call: Callable[[], Any], *, what: str) -> Any:
-    """Await `call()`, retrying only a capacity refusal, a bounded number of times.
+async def _retrying(call: Callable[[], Any], *, what: str,
+                    attempts: int = RETRY_MAX_ATTEMPTS) -> Any:
+    """Await `call()`, retrying only a capacity refusal, up to `attempts` times.
 
     Anything that is not a 429 is re-raised on the first attempt: a content filter, a
     malformed request and a real defect all need to surface as themselves, and retrying
     them would turn a clear failure into a slow one.
+
+    `attempts` is per-call because the two callers have opposite economics. The formatting
+    turn is the answer the reader is waiting on, so it is worth four attempts over ten
+    seconds. A structured extraction is an ENRICHMENT: if it cannot run, the turn still
+    answers, and spending thirty-five seconds retrying a step whose failure is already
+    handled is the reader's time spent on nothing — measured 2026-11-08, `90000069` spent
+    34.7 s of a 67.6 s turn on five refused extraction attempts before degrading to the
+    fallback that was waiting for it all along.
     """
-    for attempt in range(1, RETRY_MAX_ATTEMPTS + 1):
+    for attempt in range(1, max(1, attempts) + 1):
         try:
             return await call()
         except Exception as exc:
-            if attempt >= RETRY_MAX_ATTEMPTS or not _rate_limited(exc):
+            if attempt >= max(1, attempts) or not _rate_limited(exc):
                 raise
             await _pause_before_retry(attempt, what)
     raise AssertionError("unreachable: the loop returns or raises")
@@ -939,6 +948,27 @@ async def _readmission_comparators(
     # found this patient's literature, and publishing none of it is the defect this
     # directive exists to close (`90000030`: eighteen retrieved, zero published).
     fallback_literature = _fallback_literature(result.rows, result.pool)
+    if fallback_literature:
+        # Say so on the call that retrieved them, because settlement runs before the
+        # guardrail and before presentation, and it is a pure function of the turn's own
+        # tool calls (graph `_settle` passes those and nothing else). Without this the
+        # records are published by `presentation` — which reads the array directly — and
+        # deleted from the prose by `enforce_citations`, because the allowance it builds
+        # from `tool_calls` cannot see an array that lives on the state. That is exactly
+        # how both badges died on `90000069` and `90000020` while the drawer kept the
+        # papers (2026-11-08).
+        #
+        # This is a declaration, not evidence: the pool stays uncitable and only the two
+        # records the narrative was actually given are named here.
+        announced = [str(article.get("pmid") or "").strip()
+                     for article in fallback_literature
+                     if str(article.get("pmid") or "").strip()]
+        for call in calls_made:
+            if call.get("name") not in routing.LITERATURE_TOOLS:
+                continue
+            response = call.get("response")
+            if isinstance(response, dict):
+                call["response"] = {**response, "fallback_pmids": announced}
     if fallback_literature:
         logger.info(
             "comparators: no verified row; %d retrieved record(s) published for the "
@@ -1978,6 +2008,51 @@ REPLY_NOT_JSON = "not_json"
 #: answer" (2026-11-08), which is the one outcome a clinician cannot act on.
 REPLY_RATE_LIMITED = "rate_limited"
 
+#: How many attempts a structured extraction gets before the step degrades.
+#:
+#: Two, and the number is a latency decision rather than a reliability one. The step is an
+#: enrichment: `derive_target` can fall back to the chart's own headers and
+#: `extract_comparators` can fall back to publishing the studies it did read, and both of
+#: those are waiting whether or not the model answers. So a refusal that survives one
+#: backoff is treated as "this step is not available right now" and the turn moves on.
+#:
+#: Measured 2026-11-08 on `agent-00266-kbs`: the four-attempt ceiling spent 34.71 s of a
+#: 67.62 s `/ehr` (`90000069`) and 60.65 s of an 88.66 s one (`90000020`) — every attempt
+#: refused, nothing produced, and the fallback published in the end either way.
+STRUCTURED_MAX_ATTEMPTS = 2
+
+#: The generation parameters a structured reply is asked for under.
+#:
+#: `thinking_level="minimal"` because the two questions are extraction, not reasoning —
+#: "which condition is this admission for" and "which abstract states a 30-day rate" are
+#: answered by reading, and the tokens spent deliberating them are spent before the first
+#: character of JSON. Measured on `4ed74ac0` (2026-11-08): 3928 and 3933 reasoning tokens
+#: for 164 and 159 tokens of output, 36.8 s of an 88.7 s turn, and BOTH replies failed to
+#: parse — the allowance went to thoughts and the answer arrived truncated.
+#:
+#: NOT `thinking_budget=0`, which is what this first tried and what the directive asked
+#: for. On Gemini 3+ the client maps `reasoning_effort` to `thinking_level` and the LEVEL
+#: wins, so a budget of zero is discarded with a warning while the model keeps its effort:
+#:
+#:     Both 'thinking_level' and 'thinking_budget' were set after merging thinking
+#:     configuration values. 'thinking_level' takes precedence for Gemini 3+ models;
+#:     'thinking_budget' will be ignored.
+#:
+#: `thinking_level` has no "off" — the accepted values are minimal, low, medium, high
+#: (`ChatGoogleGenerativeAI.thinking_level`) — so `minimal` is the floor this model
+#: exposes. A reasoning count of exactly zero is not reachable here, and reporting one
+#: would be a measurement nobody took.
+#:
+#: `response_mime_type` makes the reply a JSON object by contract rather than by
+#: instruction, which is the half of the directive that does hold.
+#:
+#: Set per call rather than at construction: the client is built once and shared with the
+#: formatting turn, which must keep its thinking.
+_STRUCTURED_CALL_PARAMS: dict[str, Any] = {
+    "thinking_level": "minimal",
+    "response_mime_type": "application/json",
+}
+
 
 async def _structured_reply(
     llm, system: str, human: str, config: dict | None,
@@ -1988,15 +2063,22 @@ async def _structured_reply(
     than read: a condition becomes a query string, and a row becomes a claim that has to
     match the abstract it came from. Prose in either place would be unfalsifiable.
 
-    A capacity refusal is retried (`_retrying`) and, exhausted, reported as
-    `REPLY_RATE_LIMITED` rather than raised: both callers have a defined answer for a step
-    that could not run, and neither has one for an exception.
+    The call carries `_STRUCTURED_CALL_PARAMS`: no thinking, and a JSON mime type. Both are
+    latency and reliability, not fidelity — the model is being asked to transcribe what it
+    read, and the two failure modes observed in production were a reply that spent its
+    allowance on deliberation (`4ed74ac0`) and one that arrived as prose.
+
+    A capacity refusal is retried ONCE (`STRUCTURED_MAX_ATTEMPTS`) and, exhausted, reported
+    as `REPLY_RATE_LIMITED` rather than raised: both callers have a defined answer for a
+    step that could not run, and neither has one for an exception.
     """
     messages = [SystemMessage(content=system), HumanMessage(content=human)]
+    bound = _bounded_call(llm, _STRUCTURED_CALL_PARAMS)
     try:
         response = await _retrying(
-            lambda: llm.ainvoke(messages, config=config or {}),
+            lambda: bound.ainvoke(messages, config=config or {}),
             what="the literature extraction",
+            attempts=STRUCTURED_MAX_ATTEMPTS,
         )
     except Exception as exc:  # noqa: BLE001 - re-raised below unless it is capacity
         if not _rate_limited(exc):
@@ -2674,6 +2756,21 @@ COMPARATOR_REPLY_TOKENS = 4096
 #: same pool read in two halves only when the first read failed. Twenty records is what one
 #: query returns; a split is used only to keep a truncated reply from deleting the pass.
 COMPARATOR_POOL_SPLIT_THRESHOLD = 1
+
+
+def _bounded_call(llm, params: dict[str, Any]):
+    """The model with extra generation parameters for one call, when it can carry them.
+
+    `bind` is how a LangChain chat model takes per-call generation settings, and the
+    callers that pass a fake model into these functions do not have it. Asking for it and
+    falling back keeps the parameters a property of the real client rather than a
+    requirement every test double has to implement — the same rule `_bounded` follows for
+    the output ceiling, which this is the general form of.
+    """
+    binder = getattr(llm, "bind", None)
+    if binder is None:
+        return llm
+    return binder(**params)
 
 
 def _bounded(llm, tokens: int):

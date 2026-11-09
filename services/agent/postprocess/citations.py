@@ -1539,6 +1539,89 @@ def comparator_pmids(comparators: "list[dict] | None") -> frozenset[str]:
     return record_pmids(comparators)
 
 
+def published_literature_pmids(tool_calls: "list[dict] | None") -> frozenset[str]:
+    """The records a command DECLARED it published to the narrative.
+
+    A fifth channel, and the only one read off the call rather than off an array, because
+    of where the decision is made: the comparator step chooses the fallback records and
+    writes them onto the state, while settlement is a pure function of the turn's tool
+    calls and cannot see the state at all (`graph._settle`). So the step that publishes
+    them says so on the call that retrieved them, and every later stage reads one place.
+
+    Distinct from `literature_pmids` in exactly the way that matters: that function is
+    filtered by `scope` because a readmission-scope search returns a POOL, and a pool is
+    not the answer's evidence. This names only the records the engine itself handed to the
+    prompt — two of them, chosen and ranked — so a badge pointing at one is not an
+    identifier nobody verified. The pool remains uncitable, which is the rule
+    `_searched_for_evidence` exists to enforce.
+
+    There is no clinical data here: the identifiers come from the response the tool
+    returned, and the decision to publish them is `deterministic._fallback_literature`'s.
+    """
+    found: set[str] = set()
+    for call in tool_calls or []:
+        if not isinstance(call, dict):
+            continue
+        response = call.get("response")
+        if not isinstance(response, dict):
+            continue
+        for pmid in response.get("fallback_pmids") or ():
+            text = str(pmid or "").strip()
+            if text:
+                found.add(text)
+    return frozenset(found)
+
+
+def allowed_literature_pmids(
+    tool_calls: "list[dict] | None" = None,
+    *,
+    conversation_calls: "list[dict] | None" = None,
+    replay: bool = False,
+    comparators: "list[dict] | None" = None,
+    fallback_literature: "list[dict] | None" = None,
+    thread_literature: "list[dict] | None" = None,
+) -> frozenset[str]:
+    """Every PMID a turn may write as `^[PMID: …]`, from every channel, in one place.
+
+    The allowance had four authors. Settlement unioned three of them, the guardrail unioned
+    three of them, and neither included the fourth — so the records a turn retrieved when no
+    cohort verified were published to the reader's reference list and then DELETED from the
+    prose that named them, because settlement runs first and had never heard of them
+    (`90000069`, `90000020`, 2026-11-08: both badges `citation_out_of_range`, both papers
+    still in the drawer).
+
+    One function, because the two passes must allow exactly the same set. A second spelling
+    of the union is not a redundancy that catches mistakes — it is the mechanism by which
+    the passes disagree, and the disagreement is invisible: the answer reads as uncited and
+    the drawer still lists the paper.
+
+    The four channels are not interchangeable and each keeps its own reason for being
+    citable:
+
+    * `literature_pmids` — the records the turn's OWN evidence search returned. Its
+      `scope` decides, so a comparator pool is never counted here.
+    * `comparator_pmids` — the cohorts the comparison table verified and drew.
+    * `record_pmids(fallback_literature)` — the records a turn with no verified cohort still
+      retrieved and published, so the section that summarises them can cite them. These
+      arrive twice and that is deliberate: as the array a caller holds (the guardrail and
+      the composer do), and as `published_literature_pmids(tool_calls)` for settlement,
+      which holds only the calls. One union, so the two readings cannot disagree.
+    * `record_pmids(thread_literature)` — the records an earlier turn of this thread rested
+      on, so a follow-up quoting them is not inventing an identifier.
+
+    `replay` is the caller's own fact, not derivable here: whether the replayed turns'
+    searches are in scope for THIS answer (`wants_literature` at settlement, `literature_replay`
+    at the guardrail). Both are stamped once, upstream, and both mean the same thing.
+    """
+    pmids = literature_pmids(
+        tool_calls or [], (conversation_calls or None) if replay else None)
+    return (pmids
+            | comparator_pmids(comparators)
+            | record_pmids(fallback_literature)
+            | published_literature_pmids(tool_calls)
+            | record_pmids(thread_literature))
+
+
 def cited_pmids(answer: str) -> list[str]:
     """The PMIDs the ANSWER names, in the order it first names them.
 

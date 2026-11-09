@@ -1292,24 +1292,28 @@ def guard_answer(
         answer,
         citations.citation_bound(tool_calls, conversation_calls,
                                  evidence_state=evidence_state),
-        citations.literature_pmids(
-            tool_calls, conversation_calls if literature_replay else None
-        )
-        # And the verified cohorts the comparison table published. `/ehr`'s narrative
-        # explains the comparison those rows are half of, so it has to be able to name
-        # them; the allowance is the rows that were DRAWN, not the retrieval pool, so a
-        # PMID the table refused is still an identifier nobody verified.
-        | citations.comparator_pmids((state or {}).get("comparators"))
-        # And the records a turn with NO verified cohort still retrieved and published.
-        # Same rule as the cohorts, one channel over: the briefing summarises what those
-        # studies report about readmission and cites them, so a badge naming one is a
-        # verified identifier rather than an invention — the array is the extraction's own
-        # ranked pool, filtered to adult cohorts for this admission (2026-11-08).
-        | citations.record_pmids((state or {}).get("fallback_literature"))
-        # And the published records an earlier turn of this thread cited. Same rule again:
-        # the thread retrieved them and its answer rested on them, so a follow-up naming
-        # one is quoting the thread rather than inventing an identifier (2026-11-04).
-        | citations.record_pmids((state or {}).get("thread_literature")),
+        # The badge allowance, from the one function that defines it — the SAME call
+        # `answer.settle_answer` makes, so the two passes cannot disagree about which
+        # identifiers are real. They did: settlement ran first with a three-channel union
+        # that did not know the records a zero-cohort turn had just published, deleted
+        # their badges, and this pass was never shown them (`90000069`, `90000020`,
+        # 2026-11-08).
+        citations.allowed_literature_pmids(
+            tool_calls,
+            conversation_calls=conversation_calls if literature_replay else None,
+            replay=literature_replay,
+            # The cohorts the comparison table published: the rows that were DRAWN, not the
+            # retrieval pool, so a PMID the table refused is still an identifier nobody
+            # verified.
+            comparators=(state or {}).get("comparators"),
+            # And the studies a turn with no verified cohort retrieved and published
+            # anyway, which its risk section summarises and cites.
+            fallback_literature=(state or {}).get("fallback_literature"),
+            # And the published records an earlier turn of this thread cited: the thread
+            # retrieved them and its answer rested on them, so a follow-up naming one is
+            # quoting the thread rather than inventing an identifier (2026-11-04).
+            thread_literature=(state or {}).get("thread_literature"),
+        ),
     )
     flags += f
 

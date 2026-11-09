@@ -384,6 +384,7 @@ def settle_answer(
     wants_literature: bool = False,
     comparators: list[dict] | None = None,
     thread_literature: list[dict] | None = None,
+    fallback_literature: list[dict] | None = None,
     evidence_state: Any = None,
 ) -> Settlement:
     """Decide the answer's markers: vocabulary, bound, then the reader's numbering.
@@ -411,6 +412,14 @@ def settle_answer(
     widens the badge allowance by exactly those identifiers and nothing else — the pool a
     search returns is not evidence, and `citations.cited_articles` is what decided which
     records of it a turn actually rested on.
+
+    `fallback_literature` is the fourth channel and the one this function used to be blind
+    to: the studies a turn with no verified cohort still retrieved and published. Ignoring
+    them here made `enforce_citations` delete the badges the prose had just written, while
+    `presentation` — which reads that array directly — kept the rows in the drawer. The
+    answer read as uncited over a reference list naming the papers, and the deletion was
+    invisible because the allowance was assembled here rather than asked for
+    (`citations.allowed_literature_pmids`).
     """
     # The array the answer's markers address. With `evidence_state` it is the session
     # record's — a passage the conversation retrieved twice occupies one position, so the
@@ -419,34 +428,29 @@ def settle_answer(
     # resolves through and what `turn.py` republishes for the next turn's replay.
     bound = citations.citation_bound(tool_calls or [], replayed_tool_calls or [],
                                      evidence_state=evidence_state)
-    # The badge allowance follows the same rule the bound does, on the one axis where it
-    # may: a turn that is itself about published records can cite the records the replay
-    # showed it. `wants_literature` is stamped once by `graph.ask` — the decision that let
-    # the earlier search stay in the transcript in the first place — so this stays a read
-    # of that decision rather than a second opinion about the question, and a chart turn
-    # still cites nothing it was not shown.
-    pmids = citations.literature_pmids(
-        tool_calls or [], (replayed_tool_calls or None) if wants_literature else None,
-    )
-    # And the cohorts the comparison table published, which is a third channel beside the
-    # note passages and the answer's own literature — the same union `guardrail` builds
-    # (`citations.comparator_pmids`), made here so both passes allow the same set.
+    # The badge allowance, from the one function that defines it.
     #
-    # `/ehr`'s comparator search declares `scope="readmission"`, so `literature_pmids`
-    # deliberately does NOT count it: those records are the table's, not the answer's own
-    # citation list, and counting them would draw the briefing as a literature turn with
-    # twenty-five candidates. The consequence was that a `^[PMID: …]` badge naming a
-    # cohort the table had just verified resolved against an empty allowance and was
-    # deleted here — so it never reached the guardrail below, which already knew the row.
-    # Measured 2026-11-03: `^[PMID: 24108298]` on 90000069 and both comparator badges on
-    # 90000015 were removed as `citation_out_of_range` while the references drawer listed
-    # the records they named.
-    pmids = pmids | citations.comparator_pmids(comparators)
-    # And the records an earlier turn of the thread verified. Same rule, one layer out: a
-    # follow-up answering from the thread's own published benchmark is not naming an
-    # identifier nobody retrieved — the thread retrieved it, and `replay_messages`
-    # carried back the records that turn cited.
-    pmids = pmids | citations.record_pmids(thread_literature)
+    # It was assembled here for three channels: the turn's own evidence search, the cohorts
+    # the table verified, and the records an earlier turn rested on. `/ehr`'s comparator
+    # search declares `scope="readmission"`, so `literature_pmids` deliberately does not
+    # count it — those records are the table's, not the answer's own citation list — and the
+    # compensation for that was the comparator rows. When the rows were empty there was
+    # nothing to compensate with, and a badge naming a study the turn HAD just published was
+    # removed here as `citation_out_of_range` (measured 2026-11-03 on a verified cohort;
+    # again 2026-11-08 on both fallback records of `90000069` and `90000020`).
+    #
+    # `replay` carries the one fact this function cannot derive: whether the replayed turns'
+    # searches are in scope for THIS answer. `wants_literature` is stamped once by
+    # `graph.ask` — the decision that let the earlier search stay in the transcript — so this
+    # stays a read of that decision rather than a second opinion about the question.
+    pmids = citations.allowed_literature_pmids(
+        tool_calls or [],
+        conversation_calls=replayed_tool_calls or None,
+        replay=wants_literature,
+        comparators=comparators,
+        fallback_literature=fallback_literature,
+        thread_literature=thread_literature,
+    )
 
     flags: list[str] = []
     settled_prose: str | None = None

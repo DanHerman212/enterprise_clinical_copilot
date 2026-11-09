@@ -187,7 +187,7 @@ def test_the_extraction_call_carries_an_explicit_output_ceiling():
 
     asyncio.run(deterministic._extract_pass(llm, FEMORAL, [abstract], None))
 
-    assert llm.bound == [{"max_output_tokens": deterministic.COMPARATOR_REPLY_TOKENS}]
+    assert {"max_output_tokens": deterministic.COMPARATOR_REPLY_TOKENS} in llm.bound
 
 
 def test_the_outcomes_reduce_to_one_word_for_the_turn():

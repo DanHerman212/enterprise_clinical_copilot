@@ -97,14 +97,18 @@ def test_a_content_refusal_is_not_a_capacity_refusal():
 
 
 def test_a_throttled_structured_reply_is_retried_and_succeeds(_no_real_waiting):
-    llm = _Refusing(failures=2)
+    llm = _Refusing(failures=1)
 
     payload, why = asyncio.run(deterministic._structured_reply(llm, "sys", "human", None))
 
     assert why == ""
     assert payload == {"condition": "cervical spondylosis"}
-    assert llm.calls == 3, "the two refusals did not both cost an attempt"
-    assert [attempt for attempt, _ in _no_real_waiting] == [1, 2]
+    # One refusal costs one attempt, and the second attempt is the one that lands. The
+    # ceiling is two (Stage 8, 2026-11-09): this step is an enrichment whose failure is
+    # already handled, so it is not worth four attempts and ten seconds of the reader's
+    # time — measured at 34.7 s of a 67.6 s `/ehr` on `90000069`.
+    assert llm.calls == 2, "the refusal did not cost an attempt"
+    assert [attempt for attempt, _ in _no_real_waiting] == [1]
 
 
 def test_a_structured_reply_that_never_gets_through_reports_capacity(_no_real_waiting):
@@ -115,7 +119,7 @@ def test_a_structured_reply_that_never_gets_through_reports_capacity(_no_real_wa
 
     assert payload is None
     assert why == deterministic.REPLY_RATE_LIMITED
-    assert llm.calls == deterministic.RETRY_MAX_ATTEMPTS
+    assert llm.calls == deterministic.STRUCTURED_MAX_ATTEMPTS
     assert "refused for capacity" in deterministic.reply_problem(why)
 
 

@@ -46,6 +46,7 @@ from services.agent.postprocess.citations import (
     MARKER_PATTERN,
     RETRIEVAL_TOOLS,
     EvidenceLedger,
+    allowed_literature_pmids,
     cited_numbers,
     cited_pmids,
     citable_passages,
@@ -387,12 +388,36 @@ def compose_presentation(question: str, answer: str,
     # records this turn read and named, so they enter the same numbered array as every other
     # published source. Without this a turn whose verification failed published NOTHING from
     # the literature, which is the asymmetry a reader reported (2026-11-08).
+    # The records this turn may publish AND cite, from the one function that decides it.
+    # `settlement`, the guardrail and this layer each used to assemble their own answer to
+    # "which PMIDs are real", and the answers differed: the badges were deleted upstream
+    # while these rows were still drawn, so the reference list named two papers nothing in
+    # the prose pointed at (`90000069`, `90000020`, 2026-11-08). One authority, read here,
+    # is what makes that shape impossible rather than unlikely — a record may only reach
+    # the drawer if the same set that protects its badge contains it.
+    allowed_pmids = allowed_literature_pmids(
+        tool_calls,
+        conversation_calls=evidence_calls if literature_replay else None,
+        replay=literature_replay,
+        comparators=comparators,
+        fallback_literature=fallback_literature,
+        thread_literature=thread_literature,
+    )
+    # And only the fallback records this answer actually NAMES. The older rule — an empty
+    # `cited` publishes everything — is right for a turn's own search, which it read
+    # whether or not it wrote a badge. It is wrong here: these records were handed to the
+    # prompt as material for ONE section, so a row for one the section never cited is a
+    # row with nothing pointing at it, which is the defect a reader reported.
     fallback_records = [
         article for article in fallback_literature or []
         if isinstance(article, dict)
+        and str(article.get("pmid") or "").strip() in named_thread_pmids
     ]
-    published_records = _published_records(
-        literature, [*thread_records, *fallback_records])
+    published_records = [
+        article for article in _published_records(
+            literature, [*thread_records, *fallback_records])
+        if str(article.get("pmid") or "").strip() in allowed_pmids
+    ]
     # The lab card reads THIS turn's calls, not the conversation's. `evidence_calls` is
     # the right array for what the answer rests on and for how its markers are numbered
     # (TF-10, 2026-10-23), but a chart is not a provenance statement — it is a drawing

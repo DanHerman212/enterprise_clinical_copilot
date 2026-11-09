@@ -82,27 +82,32 @@ def _row(pmid: str) -> dict:
 
 # --- 1. recall: a thin pool is broadened, a healthy one is not -----------------
 
-def test_a_thin_pool_is_re_broadened_and_merged_by_pmid():
-    """Four records is not a pool, and the strict clause is usually why.
+def test_a_thin_pool_is_broadened_by_the_tool_and_read_once_by_the_engine():
+    """Four records is not a pool, and the horizon clause is usually why.
 
     `90000047` (salpingectomy) returned four: the horizon clause requires the abstract to
     spell "30-day" or "thirty days", which an ectopic-pregnancy series rarely does. The
     second query drops that requirement and the two pools are merged, de-duplicated.
+
+    That second query is the TOOL's since Stage 9A. It ran here for one stage, and the two
+    halves drifted: this side re-filtered and re-ranked a pool the tool had already
+    filtered and ranked, on three booleans that had no notion of cohort size. What the
+    engine is left with is one call and the decision about how many abstracts to read —
+    asserted here, with the broadening itself asserted in
+    `test_benchmark_ranking_2026_11_09.py`.
     """
     searched: list[tuple] = []
 
     async def search(terms, wide):
         searched.append((terms, wide))
-        if wide:
-            return {"query": "strict", "articles": STRICT}
-        # The broader pass overlaps the strict one by one record.
+        # The tool's answer to the thin pool: both passes merged, de-duplicated, ranked.
         return {"query": "broad", "articles": [*POOL[2:], POOL[0]]}
 
     pass_ = asyncio.run(deterministic.candidate_pass(search, TARGET))
 
-    assert [call[1] for call in searched] == [True, False], (
-        "the broadened query is the second pass and it drops the horizon clause")
-    assert pass_.candidates == 6, "the merged pool holds each record once"
+    assert len(searched) == 1, (
+        "the engine asked twice; broadening belongs to search_readmission_benchmarks")
+    assert pass_.candidates == 5, "the merged pool holds each record once"
     pmids = [article["pmid"] for article in pass_.aligned]
     assert len(pmids) == len(set(pmids))
 
@@ -149,6 +154,10 @@ def test_a_pass_that_verifies_nothing_still_hands_over_the_pool():
 
     A caller that knows only `rows == []` cannot tell "the literature said nothing" from
     "the literature said it without a number"; the pool is what tells them apart.
+
+    The pool is what the extraction READ, which is the capped pool since Stage 9A
+    (`MAX_EXTRACTION_CANDIDATES = 5`): the fixture is six records and the sixth is not
+    published as evidence because it was never in front of the model.
     """
     async def search(terms, wide):
         return {"query": "strict", "articles": POOL}
@@ -158,7 +167,7 @@ def test_a_pass_that_verifies_nothing_still_hands_over_the_pool():
 
     assert result.rows == []
     assert [article["pmid"] for article in result.pool] == [
-        article["pmid"] for article in POOL]
+        article["pmid"] for article in POOL[:deterministic.MAX_EXTRACTION_CANDIDATES]]
 
 
 def test_the_top_two_ranked_records_are_published_when_no_row_verified():

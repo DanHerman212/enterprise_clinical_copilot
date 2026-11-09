@@ -1288,6 +1288,13 @@ Rules, and each one has been broken before:
   it and say that the cohort's procedure is more invasive than this admission's.
 - At most two comparators. If more qualify, keep the two whose cohorts are closest to
   this patient.
+- EVALUATE EVERY ABSTRACT. The abstracts are ordered: the ones that state a numeric
+  readmission rate come first, and each carries its cohort size. Read all of them, and emit
+  one comparator row for EACH abstract that states a numeric 30-day readmission percentage
+  — up to three rows — ordered by largest cohort sample size first. Never stop after
+  extracting only the first abstract if additional abstracts in the list also state a
+  30-day readmission rate: on 2026-11-09 a run over ten abstracts, two of which reported a
+  30-day readmission rate, produced one row for an abstract that reported none.
 - ANSWER COMPACTLY. No preamble, no summary of how many you read, no commentary on an
   abstract you refused. This reply is machine-read and a reply cut off by the output
   ceiling is discarded whole — a missing row costs the reader a comparison, and an extra
@@ -1322,10 +1329,15 @@ def literature_comparator_input(target: Any, articles: list[dict]) -> str:
         "RETRIEVED ABSTRACTS:",
     ]
     for article in articles or []:
+        cohort = article.get("sample_size_n")
         lines.append(
             f'<record pmid="{article.get("pmid")}">\n'
             f'title: {article.get("title")}\n'
             f'journal: {article.get("journal")} ({article.get("pub_date")})\n'
+            # The size the abstract states, read off it by the retriever. Stated here
+            # because the extraction is asked to order its rows largest-cohort-first: a
+            # model told to rank on a number it cannot see would be ordering on the prose.
+            f'{"cohort size: " + str(int(cohort)) if isinstance(cohort, int) else "cohort size: not stated"}\n'
             f'abstract:\n{article.get("abstract")}\n'
             "</record>"
         )

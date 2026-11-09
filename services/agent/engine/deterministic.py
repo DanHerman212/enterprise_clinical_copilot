@@ -798,9 +798,10 @@ def _pass_rows(passes: list["ComparatorPass"]) -> list[dict]:
 
     `retrieved -> pool_size -> aligned -> verified` is the whole diagnostic: `candidates`
     is what PubMed returned, `pool_size` what survived the population filter, `aligned`
-    what the extraction turn was given (the cap, so it stops at ten) and `verified` what
-    could be quoted. Without `pool_size` the line read "aligned=10, excluded=0", which
-    looks like ten matches and is really ten reads (`cr`, 2026-11-08).
+    what the extraction turn was given (the cap, so it stops at
+    `MAX_EXTRACTION_CANDIDATES`) and `verified` what could be quoted. Without `pool_size`
+    the line read "aligned=10, excluded=0", which looks like ten matches and is really ten
+    reads (`cr`, 2026-11-08).
     """
     return [
         {"query": entry.query, "wide": entry.wide, "candidates": entry.candidates,
@@ -1501,15 +1502,6 @@ MAX_ANCHORS = 8
 #: one record is not a comparison — and the second pass costs two E-utilities calls and a
 #: model call, which is worth spending on a turn that has nothing to show.
 MIN_COMPARATORS = 2
-
-#: Below this many records, the strict readmission query is re-asked with the broadened
-#: outcome clause and the two pools are merged. Measured 2026-11-08: a salpingectomy
-#: admission (`90000047`) returned FOUR records from the strict query, because the horizon
-#: clause requires the abstract to spell "30-day" or "thirty days" and an ectopic-pregnancy
-#: series usually does not. Four abstracts is not a pool, and the matrix drew nothing from
-#: it. Eight is roughly the point at which the extraction cap has something to choose
-#: between rather than merely something to read.
-MIN_STRICT_CANDIDATES = 8
 
 #: How many ranked records a turn with no verified 30-day cohort still publishes. Two,
 #: because the section that draws on them is one paragraph: one study is an anecdote and
@@ -2481,6 +2473,10 @@ class ComparatorPass:
     """
 
     query: str
+    #: Which of the tool's two passes the caller asked for, as the tool-call contract
+    #: spells it. Since Stage 9A the tool runs the horizon-pinned pass and broadens it on
+    #: its own, so this records the request and not the retrieval: read `query` for what
+    #: was actually asked of PubMed, and `pool_size` for what came back.
     wide: bool
     candidates: int
     aligned: int
@@ -2552,20 +2548,12 @@ async def extract_comparators(
     in a test — and it is passed in rather than imported so that this module keeps no
     dependency on the tool surface and the policy can be exercised without NCBI.
 
-    ONE query and ONE model call, which is a reversal of the two-pass design and worth
-    stating plainly. That design asked the condition alone first, with the exact-phrase
-    outcome clause, and only asked the broadened question if the narrow pass failed to
-    produce two rows. It was built for precision and it cost the reader time: measured
-    2026-11-02, a `/ehr` turn showed `Searching the Literature` twice in the workflow and
-    two five-second extraction gaps in the trace, 25.6s for a briefing that had already
-    done its chart work.
-
-    The precision the narrow pass was built for is no longer bought locally at all: the
-    pool from one broadened query is handed to the extraction turn whole, in PubMed's
-    order, and the model that reads the abstracts decides which of them is this patient's
-    cohort. Ordering the pool in Python before the model saw it only decided which records
-    the model was allowed to consider. What the reader gets is the union the two passes
-    were trying to approximate, read once.
+    ONE retrieval call and ONE model call. The two passes are not gone, they moved: the
+    strict horizon-pinned query and the broadened fallback both run inside
+    `services.mcp.tools.literature.search_readmission_benchmarks`, so a turn still shows
+    `Searching the Literature` once and the broadening it performs is invisible to the
+    workflow. Measuring it here cost the reader time — 2026-11-02, two extraction gaps and
+    25.6s — and measuring it there costs nothing.
 
     Empty stays a real answer at every stage: a query that returns nothing, a pool that is
     all another population, and a pool that is all a different condition are three
@@ -2576,7 +2564,7 @@ async def extract_comparators(
         llm, target, candidates.aligned, config)
     rejected = [*candidates.refused, *refused_rows]
     return ComparatorResult(
-        rows=verified[:max_rows], rejected=rejected,
+        rows=_by_evidence_scale(verified)[:max_rows], rejected=rejected,
         passes=[candidates.report(verified=len(verified),
                                   rejected=candidates.refused, outcome=outcome)],
         # The array the extraction read, not the rows it produced. A caller that publishes
@@ -2584,6 +2572,30 @@ async def extract_comparators(
         # literature says about readmission, which is a different claim from a 30-day rate
         # and is labelled as one wherever it is drawn.
         pool=[article for article in candidates.aligned if isinstance(article, dict)],
+    )
+
+
+def _by_evidence_scale(rows: list[dict] | None) -> list[dict]:
+    """Verified rows, the strongest evidence first.
+
+    The table draws at most two rows, so which two is a clinical statement: a numeric rate
+    from a registry is a benchmark, and "no patient was readmitted" from a 33-patient series
+    is a finding. When the model proposes both, the order it proposes them in is the order
+    it happened to read them.
+
+    Sorted on three facts the row now carries from the pool it came out of — whether its
+    abstract states a numeric rate, the cohort size, and the retrieval score — with the
+    model's order kept as the tie-breaker so a run stays reproducible. A row with none of
+    them (a verified row whose pool article is missing) sorts last rather than being
+    dropped: it passed verification, so it is a real row.
+    """
+    return sorted(
+        [row for row in rows or [] if isinstance(row, dict)],
+        key=lambda row: (
+            not row.get("has_readmission_rate_sentence"),
+            -(int(row.get("sample_size_n") or 0)),
+            -float(row.get("rank_score") or 0.0),
+        ),
     )
 
 
@@ -2598,6 +2610,8 @@ class CandidatePass:
     """
 
     query: str
+    #: The scope the caller asked for. The tool decides which clause to ask; see
+    #: `ComparatorPass.wide`.
     wide: bool
     candidates: int
     aligned: tuple[dict, ...]
@@ -2636,7 +2650,14 @@ class CandidatePass:
 #:
 #: What is refused is reported, not silent: `ComparatorPass.candidates` still states what
 #: PubMed returned, so a table built from the top ten of twenty-five is visible as such.
-MAX_EXTRACTION_CANDIDATES = 10
+MAX_EXTRACTION_CANDIDATES = 5
+
+#: How many of those slots are reserved for abstracts that actually state a rate.
+#:
+#: The whole five, so the reservation is stated rather than implied: an abstract with no
+#: readmission figure cannot produce a row, and one that can is worth a slot ahead of one
+#: that cannot. When fewer than five qualify the remainder fills from the ranked pool.
+_RATE_BEARING_SLOTS = 5
 
 
 def _comparator_relevance(article: dict, target: ClinicalTarget) -> tuple:
@@ -2675,64 +2696,51 @@ async def candidate_pass(search, target: ClinicalTarget) -> CandidatePass:
     """The one readmission query this turn runs, and what it left to read.
 
     The clinical half is the condition OR its anchors, which is what the tool builds from
-    a query plus its synonyms; the outcome half is the broadened clause, because a record
-    that says "readmission within 30 days" matches none of the four exact phrases and the
-    reader is owed the record that says it. One query rather than two: the second existed to
-    catch what the first missed, and asking once with the broader clause and ranking the
-    result catches it without a second round trip.
+    a query plus its synonyms. ONE query: retrieval, broadening, the population filter and
+    the ranking all live in `services.mcp.tools.literature.search_readmission_benchmarks`
+    as of Stage 9A, because they were split between that module and this one and the two
+    halves drifted — this side ranked on three booleans with no notion of cohort size, so a
+    33-patient series that readmitted nobody sorted above a 1,140-patient cohort reporting
+    3.4% (`90000069`, 2026-11-09).
 
-    Nothing here decides whether a record is ABOUT this patient's condition. Every adult
-    record the search returned goes to the extraction turn, in the order PubMed ranked
-    them — no local ordering and no local cut. A Python sort over titles and abstracts was
-    deciding which records the model was allowed to read, and each of its rules — name the
-    condition, state a percentage, name the operation — was a guess about clinical
-    relevance standing where reading the abstract belongs. A token gate used to refuse
-    records before the model saw them, which turned a synonym into a silent refusal.
+    What is left here is the part only this side can do: choosing how many abstracts to put
+    in one prompt, and putting the ones that can produce a row first.
 
-    The one bound that is not a judgement about relevance is `MAX_EXTRACTION_CANDIDATES`,
-    which is about how long the reply is: the top of PubMed's own ranking, sized so one
-    extraction call cannot truncate.
+    RATE-BEARING FIRST, THEN THE REST. `MAX_EXTRACTION_CANDIDATES` used to be ten records
+    in the ranker's order, which on `90000090` meant one rate-bearing abstract and nine
+    that could not produce a row — and the model proposed exactly one column, the wrong one.
+    A prompt is a budget, and spending it on abstracts that cannot yield a figure is how a
+    matrix stays empty over a pool that contained two usable cohorts.
     """
     result = await search([target.condition, *target.anchors], True)
     result = result if isinstance(result, dict) else {}
     query = str(result.get("query") or "")
     articles = _articles_of(result)
-    # A strict query that found almost nothing is re-asked with the broader outcome clause,
-    # and what it adds joins the same pool. The two clauses ask the SAME question with
-    # different tolerances: the first requires the abstract to name the horizon ("30-day",
-    # "thirty days"), the second accepts any readmission phrase. For a common operation the
-    # first is right and returns twenty records; for a narrow one it returns four and the
-    # comparison is lost before any model reads an abstract (`90000047`, 2026-11-08).
-    #
-    # Merged rather than replaced, and the strict records keep their order: they are the
-    # ones whose abstracts state the horizon, and `_comparator_relevance` ranks on that
-    # fact, so putting them first costs nothing and keeps a run reproducible.
-    if len(articles) < MIN_STRICT_CANDIDATES:
-        broader = await search([target.condition], False)
-        broader = broader if isinstance(broader, dict) else {}
-        known = {str(article.get("pmid") or "").strip() for article in articles}
-        added = [article for article in _articles_of(broader)
-                 if str(article.get("pmid") or "").strip() not in known]
-        logger.info(
-            "comparators: strict query returned %d record(s), below the %d that make a "
-            "pool; the broadened query added %d more",
-            len(articles), MIN_STRICT_CANDIDATES, len(added),
-        )
-        articles += added
     pool, refused = adult_cohorts(articles, target)
-    # Ranked BEFORE the extraction cap, because PubMed's order is a relevance order for
-    # the QUERY and not for this comparison. `cr` (2026-11-08) lost its one usable cohort
-    # this way: `38645981` — a vaginal-hysterectomy series reporting 2.7% and 4.0% at 30
-    # days — was candidate #4 of twenty, so it survived the cap; but on a pool whose
-    # first ten happened to be generic gynae-oncology papers, the file that states a
-    # 30-day rate sits at #11 and is never read. The score is what a reader would use to
-    # choose which ten abstracts to read: does it state a 30-day rate, is it about this
-    # admission's procedure, is it about its condition. PubMed's order survives as the
-    # tie-breaker, which is what makes the result reproducible.
-    ranked = sorted(pool, key=lambda article: _comparator_relevance(article, target))
+    # The tool returns its pool already ranked, with the score and the reason on each
+    # record. A pool without them was injected by a test double, and then this side ranks
+    # for itself — the same question, asked of the mock, so a fixture keeps its meaning.
+    if any("rank_score" in article for article in pool):
+        ranked = sorted(pool, key=lambda article: -float(article.get("rank_score") or 0.0))
+    else:
+        ranked = sorted(pool, key=lambda article: _comparator_relevance(article, target))
+    rate_bearing = [article for article in ranked
+                    if article.get("has_readmission_rate_sentence")]
+    selected = (rate_bearing[:_RATE_BEARING_SLOTS]
+                + [article for article in ranked if article not in rate_bearing])
+    selected = selected[:MAX_EXTRACTION_CANDIDATES]
+    logger.info(
+        "comparators: reading %d abstract(s), %d of them rate-bearing: %s",
+        len(selected), len([a for a in selected if a.get("has_readmission_rate_sentence")]),
+        ", ".join(
+            f"{article.get('pmid')}(score={article.get('rank_score')},"
+            f"n={article.get('sample_size_n')},"
+            f"rate={'y' if article.get('has_readmission_rate_sentence') else 'n'})"
+            for article in selected),
+    )
     return CandidatePass(
         query=query, wide=True, candidates=len(articles),
-        aligned=tuple(ranked[:MAX_EXTRACTION_CANDIDATES]),
+        aligned=tuple(selected),
         refused=tuple(refused),
         pool_size=len(pool),
         excluded=len(refused),
@@ -2798,6 +2806,20 @@ def _reply_rows(payload: dict, pool: list[dict], target: ClinicalTarget,
     """
     verified, refused = verify_comparators(
         payload.get("comparators"), pool, target)
+    # The retrieval's own judgement of the record, carried onto the row it produced: the
+    # cohort size the abstract stated, the score it was ranked by, and whether it states a
+    # numeric rate at all. The table draws two rows and the section quotes them, so WHICH
+    # two survive is a clinical statement, and it cannot be made from a row that knows only
+    # the rate it reports (`90000069`: a 33-patient series at 0% was the only row).
+    by_pmid = {str(article.get("pmid") or "").strip(): article
+               for article in pool or [] if isinstance(article, dict)}
+    for row in verified:
+        article = by_pmid.get(str(row.get("pmid") or "").strip())
+        if not isinstance(article, dict):
+            continue
+        for field in ("sample_size_n", "rank_score", "has_readmission_rate_sentence"):
+            if field in article and field not in row:
+                row[field] = article[field]
     # `rejected` is OPTIONAL and empty by contract: the prompt stopped asking the model for
     # a written refusal per abstract on 2026-11-08, because the essay was most of the reply
     # and a long reply is one that gets cut off. The read stays for two reasons — a reply

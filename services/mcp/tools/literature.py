@@ -45,9 +45,10 @@ the moment it answered correctly. Never fabricate a citation either.
 
 import asyncio
 import logging
+import math
 import re
 import xml.etree.ElementTree as ElementTree
-from typing import Annotated, Any
+from typing import Annotated, Any, Sequence
 
 import httpx
 from pydantic import Field
@@ -460,6 +461,181 @@ READMISSION_CANDIDATE_POOL = 25
 _READMISSION_TERM = re.compile(r"readmi(?:ssion|tted)|rehospitali[sz]ation", re.IGNORECASE)
 _PERCENT = re.compile(r"\d+(?:\.\d+)?\s*%")
 
+#: The horizon the comparison is made at, as the vocabulary an abstract uses.
+_THIRTY_DAY = re.compile(
+    r"\b30[\s-]?days?\b|\bthirty[\s-]?days?\b|\bwithin 30 days\b", re.IGNORECASE
+)
+
+#: A readmission count stated as ZERO in words. A real result, and a different claim from
+#: "3.4%": it is a statement about a cohort small enough for zero to be its finding.
+_VERBAL_ZERO = re.compile(
+    r"no\s+(?:patient|cases?|patients)\s+(?:was|were)\s+(?:re)?admitted"
+    r"|\bno\s+readmissions?\b|\bzero\s+readmissions?\b"
+    r"|\bnone\s+(?:of\s+the\s+patients\s+)?(?:was|were)\s+(?:re)?admitted"
+    r"|\bno\s+unplanned\s+readmissions?\b",
+    re.IGNORECASE,
+)
+
+#: A cohort size as a paper states it: "1140 patients", "2,996 admissions", "n = 583",
+#: "All 33 patients", "2996 hip fracture patients". The largest figure in the abstract is
+#: taken, because a study that reports its whole registry and then a subgroup reports the
+#: registry as its size.
+#:
+#: Up to three words may sit between the figure and the noun, because a cohort is named as
+#: "2996 hip fracture patients" as often as "2996 patients" — without the gap `39420969`
+#: stated no size at all, and the +17.4 its 2,996 patients had earned was silently missing
+#: (2026-11-09).
+#:
+#: "hospitalisations" is on the list because a COPD cohort says "a total of 782
+#: hospitalizations for AECOPD were enrolled" and not "782 patients" — measured 2026-11-09
+#: on `37037836`, which stated its size and parsed as unknown.
+#:
+#: Two digits at minimum. The figure has to be a cohort and not an event count: "an
+#: incisional hematoma was reported in 2 patients" states a complication, and reading it as
+#: a sample size would put a two-patient denominator under a benchmark. Ten is the floor
+#: below which a series is not a benchmark anyway.
+_SAMPLE_SIZE = re.compile(
+    r"(?:n\s*=\s*|\b)(\d[\d,]{1,})\s+(?:[A-Za-z][A-Za-z()-]*\s+){0,3}?"
+    r"(?:patients|cases|admissions|hospitali[sz]ations|encounters|discharges|procedures|"
+    r"adults|subjects|participants|individuals|people|recipients)\b",
+    re.IGNORECASE,
+)
+
+#: A thousands separator written as a space: "75 000 people", "1 859 patients". PubMed
+#: abstracts use it, and without collapsing it first the digits after the space read as a
+#: cohort of their own — measured 2026-11-09, `40664407` ("Around 75 000 people suffer from
+#: hip fractures yearly") parsed as N=0.
+_SPACED_THOUSANDS = re.compile(r"(?<=\d)\s(?=\d{3}(?!\d))")
+
+#: Below this many records the strict readmission query is re-asked without the horizon
+#: clause and the two pools are merged.
+#:
+#: The same threshold the agent used, moved here with the retrieval it belongs to. The
+#: strict clause requires the abstract to spell "30-day" or "thirty days"; a series that
+#: reports "readmission at one month" matches the broadened clause and not the strict one.
+MIN_STRICT_CANDIDATES = 8
+
+#: `_PEDIATRIC_MARKERS`, mirrored. A cohort of children is a different patient, not a
+#: narrower band of this one, and the filter belongs with retrieval rather than four
+#: hundred lines away in the engine. The engine keeps its own copy because the two
+#: deployables do not share a code path: the agent image carries `services/agent/` and the
+#: MCP *config* module, not `services/mcp/tools/`, so an import from here would not resolve
+#: in the container. Collapsing the two is Stage 9B's job.
+_PEDIATRIC_MARKERS = re.compile(
+    r"\b(?:pediatric|paediatric|children|child|infant|infants|neonatal|neonate|"
+    r"adolescent|adolescents|juvenile|under 18|< ?18)\b",
+    re.IGNORECASE,
+)
+
+
+def names_pediatric_population(*parts: Any) -> bool:
+    """Whether any of these texts describes a cohort of children."""
+    return any(_PEDIATRIC_MARKERS.search(f" {str(part or '')} ") for part in parts)
+
+
+def _sentences(abstract: str) -> list[str]:
+    """The abstract as sentences, without a regex that needs shell-hostile characters."""
+    return [part.strip() for part in re.split(r"(?<=[.]) ", abstract or "") if part.strip()]
+
+
+def readmission_rate_sentence(abstract: str) -> str:
+    """The first sentence that states a READMISSION figure, or "".
+
+    A sentence qualifies only when it names readmission AND carries a percentage. That
+    pairing is what separates a benchmark from a paper that reports mortality, length of
+    stay or complications: `39420969` spent a sentence on "males were more likely to be
+    readmitted at 30 … (P < .001)" and a separate one on "30-day mortality … 6.6% vs
+    4.5%", and neither states a readmission rate (measured 2026-11-09).
+    """
+    for sentence in _sentences(abstract):
+        if _READMISSION_TERM.search(sentence) and _PERCENT.search(sentence):
+            return sentence
+    return ""
+
+
+def sample_size(abstract: str) -> int | None:
+    """The largest cohort the abstract states, or None when it states no size.
+
+    Spaced thousands are tightened first so "75 000 people" is one figure rather than 75 and
+    000, and a single digit is refused so an event count is not read as a denominator.
+    """
+    text = abstract or ""
+    previous = None
+    while previous != text:
+        previous, text = text, _SPACED_THOUSANDS.sub("", text)
+    sizes = [
+        int(value.replace(",", "")) for value in _SAMPLE_SIZE.findall(text)
+        if int(value.replace(",", "")) >= 10
+    ]
+    return max(sizes) if sizes else None
+
+
+def score_benchmark_candidate(article: dict, *, condition: str = "",
+                              anchors: Sequence[str] = ()) -> dict:
+    """How well this record can serve as a 30-day benchmark, and why.
+
+    Five facts, added up, all of them read off the abstract the reader could read:
+
+        +40  a sentence states a readmission figure  (the only thing a row needs)
+        +25  that sentence, or the abstract, names a 30-day horizon
+        +0..30 clinical match: +18 procedure/anchor in the text (+6 if in the title),
+                              +12 condition in the text (+4 if in the title)
+        +0..20 cohort size, as `min(20, 5*log10(N))`
+        -15  a verbal zero, or a cohort under 50
+
+    The size term is the one this lacked. `_comparator_relevance` ranked three booleans and
+    was blind to scale, so a 33-patient single-centre series that readmitted nobody sorted
+    above a 1,140-patient NSQIP cohort reporting 3.4%, and the matrix showed the former
+    (`90000069`, 2026-11-09). A log scale because the difference that matters is an order
+    of magnitude, not a patient: N=1,140 is +15.3 and N=2,996 is +17.4, while N=33 is +7.6
+    and the penalty takes it to -7.4.
+
+    The verbal-zero penalty is not a judgement about the finding. "No patient was
+    readmitted within 30 days" is a real result, and it is the result of a small cohort;
+    when a larger numeric cohort exists for the same operation it is the better benchmark,
+    and when none does this one still surfaces because nothing outranks it.
+
+    Deterministic: every term is a substring or a regex over text the record publishes, and
+    ties break on the caller's order, which is PubMed's.
+    """
+    abstract = str(article.get("abstract") or "")
+    title = str(article.get("title") or "")
+    text = f"{title} {abstract}".lower()
+
+    rate_sentence = readmission_rate_sentence(abstract)
+    states_rate = bool(rate_sentence)
+    horizon = bool(_THIRTY_DAY.search(rate_sentence or abstract))
+
+    score = 0.0
+    if states_rate:
+        score += 40.0
+    if states_rate and horizon:
+        score += 25.0
+
+    condition_text = str(condition or "").strip().lower()
+    anchor_texts = [str(anchor or "").strip().lower() for anchor in anchors if str(anchor or "").strip()]
+    if condition_text and condition_text in text:
+        score += 12.0 + (4.0 if condition_text in title.lower() else 0.0)
+    for anchor in anchor_texts:
+        if anchor and anchor != condition_text and anchor in text:
+            score += 18.0 + (6.0 if anchor in title.lower() else 0.0)
+            break
+
+    size = sample_size(abstract)
+    if size is not None:
+        score += min(20.0, round(5.0 * math.log10(max(size, 1)), 2))
+
+    verbal_zero = bool(_VERBAL_ZERO.search(abstract))
+    if (not states_rate and verbal_zero) or (size is not None and size < 50):
+        score -= 15.0
+
+    return {
+        "rank_score": round(score, 2),
+        "sample_size_n": size,
+        "has_readmission_rate_sentence": states_rate,
+    }
+
+
 
 def _clinical_clause(terms: str | list[str] | tuple[str, ...]) -> str:
     """The clinical half of a broadened query, as an OR of quoted phrases.
@@ -504,13 +680,20 @@ def readmission_query(
 
 
 def quantitative_readmission_articles(articles: list[dict]) -> list[dict]:
-    """The records whose abstract states both a readmission and a percentage.
+    """The records that state a readmission result at all, as a number or as a zero.
 
-    A number is the only thing a comparator needs from a record, and most records for a
-    condition do not state one: they report an odds ratio, a five-year figure, or a
-    qualitative finding. Filtering here rather than asking a model to look is what keeps
-    the model's context to records that can produce a row at all — and what makes the
-    empty result an honest answer rather than a model's opinion about relevance.
+    A number is what a comparator needs, and most records for a condition do not state one:
+    they report an odds ratio, a five-year figure, or a qualitative finding. Filtering here
+    rather than asking a model to look is what keeps the model's context to records that
+    can produce a row at all — and what makes the empty result an honest answer rather than
+    a model's opinion about relevance.
+
+    A VERBAL ZERO counts as a number, which it did not until 2026-11-09. "No patient was
+    readmitted within 30 days" is a real finding about a real cohort, and it was reaching
+    the pool only when the same abstract happened to contain some other percentage — so a
+    small series that readmitted nobody was dropped as having no figures, while the same
+    series with an unrelated 72% discharge rate survived to be ranked first. The ranker
+    now scores that kind of record down instead of the filter deleting it unseen.
     """
     kept: list[dict] = []
     for article in articles or []:
@@ -519,7 +702,7 @@ def quantitative_readmission_articles(articles: list[dict]) -> list[dict]:
         abstract = str(article.get("abstract") or "")
         if not abstract or not _READMISSION_TERM.search(abstract):
             continue
-        if not _PERCENT.search(abstract):
+        if not _PERCENT.search(abstract) and not _VERBAL_ZERO.search(abstract):
             continue
         kept.append(article)
     return kept
@@ -531,39 +714,93 @@ async def search_readmission_benchmarks(
     wide: bool = False,
     max_results: int = READMISSION_CANDIDATE_POOL,
 ) -> LiteratureResult:
-    """Live PubMed records that could serve as readmission comparators, or none.
+    """Live PubMed records ranked as readmission benchmarks, or none.
 
-    `terms` is the primary condition on the first pass and the anchor synonyms on the
-    broadened one. `wide` selects the second-pass outcome clause.
+    This is the whole retrieval decision, in one place: which query to ask, whether to ask
+    a second one, which cohorts belong to this patient's population, and in what order a
+    model should read them. It used to be split — the tool chose the query and the agent
+    re-asked, re-filtered and re-ranked — and the two halves drifted: the agent's ranker was
+    three booleans with no notion of cohort size, and the tool's pool was filtered on a
+    different rule than the agent's (`90000069`, `90000090`, 2026-11-09).
 
-    This function runs ONE query and returns the whole filtered pool — `max_results`
-    defaults to the pool rather than to what a model should read. Ranking the candidates
-    against the patient's own condition, and truncating to what the extraction turn can
-    read, is the caller's job: it is the only layer that knows which phrase is the
-    patient's condition, and on 2026-11-02 truncating on PubMed's order dropped a
-    qualifying cohort from a pool that contained it.
+    `terms` is the condition followed by its anchor synonyms; `condition` and `anchors` are
+    read off it, so the caller passes one list and the ranking names the same phrases the
+    query was built from.
+
+    `wide` is carried, not consulted: it is what the tool-call contract calls the
+    benchmark scope, and both passes run here regardless. A flag that switched the passes
+    off would be a way for a caller to silently lose the broadening that `90000047`
+    needed.
+
+    1. ASK THE STRICT QUESTION. The horizon clause pins "30-day" / "thirty days".
+    2. ASK IT AGAIN, BROADER, IF THAT WAS THIN. Under `MIN_STRICT_CANDIDATES` the horizon
+       clause is dropped and the two pools are merged by pmid. A series that reports
+       "readmission at one month" matches the broadened clause and not the strict one, and
+       on 2026-11-08 a salpingectomy admission returned four records and drew no matrix.
+    3. DROP COHORTS OF CHILDREN. Before ranking, so a paediatric cohort cannot take a slot.
+    4. SCORE AND SORT. `score_benchmark_candidate`, descending, so the model reads the
+       records that can produce a row first.
+
+    Every returned article carries `rank_score`, `sample_size_n` and
+    `has_readmission_rate_sentence`, so a Langfuse trace shows the order and the reason
+    without anyone reconstructing it — which is what the last audit had to do, and why the
+    ranking was unobservable.
 
     Empty is a real answer and is reported as one (`{"articles": [], ...}`), never as an
     error. A degraded search propagates unchanged, because "the search did not happen" and
     "the search found nothing" are different statements and the caller has to be able to
     tell them apart.
     """
-    term = readmission_query(terms, wide=wide)
+    condition = terms[0] if isinstance(terms, (list, tuple)) and terms else str(terms or "")
+    anchors = [str(term).strip() for term in
+               (terms[1:] if isinstance(terms, (list, tuple)) else []) if str(term).strip()]
+
+    strict_term = readmission_query(terms, wide=False)
     result = await _search(
-        term, retmax=READMISSION_CANDIDATE_POOL,
+        strict_term, retmax=READMISSION_CANDIDATE_POOL,
         reldate_days=READMISSION_RECENCY_YEARS * 366,
     )
     if result.get("degraded") or result.get("error"):
         return result
 
     articles = quantitative_readmission_articles(result.get("articles") or [])
-    articles = articles[:max_results]
-    if not articles:
+    term = strict_term
+    if len(articles) < MIN_STRICT_CANDIDATES:
+        broad_term = readmission_query(terms, wide=True)
+        broader = await _search(
+            broad_term, retmax=READMISSION_CANDIDATE_POOL,
+            reldate_days=READMISSION_RECENCY_YEARS * 366,
+        )
+        if not (broader.get("degraded") or broader.get("error")):
+            known = {str(article.get("pmid") or "") for article in articles}
+            added = [article for article in quantitative_readmission_articles(
+                broader.get("articles") or [])
+                if str(article.get("pmid") or "") not in known]
+            _LOG.info(
+                "literature: strict query returned %d record(s), below the %d that make a "
+                "pool; the broadened query added %d more",
+                len(articles), MIN_STRICT_CANDIDATES, len(added),
+            )
+            articles += added
+            term = broad_term if added else strict_term
+
+    adults = [
+        article for article in articles
+        if not names_pediatric_population(
+            article.get("title"), article.get("journal"), article.get("abstract"))
+    ]
+    for article in adults:
+        article.update(score_benchmark_candidate(
+            article, condition=str(condition), anchors=anchors))
+    adults.sort(key=lambda article: -float(article.get("rank_score") or 0.0))
+    adults = adults[:max_results]
+
+    if not adults:
         return _empty(
             term, "PubMed returned no record stating a 30-day readmission rate.",
         )
-    _LOG.info("literature: %d benchmark record(s) for %r", len(articles), term[:80])
-    return {"query": term, "returned": len(articles), "articles": articles}
+    _LOG.info("literature: %d benchmark record(s) for %r", len(adults), term[:80])
+    return {"query": term, "returned": len(adults), "articles": adults}
 
 
 async def search_literature(
@@ -603,8 +840,10 @@ async def search_literature(
         Field(
             description=(
                 "readmission scope only: clinical synonyms for the same condition. "
-                "Supplying them runs the broadened second pass (horizon-and-outcome "
-                "clause, OR of quoted phrases) instead of the first."
+                "They are OR'd with the query so a record naming any of them is a "
+                "statement about the same condition. They do not choose the query "
+                "form: the retrieval asks the horizon-pinned question first and "
+                "broadens it only if that pool is thin."
             ),
         ),
     ] = None,

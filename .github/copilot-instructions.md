@@ -1,5 +1,17 @@
 ## NON-NEGOTIABLE GOVERNANCE & ANTI-HACKING LAWS
 
+0. **Deploy & Commit Authorization (highest precedence):**
+   - NEVER `git commit`, NEVER `git push`, NEVER `gcloud builds submit`, NEVER
+     `gcloud builds triggers run`, and NEVER deploy, without express authorization from the
+     user for that specific change, in that turn.
+   - Authorisation for one stage does not carry to the next. Ask again, every time.
+   - Pushing to `main` fires the Cloud Build trigger and deploys to Cloud Run. **A push is a
+     deploy.** There is no commit-only path that is safe.
+   - When a directive says "report X before committing", produce the report and STOP. Doing
+     both in one turn is a violation, even when the report is accurate and the suites pass.
+   - The loop is: implement → run both suites → live verification → report the diff, the
+     test counts and the evidence → **stop** → wait for authorization → then commit/push.
+
 1. **Strict Scope Enforcement (`Authorized Scope`):**
    - You may ONLY create or modify files explicitly listed in the current prompt's `Authorized Scope`.
    - Modifying any file outside `Authorized Scope` is a hard failure.

@@ -101,6 +101,26 @@ class LiteratureArticle(TypedDict):
     authors: str
     abstract: str
     url: str
+    # The benchmark ranking, as the retrieval computed it: the composite score, the cohort
+    # size the abstract states, and whether a sentence states a readmission figure. Absent
+    # on a general `/pubmed` search, which ranks by PubMed relevance rather than by
+    # evidence, and present on every readmission benchmark.
+    #
+    # Declared for the reason `granularity` is, and the reason matters more here. These
+    # three keys ARE the ranking: the agent reads them to put the abstracts that can
+    # produce a row first, to carry the cohort size onto the verified row, and to order two
+    # verified rows against each other. Undeclared, they were dropped from the payload the
+    # client received — measured 2026-11-09, the tool scored a record `n=10153503,
+    # score=119.0` and the agent saw neither, re-ranked the pool with the three-boolean
+    # fallback and could not tell a rate-bearing abstract from a mortality-only one. The
+    # ranking was correct inside the tool and invisible outside it, which is the drift this
+    # consolidation exists to remove.
+    rank_score: NotRequired[float]
+    # Null when the abstract states no cohort size, which is a fact about the paper and not
+    # a missing field: "not stated" is what the ranking scored it on, and an absent key
+    # would be indistinguishable from a payload built before this existed.
+    sample_size_n: NotRequired[int | None]
+    has_readmission_rate_sentence: NotRequired[bool]
 
 
 class LiteratureResult(TypedDict):

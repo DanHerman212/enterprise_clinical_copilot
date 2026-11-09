@@ -52,8 +52,15 @@ def test_the_served_path_keeps_the_synthesis_level():
 # --------------------------------------------------------------------------------------
 
 
-def test_the_input_bound_is_ten_and_the_reply_ceiling_is_the_client_default():
-    assert deterministic.MAX_EXTRACTION_CANDIDATES == 10
+def test_the_input_bound_is_five_and_the_reply_ceiling_is_the_client_default():
+    """Five since Stage 9A, and the number is the point rather than the ceiling.
+
+    Ten abstracts in PubMed's order was one rate-bearing cohort and nine that could not
+    produce a row, and the model proposed the wrong one (`90000090`, 2026-11-09). The
+    reply ceiling is unchanged: five abstracts fit comfortably in the client default,
+    which is what let the ceiling come back down from twice that.
+    """
+    assert deterministic.MAX_EXTRACTION_CANDIDATES == 5
     assert deterministic.COMPARATOR_REPLY_TOKENS == 4096
 
 

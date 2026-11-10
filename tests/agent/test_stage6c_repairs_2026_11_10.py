@@ -476,13 +476,19 @@ def _flatten(text: str) -> str:
 
 
 def test_the_labs_rules_say_a_whole_panel_names_every_analyte():
-    """`dev_t1_05`: an all-normal panel, and the answer named the movers only."""
+    """`dev_t1_05`: an all-normal panel, and the answer named the movers only.
+
+    Stage 6F replaced the illustrative values with the rule they illustrated, so what is
+    asserted here is the requirement: a moving in-range series is reported, and every
+    remaining analyte is named rather than dropped.
+    """
     text = _flatten(prompts.LABS_FORMATTING)
 
     assert "THE WHOLE PANEL MEANS EVERY ANALYTE IN IT" in text
     assert "no analyte in it may be silently omitted" in text
     assert "stayed within its reference interval" in text
-    assert "hemoglobin moving 14.0 to 13.4" in text
+    assert "Any analyte whose readings shifted across the stay is reported" in text
+    assert "leaving it out because it was never abnormal loses a series" in text
 
 
 def test_the_labs_rules_still_answer_only_what_was_asked():

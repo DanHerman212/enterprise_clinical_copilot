@@ -15,9 +15,18 @@ class PredictionFactor(TypedDict):
     feature: str
     contribution: float
     direction: str
-    # The patient's own value for the feature, read from the row that was scored. Absent
-    # when the attribution names an aggregated parent (`discharge_location`) or the row
-    # has no value for it — absence is a fact, so it is left out rather than stated as 0.
+    # The patient's own value for the feature, read from the row that was scored.
+    #
+    # Three states, and the difference between the last two is the point:
+    #
+    # * a number — the value the booster scored, published at clinical precision;
+    # * ABSENT — the attribution names an aggregated parent (`discharge_location` is
+    #   thirteen one-hot columns) and there is no single column whose value it could be;
+    # * `None` — the column exists and this admission's row holds NULL. The model scored a
+    #   missing value, which is a fact about the evidence and is stated as one. It is not
+    #   cross-filled from `get_lab_trends`: a laboratory series is a different measurement
+    #   (a series' last reading is not a maximum), so quoting it as the model's input would
+    #   invent the input the model read.
     #
     # Declared here because an undeclared key is dropped from the structured payload the
     # client receives, and this one is the difference between an answer that states what
@@ -29,8 +38,9 @@ class PredictionFactor(TypedDict):
     # produces: a row value of `0` for `oncology_flag` reached the client as `0.0`, and
     # the prompt's rule to quote a served value exactly then had a number to copy that no
     # clinician writes. The union emits `anyOf [integer, number]`, and the validator
-    # keeps an integer as an integer (canary, 2026-11-04).
-    value: NotRequired[int | float]
+    # keeps an integer as an integer (canary, 2026-11-04). `None` joins the union for the
+    # NULL-row case, so the wire schema accepts an explicit null as well.
+    value: NotRequired[int | float | None]
 
 
 class PredictionResult(TypedDict):
@@ -68,6 +78,15 @@ class RetrievalPassage(TypedDict):
     # note is returned instead. Declared here because a key the schema does not declare is
     # dropped from the structured payload the client receives.
     granularity: NotRequired[str]
+    # Which list this passage is, on `discharge_medications` only.
+    #
+    # `dedicated`: the note has a heading whose purpose is a discharge medication list.
+    # `narrative`: it does not, and the passage is the course or the plan instead.
+    #
+    # Declared because the difference decides whether a drug is a prescription or an
+    # administration, and until this key existed every consumer had to infer it from the
+    # section NAME — the one thing a fallback deliberately changes.
+    medication_source: NotRequired[str]
 
 
 class RetrievalResult(TypedDict):
@@ -78,6 +97,10 @@ class RetrievalResult(TypedDict):
     # Present when an empty result needs explaining — no discharge note, or none of the
     # summary sections. Declared for the same reason as `granularity`.
     note: NotRequired[str]
+    # `discharge_medications` only: whether a heading exists that is a discharge
+    # medication list, as opposed to the narrative fallback. False means the text came
+    # from the course or the plan, so a drug named in it may be one the stay administered.
+    dedicated_section_present: NotRequired[bool]
 
 
 class LiteratureArticle(TypedDict):

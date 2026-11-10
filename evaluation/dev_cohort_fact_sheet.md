@@ -321,8 +321,8 @@ Sections present: `history_of_present_illness`, `brief_hospital_course`, `physic
 |---|---|
 | age | 69 |
 | gender | Female |
-| discharge_location | Home with home health |
-| length_of_stay_days | 7.91667 |
+| discharge_location | — |
+| length_of_stay_days | — |
 | prior_inpatient_days | 13.4167 |
 | prior_admission_count | 2 |
 | recent_ed_visits | 0 |
@@ -383,8 +383,8 @@ Sections present: `discharge_summary`.
 |---|---|
 | age | 78 |
 | gender | Female |
-| discharge_location | Home |
-| length_of_stay_days | 7.83333 |
+| discharge_location | — |
+| length_of_stay_days | — |
 | prior_inpatient_days | 0 |
 | prior_admission_count | 0 |
 | recent_ed_visits | 0 |

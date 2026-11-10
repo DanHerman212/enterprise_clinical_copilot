@@ -32,6 +32,26 @@ def _source() -> FeatureSource:
     return get_feature_source()
 
 
+#: Fields that only exist because there was a stay.
+#:
+#: `index_los_days` is a real number on an outpatient row — the encoder built the row as
+#: though it were an admission — and `discharge_location` is that row's disposition.
+#: Neither describes a visit: the encounter has no length of stay and nothing was
+#: discharged. Dropping them here means no consumer can repeat the number, whatever it
+#: chooses to do with the rest of the profile.
+STAY_ONLY_PROFILE_FIELDS: tuple[str, ...] = ("index_los_days", "discharge_location")
+
+#: The decoder's own word for a visit (`dependencies/features/profile.py`,
+#: `ENCOUNTER_LABELS`). Matched as a prefix so a later relabelling that keeps the noun
+#: still classifies, and because nothing else in that vocabulary starts with this word.
+OUTPATIENT_PREFIX = "outpatient"
+
+
+def _is_outpatient(profile: dict[str, Any]) -> bool:
+    return str(profile.get("encounter_type") or "").strip().lower().startswith(
+        OUTPATIENT_PREFIX)
+
+
 def _error(hadm_id: int, code: str, message: str) -> dict[str, Any]:
     return tool_error(code, message, hadm_id=hadm_id, feature_source=FEATURE_SOURCE)
 
@@ -60,6 +80,9 @@ def _profile(hadm_id: int) -> dict[str, Any]:
             hadm_id, "incomplete_features",
             "The feature source returned no profile for this admission.",
         )
+    if _is_outpatient(fields):
+        fields = {key: value for key, value in fields.items()
+                  if key not in STAY_ONLY_PROFILE_FIELDS}
     return {
         "hadm_id": hadm_id,
         "profile": fields,

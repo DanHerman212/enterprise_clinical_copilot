@@ -766,6 +766,7 @@ def _no_medication_sections_payload(hadm_id: int, note_id: str | None) -> dict[s
               note_id, hadm_id)
     return {"hadm_id": hadm_id, "query": "discharge medications",
             "returned": 0, "passages": [],
+            "dedicated_section_present": False,
             "note": "no discharge medication section found in this note"}
 
 
@@ -823,12 +824,19 @@ def _search_medication_sections(hadm_id: int) -> dict[str, Any]:
             "section": name,
             "text": body,
             "retrieval": "deterministic",
+            # Which list this is, stated rather than left to be inferred from the section
+            # name. A drug named in a `dedicated` passage is on the record's discharge
+            # list; one named in a `narrative` passage is a drug the hospital course or
+            # the plan mentions, which may be an inpatient administration.
+            "medication_source": (
+                "dedicated" if name in _DEDICATED_MED_SECTIONS else "narrative"),
         })
 
     if not passages:
         return _no_medication_sections_payload(hadm_id, note_id)
     return {"hadm_id": hadm_id, "query": "discharge medications",
-            "returned": len(passages), "passages": passages}
+            "returned": len(passages), "passages": passages,
+            "dedicated_section_present": bool(dedicated)}
 
 
 async def discharge_medications(hadm_id: int) -> RetrievalResult | ToolError:

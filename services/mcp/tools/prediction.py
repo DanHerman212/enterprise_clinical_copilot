@@ -209,9 +209,25 @@ def _scored_factor(factor: dict, row: dict) -> dict:
         "contribution": round(float(factor["attribution"]), 4),
         "direction": "increases" if float(factor["attribution"]) > 0 else "decreases",
     }
-    value = _row_value(row, str(factor["feature"]))
-    if value is not None:
-        entry["value"] = _clinical_value(value)
+    feature = str(factor["feature"])
+    if feature not in row:
+        # An aggregated parent (`discharge_location` is thirteen one-hot columns) has no
+        # single value to state. The key is omitted rather than nulled: a null would name
+        # a column whose absence it describes, and there is none.
+        return entry
+    value = _row_value(row, feature)
+    if value is None:
+        # The column exists and this admission's row holds NULL. The booster scored a
+        # missing value, and that is a fact about the evidence rather than about the
+        # patient — so it is stated explicitly as null instead of being dropped, which
+        # would make it indistinguishable from the aggregated parent above.
+        #
+        # It is NEVER filled from `get_lab_trends`. The series is a different measurement
+        # (a last reading is not a maximum), so a number taken from it would be presented
+        # as the input the model read when the model read nothing.
+        entry["value"] = None
+        return entry
+    entry["value"] = _clinical_value(value)
     return entry
 
 

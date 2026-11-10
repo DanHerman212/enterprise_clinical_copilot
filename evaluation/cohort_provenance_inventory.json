@@ -3061,10 +3061,8 @@
       "profile": {
         "admission_type": "Urgent (URGENT)",
         "age": "67",
-        "discharge_location": "Long-term acute care",
         "encounter_type": "outpatient encounter (no inpatient stay)",
         "gender": "Female",
-        "index_los_days": "24.7917",
         "insurance": "Medicare",
         "prior_admission_count": "28",
         "prior_inpatient_days": "272.917",
@@ -4144,10 +4142,8 @@
       "profile": {
         "admission_type": "Emergency (EW EMER.)",
         "age": "73",
-        "discharge_location": "Skilled nursing facility",
         "encounter_type": "outpatient encounter (no inpatient stay)",
         "gender": "Female",
-        "index_los_days": "5.875",
         "insurance": "Medicare",
         "prior_admission_count": "0",
         "prior_inpatient_days": "0",
@@ -4185,7 +4181,7 @@
             "contribution": 0.0838,
             "direction": "increases",
             "name": "discharge_location",
-            "value": "Skilled nursing facility"
+            "value": null
           }
         ],
         "model_version": "readmission-final-20260917173317",
@@ -5399,10 +5395,8 @@
       "profile": {
         "admission_type": "Emergency, direct admission (DIRECT EMER.)",
         "age": "69",
-        "discharge_location": "Home with home health",
         "encounter_type": "outpatient encounter (no inpatient stay)",
         "gender": "Female",
-        "index_los_days": "7.91667",
         "insurance": "Medicare",
         "prior_admission_count": "2",
         "prior_inpatient_days": "13.4167",
@@ -5745,10 +5739,8 @@
       "profile": {
         "admission_type": "Emergency (EW EMER.)",
         "age": "68",
-        "discharge_location": "Home",
         "encounter_type": "outpatient encounter (no inpatient stay)",
         "gender": "Male",
-        "index_los_days": "1.54167",
         "insurance": "Medicare",
         "prior_admission_count": "0",
         "prior_inpatient_days": "0",
@@ -7566,10 +7558,8 @@
       "profile": {
         "admission_type": "Urgent (URGENT)",
         "age": "78",
-        "discharge_location": "Home",
         "encounter_type": "outpatient encounter (no inpatient stay)",
         "gender": "Female",
-        "index_los_days": "7.83333",
         "insurance": "Medicare",
         "prior_admission_count": "0",
         "prior_inpatient_days": "0",
@@ -11238,10 +11228,8 @@
       "profile": {
         "admission_type": "Emergency, direct admission (DIRECT EMER.)",
         "age": "69",
-        "discharge_location": "Home with home health",
         "encounter_type": "outpatient encounter (no inpatient stay)",
         "gender": "Female",
-        "index_los_days": "7.91667",
         "insurance": "Medicare",
         "prior_admission_count": "2",
         "prior_inpatient_days": "13.4167",
@@ -11357,10 +11345,8 @@
       "profile": {
         "admission_type": "Urgent (URGENT)",
         "age": "78",
-        "discharge_location": "Home",
         "encounter_type": "outpatient encounter (no inpatient stay)",
         "gender": "Female",
-        "index_los_days": "7.83333",
         "insurance": "Medicare",
         "prior_admission_count": "0",
         "prior_inpatient_days": "0",
@@ -11759,7 +11745,7 @@
       }
     }
   },
-  "generated": "2026-11-10T13:03:18+00:00",
+  "generated": "2026-11-10T14:12:24+00:00",
   "llm_calls": 0,
   "n_records": 87,
   "recommended_holdout": {
@@ -12340,10 +12326,8 @@
         "profile": {
           "admission_type": "Urgent (URGENT)",
           "age": "67",
-          "discharge_location": "Long-term acute care",
           "encounter_type": "outpatient encounter (no inpatient stay)",
           "gender": "Female",
-          "index_los_days": "24.7917",
           "insurance": "Medicare",
           "prior_admission_count": "28",
           "prior_inpatient_days": "272.917",

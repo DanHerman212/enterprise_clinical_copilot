@@ -28,10 +28,12 @@ Empty is a real answer: {"passages": [], "returned": 0}. Never fabricate.
 import asyncio
 import logging
 import re
+import time
 from functools import lru_cache
 from typing import Annotated, Any
 
 from google import genai
+from google.api_core import exceptions as google_exceptions
 from google.cloud import aiplatform, bigquery
 from google.cloud.aiplatform.matching_engine.matching_engine_index_endpoint import (
     Namespace,
@@ -95,6 +97,27 @@ _SECTION_RE = re.compile(r"_(?P<section>(" + "|".join(_KNOWN_SECTIONS) + r"))_")
 
 _LOG = logging.getLogger(__name__)
 
+#: The failures a second attempt can fix, on the same terms as the prediction client
+#: (`dependencies/model_endpoint.py`, `TRANSIENT_PREDICT_ERRORS`): the stream was dropped, the
+#: deadline was missed, or the serving host returned an internal error. A `InvalidArgument` or
+#: a `NotFound` is the request, and retrying it fails identically.
+#:
+#: The measured case is a broken gRPC stream on the index query: on 2026-11-10 an evaluation
+#: turn recorded `ServiceUnavailable: 503 Stream removed (recvmsg:Connection reset by peer
+#: (104))` from `find_neighbors`, the tool answered `search_failed`, and the item was scored as
+#: a structural failure of the answer because nothing was retrieved (`dev_t5_01`).
+TRANSIENT_SEARCH_ERRORS: tuple[type[BaseException], ...] = (
+    google_exceptions.ServiceUnavailable,
+    google_exceptions.DeadlineExceeded,
+    google_exceptions.InternalServerError,
+    ConnectionError,
+)
+
+#: Attempt pauses, first attempt immediate. Two retries, 0.5 s and 1.5 s apart, which is what
+#: the prediction path settled on: long enough for a dropped stream to be re-established,
+#: short enough that a turn still answers inside the caller's ceiling.
+RETRY_PAUSES: tuple[float, ...] = (0.0, 0.5, 1.5)
+
 # The one parameter in this layer with a range. Defined once so the advertised schema and the
 # check that enforces it cannot disagree: a schema steers a caller, it does not stop one.
 TOP_K_MIN = 1
@@ -122,6 +145,63 @@ def _index_endpoint() -> aiplatform.MatchingEngineIndexEndpoint:
 @lru_cache(maxsize=1)
 def _embed_client() -> genai.Client:
     return genai.Client(vertexai=True, project=PROJECT, location=LOCATION)
+
+
+def _embed_with_retry(query: str) -> Any:
+    """One query embedded, retrying the failures a second attempt can fix.
+
+    Both handles here are cached for the process lifetime, and both hold their own HTTP/2
+    channel. A dropped stream belongs to that channel, so a retry on the same handle fails
+    the same way — `cache_clear()` before each retry is what makes the retry real rather
+    than nominal. The prediction client has done this since 2026-11-10
+    (`dependencies/model_endpoint.py`); the retrieval path had no retry at all, so a single
+    dropped stream became a `search_failed` for the whole turn.
+    """
+    last: BaseException | None = None
+    for pause in RETRY_PAUSES:
+        if pause:
+            time.sleep(pause)
+            _embed_client.cache_clear()
+        try:
+            return _embed_client().models.embed_content(
+                model=EMBEDDING_MODEL,
+                contents=[query],
+                config=types.EmbedContentConfig(
+                    output_dimensionality=OUTPUT_DIMENSIONALITY,
+                    task_type="RETRIEVAL_QUERY",
+                ),
+            )
+        except TRANSIENT_SEARCH_ERRORS as exc:
+            last = exc
+            continue
+    raise last if last is not None else RuntimeError("embed_content failed")
+
+
+def _find_neighbors_with_retry(query_vec: list[float], top_k: int,
+                               hadm_id: int) -> Any:
+    """The index queried, retrying the same three failures on a fresh channel.
+
+    Same shape as `_embed_with_retry`, for the same reason, and it is the call that
+    actually failed on 2026-11-10: `find_neighbors` raised
+    `ServiceUnavailable: 503 Stream removed (recvmsg:Connection reset by peer (104))` and
+    `rag_search` answered `search_failed` on its first attempt.
+    """
+    last: BaseException | None = None
+    for pause in RETRY_PAUSES:
+        if pause:
+            time.sleep(pause)
+            _index_endpoint.cache_clear()
+        try:
+            return _index_endpoint().find_neighbors(
+                deployed_index_id=DEPLOYED_INDEX_ID,
+                queries=[query_vec],
+                num_neighbors=top_k,
+                filter=[Namespace(RESTRICT_NAMESPACE, [str(hadm_id)])],
+            )
+        except TRANSIENT_SEARCH_ERRORS as exc:
+            last = exc
+            continue
+    raise last if last is not None else RuntimeError("find_neighbors failed")
 
 
 @lru_cache(maxsize=1)
@@ -303,14 +383,7 @@ def _search(hadm_id: int, query: str, top_k: int, *,
 
     # Embed the query.
     try:
-        resp = _embed_client().models.embed_content(
-            model=EMBEDDING_MODEL,
-            contents=[query],
-            config=types.EmbedContentConfig(
-                output_dimensionality=OUTPUT_DIMENSIONALITY,
-                task_type="RETRIEVAL_QUERY",
-            ),
-        )
+        resp = _embed_with_retry(query)
         query_vec = [float(v) for v in resp.embeddings[0].values]
     except Exception as exc:  # network, auth, model unreachable
         # Detail stays server-side (ECC-21): exception text can embed project
@@ -321,12 +394,7 @@ def _search(hadm_id: int, query: str, top_k: int, *,
 
     # Query the index with the hadm_id restrict applied server-side.
     try:
-        res = _index_endpoint().find_neighbors(
-            deployed_index_id=DEPLOYED_INDEX_ID,
-            queries=[query_vec],
-            num_neighbors=top_k,
-            filter=[Namespace(RESTRICT_NAMESPACE, [str(hadm_id)])],
-        )
+        res = _find_neighbors_with_retry(query_vec, top_k, hadm_id)
     except Exception as exc:
         _LOG.error("rag_search: index query failed for hadm %s", hadm_id, exc_info=exc)
         return _error(hadm_id, "search_failed",

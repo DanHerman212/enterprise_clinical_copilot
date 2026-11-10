@@ -651,10 +651,15 @@ def settle_answer(
     # pill, a drawer row and an evaluation source keep naming the same passage.
     display: dict[str, int] = {}
     if settled_prose:
+        # The one canonical spelling before the page's numbering is computed. A cluster
+        # the model wrote as `^[2], [5]` had one marker and one piece of prose in it; a
+        # display number is assigned per marker, so compaction has to see all of them or
+        # the reader is handed a pill-less `[5]` beside a numbered pill (Stage 6C).
+        settled_prose = citations.normalise_carets(settled_prose)
         settled_prose, display = citations.compact_display_numbers(settled_prose)
     if settled_deterministic:
         compacted, deterministic_map = citations.compact_display_numbers(
-            settled_deterministic)
+            citations.normalise_carets(settled_deterministic))
         settled_deterministic = compacted
         # The deterministic answer WINS at the point of serving — `turn.compose_success`
         # reads `deterministic_answer` in preference to the model's prose — so its map is

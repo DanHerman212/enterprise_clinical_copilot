@@ -1624,6 +1624,13 @@ async def ask(
         system_prompt = prompts.compose_system_prompt(
             allowed_tools=allowed_for_prompt,
             wants_literature=wants_literature,
+            # The published-records rules attach on the EVIDENCE as well as on the cue
+            # test. A follow-up that holds two retrieved cohorts and asks how they compare
+            # needs the rule that says cite them by PMID; `dev_t2_03` turn 3 asked exactly
+            # that, the cue test saw no cue, and the answer cited note passages on two
+            # published rates (2026-11-10).
+            has_literature=bool((session.literature if session is not None else None)
+                                or thread_literature),
             risk_driver_question=risk_driver_question,
             risk_score_question=risk_score_question,
             lab_driver_question=lab_driver_question,
@@ -1934,12 +1941,19 @@ async def replay_messages(
         # dialogue rather than the wire.
         messages.append(HumanMessage(
             content=routing.strip_admission_suffix(turn["question"], hadm_id)))
+        # Which of this turn's numbers addressed a published record, so the answer below can
+        # be put back onto identifiers rather than positions. Collected across the turn's
+        # searches because the number is the page's, not the call's.
+        turn_markers: dict[str, str] = {}
         for call_index, call in enumerate(turn.get("tool_calls") or []):
             payload = resolved.get((turn_index, call_index), call.get("payload"))
             # The arguments this replay will carry, copied so the candidate-pool scope can
             # be dropped from a PRUNED search without rewriting the caller's stored turn.
             call_args = dict(call.get("args") or {})
             if str(call.get("name")) in routing.LITERATURE_TOOLS:
+                for number, pmid in citations.literature_marker_rewrites(
+                        [{"name": call.get("name"), "response": payload}]).items():
+                    turn_markers.setdefault(number, pmid)
                 # A search returns a pool; a turn rests on one or two of it. Only the
                 # records that turn's own answer CITED are part of the thread's evidence,
                 # so only those reach `thread_literature` and `replayed_tool_calls`.
@@ -2004,9 +2018,18 @@ async def replay_messages(
         # retrieved has a position below this turn's first unit, and `restore_global_markers`
         # adds the offset back to land on the absolute position the record gives that
         # passage. That is the mechanism by which a reused position survives a replay.
+        # A published record's number is replaced by the record BEFORE the conversation's
+        # numbering is applied. `^[7]` on the replayed page meant "the seventh thing this
+        # turn displayed"; carried into `restore_global_markers` it becomes position
+        # `turn_offset + 7`, which here is a note section. Turn 3 of `dev_t2_03` read two
+        # cohort rates addressed that way and cited two note passages for them
+        # (2026-11-10). A badge names a record and survives the move unchanged, so the
+        # repair is to write the badge the turn should have written.
+        replayed_answer = citations.rewrite_literature_markers(
+            turn.get("answer") or "", turn_markers)
         messages.append(AIMessage(
             content=citations.restore_global_markers(
-                turn.get("answer") or "", turn.get("citation_map"), turn_offset)))
+                replayed_answer, turn.get("citation_map"), turn_offset)))
     if record_sink is not None:
         # The record this replay built, for a caller that would otherwise hydrate the same
         # payloads a second time. An empty record and `None` are different statements — the

@@ -42,11 +42,19 @@ DEPENDENCY_ERROR = "dependency_error"
 #: `invalid_argument` is the agent's own mistake and must be scored as one, or the gate
 #: goes blind to the agent misusing a tool. Everything outside this set is evaluated
 #: normally.
+#:
+#: `search_failed` and `embed_failed` joined on 2026-11-10. Both are the retrieval backend
+#: saying it could not be reached — the vector index and the embedding model respectively —
+#: and both were missing, so `dev_t5_01` was scored as a structural failure of an answer
+#: about evidence the tool never returned. That is the same fault `prediction_failed` was
+#: added for, one tool further out.
 INFRASTRUCTURE_ERROR_CODES: frozenset[str] = frozenset({
     "prediction_failed",
     "mcp_unavailable",
     "service_unavailable",
     "timeout",
+    "search_failed",
+    "embed_failed",
 })
 
 

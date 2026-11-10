@@ -388,13 +388,30 @@ async def compose_success(
     cited_records = [str(row.get("pmid") or "").strip()
                      for row in presentation.get("references") or []
                      if str(row.get("pmid") or "").strip()]
+    # The same rows with the number each was served under. A replayed answer carries the
+    # numbers its own page used (`^[7]`, `^[8]`), and a number means a different thing on
+    # the next turn: `dev_t2_03` turn 3 read a replayed `/ehr` answer whose cohort rates
+    # were `^[7]` and `^[8]` while this turn's record numbered 7 and 8 as two note
+    # sections, so the model addressed two published rates to two note passages
+    # (2026-11-10). The pair travels with the call so the replay can put the identifiers
+    # back, which is what `graph.replay_messages` does with it.
+    cited_markers = {
+        str(row["index"]): str(row["pmid"]).strip()
+        for row in presentation.get("references") or []
+        if str(row.get("pmid") or "").strip()
+        and isinstance(row.get("index"), int)
+        and not isinstance(row.get("index"), bool)
+    }
     if cited_records:
         for call in trimmed_calls:
             if call["name"] not in routing.LITERATURE_TOOLS:
                 continue
             response = call.get("response")
             if isinstance(response, dict) and "cited_pmids" not in response:
-                call["response"] = {**response, "cited_pmids": cited_records}
+                stamped = {"cited_pmids": cited_records}
+                if cited_markers:
+                    stamped["cited_markers"] = dict(cited_markers)
+                call["response"] = {**response, **stamped}
 
     # The trace, written once, now that the answer is settled AND composed. Two records,
     # and the order between them is the contract: what the turn asked for, and what the

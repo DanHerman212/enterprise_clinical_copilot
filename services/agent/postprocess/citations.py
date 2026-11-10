@@ -139,16 +139,69 @@ _CARETLESS_PMID_RE = re.compile(
     re.IGNORECASE,
 )
 
+#: A NUMERIC bracket written without its caret, at a position where a citation
+#: continuation is possible: `[ \t]*[,;]?[ \t]*` then `[5]`. The gap is the same one
+#: `_CLUSTER_GAP_RE` accepts between two markers, so this reads a cluster in exactly the
+#: form a model writes it: `^[2], [5]`.
+#:
+#: Strictly numeric, and only read immediately after a `^[...]` marker (see
+#: `normalise_carets`). `[95% CI 0.4-1.9]` is a confidence interval and not a citation, and
+#: a bracket that carries any non-digit other than the commas of a cluster is left alone.
+_CARETLESS_NUMERIC_RE = re.compile(
+    r"(?P<gap>[ \t]*[,;]?[ \t]*)\[\s*(?P<body>\d+(?:\s*,\s*\d+)*)\s*\]"
+)
+
 
 def normalise_carets(answer: str) -> str:
-    """Put the caret back on a PMID badge the model wrote without one.
+    r"""Put the caret back on a badge the model wrote without one.
 
-    Idempotent, and a no-op on prose that has none. Applied at the top of every function
-    that reads markers, so the caret-less form cannot survive to a reader.
+    Two repairs, and both exist because the marker language has exactly one spelling
+    (`MARKER_OPEN`) and every reader downstream scans for that one spelling.
+
+    1. A PMID badge written without its caret: `[PMID: 39592196]`. Printed verbatim to a
+       clinician on 2026-11-08 (`cp`, turn 2) while the drawer listed the same record as
+       row 10, because every pass in this module requires `\^\[` — so a caret-less badge
+       was not rewritten, not stripped, not counted as a citation and not resolvable. It
+       was prose.
+    2. A NUMERIC bracket that continues a cluster: `^[2], [5]` and `^[1], [2], [7]`. The
+       model writes the caret once at the start of a cluster and drops it on every later
+       bracket, and the same thing followed: `[5]` was never a marker, so `^[5]`'s unit
+       was never counted, never bound-checked and never resolvable. Measured on `dev_t2_02`
+       turn 3 (2026-11-10), where the raw output was `^[1], [2], [7]` and the served answer
+       carried `^[1], [2], [7]` with two of the three brackets as literal text.
+
+    The second repair is anchored on a `^[...]` marker and reads forward across the same
+    separator `_CLUSTER_GAP_RE` accepts between two markers, so only a bracket a model is
+    continuing a citation with is touched. `[95% CI 0.4-1.9]` is not numeric and is never
+    matched; neither is a bracket anywhere else in the sentence.
+
+    Idempotent, and a no-op on prose that has neither form. Applied at the top of every
+    function that reads markers, so neither shape can survive to a reader.
     """
     if not answer or "[" not in answer:
         return answer
-    return _CARETLESS_PMID_RE.sub(lambda match: "^" + match.group(0), answer)
+    repaired = _CARETLESS_PMID_RE.sub(lambda match: "^" + match.group(0), answer)
+    out: list[str] = []
+    last = 0
+    index = 0
+    while True:
+        marker = _ANY_MARKER_RE.search(repaired, index)
+        if marker is None:
+            break
+        out.append(repaired[last:marker.end()])
+        index = marker.end()
+        last = index
+        # Read the rest of the cluster: every bare numeric bracket separated from the
+        # marker before it by nothing, whitespace or a citation comma/semicolon.
+        while True:
+            tail = _CARETLESS_NUMERIC_RE.match(repaired, index)
+            if tail is None or tail.start() != index:
+                break
+            out.append(tail.group("gap") + "^[" + tail.group("body") + "]")
+            index = tail.end()
+            last = index
+    out.append(repaired[last:])
+    return "".join(out)
 
 
 def _marker_re(body: str, flags: int = 0) -> "re.Pattern[str]":
@@ -902,8 +955,15 @@ def renumber_citations(answer: str) -> str:
 
     A repeated marker on a list is hoisted onto the line that introduces it first
     (see `dedupe_list_citations`), so what is expanded is what will be read.
+
+    `normalise_carets` runs FIRST, since Stage 6C. A cluster the model wrote as
+    `^[2], [5]` has one marker and one piece of prose in it until the carets are put back,
+    and every step below — the list hoist, the cluster expansion, the vocabulary sweep —
+    reads markers. Normalising at the entry is what makes those three steps see the same
+    answer the model wrote.
     """
-    return _drop_unknown_markers(_renumber_citations(dedupe_list_citations(answer))[0])
+    return _drop_unknown_markers(_renumber_citations(
+        dedupe_list_citations(normalise_carets(answer)))[0])
 
 
 def cited_numbers(answer: str) -> list[int]:
@@ -1500,6 +1560,85 @@ def literature_pmids(
         str(article["pmid"]) for article in literature_articles(
             literature_calls(tool_calls, conversation_calls))
     )
+
+
+def literature_marker_rewrites(calls: "list[dict] | None") -> dict[str, str]:
+    """{display number: pmid} for the published records a turn's searches held.
+
+    The one fact a replay needs to put a replayed answer's cohort badges back onto their
+    identifiers, and the one fact the stored turn did not carry. `presentation` numbers a
+    turn `1..K` — note passages, then laboratory series, then the published records — and
+    records that numbering in `sources[].cite` against each record's `pmid`. `turn.py`
+    stamps those identifiers onto the search (`cited_pmids`) so the replay can prune to
+    what the turn rested on; this is the same stamp with the pair kept, so a replayed
+    answer's `^[7]` can be turned back into `^[PMID: 35464578]`.
+
+    The pair exists because a number is not an identifier across turns. `dev_t2_03` turn 3
+    opened on a replayed `/ehr` answer whose two published rates carried `^[7]` and
+    `^[8]` — the numbers they had on THAT turn's page — while `<session_evidence_state>`
+    numbered position 7 as `physical_exam` and 8 as `discharge_diagnosis`. The model read
+    two cohort rates addressed to two note sections, and wrote `^[1]` and `^[2]` of its own
+    (2026-11-10).
+
+    Reads `cited_markers` off each literature call, which `turn.py` writes beside
+    `cited_pmids`; a turn stored before this field existed contributes nothing and replays
+    exactly as it did.
+    """
+    markers: dict[str, str] = {}
+    for call in calls or []:
+        if not isinstance(call, dict):
+            continue
+        if str(call.get("name") or "") not in routing.LITERATURE_TOOLS:
+            continue
+        response = call.get("response")
+        if not isinstance(response, dict):
+            response = call.get("payload")
+        if not isinstance(response, dict):
+            continue
+        pairs = response.get("cited_markers")
+        if not isinstance(pairs, Mapping):
+            continue
+        for number, pmid in pairs.items():
+            key = str(number or "").strip()
+            value = str(pmid or "").strip()
+            if key.isdigit() and value:
+                markers.setdefault(key, value)
+    return markers
+
+
+def rewrite_literature_markers(answer: str, markers: Mapping[str, str]) -> str:
+    """A replayed answer's published-record numbers put back as `^[PMID: <id>]`.
+
+    A number addresses a position in one turn's page; an identifier addresses a record
+    wherever it is read. So a marker whose number `markers` holds becomes the badge that
+    names the same record, and a marker it does not hold is left for
+    `restore_global_markers` to renumber into the conversation's array.
+
+    A cluster is handled per number, and the numbers that were not records survive as a
+    cluster of their own: `^[2], ^[7]` on a sentence resting on a note passage and a cohort
+    becomes `^[2] ^[PMID: 35464578]`, one marker per claim, which is the shape the browser
+    draws and the shape the prompt asks for.
+    """
+    if not answer or not markers or "^[" not in answer:
+        return answer
+    text = normalise_carets(answer)
+    out: list[str] = []
+    last = 0
+    for match in _ANY_MARKER_RE.finditer(text):
+        body = match.group(1).strip()
+        if not _NUMERIC_BODY_RE.fullmatch(body):
+            continue
+        rewritten: list[str] = []
+        for number in _expand_citations(body):
+            pmid = markers.get(str(number))
+            token = f"^[PMID: {pmid}]" if pmid else f"^[{number}]"
+            if token not in rewritten:
+                rewritten.append(token)
+        out.append(text[last:match.start()])
+        out.append(" ".join(rewritten))
+        last = match.end()
+    out.append(text[last:])
+    return "".join(out)
 
 
 def record_pmids(rows: "Iterable[dict] | None") -> frozenset[str]:

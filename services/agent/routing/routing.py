@@ -349,6 +349,12 @@ _LITERATURE_CUES: tuple[tuple[str, ...], ...] = (
     ("systematic", "review"),
     ("pubmed",), ("guideline",), ("guidelines",),
     ("efficacy",), ("effectiveness",), ("benchmark",), ("benchmarks",),
+    # `research` and `peer reviewed` joined on 2026-11-10. A follow-up asking how "the
+    # peer-reviewed research from your first answer" compared with this patient's estimate
+    # carried neither cue, so `asks_for_literature` said no — and the turn that most needed
+    # the published-records rule (`dev_t2_03` turn 3) was the one turn given no cue-driven
+    # reason to read it.
+    ("research",), ("peer", "reviewed"),
 )
 
 

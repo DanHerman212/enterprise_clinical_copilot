@@ -443,7 +443,17 @@ def _lab_text(tool_calls: list[dict]) -> str:
 # and the patient's own figure is only ever handed over as a display string, so this is
 # the third control rather than the only one.
 
-_RISK_DECIMAL = re.compile(r"\b0\.\d{2,6}\b")
+#: A decimal that could be a probability or a driver's contribution, WITH its sign.
+#:
+#: The sign is part of the token because `top_factors[].contribution` is signed: a factor
+#: that decreases the estimate is served as `-0.0768`, and a pattern that matched only
+#: `0.0768` compared the magnitude of that number against a list holding its negative. The
+#: distance between the two is 0.1536, no half-unit tolerance covers it, and the number was
+#: removed from the sentence explaining it — leaving `(contribution -)`, with the minus sign
+#: stranded where its digits had been (`dev_t4_02` turn 3, 2026-11-10).
+#:
+#: `\b` after the sign keeps a trailing digit out: `10.0768` is not `0.0768`.
+_RISK_DECIMAL = re.compile(r"[+-]?\b0\.\d{2,6}\b")
 _RISK_PERCENT = re.compile(r"\b(\d{1,2}(?:\.\d{1,2})?)\s*%")
 # `%` gets no trailing \b (a word boundary needs a word char after it, and
 # "%" is followed by a space) — a decimal followed by % is the percent
@@ -613,6 +623,7 @@ def verify_risk_numbers(
     # reached its value and then had it removed. The contribution was the same defect in
     # the other direction: a driver answer that named `+0.0824` lost it (2026-11-10).
     measurements = [*_factor_values(tool_calls), *_contributions(tool_calls)]
+    contributions = _contributions(tool_calls)
     spans: list[tuple[int, int]] = []
 
     def supported(x: float, tol: float) -> bool:
@@ -620,6 +631,17 @@ def verify_risk_numbers(
 
     def measured(x: float, tol: float) -> bool:
         return any(abs(x - v) <= tol + 1e-12 for v in measurements)
+
+    def by_magnitude(x: float, tol: float) -> bool:
+        """A contribution matched by SIZE, whichever way it points.
+
+        The payload serves `contribution: -0.0768`, and a sentence may report that as
+        "decreased the estimate by 0.0768" or as "-0.0768". Both name the number the turn
+        was given, so both are supported; comparing the signed values alone made the
+        prose a magnitude and the payload a direction, and the figure was stripped as
+        invented (2026-11-10).
+        """
+        return any(abs(abs(x) - abs(v)) <= tol + 1e-12 for v in contributions)
 
     for m in _RISK_DECIMAL.finditer(answer):
         token = m.group(0)
@@ -632,8 +654,18 @@ def verify_risk_numbers(
         if lab_text and token in lab_text:
             continue
         decimals = len(token.split(".")[1])
-        if not (supported(float(token), 0.5 * 10 ** -decimals)
-                or measured(float(token), 0.5 * 10 ** -decimals)):
+        tolerance = 0.5 * 10 ** -decimals
+        value = float(token)
+        # Three readings, and the third is why the sign is in the pattern. `value` is the
+        # number as written — `-0.0768` matches the contribution it was served for;
+        # `measured` matches a factor value or a contribution exactly; `by_magnitude`
+        # matches a contribution of that SIZE whatever its direction, which is what
+        # "decreased by 0.0768" and "+0.0768" against a served `-0.0768` both are.
+        # `supported` is the score and the threshold, where a sign is not part of the
+        # claim.
+        if not (supported(value, tolerance)
+                or measured(value, tolerance)
+                or by_magnitude(value, tolerance)):
             flags.append(f"risk_number_unsupported:{token}")
             spans.append((m.start(), m.end()))
     for m in _RISK_PERCENT.finditer(answer):
@@ -659,7 +691,10 @@ def verify_risk_numbers(
     if not spans:
         return answer, flags
     cleaned = _remove_spans(answer, spans)
-    return re.sub(r" +([,.;:])", r"\1", cleaned).strip(), flags
+    # `)` and `]` join the tidy set. A removed span can strand a space in front of either,
+    # and `(contribution )` is the same artefact as `discharge ,`: the reader sees that
+    # something was taken out, which is the one thing this pass must not show.
+    return re.sub(r" +([,.;:)])", r"\1", cleaned).strip(), flags
 
 
 # --- Invented calendar dates (ECC-35) ----------------------------------------

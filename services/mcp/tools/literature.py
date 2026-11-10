@@ -316,21 +316,53 @@ def _articles(root: ElementTree.Element) -> list[dict[str, str]]:
 _RATE_LIMIT_RETRIES = 2
 _RATE_LIMIT_BACKOFF_SECONDS = 0.6
 
+#: Statuses a second request can fix: NCBI refusing because it is busy, and not because
+#: the request is wrong. A 400 or a 404 fails identically on the retry, so those are
+#: returned at once and reported as they are.
+_TRANSIENT_STATUSES = frozenset({500, 502, 503, 504})
+
+#: The same class as the retrieval path's dropped gRPC stream (`retrieval.py`): the
+#: connection went away mid-request. Retried on the same terms, because a clinician who
+#: clicked a literature chip cannot tell an outage from a search that found nothing, and
+#: the answer must not report the first as the second.
+_TRANSIENT_HTTP_ERRORS: tuple[type[BaseException], ...] = (
+    httpx.ConnectError,
+    httpx.ReadError,
+    httpx.RemoteProtocolError,
+    httpx.ConnectTimeout,
+    httpx.ReadTimeout,
+)
+
 
 async def _get(
     client: httpx.AsyncClient, url: str, params: dict[str, str]
 ) -> httpx.Response:
-    """GET, pausing and retrying a bounded number of times when NCBI says slow down.
+    """GET, pausing and retrying a bounded number of times when the attempt can be fixed.
 
-    The final response is returned whatever its status: the caller raises on it and
-    the error branch below reports the outcome, so a rate limit that outlasts the
-    retries is still reported as a rate limit rather than as a generic failure.
+    Two failures are retried, for the same reason: the rate limit, because a clinician
+    who clicked a chip has no way to tell a slow-down from an outage and the API key is
+    not always present; and a transient refusal or a dropped connection, because the
+    request is fine and the second attempt usually lands.
+
+    The final response is returned whatever its status: the caller raises on it and the
+    error branch below reports the outcome, so a rate limit that outlasts the retries is
+    still reported as a rate limit rather than as a generic failure.
     """
     for attempt in range(_RATE_LIMIT_RETRIES + 1):
-        response = await client.get(url, params=params)
-        if response.status_code != 429 or attempt == _RATE_LIMIT_RETRIES:
+        final = attempt == _RATE_LIMIT_RETRIES
+        try:
+            response = await client.get(url, params=params)
+        except _TRANSIENT_HTTP_ERRORS:
+            if final:
+                raise
+            await asyncio.sleep(_RATE_LIMIT_BACKOFF_SECONDS * (2 ** attempt))
+            continue
+        if final:
             return response
-        await asyncio.sleep(_RATE_LIMIT_BACKOFF_SECONDS * (2 ** attempt))
+        if response.status_code == 429 or response.status_code in _TRANSIENT_STATUSES:
+            await asyncio.sleep(_RATE_LIMIT_BACKOFF_SECONDS * (2 ** attempt))
+            continue
+        return response
     raise AssertionError("unreachable: the loop returns on its final attempt")
 
 

@@ -52,9 +52,24 @@ def configured() -> Path | None:
     return _SINK
 
 
+def _prompt(turn: Any) -> str:
+    """The wording a turn carries, or `""` for a turn that declares only a control.
+
+    A dataset turn is either a string or a `TurnSpec` — `{"prompt": .., "intent": ..}`
+    on the wire, a validated object once `schemas` has parsed it. `str(turn)` wrote a
+    Python dict repr into the report a human reads, which for `dev_t2_01`, `dev_t2_02`
+    and `holdout_t3_03` stated a question nobody asked. A chip turn has no wording of
+    its own, and is `""` here for the same reason `DatasetItemInput.prompts` makes it
+    one: the agent composes that question and the response carries it back.
+    """
+    if isinstance(turn, dict):
+        return str(turn.get("prompt") or "")
+    return str(getattr(turn, "prompt", turn) or "")
+
+
 def _turns(input_doc: dict[str, Any], output: dict[str, Any]) -> list[dict[str, Any]]:
     """One entry per turn: what was asked, what came back, what the reader can click."""
-    questions = [str(q) for q in (input_doc.get("turns") or [])]
+    questions = [_prompt(q) for q in (input_doc.get("turns") or [])]
     answers = output.get("turn_responses")
     if not isinstance(answers, list) or not answers:
         answers = [output.get("turn_1_response") or ""]

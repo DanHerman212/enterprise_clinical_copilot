@@ -61,7 +61,7 @@ Most abnormal at discharge: **Red blood cells** 3.47 x10^6/uL (flag `low`, refer
 
 ### Clinical note
 
-Sections present: `history_of_present_illness`, `brief_hospital_course`, `discharge_diagnosis`, `discharge_instructions`.
+Sections present: `chief_complaint`, `history_of_present_illness`, `allergies`, `past_medical_history`, `discharge_medications`, `physical_exam`, `brief_hospital_course`, `discharge_diagnosis`, `discharge_instructions`.
 
 - **discharge_diagnosis** (quoted): "Status post right total knee replacement secondary to degenerative joint disease performed on 08/21/2007."
 - **brief_hospital_course** (quoted): "As mentioned above, the patient was admitted on 08/24/2007 to the Transitional Care Unit at XYZ Services for evaluation and rehabilitation."
@@ -97,7 +97,7 @@ Sections present: `history_of_present_illness`, `brief_hospital_course`, `discha
 
 ### Discharge medications
 
-1 passage(s), 554 characters. anticoagulant: absent, beta-blocker: absent, diuretic: absent, taper: absent.
+1 passage(s), 340 characters. anticoagulant: absent, beta-blocker: absent, diuretic: absent, taper: absent.
 
 ```
 1. Phenergan 25 mg q.6. p.r.n.
@@ -105,8 +105,6 @@ Sections present: `history_of_present_illness`, `brief_hospital_course`, `discha
 3. Benadryl 25-50 mg p.o. q.i.d. for pruritus.
 4. Sliding scale will be discontinued at the time of discharge and will be reinstituted on arrival at Pelican Bay Infirmary.
 5. The patient had initially been on enalapril here. His hypertension will be managed by Dr. X as well.
-
-PLAN: The patient should return for repeat ERCP if there are signs of stent occlusion such as fever, increased bilirubin, worsening pain. In the meantime, he will be kept on a regular diet and activity per Dr. X.
 ```
 
 ### Laboratory values at discharge
@@ -128,7 +126,7 @@ Most abnormal at discharge: **Red blood cells** 2.69 x10^6/uL (flag `low`, refer
 
 ### Clinical note
 
-Sections present: `history_of_present_illness`.
+Sections present: `history_of_present_illness`, `discharge_medications`, `assessment_and_plan`.
 
 - **history_of_present_illness** (quoted): "The patient is a 48-year-old man who has had abdominal pain since October of last year associated with a 30-pound weight loss and then developed jaundice."
 
@@ -162,7 +160,11 @@ Sections present: `history_of_present_illness`.
 
 ### Discharge medications
 
-**Empty state** — 0 passage(s), the note has no discharge_medications section; the note has no discharge_instructions section.
+1 passage(s), 1821 characters. anticoagulant: absent, beta-blocker: absent, diuretic: absent, taper: absent.
+
+```
+The patient was admitted to the emergency room. Plavix was started in addition to baby aspirin. He was kept on oral Zithromax for his cough. He was given Xopenex treatment, because of his respiratory distress. Carotid ultrasound was reviewed and revealed a 50 to 69% obstruction of left internal carotid. Dr. X saw him in consultation and recommended CT angiogram. This showed no significant obstructive lesion other than what was known on the ultrasound. Head MRI was done and revealed the above findings. The patient was begun on PT and improved. By discharge, he had much improved strength in his right arm. He had no further progressions. His cough improved with oral Zithromax and nebulizer treatments. His platelets also improved as well. By discharge, his platelets was up to 107,000. His H&H was stable at 41.7 and 14.6 and his white count was 4300 with a normal differential. Chest x-ray revealed a mild elevated right hemidiaphragm, but no infiltrate. Last chemistry panel on December 5, 2003, sodium 137, potassium 4.0, chloride 106, CO2 23, glucose 88, BUN 17, creatinine 0.7, calcium was 9.1. PT/INR on admission was 1.03, PTT 34.7. At the time of discharge, the patient's cough was much improved. His right arm weakness has much improved. His lung examination has just occasional rhonchi. He was changed to a metered dose inhaler with albuterol. He is being discharged home. An echocardiogram revealed mild concentric LVH with normal left ventricular function with an EF of 57%, moderate left atrial enlargement and diastolic dysfunction with mild mitral regurgitation. He will follow up in my office in 1 week. He is to start PT and OT as an outpatient. He is to avoid driving his car. He is to notify, if further symptoms. He has 2 more doses of Zithromax at home, he will complete. His prognosis is good.
+```
 
 ### Laboratory values at discharge
 
@@ -183,9 +185,9 @@ Most abnormal at discharge: **RDW** 23.7 % (flag `high`, reference 11.5–14.5).
 
 ### Clinical note
 
-Sections present: `brief_hospital_course`, `discharge_diagnosis`.
+Sections present: `admission_diagnosis`, `discharge_diagnosis`, `brief_hospital_course`.
 
-- **discharge_diagnosis** (quoted): "Cerebrovascular accident (CVA) with right arm weakness."
+- **discharge_diagnosis** (quoted): "Cerebrovascular accident with right arm weakness and MRI indicating acute/subacute infarct involving the left posterior parietal lobe without mass effect."
 - **brief_hospital_course** (quoted): "The patient was admitted to the emergency room."
 
 ## 90000105
@@ -243,7 +245,7 @@ No value sits outside its reference range at discharge.
 
 ### Clinical note
 
-Sections present: `brief_hospital_course`, `discharge_diagnosis`, `discharge_instructions`.
+Sections present: `discharge_diagnosis`, `major_procedure`, `brief_hospital_course`, `discharge_instructions`.
 
 - **discharge_diagnosis** (quoted): "Morbid obesity, status post laparoscopic Roux-en-Y gastric bypass."
 - **brief_hospital_course** (quoted): "This is a 30-year-old male, who presented recently to the Bariatric Center for evaluation and treatment of longstanding morbid obesity and associated comorbidities."
@@ -303,7 +305,7 @@ Most abnormal at discharge: **Red blood cells** 3.33 x10^6/uL (flag `low`, refer
 
 ### Clinical note
 
-Sections present: `history_of_present_illness`, `brief_hospital_course`, `discharge_diagnosis`, `discharge_instructions`.
+Sections present: `history_of_present_illness`, `brief_hospital_course`, `physical_exam`, `pertinent_results`, `major_procedure`, `discharge_instructions`, `discharge_diagnosis`.
 
 - **discharge_diagnosis** (quoted): "Coronary artery disease status post percutaneous coronary artery intervention to the right coronary artery and to the LAD."
 - **brief_hospital_course** (quoted): "ABC presented to the Day Hospital in anticipation for Urology surgery."
@@ -341,7 +343,13 @@ Sections present: `history_of_present_illness`, `brief_hospital_course`, `discha
 
 ### Discharge medications
 
-**Empty state** — 0 passage(s), the note has no discharge_medications section; the note has no discharge_instructions section.
+1 passage(s), 1447 characters. anticoagulant: absent, beta-blocker: absent, diuretic: absent, taper: absent.
+
+```
+The patient is a 69-year-old female, who was referred for outpatient skilled speech therapy, secondary to right hemisphere disorder, status post stroke. The patient attended nine outpatient skilled speech therapy sessions from her initial evaluation on 12/01/08 to her last session on 01/09/09.
+
+The patient made some progress during therapy. She accomplished two and a half out of her five short-term therapy goals. We did complete an oral mechanism examination and clinical swallow evaluation, which showed her swallowing to be within functional limits. The patient improved on her turn taking skills during conversation, and she was able to listen to a narrative and recall the main idea plus five details after a three-minute delay independently. The patient continues to have difficulty with visual scanning in cancellation task, secondary to her significant left neglect. She also did not accomplish her sustained attention goal, which required her to complete tasks greater than 80% accuracy for at least 15 minutes independently. Thus she also continued to have difficulty with reading, comprehension, secondary to the significance of her left neglect. The patient was initially authorized for 12 outpatient speech therapy sessions, but once again she only attended 9. Her last session occurred on 01/09/09. She has not made any additional followup sessions with me for over three weeks, so she is discharged from my services at this time.
+```
 
 ### Laboratory values at discharge
 
@@ -362,7 +370,8 @@ Most abnormal at discharge: **RDW** 23.1 % (flag `high`, reference 11.5–14.5).
 
 ### Clinical note
 
-No discharge-summary sections — no discharge summary sections found in this note. `/ehr` can only answer this record through its record-wide fallback.
+Sections present: `discharge_summary`.
+
 
 ## 90000073
 
@@ -396,7 +405,15 @@ No discharge-summary sections — no discharge summary sections found in this no
 
 ### Discharge medications
 
-**Empty state** — 0 passage(s), the note has no discharge_medications section; the note has no discharge_instructions section.
+1 passage(s), 1758 characters. anticoagulant: absent, beta-blocker: absent, diuretic: absent, taper: absent.
+
+```
+The patient is a 78-year-old female, who was referred to Medical Center's Outpatient Rehabilitation Department for skilled speech therapy secondary to cognitive-linguistic deficits. Outpatient skilled speech therapy was recommended for two times a week to improve her overall memory, executive function, attention, and visuospatial skills. The patient made excellent progress during the therapy and she accomplished all of her short-term therapy goals. She is able to name 15 items in a broad category with minimal queuing. The patient can sequence activities with greater than 90% accuracy with minimal queuing. She is able to follow a 3 step direction with greater than 80% accuracy, and she is able to complete visual scanning tasks with greater than 80% accuracy. The patient is currently able to listen to and/or read a narrative and be able to recall the main idea plus 3 supporting elements after a 3-minute delay.
+
+LONG-TERM GOALS: Both functional and cognitive-linguistic ability to improve safety and independence at home and in the community. This goal has been met based on the patient and husband reports the patient is able to complete all activities, which she desires to do at home. During the last reevaluation, the patient had a significant progress and all cognitive domains evaluated, which are attention, memory, executive functions, language, and visuospatial skill. She continues to have an overall mild cognitive-linguistic deficit, but this is significantly improved from her initial evaluation, which showed severe impairment.
+
+The patient does no longer need a skilled speech therapy because she has accomplished all of her goals and her progress has plateaued. The patient and her husband both agreed with the patient's discharge.
+```
 
 ### Laboratory values at discharge
 
@@ -417,7 +434,8 @@ Most abnormal at discharge: **Red blood cells** 3.16 x10^6/uL (flag `low`, refer
 
 ### Clinical note
 
-No discharge-summary sections — no discharge summary sections found in this note. `/ehr` can only answer this record through its record-wide fallback.
+Sections present: `discharge_summary`.
+
 
 ---
 

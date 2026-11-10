@@ -1,7 +1,13 @@
 """Phase 03, Section 4 — the ground-truth cohort provenance inventory.
 
 Read-only. No model is called: every field comes from the same four patient-scoped tools
-the sweep exercises, plus the phenotype map that already resolves each admission.
+the sweep exercises, plus the feature row each admission was scored on.
+
+The phenotype map that used to resolve an admission's condition is gone: Stage Gate 2
+deleted it from `presentation/domain.py` together with `bucket_for`, because a
+hand-maintained `hadm_id -> condition` table decides a clinical question. The archetype
+choice below therefore reads `oncology_flag` from the row the model scored. That is the
+same fact the Dev suite asserts on, and it is read, never inferred.
 
     .venv/bin/python evaluation/inventory/cohort_provenance.py
 
@@ -25,9 +31,11 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from services.agent.presentation import domain as admission_phenotypes
+from google.cloud import bigquery  # noqa: E402
+
 from services.agent.ingress.contracts import SERVED_HADM_IDS  # noqa: E402
 from evaluation.outpatient_oracle import OUTPATIENT_HADM_IDS  # noqa: E402
+from services.mcp.config import ENTITY_ID_COLUMN, PROJECT, TABLE  # noqa: E402
 from services.mcp.tools import (  # noqa: E402
     discharge_medications,
     get_lab_trends,
@@ -35,6 +43,10 @@ from services.mcp.tools import (  # noqa: E402
     rag_search_sections,
 )
 from services.mcp.tools.admission_profile import get_admission_profile  # noqa: E402
+from services.mcp.retrieval.sections import (  # noqa: E402
+    DISCHARGE_INSTRUCTIONS,
+    DISCHARGE_MEDICATIONS,
+)
 
 #: Same transport settings as the Section 3 sweep, for the same reason: past ~8
 #: simultaneous token refreshes `oauth2.googleapis.com` starts refusing, so the sweep
@@ -53,6 +65,13 @@ HOLDOUT_OUTPATIENT_POOL = (90000028, 90000040, 90000054)
 #: Notes with no discharge-summary headings (TF-2), which is itself an archetype.
 HEADINGLESS = frozenset({90000026, 90000033, 90000087})
 
+#: The headings that exist to carry a discharge medication list. `discharge_medications`
+#: serves either one of them when the note has one, and falls back to the narrative
+#: (`brief_hospital_course`, the admission list, the transfer list) when it has neither.
+#: Recording which of the two happened is what separates "this record documents no
+#: discharge medications" from "this record documents them inside the hospital course".
+DEDICATED_MED_SECTIONS = frozenset({DISCHARGE_MEDICATIONS, DISCHARGE_INSTRUCTIONS})
+
 ANTICOAGULANT = re.compile(
     r"warfarin|apixaban|rivaroxaban|dabigatran|edoxaban|enoxaparin|heparin", re.I)
 TAPER = re.compile(r"taper|tapering|reduce|decrease|wean", re.I)
@@ -69,22 +88,46 @@ async def _read(call, hadm_id: int):
     raise last  # type: ignore[misc]
 
 
+def _feature_rows(hadm_ids: tuple[int, ...]) -> dict[int, dict[str, Any]]:
+    """The exact row each admission was scored on, in one read of the serving table.
+
+    The row is the only place four facts live: the `encounter_type` column the product
+    reads, the `oncology_flag` the archetype choice below needs now that the phenotype
+    map is gone, and the raw value of every driver the profile cannot decode
+    (`rdw_max`, `sodium_min`, `monocytes_min`). All four are structured facts, and the
+    point of this artifact is that each is copied rather than inferred.
+    """
+    client = bigquery.Client(project=PROJECT)
+    query = f"SELECT * FROM {TABLE} WHERE {ENTITY_ID_COLUMN} IN UNNEST(@ids)"
+    job = bigquery.QueryJobConfig(query_parameters=[
+        bigquery.ArrayQueryParameter("ids", "INT64", list(hadm_ids))])
+    return {int(row[ENTITY_ID_COLUMN]): dict(row.items())
+            for row in client.query(query, job_config=job).result()}
+
+
 def _profile_fields(profile: dict[str, Any]) -> dict[str, Any]:
-    keep = ("age", "gender", "discharge_location", "insurance", "race",
+    keep = ("encounter_type", "age", "gender", "discharge_location", "insurance", "race",
             "admission_type", "prior_admission_count", "prior_inpatient_days",
             "recent_ed_visits", "index_los_days")
     return {key: profile.get(key) for key in keep if profile.get(key) is not None}
 
 
 def _medication_facts(payload: dict[str, Any]) -> dict[str, Any]:
-    passages = payload.get("passages") or []
+    passages = [passage for passage in payload.get("passages") or []
+                if isinstance(passage, dict)]
     text = "\n\n".join(
         str(passage.get("text") or "") for passage in passages
-        if isinstance(passage, dict)
     ).strip()
     return {
         "section_present": bool(passages),
-        "chars": len(text),
+        # `chars` is the sum of the passage lengths, not the length of a joined string:
+        # the separator is an artefact of how this module concatenates for a regex, and
+        # counting it made every two-passage record read 2 characters long.
+        "chars": sum(len(str(passage.get("text") or "")) for passage in passages),
+        "dedicated_section_present": any(
+            passage.get("section") in DEDICATED_MED_SECTIONS for passage in passages),
+        "sections": [passage.get("section") for passage in passages],
+        "chunk_ids": [passage.get("id") for passage in passages],
         "snippet": text[:240],
         "mentions_anticoagulant": bool(ANTICOAGULANT.search(text)),
         "mentions_taper": bool(TAPER.search(text)),
@@ -120,15 +163,20 @@ def _lab_facts(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _note_facts(hadm_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+    passages = [passage for passage in payload.get("passages") or []
+                if isinstance(passage, dict)]
     return {
-        "sections": [passage.get("section") for passage in payload.get("passages") or []],
+        "sections": [passage.get("section") for passage in passages],
+        "section_count": len(passages),
+        "chunk_ids": [passage.get("id") for passage in passages],
         "headingless": hadm_id in HEADINGLESS,
         "error": payload.get("error"),
         "note": payload.get("note"),
     }
 
 
-def _risk_facts(payload: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
+def _risk_facts(payload: dict[str, Any], profile: dict[str, Any],
+                row: dict[str, Any]) -> dict[str, Any]:
     drivers = []
     for factor in (payload.get("top_factors") or [])[:5]:
         feature = factor.get("feature")
@@ -136,8 +184,11 @@ def _risk_facts(payload: dict[str, Any], profile: dict[str, Any]) -> dict[str, A
             "name": feature,
             "contribution": factor.get("contribution"),
             "direction": factor.get("direction"),
-            # The value the model was scored on, when the row carries that feature.
-            "value": profile.get(feature),
+            # The value the model was scored on: the row first, because the profile
+            # decodes a fixed set of administrative columns and a lab-derived or
+            # oncology feature has no readable form anywhere else. A driver this
+            # cannot state is `None` — an absent value must not read as a measured 0.
+            "value": row.get(feature, profile.get(feature)),
         })
     return {
         "probability": payload.get("probability"),
@@ -148,7 +199,8 @@ def _risk_facts(payload: dict[str, Any], profile: dict[str, Any]) -> dict[str, A
     }
 
 
-async def _record(hadm_id: int, gate: asyncio.Semaphore) -> tuple[int, dict[str, Any]]:
+async def _record(hadm_id: int, gate: asyncio.Semaphore,
+                  row: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     async with gate:
         profile_payload = await _read(get_admission_profile, hadm_id)
         risk_payload = await _read(predict_readmission, hadm_id)
@@ -159,23 +211,28 @@ async def _record(hadm_id: int, gate: asyncio.Semaphore) -> tuple[int, dict[str,
     profile = {}
     if isinstance(profile_payload, dict) and not profile_payload.get("error"):
         profile = profile_payload.get("profile") or {}
-    bucket = admission_phenotypes.bucket_for(hadm_id)
 
     return hadm_id, {
         "hadm_id": hadm_id,
+        # The oracle's decision and the row's own column are recorded side by side:
+        # the product reads `encounter_type`, the oracle is the answer key, and the
+        # two disagreeing is one of the things this artifact exists to make visible.
         "outpatient": hadm_id in OUTPATIENT_HADM_IDS,
-        "phenotype": bucket.key if bucket else None,
+        "encounter_type": row.get("encounter_type"),
+        "oncology_flag": row.get("oncology_flag"),
         "profile": _profile_fields(profile),
-        "risk": _risk_facts(risk_payload, profile),
+        "risk": _risk_facts(risk_payload, profile, row),
         "medications": _medication_facts(meds_payload),
         "labs": _lab_facts(labs_payload),
         "notes": _note_facts(hadm_id, notes_payload),
     }
 
 
-async def _inventory(hadm_ids: tuple[int, ...]) -> dict[int, dict[str, Any]]:
+async def _inventory(hadm_ids: tuple[int, ...],
+                     rows: dict[int, dict[str, Any]]) -> dict[int, dict[str, Any]]:
     gate = asyncio.Semaphore(CONCURRENCY)
-    pairs = await asyncio.gather(*(_record(h, gate) for h in hadm_ids))
+    pairs = await asyncio.gather(
+        *(_record(hadm_id, gate, rows.get(hadm_id, {})) for hadm_id in hadm_ids))
     return dict(pairs)
 
 
@@ -198,7 +255,7 @@ def _pick(records: dict[int, dict[str, Any]], exclude: set[int]) -> dict[str, in
                    + 400 * pool[h]["medications"]["mentions_taper"]
                    + 400 * pool[h]["medications"]["mentions_anticoagulant"]))
     oncology_risk = best(
-        lambda h: (pool[h]["phenotype"] == "oncology",
+        lambda h: (bool(pool[h]["oncology_flag"]),
                    pool[h]["risk"]["probability"] or 0,
                    pool[h]["labs"]["abnormal_count"]))
     minimal = best(
@@ -222,14 +279,15 @@ def _pick(records: dict[int, dict[str, Any]], exclude: set[int]) -> dict[str, in
 
 def main() -> int:
     served = tuple(sorted(SERVED_HADM_IDS))
-    records = asyncio.run(_inventory(served))
+    rows = _feature_rows(served)
+    records = asyncio.run(_inventory(served, rows))
 
     dev = [*DEV_INPATIENT, *DEV_OUTPATIENT]
     recommended = _pick(records, exclude=set(dev))
 
     artifact = {
         "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "source": "services/mcp tools + admission_phenotypes, read-only",
+        "source": "services/mcp tools + the scoring feature row, read-only",
         "llm_calls": 0,
         "n_records": len(records),
         "dev": {str(h): records[h] for h in dev if h in records},

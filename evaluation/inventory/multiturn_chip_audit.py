@@ -94,7 +94,8 @@ ABSENT_MARKERS = (
 _CITE = MARKER_PATTERN
 
 
-def _turn_payload(asked: str, answer: str, calls: list[dict]) -> dict:
+def _turn_payload(asked: str, answer: str, calls: list[dict],
+                  citation_map: dict | None = None) -> dict:
     """One replayed turn, in the shape the site stores and sends back.
 
     The site keeps a tool's response only when the agent says it cannot be produced
@@ -102,6 +103,14 @@ def _turn_payload(asked: str, answer: str, calls: list[dict]) -> dict:
     replay. Sending a response for a derivable call would make the audit's Turn 2
     cheaper than the product's, and would hide a replay defect behind a payload the
     browser never sends.
+
+    `citation_map` is sent because the site sends it. `contracts.REPLAYED_TURN_FIELDS`
+    accepts `question`, `answer`, `tool_calls` and an optional `citation_map`, and the
+    two numbering schemes it reconciles are both live: the answer's markers are
+    `1..K` within the turn, while the evidence array the conversation is numbered
+    against keeps cumulative positions. Omitting the map does not fail — the agent
+    falls back to stripping the prior turn's markers, which is a replay the site never
+    performs and therefore one this audit has no business measuring.
     """
     replay = []
     for call in calls or []:
@@ -112,7 +121,8 @@ def _turn_payload(asked: str, answer: str, calls: list[dict]) -> dict:
         if not call.get("derivable", True):
             entry["payload"] = call.get("response")
         replay.append(entry)
-    return {"question": asked, "answer": answer, "tool_calls": replay}
+    return {"question": asked, "answer": answer, "tool_calls": replay,
+            "citation_map": citation_map if isinstance(citation_map, dict) else {}}
 
 
 def _tools(calls: list[dict]) -> str:
@@ -139,6 +149,7 @@ def _read(envelope: dict) -> dict:
         "sources": envelope.get("sources") or [],
         "follow_ups": envelope.get("follow_ups") or [],
         "tool_calls": envelope.get("tool_calls") or [],
+        "citation_map": envelope.get("citation_map") or {},
         "guardrail_flags": envelope.get("guardrail_flags") or [],
         "error": envelope.get("error"),
     }
@@ -225,7 +236,8 @@ def _audit_command(ask, *, hadm_id: int, command: str, run_tag: str) -> dict:
     for chip in chips:
         turn2 = _ask_turn(
             ask, question=chip, hadm_id=hadm_id,
-            turns=[_turn_payload(asked, turn1["answer"], turn1["tool_calls"])],
+            turns=[_turn_payload(asked, turn1["answer"], turn1["tool_calls"],
+                                 turn1["citation_map"])],
             run_tag=run_tag, intent="follow_up",
         )
         verdict, reason = _verdict(turn2, chip=chip,
@@ -252,7 +264,8 @@ def _audit_command(ask, *, hadm_id: int, command: str, run_tag: str) -> dict:
         first = chips[0]
         turn2 = _ask_turn(
             ask, question=first, hadm_id=hadm_id,
-            turns=[_turn_payload(asked, turn1["answer"], turn1["tool_calls"])],
+            turns=[_turn_payload(asked, turn1["answer"], turn1["tool_calls"],
+                                 turn1["citation_map"])],
             run_tag=run_tag, intent="follow_up",
         )
         progression["turns"].append({"question": first,
@@ -262,8 +275,10 @@ def _audit_command(ask, *, hadm_id: int, command: str, run_tag: str) -> dict:
             turn3 = _ask_turn(
                 ask, question=second, hadm_id=hadm_id,
                 turns=[
-                    _turn_payload(asked, turn1["answer"], turn1["tool_calls"]),
-                    _turn_payload(first, turn2["answer"], turn2["tool_calls"]),
+                    _turn_payload(asked, turn1["answer"], turn1["tool_calls"],
+                                  turn1["citation_map"]),
+                    _turn_payload(first, turn2["answer"], turn2["tool_calls"],
+                                  turn2["citation_map"]),
                 ],
                 run_tag=run_tag, intent="follow_up",
             )

@@ -201,10 +201,21 @@ def test_every_inpatient_admission_has_a_manifest_that_hydrates(manifests):
     assert not thin, f"manifest missing required fields: {thin}"
 
 
-def test_the_manifest_names_the_admission_it_belongs_to(manifests):
-    wrong = [h for h in sorted(INPATIENT)
-             if f'hadm_id="{h}"' not in manifests[h]]
-    assert not wrong, f"manifest rendered under the wrong id: {wrong}"
+def test_the_manifest_never_names_the_admission_it_belongs_to(manifests):
+    """The identifier is the one value in the block the model must never write back.
+
+    The block is rendered for a record the turn is already about, so the id adds no
+    evidence to it — and an id in the window was read straight out of the tag and written
+    into a tool argument (`discharge_medications({"hadm_id": "90000069"})`, 2026-11-06),
+    leaving the session to accept or refuse a value it had supplied itself. `render` still
+    takes the id, because a reader of its signature is entitled to know what it is about;
+    the text it returns must not carry it.
+    """
+    leaked = [h for h in sorted(INPATIENT) if str(h) in manifests[h]]
+    assert not leaked, f"manifest leaked its admission id: {leaked}"
+    unattributed = [h for h in sorted(INPATIENT)
+                    if not manifests[h].startswith("<admission_metadata")]
+    assert not unattributed, f"manifest is not the block it claims to be: {unattributed}"
 
 
 # --- the outpatient boundary -------------------------------------------------

@@ -181,7 +181,7 @@ def test_the_item_input_sent_to_langfuse_validates_as_a_dataset_item():
         hadm: {"encounter": "inpatient"} for hadm in
         (90000015, 90000108, 90000106, 90000105, 90000023, 90000051, 90000073)})
     validated = [DatasetItemInput.model_validate(p["input"]) for p in payloads]
-    assert len(validated) == 26
+    assert len(validated) == 27
     assert validated[0].patient_id == "90000015"
     assert validated[0].turns == ["/ehr"]
     # The ground truth rides on the item's own `expected_output` field, which is what

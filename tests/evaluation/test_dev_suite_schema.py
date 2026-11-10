@@ -68,9 +68,9 @@ def _fact_section(hadm_id: str) -> str:
 
 def test_the_suite_parses_and_holds_exactly_the_authored_scenarios():
     ids = [row["id"] for row in ROWS]
-    assert len(ids) == 26, ids
+    assert len(ids) == 27, ids
     assert ids == sorted(ids), "scenarios are ordered by id in the file"
-    assert len(set(ids)) == 26, "no scenario id is repeated"
+    assert len(set(ids)) == 27, "no scenario id is repeated"
 
 
 def test_validate_rows_accepts_the_authored_file():
@@ -94,7 +94,7 @@ def test_a_holdout_row_is_refused_by_the_validator():
 
 def test_every_scenario_becomes_a_harness_item():
     items = dev_suite.dev_suite_items(manifest_provider=_manifest_provider)
-    assert len(items) == 26
+    assert len(items) == 27
     assert {item.workflow_type for item in items} == {
         "single_probe", "command_plus_followup", "multi_turn"}
     # Trajectory 4 always needed more than the two-turn script the runner had; Phase B
@@ -196,14 +196,14 @@ def test_the_scenario_mix_covers_every_trajectory():
               for name in TRAJECTORIES}
     assert counts == {
         "t1_declarative_command": 6,
-        "t2_dynamic_affordance_loopback": 4,
+        "t2_dynamic_affordance_loopback": 5,
         "t3_analytical_drilldown": 4,
         "t4_cross_domain_synthesis": 3,
         "t5_freetext_cold_start": 3,
         "t6_adversarial_false_premise": 3,
         "t7_adversarial_boundaries": 3,
     }
-    assert sum(counts.values()) == 26
+    assert sum(counts.values()) == 27
 
 
 # ------------------------------------------------------- dynamic loop-back (Traj. 2)

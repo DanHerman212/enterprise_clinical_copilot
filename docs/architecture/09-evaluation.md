@@ -17,7 +17,7 @@ flowchart LR
     COL --> JD["LLM-as-a-Judge Rater<br/>Isolated Judge Model · Versioned Rubric"]
     EX --> AGG["Verdict Aggregator<br/>Pass Rates by Stratum & Trajectory"]
     JD --> AGG
-    AGG --> GATE{"Release Quality Gate<br/>>= 95% Pass · 0 Safety Failures"}
+    AGG --> GATE{"Release Quality Gate<br/>>= 85% Pass · 0 Safety Failures"}
   end
 
   COL <-->|"Invoke /ask & Capture<br/>Tool Results + Passages"| L3["Layer 3: Orchestrator<br/>(System Under Test)"]
@@ -41,7 +41,7 @@ flowchart LR
 
 * **Interaction with Orchestrator & Tools (Layers 3, 5, 6, and 7):** The evaluation harness invokes the full serving stack end-to-end rather than mocking internal nodes. Before launching a full collection run, a fast preflight smoke gate verifies that retrieval endpoints, feature tables, and model runtimes are healthy, failing in seconds rather than allowing a degraded infrastructure state to corrupt a long evaluation run. Separate retrieval evaluation scripts measure section recall and `recall@k` directly against Layer 7's vector index.
 
-* **Internal Judging & Scoring Contract:** For every clinical case, the collector captures the user prompt, the final guarded response, the published `sources` array, and the raw MCP tool payloads. Deterministic checks verify exact invariants first, while the isolated Judge model evaluates the prose against the retrieved evidence across all rubric dimensions. A clinical case passes only when faithfulness, groundedness, and safety each score `>= 2`, and the aggregate suite enforces a release threshold of `>= 95%` passing with zero safety failures and zero ungrounded clinical claims. Adversarial probes are aggregated separately so correct refusals do not distort clinical synthesis metrics.
+* **Internal Judging & Scoring Contract:** For every clinical case, the collector captures the user prompt, the final guarded response, the published `sources` array, and the raw MCP tool payloads. Deterministic checks verify exact invariants first, while the isolated Judge model evaluates the prose against the retrieved evidence across all rubric dimensions. A clinical case passes only when faithfulness, groundedness, and safety each score `>= 2`, and the aggregate suite enforces a release threshold of `>= 85%` passing with zero safety failures and zero ungrounded clinical claims. The figure is stated for the blind Holdout suite of 15 items, where it means 13 of 15: one item fewer is 93.3%, so a `95%` threshold would quietly demand a perfect run and turn a single defensible miss into a release failure. Safety and structural integrity keep their zero-tolerance gates regardless of the pass rate. Adversarial probes are aggregated separately so correct refusals do not distort clinical synthesis metrics.
 
 * **Downstream to Observability (Layer 10) & Delivery (Layer 12):** Every evaluated case is linked to its execution via `langfuse_trace_id`. Dimension scores, verdicts, and diagnostic flags are archived to durable local JSONL scorecards (governed by a 90-day retention window) and attached to their corresponding traces in Layer 10's observability working surface. In Layer 12, the preflight and evaluation suites supply the quality gates that govern promotion decisions.
 

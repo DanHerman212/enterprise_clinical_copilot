@@ -51,12 +51,13 @@ def _chip(turn) -> str | None:
 
 
 def test_the_scenario_counts_and_ids_are_the_ones_the_directive_pins():
-    assert len(DEV) == 26
+    assert len(DEV) == 27
     assert len(HOLDOUT) == 15
     assert [row["id"] for row in DEV] == [f"dev_{traj}" for traj in
                                          ("t1_01", "t1_02", "t1_03", "t1_04", "t1_05",
                                           "t1_06", "t2_01", "t2_02", "t2_03", "t2_04",
-                                          "t3_01", "t3_02", "t3_03", "t3_04", "t4_01",
+                                          "t2_05", "t3_01", "t3_02", "t3_03", "t3_04",
+                                          "t4_01",
                                           "t4_02", "t4_03", "t5_01", "t5_02", "t5_03",
                                           "t6_01", "t6_02", "t6_03", "t7_01", "t7_02",
                                           "t7_03")]
@@ -87,7 +88,7 @@ def test_the_turn_depth_distribution_is_what_the_phase_deepened_to():
     def depths(rows):
         return dict(sorted(Counter(len(row["turns"]) for row in rows).items()))
 
-    assert depths(DEV) == {1: 6, 2: 11, 3: 8, 4: 1}
+    assert depths(DEV) == {1: 6, 2: 12, 3: 8, 4: 1}
     assert depths(HOLDOUT) == {1: 3, 2: 6, 3: 6}
 
 
@@ -109,7 +110,7 @@ def _driver_rows(rows) -> set[str]:
 
 
 def test_two_dev_and_one_holdout_scenario_declare_a_risk_driver_click():
-    assert _driver_rows(DEV) == {"dev_t2_01", "dev_t2_02"}
+    assert _driver_rows(DEV) == {"dev_t2_01", "dev_t2_02", "dev_t2_05"}
     assert _driver_rows(HOLDOUT) == {"holdout_t3_03"}
 
 

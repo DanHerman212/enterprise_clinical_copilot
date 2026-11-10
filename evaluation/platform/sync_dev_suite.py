@@ -37,10 +37,10 @@ from evaluation.platform.dev_suite import (  # noqa: E402
 )
 
 DATASET = "ecc-tier2-dev-suite"
-DESCRIPTION = ("Tier 2 stratified behavioral dev suite: 26 scenarios, 7 dev records, "
+DESCRIPTION = ("Tier 2 stratified behavioral dev suite: 27 scenarios, 7 dev records, "
                "7 interaction and adversarial trajectories")
 RUBRIC_VERSION = "v8"
-EXPECTED_ITEMS = 26
+EXPECTED_ITEMS = 27
 
 
 def _manifest_provider():

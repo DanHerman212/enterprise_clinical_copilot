@@ -85,9 +85,11 @@ def test_the_medication_position_is_read_from_the_record_not_from_the_turn():
     }]
     state.ingest_tool_output("discharge_medications", {"hadm_id": HADM},
                              recorded[0]["response"])
-    deterministic._consolidate_medication_passages(recorded)
 
-    assert deterministic._medication_passage_position(recorded, state) == 5
+    verified = [{"medication": "Celebrex", "dosage": "200 mg"}]
+
+    assert deterministic._medication_passage_positions(
+        recorded, state, verified) == (5,)
 
 
 def test_no_record_means_no_marker_rather_than_a_wrong_one():
@@ -98,7 +100,7 @@ def test_no_record_means_no_marker_rather_than_a_wrong_one():
         },
     }]
 
-    assert deterministic._medication_passage_position(recorded, None) is None
+    assert deterministic._medication_passage_positions(recorded, None, []) == ()
 
 
 # ------------------------------------------------- Fix 2: one unparseable reply made
@@ -409,10 +411,13 @@ def test_the_laboratory_spoke_states_both_new_rules():
 
 
 def test_the_medication_spoke_states_the_fallback_provenance():
-    """The rule `/meds` makes in code, stated for the free-text path: drugs read out of
-    the hospital course are not a discharge list, and the inventory is what says so."""
-    assert "MARKS `discharge_medications` ABSENT" in prompts.MEDS_SPOKE
-    assert "hospital course documents these drugs" in prompts.MEDS_SPOKE
+    """The rule `/meds` makes in code, stated for the free-text path: drugs read out of the
+    hospital course are not a discharge list, and the passages' own provenance is what says
+    so (reworded 2026-11-10: the rule now keys on `medication_source`, so a passage from
+    `discharge_instructions` is never called a record without a medication section)."""
+    assert "medication_source=narrative" in prompts.MEDS_SPOKE
+    assert "medication_source=dedicated" in prompts.MEDS_SPOKE
+    assert "never attribute a drug you read there to `brief_hospital_course`" in prompts.MEDS_SPOKE
 
 
 @pytest.mark.parametrize("budget,text", [

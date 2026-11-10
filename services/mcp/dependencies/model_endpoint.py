@@ -6,11 +6,23 @@ is cached here for the process lifetime.
 """
 
 from functools import lru_cache
+import time
 from typing import Any
 
+from google.api_core import exceptions as google_exceptions
 from google.cloud import aiplatform
 
 from ..config import ENDPOINT_NAME, LOCATION, PROJECT
+
+#: The failures a second call can fix. Each one is the transport or the server ask
+#: gone wrong rather than the request: a stream the server dropped, a deadline the
+#: backend missed, an internal error on the serving host. A `InvalidArgument` or a
+#: `PermissionDenied` is not here, because retrying it fails identically.
+TRANSIENT_PREDICT_ERRORS: tuple[type[BaseException], ...] = (
+    google_exceptions.ServiceUnavailable,
+    google_exceptions.DeadlineExceeded,
+    google_exceptions.InternalServerError,
+)
 
 
 @lru_cache(maxsize=1)
@@ -38,8 +50,25 @@ def predict_one(instance: dict[str, float | None]) -> tuple[dict[str, Any], str]
     Raises rather than returning a partial result if the endpoint answers with
     an empty prediction list — an empty 200 is the kind of silent success that
     is far more expensive to debug than an exception.
+
+    A transient failure is retried twice before it becomes the caller's error. The
+    measured case is a broken gRPC stream: on 2026-11-10 an evaluation turn recorded
+    ``ServiceUnavailable: 503 Stream removed (recvmsg:Connection reset by peer (104))``
+    from this call, and the whole item was left unscored. The stream belongs to the
+    cached client channel, so ``endpoint.cache_clear()`` runs before each retry — a
+    retry on the same broken channel fails the same way, which is a retry in name only.
     """
-    response = endpoint().predict(instances=[instance])
-    if not response.predictions:
-        raise RuntimeError("Endpoint returned a response with no predictions.")
-    return response.predictions[0], getattr(response, "deployed_model_id", "") or ""
+    last: BaseException | None = None
+    for pause in (0.0, 0.5, 1.5):
+        if pause:
+            time.sleep(pause)
+            endpoint.cache_clear()
+        try:
+            response = endpoint().predict(instances=[instance])
+        except TRANSIENT_PREDICT_ERRORS as exc:
+            last = exc
+            continue
+        if not response.predictions:
+            raise RuntimeError("Endpoint returned a response with no predictions.")
+        return response.predictions[0], getattr(response, "deployed_model_id", "") or ""
+    raise last if last is not None else RuntimeError("Endpoint prediction failed.")

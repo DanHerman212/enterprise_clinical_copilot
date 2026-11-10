@@ -203,6 +203,9 @@ def parse_medications(
         if reason:
             dropped.append({"medication": row.get("medication", ""), "reason": reason})
             continue
+        setting = _normalise(str(row.get("setting") or ""))
+        if setting not in ("discharge", "inpatient"):
+            setting = ""
         # A route or indication is kept only when the passage states it. "IV" and "for
         # pain" are short enough to appear in any clinical note by accident, so the same
         # rule the dose gets applies: what the note does not say is not carried.
@@ -211,6 +214,7 @@ def parse_medications(
             "dosage": str(row.get("dosage") or "").strip(),
             "frequency": str(row.get("frequency") or "").strip(),
             "route": str(row.get("route") or "").strip() if route and route in source else "",
+            "setting": setting,
         })
     return verified, dropped
 
@@ -282,63 +286,60 @@ def _retrieved_records(recorded: list[RecordedToolCall]) -> list[Any]:
     return records
 
 
-def _consolidate_medication_passages(recorded: list[RecordedToolCall]) -> None:
-    """Put the whole medications text in one passage, at index 0.
+def _passage_supports(passage: dict, row: dict[str, str]) -> bool:
+    """Whether this passage states the drug a row names, and the dose it states for it.
 
-    `discharge_medications` returns every chunk of the medications section and then
-    every chunk of the discharge instructions — deliberately, because the names are in
-    the first and the doses are in the second, and the extraction needs both. But
-    `/meds` cites its narrative with a single marker, and that marker addresses
-    `passages[0]`: the FIRST chunk of the medications section. A reader who clicked it
-    saw a fragment of the list the grid had just shown them in full, and the guardrail
-    compared the whole answer against one chunk of its evidence.
-
-    Joined here, once, before anything reads the passages — the citation layer, the
-    guardrail's source text and the payload all see the same complete text. The labels
-    inside the joined body still say which section each part came from, so nothing is
-    lost by merging the containers. The model was already given the per-section
-    rendering above; this changes what the answer CITES, not what the model read.
+    The same leniency the extraction check uses, applied to one passage at a time: a name
+    must appear in the passage body, and a dosage must be supported when the row carries
+    one. A drug named in one section and dosed in another is a row no single passage
+    supports, which is what makes the pair of citations necessary rather than decorative.
     """
-    for call in recorded:
-        response = call.get("response")
-        if not isinstance(response, dict):
-            continue
-        passages = response.get("passages")
-        if not isinstance(passages, list) or len(passages) < 2:
-            continue
-        text = "\n\n".join(
-            str(passage.get("text") or "") for passage in passages
-            if isinstance(passage, dict)
-        ).strip()
-        if not text:
-            continue
-        # The first passage's own keys are kept; only the text is replaced. The
-        # `section` key is deliberately NOT relabelled: citation resolution matches on
-        # the machine name (`discharge_medications`), and a human label here would make
-        # `resolve_source` miss it and serve the "no information" sentence instead of the
-        # passage. What the reader sees as a heading comes from the key, upstream.
-        merged = dict(passages[0])
-        merged["text"] = text
-        response["passages"] = [merged]
-        response["returned"] = 1
+    body = _normalise(str(passage.get("text") or ""))
+    name = _normalise(str(row.get("medication") or ""))
+    if not name or name not in body:
+        return False
+    dosage = _normalise(str(row.get("dosage") or ""))
+    return not dosage or _dose_supported(dosage, body)
 
 
-def _medication_passage_position(recorded: list[RecordedToolCall],
-                                 evidence_state: Any) -> int | None:
-    """The position the session record gave the passage the narrative reports on.
+def _passage_names(passage: dict, row: dict[str, str]) -> bool:
+    """Whether this passage names the drug at all, whatever it says about the dose.
+
+    The looser half of `_passage_supports`, and the one that decides whether a passage
+    CONTRIBUTES to the answer. A discharge list states names and the instructions state the
+    regimen, so the list names every drug the answer reports and doses almost none of them:
+    asking a dose of it would leave the passage that named the drug uncited.
+    """
+    body = _normalise(str(passage.get("text") or ""))
+    name = _normalise(str(row.get("medication") or ""))
+    return bool(name) and name in body
+
+
+def _medication_passage_positions(recorded: list[RecordedToolCall],
+                                  evidence_state: Any,
+                                  verified: list[dict[str, str]]) -> tuple[int, ...]:
+    """The record positions of the passages the narrative reports on, in payload order.
 
     Resolved from the record rather than counted here, because the two disagree the moment
-    the conversation has evidence in it: `/meds` retrieves one passage, and that passage may
-    be one the thread already read. `_execute_tool_calls` stamps the position it assigned or
-    REUSED — a passage `/ehr` retrieved keeps the position it had — and the marker the
-    narrative writes has to be that number, not this turn's first.
+    the conversation has evidence in it: `/meds` retrieves one or two passages, and either
+    may be one the thread already read. `_execute_tool_calls` stamps the position it
+    assigned or REUSED, and the marker the narrative writes has to be that number, not
+    this turn's first.
 
-    Read from the passage's own `id`, which is the key the record deduplicates on. `None`
-    when there is no record (no admission), or when the call returned no passage with an id;
-    the narrative then writes no marker rather than a wrong one.
+    Which passages, though, is a question about the ROWS. A discharge list that names only
+    the drugs the patient arrived on and a set of instructions that prescribe and dose the
+    take-home regimen are two different statements, and a single marker on the first one
+    asks the reader to believe a list it does not contain. So:
+
+      * a passage that supports every row is cited alone — one marker, one source, and the
+        reader lands on text that states what the sentence says;
+      * rows that span passages cite each contributing passage, in payload order;
+      * with no verified rows there is nothing to attribute, and every returned passage is
+        cited, because the sentence then reports on the retrieval itself.
     """
     if evidence_state is None:
-        return None
+        return ()
+    located: list[tuple[int, dict]] = []
     for call in recorded or []:
         response = call.get("response")
         if not isinstance(response, dict):
@@ -347,9 +348,24 @@ def _medication_passage_position(recorded: list[RecordedToolCall],
             if not isinstance(passage, dict):
                 continue
             passage_id = str(passage.get("id") or "").strip()
-            if passage_id:
-                return evidence_state.position_of_note_passage(passage_id)
-    return None
+            if not passage_id:
+                continue
+            position = evidence_state.position_of_note_passage(passage_id)
+            if position is not None:
+                located.append((position, passage))
+    if not located:
+        return ()
+    rows = [row for row in verified or [] if isinstance(row, dict)]
+    if rows:
+        complete = [(position, passage) for position, passage in located
+                    if all(_passage_supports(passage, row) for row in rows)]
+        if complete:
+            return (complete[0][0],)
+        partial = [position for position, passage in located
+                   if any(_passage_names(passage, row) for row in rows)]
+        if partial:
+            return tuple(dict.fromkeys(partial))
+    return tuple(dict.fromkeys(position for position, _ in located))
 
 
 def medication_narrative(verified: list[dict[str, str]], returned_passages: int,
@@ -425,13 +441,57 @@ def _patient_estimate(recorded: list[RecordedToolCall] | None) -> float | None:
     return None
 
 
+def lab_flag_annotation(recorded: list[RecordedToolCall]) -> str:
+    """Per analyte: how many readings are flagged, and the flag on the baseline.
+
+    The trajectory payload already carries a flag on every timepoint, and the formatter is
+    told to read them. What it cannot see is the SHAPE of the series — whether the
+    abnormal readings are all of them or three of eleven, and whether the reading the
+    admission opened with (day 0.0) was already abnormal. Two answers failed on exactly
+    that: one said an analyte "remained low throughout" whose first reading was normal,
+    and one said "all readings" were abnormal for a series of six with one flagged value.
+
+    Counted here rather than left to the model, because it is arithmetic over the payload
+    and the prompt's job is to say what to do with the number, not to work it out.
+    """
+    lines: list[str] = []
+    for call in recorded or []:
+        response = call.get("response")
+        if not isinstance(response, dict):
+            continue
+        for trend in response.get("trends") or []:
+            if not isinstance(trend, dict):
+                continue
+            series = [point for point in trend.get("series") or []
+                      if isinstance(point, dict)]
+            if not series:
+                continue
+            label = str(trend.get("label") or trend.get("key") or "value").strip()
+            unit = str(trend.get("unit") or "").strip()
+            flags = [str(point.get("flag") or "normal").strip().lower()
+                     for point in series]
+            abnormal = [flag for flag in flags if flag != "normal"]
+            baseline = series[0]
+            lines.append(
+                f"- {label}{f' ({unit})' if unit else ''}: {len(abnormal)} of "
+                f"{len(series)} readings flagged abnormal; baseline "
+                f"day {baseline.get('day')} flag={flags[0]}."
+            )
+    if not lines:
+        return ""
+    return ("<lab_flags>\nHow many readings of each analyte the panel flags abnormal, "
+            "and the flag on the baseline (first) reading:\n"
+            + "\n".join(lines) + "\n</lab_flags>")
+
+
 def _formatter_input(tool_messages: list[Any], outpatient: bool,
                      question: str | None = None,
                      comparators: list[dict] | None = None,
                      context_block: str = "",
                      session_block: str = "",
                      patient_estimate: float | None = None,
-                     fallback_literature: list[dict] | None = None) -> str:
+                     fallback_literature: list[dict] | None = None,
+                     lab_flags: str = "") -> str:
     """What the formatting turn reads: the question, the tool results, the caveat.
 
     The QUESTION goes first, and it is not decoration. Until Phase 01 this turn could be
@@ -482,6 +542,8 @@ def _formatter_input(tool_messages: list[Any], outpatient: bool,
             text = f"{text}\n\n{fallback}"
     if (session_block or "").strip():
         text = f"{text}\n\n{session_block.strip()}"
+    if (lab_flags or "").strip():
+        text = f"{text}\n\n{lab_flags.strip()}"
     if (context_block or "").strip():
         text = f"{text}{context_block}"
     asked = (question or "").strip()
@@ -1198,11 +1260,11 @@ async def run_command(
              "replay_positions": replay_positions},
         }
 
-    # `/meds` cites with one marker, so the passages it cites have to be one passage.
-    # Done before the formatting turn's state is built, because everything downstream —
-    # the answer's citation, the guardrail's source text and the grid — reads `recorded`.
-    if command.wire == "meds":
-        _consolidate_medication_passages(recorded)
+    # `/meds` cites with markers on the passages its rows came from, so the passages stay
+    # as the tool returned them. They used to be joined into the first one here, which put
+    # the record and the command's answer on two different numbering schemes: the record
+    # held two positions and the merged payload held one, so the marker named the first
+    # passage while the model had extracted from both.
 
     # The published cohorts this admission's estimate is compared against, retrieved live
     # and recorded as tool calls like every other piece of evidence this turn rests on.
@@ -1337,6 +1399,10 @@ async def run_command(
                 patient_estimate=_patient_estimate(recorded),
                 # And, when no cohort verified, the studies that were retrieved anyway.
                 fallback_literature=command_extras.get("fallback_literature"),
+                # `/labs` only: the count of flagged readings per analyte and the flag on
+                # its baseline, counted here rather than left to the prose.
+                lab_flags=(lab_flag_annotation(recorded)
+                           if command.wire == "labs" else ""),
             )),
         ],
         config=config,
@@ -1416,20 +1482,32 @@ async def run_command(
         returned = _passage_count(recorded)
         # `sections` was read above, where it chose the instruction this turn was given;
         # the narrative reports the same sections rather than re-reading them.
+        #
+        # The grid is the home prescription list, so a narrative fallback's ward
+        # administrations do not belong in it. Rows the extractor marked `inpatient` are
+        # withheld whenever the record also documents something to take home; with no
+        # discharge row at all the grid keeps them, because a record whose only
+        # medications were given on the ward is still a record with medications, and the
+        # narrative states which of them is which (2026-11-10).
+        home_rows = [row for row in verified
+                     if str(row.get("setting") or "").strip().lower() != "inpatient"]
+        grid_rows = home_rows or verified
         state["command_payload"] = {
-            "medications": verified,
+            "medications": grid_rows,
             "dropped": dropped,
             "returned_passages": returned,
             "sections": list(sections),
         }
         # The narrative replaces the raw JSON: the grid renders the list, and the
-        # prose is what the guardrails and the citation layer expect to see. The marker
-        # is the position the RECORD gave this passage, not this turn's first: a passage
-        # the thread already read keeps the number it had, and a marker that names a
-        # different passage is worse than no marker at all (2026-11-06).
+        # prose is what the guardrails and the citation layer expect to see. The markers
+        # are the positions the RECORD gave the passages these rows were read from, not
+        # this turn's first: a passage the thread already read keeps the number it had,
+        # and a marker that names a different passage is worse than no marker at all
+        # (2026-11-06), while a marker that names only one of two passages leaves half the
+        # sentence unverifiable (2026-11-10).
         state["deterministic_answer"] = answer_text.medication_narrative(
             verified, returned, sections=sections,
-            cite=_medication_passage_position(recorded, evidence_state))
+            cite=_medication_passage_positions(recorded, evidence_state, verified))
         if streams:
             # Generated here from verified rows, so announcing it is not a preview of
             # unverified text: this IS the settled answer, arriving as soon as it

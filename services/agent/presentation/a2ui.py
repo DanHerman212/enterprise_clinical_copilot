@@ -654,8 +654,21 @@ def compose_presentation(question: str, answer: str,
     # Only the records this answer NAMES (`citations.cited_pmids`). A search returns three
     # and the answer rests on one; publishing all three told the reader two papers had been
     # used (patient 90000069, turn 3, 2026-10-31 — two rows nothing pointed at).
+    # Only the records THIS answer names, when this turn ran no literature search of its
+    # own. A turn that inherited the thread's search and wrote no badge published a
+    # reference list anyway: the records reached `sources` because the channel was built
+    # from what the conversation held, so a follow-up about a medication listed the papers
+    # an earlier turn had read. A row nothing points at claims the answer used a paper it
+    # never mentioned.
+    #
+    # A `/pubmed` turn, or any turn that searched, keeps the older rule: an uncited result
+    # is still published, because that turn read what it retrieved and its card says so.
+    searched_this_turn = bool(literature_calls(tool_calls))
+    visible_records = published_records
+    if not searched_this_turn and not cited_numbers_of_records:
+        visible_records = []
     published_sources = literature_sources(
-        published_records, start=published_start,
+        visible_records, start=published_start,
         ledger_start=literature_start,
         cited=cited_numbers_of_records)
     sources = shown_sources + published_sources

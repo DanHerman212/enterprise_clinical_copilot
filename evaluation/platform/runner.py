@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -120,7 +121,17 @@ def http_ask(*, question: str | None, hadm_id: int, run_tag: str,
              follow_ups: bool = False,
              intent: str | None = None,
              chip: str | None = None) -> dict[str, Any]:
-    """One `/ask` call. `session_id` is accepted for logging only and not sent."""
+    """One `/ask` call. `session_id` is accepted for logging only and not sent.
+
+    The read ceiling is 135 s, above the platform's own 120 s request timeout on the
+    agent service, so a request the platform cuts comes back as a response this client
+    can read rather than as a read timeout it has to guess about. One retry follows a
+    transient failure — a timeout, a transport error, or a gateway status — because the
+    measured failures of this kind have been transport events, not answers: an item that
+    timed out after the full ceiling was recorded unscored with no trace at all
+    (2026-11-10). A retry re-sends the same session, so a turn that did reach the service
+    is replayed rather than re-asked blind.
+    """
     import httpx
 
     from evaluation.platform.http_auth import identity_token  # noqa: PLC0415
@@ -129,14 +140,31 @@ def http_ask(*, question: str | None, hadm_id: int, run_tag: str,
                       follow_ups=follow_ups, intent=intent, chip=chip)
     validate_body(body)
     headers = {"Authorization": f"Bearer {identity_token(AGENT_URL)}"}
-    with httpx.Client(timeout=180.0) as client:
-        response = client.post(f"{AGENT_URL}/ask", json=body, headers=headers)
-    try:
-        payload = response.json()
-    except ValueError:
-        payload = {"error": f"non-JSON response ({response.status_code})"}
-    payload.setdefault("status", response.status_code)
-    return payload
+    timeout = httpx.Timeout(connect=15.0, read=135.0, write=30.0, pool=15.0)
+    attempts = 2
+    last_error: Exception | None = None
+    for attempt in range(attempts):
+        if attempt:
+            time.sleep(2.0)
+        try:
+            with httpx.Client(timeout=timeout) as client:
+                response = client.post(f"{AGENT_URL}/ask", json=body, headers=headers)
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            last_error = exc
+            continue
+        if response.status_code in (502, 503, 504) and attempt + 1 < attempts:
+            last_error = httpx.HTTPStatusError(
+                f"gateway status {response.status_code}",
+                request=response.request, response=response)
+            continue
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = {"error": f"non-JSON response ({response.status_code})"}
+        payload.setdefault("status", response.status_code)
+        return payload
+    raise last_error if last_error is not None else RuntimeError(
+        "the agent made no response and no error")
 
 
 def run(names: list[str], *, run_tag: str, max_concurrency: int = 5) -> dict[str, Any]:

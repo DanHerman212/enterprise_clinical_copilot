@@ -52,9 +52,8 @@ def test_a_fallback_section_is_never_called_a_discharge_medication_list():
     assert "as recorded in the discharge note" not in text
     assert "does not contain a dedicated discharge medications section" not in text
     assert text == (
-        "Medications documented during the hospital course: "
-        "Zithromax, albuterol ^[1].")
-
+            "No dedicated discharge medications section is documented in the record. "
+            "Documented to continue at discharge: Zithromax, albuterol ^[1].")
 
 def test_the_sections_are_read_from_the_retrieval_not_guessed():
     recorded = [

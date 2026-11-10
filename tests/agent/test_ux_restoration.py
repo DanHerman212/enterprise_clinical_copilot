@@ -164,38 +164,32 @@ def _meds_recorded():
     }]
 
 
-def test_the_medication_passages_are_consolidated_into_the_first_one():
-    recorded = _meds_recorded()
+def test_the_medication_passages_are_left_as_the_tool_returned_them():
+    """The record and the answer are on one numbering scheme (Stage 4, 2026-11-10).
 
-    deterministic._consolidate_medication_passages(recorded)
+    These used to be joined into the first passage, because `/meds` cited with a single
+    marker and that marker addressed `passages[0]`. The join put the session record — which
+    had already numbered both passages as it ingested them — out of step with the payload
+    the answer cited, so the marker named the discharge list while the model had extracted
+    from the list and the instructions. The passages now stay as the tool returned them and
+    the narrative cites the ones its rows came from.
+    """
+    recorded = _meds_recorded()
 
     passages = recorded[0]["response"]["passages"]
-    assert len(passages) == 1
-    assert recorded[0]["response"]["returned"] == 1
-    # The section KEY is unchanged: citation resolution matches on it.
-    assert passages[0]["section"] == "discharge_medications"
-    # Every chunk is in the cited text, including the instructions that carry the doses.
-    for fragment in ("warfarin", "metoprolol", "50 mg daily"):
-        assert fragment in passages[0]["text"]
+
+    assert [passage["id"] for passage in passages] == ["m1", "m2", "i1"]
+    assert recorded[0]["response"]["returned"] == 3
 
 
-def test_a_single_passage_is_left_alone():
-    recorded = [{"name": "discharge_medications", "args": {}, "response": {
-        "returned": 1,
-        "passages": [{"id": "m1", "section": "discharge_medications", "text": "warfarin"}],
-    }}]
-
-    deterministic._consolidate_medication_passages(recorded)
-
-    assert len(recorded[0]["response"]["passages"]) == 1
-
-
-def test_the_meds_marker_resolves_to_the_consolidated_text():
-    """The wiring, not just the helper: `^[1]` must address the whole list."""
+def test_the_meds_markers_resolve_to_both_sections_the_rows_came_from():
+    """The wiring, not just the helper: a drug named in one section and dosed in the other
+    cites both, and each marker opens the passage it names."""
     recorded = _meds_recorded()
-    deterministic._consolidate_medication_passages(recorded)
     answer = answer_text.medication_narrative(
-        [{"medication": "warfarin", "dose": "4 mg"}], 1)
+        [{"medication": "warfarin", "dose": "4 mg"}], 3, cite=(1, 3))
+
+    assert answer.count("^[") == 2
 
     out = compose_presentation(
         "What medications is she going home on? ",
@@ -203,8 +197,9 @@ def test_the_meds_marker_resolves_to_the_consolidated_text():
     )
 
     assert out["sources"], "the /meds answer cites nothing"
-    assert "metoprolol" in out["sources"][0]["text"]
-    assert "50 mg daily" in out["sources"][0]["text"]
+    assert [source["cite"] for source in out["sources"]] == [1, 3]
+    assert out["sources"][0]["text"] == "warfarin"
+    assert "50 mg daily" in out["sources"][1]["text"]
 
 
 # --- Defect 8: no markdown headings in /ehr -----------------------------------

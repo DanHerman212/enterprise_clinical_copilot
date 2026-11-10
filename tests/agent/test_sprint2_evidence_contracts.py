@@ -94,7 +94,8 @@ def test_the_prompt_states_what_a_null_driver_means():
     # Flattened: the prompt is hard-wrapped, so a sentence spans source lines.
     text = " ".join(prompts.RISK_SPOKE.split())
 
-    assert "no recorded value in the structured admission feature set" in text
+    assert "no recorded value in the structured feature set" in text
+    assert "say the value is null" in text
     assert "never substitute a `get_lab_trends` reading" in text
     assert "a series is a different measurement, not the model's input" in text
 

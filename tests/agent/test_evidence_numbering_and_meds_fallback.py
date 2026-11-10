@@ -124,7 +124,9 @@ def test_a_fallback_with_drugs_state_what_the_section_documents():
     text = answer_text.medication_narrative(
         _rows("Plavix", "aspirin"), 1, sections=("brief_hospital_course",))
 
-    assert "Medications documented during the hospital course: Plavix, aspirin ^[1]." == text
+    assert text == (
+        "No dedicated discharge medications section is documented in the record. "
+        "Documented to continue at discharge: Plavix, aspirin ^[1].")
     # No talk about the document's headings, and no apology around the drug names.
     assert "does not contain a dedicated" not in text
     assert "rather than a formal discharge medication list" not in text

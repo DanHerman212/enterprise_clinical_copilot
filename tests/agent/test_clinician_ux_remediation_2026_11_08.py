@@ -262,16 +262,26 @@ def test_the_fallback_instruction_asks_for_take_home_drugs_first():
     assert "only if the passage names no discharge or take-home medication" in lowered
 
 
-def test_the_fallback_narrative_names_the_drugs_without_an_apology():
-    rows = [{"medication": name, "dosage": "", "frequency": "", "route": ""}
+def test_the_fallback_narrative_states_the_absence_and_names_the_drugs():
+    """Reversed 2026-11-10: the absence IS stated, and the drugs are attributed by setting.
+
+    The earlier wording avoided naming the document's headings on the grounds that it read
+    as an apology. The medical-risk defect that replaced it was worse: a reader told only
+    "documented during the hospital course" could not tell a take-home prescription from a
+    ward administration, and an extractor that labelled every row the same way filled the
+    home grid with IV morphine. The sentence now says the record has no dedicated section
+    and separates what continues at discharge from what was only given during the stay.
+    """
+    rows = [{"medication": name, "dosage": "", "frequency": "", "route": "",
+             "setting": "discharge"}
             for name in ("Medrol", "Darvocet", "Flexeril")]
 
     text = answer_text.medication_narrative(
         rows, 1, sections=("brief_hospital_course",))
 
     assert text == (
-        "Medications documented during the hospital course: Medrol, Darvocet, "
-        "Flexeril ^[1].")
+        "No dedicated discharge medications section is documented in the record. "
+        "Documented to continue at discharge: Medrol, Darvocet, Flexeril ^[1].")
     assert "does not contain a dedicated discharge medications section" not in text
     assert "rather than a formal discharge medication list" not in text
 

@@ -1223,6 +1223,33 @@ def turn_scope(question_kind: str | None, hadm_id: int | None = None,
     return f"free_text.turn{metadata.get('turn', 1)}", metadata
 
 
+def _foreign_admission_turn(question: str, hadm_id: int) -> dict:
+    """A question about another admission, answered without asking the model anything.
+
+    The state is the shape a finished free-text turn has, so the guardrails, the citation
+    layer and the composer read it exactly as they read any other answer. No tool ran, so
+    the record is the empty one bound to this admission; the refusal travels as
+    `deterministic_answer`, which `turn.py` prefers to the model's prose, and it carries
+    no clinical fact and no identifier from the question.
+    """
+    return {
+        "messages": [SystemMessage(content=SYSTEM_PROMPT),
+                     HumanMessage(content=question)],
+        "tool_calls": [],
+        "replayed_tool_calls": [],
+        "command": None,
+        "hadm_id": hadm_id,
+        "evidence_state": session_evidence.SessionEvidenceState(hadm_id=hadm_id),
+        "replay_positions": 0,
+        "question": question,
+        "allowed_tools": frozenset(),
+        "wants_literature": False,
+        "retrieval_demanded": False,
+        "deterministic_answer": answer_text.foreign_admission_refusal(),
+        "langfuse_trace_id": "",
+    }
+
+
 async def ask(
     toolbox: MCPToolbox,
     question: str,
@@ -1365,6 +1392,12 @@ async def ask(
                 or observability.current_trace_id()
             )
         return command_state
+
+    # A question that names a different admission is answered here, before the replay and
+    # before the model: the turn is bound to one admission, and asking another is not a
+    # question this session can answer at all.
+    if routing.requests_foreign_admission(question, hadm_id):
+        return _foreign_admission_turn(question, hadm_id)
 
     manifest_answers_question = bool(admission_context) and (
         routing.asks_for_administrative_detail(question)

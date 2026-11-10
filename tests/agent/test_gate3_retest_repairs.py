@@ -120,5 +120,5 @@ def test_the_global_number_survives_the_offset_of_a_later_turn():
 def test_the_prompt_requires_a_marker_on_every_synthesis_paragraph():
     prompt = " ".join(SYSTEM_PROMPT.split())
 
-    assert "every paragraph that states a fact carries the marker" in prompt
-    assert "including a paragraph restating an estimate" in prompt
+    assert "states a positive clinical fact carries its own" in prompt
+    assert "including one restating an estimate the thread established" in prompt

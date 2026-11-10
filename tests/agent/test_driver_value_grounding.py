@@ -315,14 +315,15 @@ def test_the_prompt_states_the_payloads_value_as_the_factor_s_own_number():
     text = _prompt()
 
     assert "one `value` per `top_factors` entry" in text
-    assert "the chart does not document the value" in text
+    assert "state a factor's `value` whenever it carries one" in text
 
 
 def test_the_prompt_stops_the_note_search_for_the_feature_name():
     """A discharge summary does not write "red cell distribution width"."""
     text = _prompt()
 
-    assert "no discharge summary contains the words" in text
+    assert "no note" in text
+    assert "contains the words" in text
     assert "search for what the value means clinically" in text
     assert "is not the chart's account of the correlate" not in text
 

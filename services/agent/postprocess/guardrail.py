@@ -489,6 +489,37 @@ def _factor_values(tool_calls: list[dict]) -> list[float]:
     return values
 
 
+def _contributions(tool_calls: list[dict]) -> list[float]:
+    """The model's own attribution weight for each top factor, exactly as served.
+
+    A driver answer is supposed to say how far a factor moved this patient's estimate, and
+    that number is `top_factors[].contribution` — 0.0824 on one admission. It is not in
+    `_predict_values` (the score and the threshold) nor in `_factor_values` (the patient's
+    own measurements), so a sentence quoting it was stripped as a fabricated probability:
+    the guard read a figure the turn had been served and called it invented.
+
+    Kept out of `_factor_values` on purpose. Those values go to `normalise_factor_values`,
+    which rounds a served number to one decimal because `16.0417 days` claims a precision
+    the record does not have. A contribution has the opposite requirement: it is the
+    model's arithmetic, four decimals are what it means, and rounding it would make the
+    sentence disagree with the payload it describes.
+    """
+    values: list[float] = []
+    for tc in tool_calls or []:
+        if tc.get("name") != "predict_readmission":
+            continue
+        resp = tc.get("response") or {}
+        if not isinstance(resp, dict) or resp.get("error"):
+            continue
+        for factor in resp.get("top_factors") or []:
+            if not isinstance(factor, dict):
+                continue
+            v = factor.get("contribution")
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                values.append(float(v))
+    return values
+
+
 def _clean_number(value: float) -> str:
     """One decimal at most, and no trailing zeros: 16.0417 -> "16", 2.5 -> "2.5"."""
     rounded = round(value, 1)
@@ -572,14 +603,16 @@ def verify_risk_numbers(
     """
     flags: list[str] = []
     values = _predict_values(tool_calls)
-    # The patient's own drivers' values, in their OWN units. A separate comparison for
-    # the reason `_factor_values` gives: `values` holds the score and the threshold as
-    # decimals, and these are days, counts and measurements. Without them a value the turn
-    # was served and asked to explain is stripped out of the sentence explaining it:
+    # The patient's own drivers' values, in their OWN units, and the model's attribution
+    # weight beside them. A separate comparison for the reason `_factor_values` gives:
+    # `values` holds the score and the threshold as decimals, and these are days, counts,
+    # measurements and contribution weights. Without them a value the turn was served and
+    # asked to explain is stripped out of the sentence explaining it:
     # "her RDW of 15.5%" is a percentage token compared against a probability of 0.34, and
     # the answer is served as "her RDW of". Measured 2026-11-02 — a driver question that
-    # reached its value and then had it removed.
-    measurements = _factor_values(tool_calls)
+    # reached its value and then had it removed. The contribution was the same defect in
+    # the other direction: a driver answer that named `+0.0824` lost it (2026-11-10).
+    measurements = [*_factor_values(tool_calls), *_contributions(tool_calls)]
     spans: list[tuple[int, int]] = []
 
     def supported(x: float, tol: float) -> bool:

@@ -692,7 +692,14 @@ class SessionEvidenceState:
                 parts = [f"feature={_escape(factor.get('feature'))}"]
                 for key in ("contribution", "direction", "value"):
                     if key in factor:
-                        parts.append(f"{key}={_escape(factor[key])}")
+                        # `null` rather than Python's `None`: the block is read by a model
+                        # as data, and "None" beside a number reads as a word rather than
+                        # as the absence of a value. The distinction matters most for a
+                        # scored feature whose row holds nothing, which the attribution
+                        # rules treat differently from a value that was never looked up.
+                        value = factor[key]
+                        shown = "null" if value is None else _escape(value)
+                        parts.append(f"{key}={shown}")
                 lines.append("  " + " | ".join(parts))
         lines.append("</readmission_risk>")
         return "\n".join(lines)

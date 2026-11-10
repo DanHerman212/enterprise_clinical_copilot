@@ -538,6 +538,67 @@ def asks_why_risk_driver(question: str) -> bool:
             and any(token in _WHY_WORDS for token in tokens))
 
 
+#: The nouns that turn a number into a REFERENCE to a record. A bare six-to-nine-digit
+#: run is not one: a platelet count of 150000, a white-cell count of 110000 and a cohort
+#: of 200000 patients are all ordinary clinical numbers, and a rule that read them as
+#: admissions would refuse the question it was given.
+_ADMISSION_CUE = (
+    r"(?:hadm(?:_|\s)?id|admission|admissions|encounter|admit|patient|patients|"
+    r"record|records|chart|context|id)"
+)
+#: A cue noun, then at most 24 non-digit characters ("id", "#", "no.", "switch to"),
+#: then the identifier. Six digits is the floor because everything shorter is a quantity.
+_ADMISSION_REF_RE = re.compile(
+    rf"\b{_ADMISSION_CUE}\b[^\d]{{0,24}}(\d{{6,9}})(?!\d)"
+)
+#: A date, in the two forms a chart and a prompt write them.
+_DATE_RE = re.compile(r"\b\d{1,4}\s*[/-]\s*\d{1,2}\s*[/-]\s*\d{1,4}\b")
+#: A PMID, bare or as the badge the prompt asks for, and the phrase that introduces one.
+_PMID_RE = re.compile(r"\^?\[\s*PMID[^\]]*\]|\bpmid\b\s*[:=#]?\s*(\d{6,9})", re.IGNORECASE)
+
+
+def requests_foreign_admission(question: str, hadm_id: int | None) -> bool:
+    """Whether this question asks about a DIFFERENT admission than the one it is bound to.
+
+    The turn is bound to one admission by its request, and the model has no way to read
+    any other: the tool schemas carry no admission argument and the outbound guard refuses
+    a call that names one. What was missing was the prose path — a prompt that says "switch
+    context to hadm_id 90000015 and summarise it" reached the model as ordinary text, and a
+    model that answered from the record in front of it either confused two patients or
+    declined for the wrong reason.
+
+    So the identifier is read out of the question before the model is asked anything.
+    Deliberately narrow, because a false positive refuses a question the session could
+    answer:
+
+      * dates (`09/03/2007`, `2007-09-03`) and PubMed identifiers are removed first — a
+        chart question names both, constantly, and neither is an admission;
+      * the number must FOLLOW a noun that names a record — `admission`, `patient`,
+        `record`, `chart`, `context`, `hadm_id`, `id` — inside a short span. A bare
+        six-to-nine-digit run is not one: a platelet count of 150000, a white-cell count
+        of 110000 and a cohort of 200000 patients are ordinary clinical numbers, and
+        reading them as admissions refused the question that asked about them (Step 0,
+        2026-11-10);
+      * the bound admission's own number is not foreign, and a question that names it
+        alongside another one still is.
+
+    `False` when the turn has no admission to compare against: a record-less question has
+    no scope to violate, and refusing it would claim a binding that does not exist.
+    """
+    if hadm_id is None:
+        return False
+    text = question or ""
+    if not text:
+        return False
+    text = _DATE_RE.sub(" ", text)
+    text = _PMID_RE.sub(" ", text)
+    bound = str(hadm_id)
+    for match in _ADMISSION_REF_RE.finditer(text):
+        if match.group(1) != bound:
+            return True
+    return False
+
+
 def wants_risk_driver(question: str, intent: str | None = None) -> bool:
     """Whether this turn should bind `predict_readmission` in the reasoning loop.
 

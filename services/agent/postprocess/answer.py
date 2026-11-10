@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Iterable
 
 from langchain_core.messages import AIMessage
 
@@ -171,9 +171,47 @@ def _course_only(sections: tuple[str, ...]) -> bool:
     return tuple(sections) == ("brief_hospital_course",)
 
 
+def _split_by_setting(verified: list[dict[str, str]]) -> tuple[list[dict[str, str]],
+                                                                 list[dict[str, str]]]:
+    """The rows the patient takes home, and the rows the stay administered.
+
+    The distinction only exists on a record with no dedicated medication section, where
+    the extractor reports each row's `setting`. A row with no setting, or any other value,
+    is a discharge row: that is what an extraction over a discharge list means, and it
+    keeps every caller that predates the field working unchanged.
+    """
+    discharge: list[dict[str, str]] = []
+    inpatient: list[dict[str, str]] = []
+    for row in verified:
+        setting = str(row.get("setting") or "").strip().lower()
+        (inpatient if setting == "inpatient" else discharge).append(row)
+    return discharge, inpatient
+
+
+def _cite_suffix(cite: int | Iterable[int] | None) -> str:
+    """The markers this sentence carries, or `""` when the caller has no position.
+
+    One marker per passage the sentence reports on, space-separated — the shape
+    `citations.renumber_citations` writes and the browser's marker regex reads. Two
+    passages are cited when the rows came from two: a `/meds` answer whose drug names are
+    in a discharge list and whose doses are in the instructions the same call returned
+    reports on both, and a single marker opened only one of them.
+    """
+    if isinstance(cite, int) and not isinstance(cite, bool):
+        values: Iterable[int] = (cite,)
+    else:
+        values = cite or ()
+    positions: list[int] = []
+    for value in values:
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            if value not in positions:
+                positions.append(value)
+    return "".join(f" ^[{position}]" for position in positions)
+
+
 def medication_narrative(verified: list[dict[str, str]], returned_passages: int,
                          sections: tuple[str, ...] = (),
-                         *, cite: int | None = None) -> str:
+                         *, cite: int | Iterable[int] | None = None) -> str:
     """What the narrative says for a medications command.
 
     The prose names the medications as well as counting them. It used to say only "N
@@ -209,18 +247,42 @@ def medication_narrative(verified: list[dict[str, str]], returned_passages: int,
     "formatting failure" is a fact about this module, not about the patient's record, and
     a judge is right to score it ungrounded (90000023, 2026-10-21).
     """
-    names = _distinct_medications(verified)
+    discharge_rows, inpatient_rows = _split_by_setting(verified)
+    names = _distinct_medications(discharge_rows)
+    inpatient_names = _distinct_medications(inpatient_rows)
     # The sentence reports on the passage the tool returned, so it carries that passage's
     # marker like any other claim: the citation layer resolves the position against the
     # record's array, and the judge reads a provenance-poor answer as one that cited
     # nothing (5fa503f6 and e5558ec7 passed with `citation_missing`, 2026-10-21). Only
     # when a position exists — a marker pointing at nothing is worse than none.
-    position = cite if cite is not None else (
-        _FIRST_TURN_POSITION if returned_passages else 0)
-    source = f" ^[{int(position)}]" if position else ""
+    source = _cite_suffix(cite if cite is not None else
+                          (_FIRST_TURN_POSITION if returned_passages else None))
     dedicated = "discharge_medications" in sections
+    instructions_only = "discharge_instructions" in sections
+    # Neither section: the retrieval fell back to narrative text, and a statement about
+    # what the patient takes home has to be made about that text rather than about a
+    # discharge list the record does not have.
+    narrative_fallback = not dedicated and not instructions_only
     where = ", ".join(section.replace("_", " ") for section in sections) or (
         "material that was retrieved")
+    if narrative_fallback:
+        if not names and not inpatient_names:
+            if returned_passages == 0:
+                return ("No specific discharge medication information is available for "
+                        "this admission.")
+            return ("No dedicated discharge medications section is documented in the "
+                    f"record, and no medication could be read from the {where}{source}.")
+        sentences = ["No dedicated discharge medications section is documented in the "
+                     "record."]
+        if names:
+            sentences.append(
+                f"Documented to continue at discharge: {', '.join(names)}{source}.")
+        if inpatient_names:
+            tail = "" if names else source
+            sentences.append(
+                "Given during the stay without a documented home prescription: "
+                f"{', '.join(inpatient_names)}{tail}.")
+        return " ".join(sentences)
     if names:
         if dedicated:
             count = len(names)
@@ -295,9 +357,10 @@ def medication_list_retrieved(tool_calls: list[dict]) -> bool:
 
     Read off the payload rather than the question's wording, because this decides what to
     serve on a turn where the model produced no text at all: there is no interpretation of
-    the question to consult. A call that failed, or that came back with no passages, is not
-    a list — the sentence it would earn points the reader at `/meds`, and an empty section
-    is not a list to point at.
+    the question to consult. A call that failed, that came back with no passages, or that
+    fell back to narrative sections (`dedicated_section_present` false) is not a list —
+    the sentence it would earn points the reader at `/meds`, and a narrative fallback is
+    not the record's discharge list to point at.
     """
     for call in tool_calls:
         if call.get("name") != "discharge_medications":
@@ -305,9 +368,33 @@ def medication_list_retrieved(tool_calls: list[dict]) -> bool:
         response = call.get("response")
         if not isinstance(response, dict) or response.get("error"):
             continue
-        if response.get("passages"):
+        if response.get("passages") and response.get("dedicated_section_present"):
             return True
     return False
+
+
+#: `prompt_feedback.block_reason` values that mean the prompt was not blocked. Gemini
+#: reports the field on ordinary responses too, so treating any value as a block would
+#: make every turn look withheld.
+_NO_PROMPT_BLOCK = frozenset({"", "BLOCK_REASON_UNSPECIFIED", "UNSPECIFIED",
+                              "BLOCKED_REASON_UNSPECIFIED", "NONE"})
+
+
+def turn_reply_withheld(state: dict) -> bool:
+    """Whether the provider took this turn's reply away, read off its own message.
+
+    `reply_withheld` is the rule; this is where the two facts it needs come from. Read
+    from the message's metadata rather than imported from the engine, because
+    `postprocess/` may not import `engine/` and the values are the provider's own.
+    """
+    message = _final_message(state)
+    if message is None:
+        return False
+    metadata = dict(getattr(message, "response_metadata", None) or {})
+    reason = str(metadata.get("finish_reason") or "").upper() or None
+    feedback = metadata.get("prompt_feedback") or {}
+    blocked_reason = str(feedback.get("block_reason") or "").upper()
+    return reply_withheld(reason, blocked=blocked_reason not in _NO_PROMPT_BLOCK)
 
 
 def reject_model_reply(state: dict) -> None:
@@ -319,10 +406,16 @@ def reject_model_reply(state: dict) -> None:
     unavailable answer rather than a fabricated one.
 
     The exception is a turn that DID retrieve the patient's discharge medication list and
-    came back with no text. That turn has something to serve, and it is not an
-    interpretation of the record — it is the record's own list, which `/meds` renders from
-    the same call. Serving nothing told the reader the question had been refused while the
-    answer sat in the turn (`MEDICATIONS_WITHHELD_SENTENCE`).
+    whose reply the provider's filter took away. That turn has something to serve, and it
+    is not an interpretation of the record — it is the record's own list, which `/meds`
+    renders from the same call. Serving nothing told the reader the question had been
+    refused while the answer sat in the turn (`MEDICATIONS_WITHHELD_SENTENCE`).
+
+    Both halves are required. A model that declines voluntarily — an `evidence_found:
+    false` envelope on a turn where the record DOES hold a discharge list — is stating a
+    judgement about the question, and answering it with "the filter withheld the summary"
+    would report a filter that never ran. Observed on a false-premise probe, 2026-11-10:
+    the turn declined with `finish_reason=STOP` and the sentence blamed a safety filter.
 
     Recorded by editing the message rather than by raising, so the finish reason and the
     content-filter verdict stay readable on the turn the caller was refused.
@@ -331,7 +424,7 @@ def reject_model_reply(state: dict) -> None:
         medication_list_retrieved(state.get("tool_calls") or [])
         or medication_list_retrieved(state.get("replayed_tool_calls") or [])
     )
-    if retrieved:
+    if retrieved and turn_reply_withheld(state):
         replace_final_text(state, MEDICATIONS_WITHHELD_SENTENCE)
         return
     replace_final_text(state, "")
@@ -364,6 +457,25 @@ def silent_turn_sentence(*, outpatient: bool = False) -> str:
 def outpatient_ehr_notice() -> str:
     """The `/ehr` notice for a record that was never an admission."""
     return OUTPATIENT_EHR_NOTICE
+
+
+#: Served when the question asks to switch to, read, or summarise a different admission.
+#:
+#: The refusal is deterministic and contains no clinical fact from the current record and
+#: no identifier from the question: a refusal that repeats the number it is refusing
+#: confirms the number, and one that summarises this patient to a question about another
+#: is the cross-patient disclosure it was meant to prevent.
+FOREIGN_ADMISSION_REFUSAL = (
+    "This session is open on one patient's encounter, and I can't switch to another "
+    "admission, read another record, or report on one. Ask me about this encounter — its "
+    "discharge summary, laboratory course, medications, readmission risk, or the "
+    "published literature — and I'll answer from the record in front of me."
+)
+
+
+def foreign_admission_refusal() -> str:
+    """The sentence served for a question about another admission."""
+    return FOREIGN_ADMISSION_REFUSAL
 
 
 def empty_turn_sentence(

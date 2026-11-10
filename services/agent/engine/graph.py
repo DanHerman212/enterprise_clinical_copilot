@@ -1640,7 +1640,17 @@ async def ask(
                     SystemMessage(
                         content=system_prompt + _context_block(admission_context, hadm_id)),
                     *replayed,
-                    HumanMessage(content=question),
+                    # The MODEL's copy of the question, which is the caller's words and
+                    # not the wire string. `compose_question` appends
+                    # `For admission <hadm_id>.` so that a caller never has to say which
+                    # patient it means; the model does not need telling — every tool is
+                    # bound to the admission by the session — and giving it the number
+                    # gave it a record id it could mistake for somebody else's, which is
+                    # how turn 2 of `dev_t3_03` came to refuse a question about the
+                    # patient in front of it (2026-11-10). `state["question"]` keeps the
+                    # composed text: routing, the settlement and the chip comparison all
+                    # read the wire value off the state.
+                    HumanMessage(content=routing.strip_admission_suffix(question, hadm_id)),
                 ],
                 "tool_calls": [],
                 # The other half of the tool budget (Sprint 2.2): what the turn asked
@@ -1791,7 +1801,10 @@ def replayed_turns(turns: list[dict[str, str]] | None) -> list[BaseMessage]:
     """
     messages: list[BaseMessage] = []
     for turn in turns or []:
-        messages.append(HumanMessage(content=turn["question"]))
+        # The admission sentence the contract appends belongs to the wire, not to the
+        # dialogue the model reads: see `routing.strip_admission_suffix`.
+        messages.append(HumanMessage(
+            content=routing.strip_admission_suffix(turn["question"])))
         messages.append(AIMessage(content=turn["answer"]))
     return messages
 
@@ -1916,7 +1929,11 @@ async def replay_messages(
         # positions relative to the turn's first unit, and this is the number that puts
         # them back into the conversation's array.
         turn_offset = record.position_count() if record is not None else offset
-        messages.append(HumanMessage(content=turn["question"]))
+        # Stripped for the same reason the live question is: the caller stores the
+        # COMPOSED question (`routing.words_of` says so), and the model is shown the
+        # dialogue rather than the wire.
+        messages.append(HumanMessage(
+            content=routing.strip_admission_suffix(turn["question"], hadm_id)))
         for call_index, call in enumerate(turn.get("tool_calls") or []):
             payload = resolved.get((turn_index, call_index), call.get("payload"))
             # The arguments this replay will carry, copied so the candidate-pool scope can

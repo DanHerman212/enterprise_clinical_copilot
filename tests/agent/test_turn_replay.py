@@ -116,10 +116,16 @@ def test_the_prompt_stays_a_template_and_the_history_is_data(monkeypatch):
         "And the potassium?", "Potassium was 3.2, low.",
     ]
     assert isinstance(messages[-1], HumanMessage)
-    # The composed question, admission suffix and all: the replay must not
-    # change what the model is asked about now.
-    assert messages[-1].content == parsed["question"]
-    assert captured["state"]["messages"][-1].content == parsed["question"]
+    # The caller's words, and the replay must not change what the model is asked about
+    # now. The ADMISSION SENTENCE is deliberately not here since Stage 5D: the contract
+    # still composes it onto the wire question (`parsed["question"]`), and the model is
+    # shown the question without it, because the session already binds every tool to the
+    # admission and a record number in the prompt is one the model can only misread. This
+    # assertion used to require the suffix "admission suffix and all"; the reversal is the
+    # point of `routing.strip_admission_suffix`, not a relaxation of the check.
+    assert messages[-1].content == "and now?"
+    assert parsed["question"] == "and now? For admission 90000009."
+    assert captured["state"]["messages"][-1].content == "and now?"
 
 # --- Phase 01: the replayed payload is the evidence a follow-up reads ---------
 

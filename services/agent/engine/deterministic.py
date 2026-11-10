@@ -546,7 +546,7 @@ def _formatter_input(tool_messages: list[Any], outpatient: bool,
         text = f"{text}\n\n{lab_flags.strip()}"
     if (context_block or "").strip():
         text = f"{text}{context_block}"
-    asked = (question or "").strip()
+    asked = routing.strip_admission_suffix((question or "").strip())
     return f"Question asked: {asked}\n\n{text}" if asked else text
 
 

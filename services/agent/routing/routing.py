@@ -548,8 +548,14 @@ _ADMISSION_CUE = (
 )
 #: A cue noun, then at most 24 non-digit characters ("id", "#", "no.", "switch to"),
 #: then the identifier. Six digits is the floor because everything shorter is a quantity.
+#:
+#: Case-insensitive since Stage 5D: the prompt's own composed suffix writes
+#: `For admission 90000015.` with a capital, and a user writes `Admission 90000015`,
+#: `Patient 90000015` or `HADM_ID 90000015` with whatever case they type. A
+#: case-sensitive cue read only the lowercase form, so the detector missed what a caller
+#: had typed in capitals (2026-11-10).
 _ADMISSION_REF_RE = re.compile(
-    rf"\b{_ADMISSION_CUE}\b[^\d]{{0,24}}(\d{{6,9}})(?!\d)"
+    rf"\b{_ADMISSION_CUE}\b[^\d]{{0,24}}(\d{{6,9}})(?!\d)", re.IGNORECASE
 )
 #: A date, in the two forms a chart and a prompt write them.
 _DATE_RE = re.compile(r"\b\d{1,4}\s*[/-]\s*\d{1,2}\s*[/-]\s*\d{1,4}\b")
@@ -951,6 +957,50 @@ def words_of(question: str) -> str:
     text = " ".join(str(question or "").split())
     stripped = _ADMISSION_SUFFIX.sub("", text).strip()
     return stripped or text
+
+
+#: The tail `compose_question` appends, matched where it lands: at the END of the text,
+#: after a space or at the start. Capital `F` and a closing full stop are both part of the
+#: anchor, because they are what the service writes. A caller's own sentence — "readmission
+#: risk score for admission 90000015?" — carries neither, and is left exactly as typed.
+_COMPOSED_ADMISSION_TAIL = re.compile(r"(?:^|\s)For admission (\d+)\.\s*$")
+
+
+def strip_admission_suffix(question: str, hadm_id: int | None = None) -> str:
+    """The question as the MODEL should read it: without the admission the contract appends.
+
+    `compose_question` appends `For admission <hadm_id>.` to every question asked with a
+    patient in scope. That sentence belongs to the wire — the harness, the console and the
+    stored turn all carry the composed question, and the response contract is unchanged by
+    this function — but it was also reaching the model as question text, which is the one
+    place it should never have been. The model is already bound to the admission by the
+    session and cannot pass one to any tool, so the sentence gave it a record number it had
+    no use for and one thing it could do with it: read a correct number as somebody else's
+    and refuse the question (measured on turn 2 of `dev_t3_03`, 2026-11-10, where the answer
+    was "this session is bound to one encounter and cannot answer questions about other
+    admission IDs" over a question about the patient in front of it).
+
+    Three things are preserved deliberately:
+
+      * a question that never carried the suffix comes back unchanged, so this is safe to
+        apply at every message boundary rather than only to the ones this deployment wrote;
+      * a suffix naming a DIFFERENT admission is left in place when `hadm_id` is given — it
+        is the caller's own text, and removing it would hide from the model something the
+        request already refused on (`requests_foreign_admission`);
+      * the result is never empty. A question that is nothing but the suffix — a bare
+        command, `/ehr For admission 90000069.` — keeps its head, and text with no head at
+        all is returned as it arrived rather than as an empty message.
+    """
+    text = str(question or "")
+    if not text.strip():
+        return text
+    match = _COMPOSED_ADMISSION_TAIL.search(text)
+    if match is None:
+        return text
+    if hadm_id is not None and match.group(1) != str(hadm_id):
+        return text
+    head = text[: match.start()].strip()
+    return head or text
 
 
 # ==== Tool registries (moved from telemetry/stages.py 2026-10-29) ====

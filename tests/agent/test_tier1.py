@@ -96,6 +96,13 @@ RESPONSE_SCHEMA = {
                     "feature": {"type": "string"},
                     "contribution": {"type": "number"},
                     "direction": {"enum": ["increases", "decreases"]},
+                    # The patient's own value for the feature, when the payload carries
+                    # one. Three states, and the schema has to admit all three: absent
+                    # for an attribution that names an aggregated parent with no column
+                    # of its own, explicitly null when the scoring row holds nothing for
+                    # the feature, and a number otherwise. `integer` is listed beside
+                    # `number` because a count is published as a count, not as 0.0.
+                    "value": {"type": ["integer", "number", "null"]},
                 },
             },
         },

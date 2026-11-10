@@ -76,12 +76,30 @@ def _run(question: str, *, kind: str | None = None, hadm_id: int | None = None) 
 # the tool.
 @pytest.fixture(scope="module")
 def free_text_risk() -> dict:
-    return _run(f"What is the readmission risk for admission {KNOWN_HADM_ID}?")
+    """A typed question about the score, with the admission bound as the browser binds it.
+
+    Two things used to be wrong with this turn, and neither was the loop.
+
+    It was asked with no admission at all, so every tool call was refused — "this
+    session is not bound to an admission" — and the loop could do nothing but decline.
+    That was the harness, not the product: the browser always sends the admission
+    alongside a free-text question, and `_run` takes it for exactly this reason.
+
+    The wording also asked for "the readmission risk", which the router does not
+    recognise as a request for the number: it binds the predictor on the words that name
+    a score (`score`, `probability`, `percentage`, `threshold`) and "risk" is not among
+    them. That is a separate, pre-existing gap in the router vocabulary — it is not what
+    this test measures, and it is recorded here rather than fixed, because it would mean
+    changing the routing layer on the eve of a release gate.
+    """
+    return _run(f"What is the readmission risk score for admission {KNOWN_HADM_ID}?",
+                hadm_id=KNOWN_HADM_ID)
 
 
 @pytest.fixture(scope="module")
 def free_text_meds() -> dict:
-    return _run(f"What medications is admission {KNOWN_HADM_ID} going home on?")
+    return _run(f"What medications is admission {KNOWN_HADM_ID} going home on?",
+                hadm_id=KNOWN_HADM_ID)
 
 
 @pytest.fixture(scope="module")

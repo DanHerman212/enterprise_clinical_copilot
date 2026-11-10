@@ -1223,7 +1223,68 @@ def turn_scope(question_kind: str | None, hadm_id: int | None = None,
     return f"free_text.turn{metadata.get('turn', 1)}", metadata
 
 
-def _foreign_admission_turn(question: str, hadm_id: int) -> dict:
+#: Handed to the model once, when it declined a question the session's own record answers.
+#:
+#: It names what the decline would cost rather than restating the rules. The record is
+#: already in the conversation, and the application reads the object as "the chart does not
+#: cover this" and tells the clinician so — which the record the model is holding
+#: contradicts. It asks for prose and not for a search, because the turn's retrieval has
+#: already run.
+INVALID_DECLINE_CORRECTION = """\
+Your last message was `{"evidence_found": false}`. That is not available to you here: this
+session has already retrieved evidence for this admission, and the evidence block above
+states what it holds. The application reads that object as "the chart does not cover the
+question" and tells the clinician exactly that, which would be untrue.
+
+Answer the question now, in prose, from the evidence you already have. If the evidence
+answers only part of it, answer that part and say plainly what it does not cover. Do not
+return the object again, and do not ask for another search: the retrieval for this turn has
+already run.
+"""
+
+
+async def _correct_invalid_decline(
+    state: dict,
+    *,
+    model: str,
+    allowed: frozenset[str],
+    on_event: Callable[[dict[str, Any]], None] | None = None,
+) -> str | None:
+    """Ask once more when a decline contradicts evidence the session already holds.
+
+    A model that answers `{"evidence_found": false}` on a turn whose record holds the
+    discharge list, a scored estimate or retrieved passages has made a judgement the record
+    does not support, and the turn is then served as an abstention: `dev_t6_02` and
+    `dev_t6_03` of the 2026-11-10 Gate 2 run both retrieved what they were asked for and
+    then declined, and the reader was told the chart did not cover the question.
+
+    The second attempt is UNBOUND. What is missing is not a retrieval — the tools already
+    ran and their results are in the conversation — so binding them again would invite the
+    same round twice. Exactly one retry, and a decline from it is honoured: a record can be
+    present and still not answer the question, and the fixed sentence is the right answer
+    then.
+
+    Returns the corrected prose, or None when the second reply is another decline. The
+    caller decides what an unanswerable turn serves.
+    """
+    conversation = list(state.get("messages") or [])
+    overlay = _working_memory(state, allowed)
+    if overlay:
+        conversation = _with_overlay(conversation, overlay)
+    conversation.append(HumanMessage(content=INVALID_DECLINE_CORRECTION))
+    _emit(on_event, stages.reviewing_event())
+    response = await model_gateway.build_llm(model).ainvoke(conversation)
+    answer = read_evidence_reply(text_of(getattr(response, "content", "")).strip())
+    if answer.declined or not answer.text:
+        return None
+    # The corrected turn IS this turn's model turn: replaced rather than appended, so
+    # `final_text`, the settlement and the trace all read the answer that will be served
+    # instead of the envelope it replaces.
+    state["messages"] = [*(state.get("messages") or [])[:-1], response]
+    return answer.text
+
+
+def _foreign_admission_turn(question: str, hadm_id: int, trace_id: str = "") -> dict:
     """A question about another admission, answered without asking the model anything.
 
     The state is the shape a finished free-text turn has, so the guardrails, the citation
@@ -1231,6 +1292,11 @@ def _foreign_admission_turn(question: str, hadm_id: int) -> dict:
     the record is the empty one bound to this admission; the refusal travels as
     `deterministic_answer`, which `turn.py` prefers to the model's prose, and it carries
     no clinical fact and no identifier from the question.
+
+    `trace_id` is the trace the refusal was recorded on. It used to be the empty string,
+    which is what a turn that made no model call and opened no span had to offer; the
+    Gate 2 run of 2026-11-10 read a follow-up with `["a4de1e6...", ""]` and counted the
+    turn as unattributed, so the caller now passes the id of the span it opened.
     """
     return {
         "messages": [SystemMessage(content=SYSTEM_PROMPT),
@@ -1246,7 +1312,7 @@ def _foreign_admission_turn(question: str, hadm_id: int) -> dict:
         "wants_literature": False,
         "retrieval_demanded": False,
         "deterministic_answer": answer_text.foreign_admission_refusal(),
-        "langfuse_trace_id": "",
+        "langfuse_trace_id": trace_id,
     }
 
 
@@ -1396,8 +1462,32 @@ async def ask(
     # A question that names a different admission is answered here, before the replay and
     # before the model: the turn is bound to one admission, and asking another is not a
     # question this session can answer at all.
+    #
+    # The refusal carries the trace it happened on. It makes no model and no tool call, so
+    # nothing else in this function would produce one, and turn 2 of `dev_t7_03` was
+    # served with an empty id and counted as unattributed by the Gate 2 harness
+    # (2026-11-10). Off the routes — a direct caller or a test — there is no turn span, so
+    # the refusal opens the only span it will have; on the routes `turn.py` owns the root
+    # and writes the question and the refusal onto it, which is why nothing here calls
+    # `set_trace_io` (Charter 13 Law 5: the trace is written in one place).
     if routing.requests_foreign_admission(question, hadm_id):
-        return _foreign_admission_turn(question, hadm_id)
+        turn_root = observability.current_turn_span()
+        refusal_name, refusal_meta = turn_scope(
+            question_kind, hadm_id, turns, run_tag, intent)
+        refusal_tags = [*refusal_meta.get("langfuse_tags", []), "tools:0",
+                        "foreign_admission_refused"]
+        trace = observability.span_trace_id(turn_root) or observability.current_trace_id()
+        if turn_root is None:
+            with observability.observation(
+                refusal_name, trace_metadata=refusal_meta,
+            ) as refusal_span:
+                observability.stamp_trace_tags(refusal_span, refusal_tags)
+                return _foreign_admission_turn(
+                    question, hadm_id,
+                    trace_id=observability.span_trace_id(refusal_span) or trace,
+                )
+        observability.stamp_trace_tags(turn_root, refusal_tags)
+        return _foreign_admission_turn(question, hadm_id, trace_id=trace)
 
     manifest_answers_question = bool(admission_context) and (
         routing.asks_for_administrative_detail(question)
@@ -1637,17 +1727,32 @@ async def ask(
     if fallback is not None:
         state["deterministic_answer"] = fallback
     elif reply.declined:
-        # Declined, and this turn may not assert an absence: no retrieval ran, a
-        # search failed, or the literature was consulted. The flag is not an answer
-        # and the fixed sentence would be a claim the records do not support, so the
-        # turn carries no text and the routes report an unavailable answer rather
-        # than a fabricated one (see `_compose_success`).
-        logger.warning(
-            "model declined with no absence to report; calls: %s",
-            ",".join(call.get("name") or "?" for call in state.get("tool_calls") or [])
-            or "none",
-        )
-        answer_text.reject_model_reply(state)
+        # A decline is a judgement, and it is checkable against the record the session
+        # already built. When that record holds content — passages, a scored estimate,
+        # checked sections or laboratories — the model has the evidence it says it lacks,
+        # so the turn is asked once more before it is served as an abstention. A turn
+        # whose reply was withheld by the provider has no text to correct and keeps the
+        # rule below; a turn with an empty record has nothing to correct against and is
+        # left alone, which is what keeps a cold prompt-injection turn abstaining.
+        corrected = None
+        record = state.get("evidence_state")
+        if final_text(state) and record is not None and _record_has_content(record):
+            corrected = await _correct_invalid_decline(
+                state, model=model, allowed=allowed_for_prompt, on_event=on_event)
+        if corrected is not None:
+            answer_text.apply_model_reply(state, corrected)
+        else:
+            # Declined, and this turn may not assert an absence: no retrieval ran, a
+            # search failed, the literature was consulted, or the retry declined too. The
+            # flag is not an answer and the fixed sentence would be a claim the records do
+            # not support, so the turn carries no text and the routes report an unavailable
+            # answer rather than a fabricated one (see `_compose_success`).
+            logger.warning(
+                "model declined with no absence to report; calls: %s",
+                ",".join(call.get("name") or "?" for call in state.get("tool_calls") or [])
+                or "none",
+            )
+            answer_text.reject_model_reply(state)
 
     # A marker that addresses no citable unit is not a citation. Removed here, where the
     # answer is settled, so the guardrails and the presentation see the same text — and so

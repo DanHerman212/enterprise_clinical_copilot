@@ -914,16 +914,27 @@ def _is_number(value: Any) -> bool:
 
 
 def _presented_factor(factor: Any) -> Any:
-    """One risk driver, named and directed, with the patient's own value beside it.
+    """One risk driver: its name, its direction, its weight, and the patient's own value.
 
-    Rebuilt field by field rather than copied and edited, because the field that has to
-    go is the one a `{**factor}` spread would keep: the contribution magnitude. It is not
-    withheld for want of a use — the widget draws it as a bar length — but because it is
-    not this turn's to state, and a raw contribution is quotable.
+    Rebuilt field by field rather than copied and edited, because a `{**factor}` spread
+    would carry whatever the payload grows next into a prompt nobody reviewed.
 
-    Three fields at most: the humanized feature name, which is the name both the prose and
-    the bars use; the direction the model attached to it; and the patient's own value for
-    that feature, at the precision the tool publishes it with.
+    The contribution is now carried, and the reason it was withheld is gone. It used to be
+    dropped as "not this turn's to state": the widget draws it as a bar length, and a raw
+    contribution is quotable. That held while no rule asked the model for one. The driver
+    rule does ask — an attribution without its size is a claim the reader cannot check —
+    and a model told to state a number it was never shown states something else instead:
+    asked what explained a `monocytes_min` driver, the answer said "the model does not
+    provide a specific numeric contribution for this factor" over a payload carrying
+    `0.0824` (dev_t2_05, 2026-11-10). `guardrail.verify_risk_numbers` already accepts a
+    served contribution, so stating it survives the guard as well as the prose.
+
+    `value` is carried when the key is present, INCLUDING when it is null. An absent key
+    and a null value are different statements: a one-hot parent that contributes to the
+    score has no value of its own to report, while a scored feature whose row holds
+    nothing has a null — and a prompt that asks the answer to say the scored input is null
+    cannot be satisfied by a projection that hides the fact. Only a factor that does not
+    carry the key at all omits it here.
 
     The value is passed through as it arrives rather than re-floated. The tool decides the
     precision (`prediction._clinical_value` — two decimals, integers as integers), and
@@ -953,9 +964,12 @@ def _presented_factor(factor: Any) -> Any:
     }
     if isinstance(factor.get("direction"), str):
         presented["direction"] = factor["direction"]
-    value = factor.get("value")
-    if _is_number(value):
-        presented["value"] = value
+    if _is_number(factor.get("contribution")):
+        presented["contribution"] = factor["contribution"]
+    if "value" in factor:
+        value = factor["value"]
+        if value is None or _is_number(value):
+            presented["value"] = value
     return presented
 
 
@@ -989,12 +1003,14 @@ def _presented_prediction(name: str, payload: Any) -> Any:
     model wrote "33.0%" beside a widget drawing 33.2%, which is why the rounding was
     removed in the first place. Given "33.2%" there is no digit to lose.
 
-    The drivers keep their names, their direction and the patient's own value for the
-    feature; what they lose is the magnitude. The narrative says which factors led, what
-    this admission recorded for them, and what they mean; the widget draws how much. A raw
-    contribution was quotable too, and a number the guardrail does not recognise as the
-    score is stripped and shown as a safety swap — so withholding it also removes a way
-    for a good answer to be visibly withdrawn from a reader mid-sentence.
+    The drivers keep their names, their direction, this patient's own value for the
+    feature and the contribution the model scored for it. Withholding the contribution was
+    measured and was wrong: given a factor the payload scored at 0.0824 and no magnitude,
+    the answer said "the model does not provide a specific numeric contribution" — a
+    turn refused over a figure it had been given. The risk spoke requires the contribution
+    quoted as served, `guardrail._contributions` carries it into "measurements", and
+    `_RISK_DECIMAL` recognises it, so the figure survives the number check rather than
+    being stripped as an unrecognised float.
 
     The value is stated here because for a clinical feature this is the only place that
     could state it: `direction` is measured against a population baseline, so it is not
@@ -1040,8 +1056,10 @@ def _presented_for_model(name: str, payload: Any) -> Any:
     """The tool result in the form the MODEL reads. Never the form the caller records.
 
     One tool needs a translation the model must not perform itself: the estimate, whose
-    floats are replaced by the display strings the widget prints and whose contribution
-    magnitudes are withheld. Everything else — note passages, medication lists, lab
+    score and threshold floats are replaced by the display strings the widget prints.
+    Each factor's contribution and recorded value travel with the factor, because the risk
+    spoke names them and a payload the prose cannot quote is a payload the prose has to
+    talk around. Everything else — note passages, medication lists, lab
     series — passes through exactly as the tool returned it.
 
     The lab series used to be rewritten here, carrying an ordinal

@@ -205,15 +205,29 @@ def test_the_model_is_shown_the_value_beside_the_direction():
     assert presented["feature"] == "red cell distribution width (RDW)"
     assert presented["direction"] == "increases"
     assert presented["value"] == 15.5
-    # The magnitude is still withheld: it is the one field that is not the model's to
-    # state, and the widget draws it.
-    assert "contribution" not in presented
+    # The contribution travels with the factor. The risk spoke asks the model to quote the
+    # served figure; withholding it made a payload carrying 0.2592 produce "the model does
+    # not provide a specific numeric contribution".
+    assert presented["contribution"] == 0.2592
 
 
-def test_a_factor_with_no_value_states_none():
+def test_a_null_value_is_carried_because_the_model_has_to_say_it():
+    presented = mcp_client._presented_factor(
+        {"feature": "haemoglobin_min", "direction": "increases",
+         "contribution": 0.0824, "value": None})
+
+    # The key is present and null: the scored feature has no recorded value, and the spoke
+    # requires the model to lead with that rather than reach for a lab series instead.
+    assert "value" in presented
+    assert presented["value"] is None
+
+
+def test_a_factor_with_no_value_given_omits_the_key():
     presented = mcp_client._presented_factor(
         {"feature": "discharge_location", "direction": "increases"})
 
+    # Absent key is a different claim from a null value: no value was scored at all, so
+    # there is nothing to report.
     assert "value" not in presented
 
 

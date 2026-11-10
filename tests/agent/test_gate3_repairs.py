@@ -46,20 +46,21 @@ MANIFEST = {"recent_ed_visits": "0", "prior_inpatient_days": "0",
 
 # --- 1. an attribution is not a finding about the patient ---------------------------
 
-def test_a_driver_carries_its_name_and_direction_and_nothing_else():
+def test_a_driver_carries_its_name_its_direction_and_its_contribution():
     """The projection is a function of the tool result, not of the patient.
 
     `patient_value` used to be copied into each factor as a cross-reference against the
     admission's row. It is gone: the row is stated once, in `<admission_metadata>`, and
-    the projection now carries the two fields the prose and the bars share. This test is
-    what keeps the third field from coming back.
+    the projection carries the three fields the prose and the bars share — the name, the
+    direction, and the contribution the risk spoke requires the model to quote.
     """
     projected = _presented_for_model("predict_readmission", dict(RISK))
     factor = next(f for f in projected["top_factors"]
                   if f["feature"].lower().startswith("recent ed"))
 
-    assert factor == {"feature": "recent ED visits", "direction": "increases"}
-    assert all(set(entry) <= {"feature", "direction"}
+    assert factor == {"feature": "recent ED visits", "direction": "increases",
+                      "contribution": 0.0861}
+    assert all(set(entry) <= {"feature", "direction", "contribution", "value"}
                for entry in projected["top_factors"])
 
 

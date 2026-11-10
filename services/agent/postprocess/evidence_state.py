@@ -344,7 +344,7 @@ class SessionEvidenceState:
             metadata = {"section": section or ""}
             if passage_id:
                 metadata["passage_id"] = passage_id
-            for extra in ("retrieval", "granularity", "query"):
+            for extra in ("retrieval", "granularity", "query", "medication_source"):
                 value = unit.get(extra) if extra in unit else raw_output.get(extra)
                 if isinstance(value, str) and value.strip():
                     metadata[extra] = value.strip()
@@ -658,10 +658,19 @@ class SessionEvidenceState:
         `section` is the analyte key or the note heading, and the heading reaches the
         record from the tool's own passage. It is escaped like every other value written
         between the record's tags.
+
+        `medication_source` rides along on a `discharge_medications` passage because the
+        distinction it states is the one a follow-up is most likely to get wrong: a drug
+        in a `dedicated` passage is on the record's discharge list, one in a `narrative`
+        passage is a drug the course or the plan mentions and may have been given on the
+        ward. Stated here rather than left in `metadata`, which the model never reads.
         """
         parts = [f"[^[{item.ref_id}]", f"tool={_escape(item.source_tool)}"]
         if item.section:
             parts.append(f"section={_escape(item.section)}")
+        provenance = item.metadata.get("medication_source")
+        if isinstance(provenance, str) and provenance.strip():
+            parts.append(f"medication_source={_escape(provenance.strip())}")
         if item.synthetic:
             parts.append("synthetic=true")
         return " | ".join(parts) + "]"

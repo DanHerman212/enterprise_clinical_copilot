@@ -91,6 +91,25 @@ SAFETY_WITHHELD_SUMMARY = (
     "model's reply, not on the search."
 )
 
+#: Served when the chart returned the patient's discharge medication list and the model's
+#: reply carried no text at all.
+#:
+#: Observed live 2026-11-10: a free-text request for the discharge list called
+#: `discharge_medications`, got the dedicated section back, and the model's reply arrived
+#: empty with the provider's dangerous-content filter flagged. The turn settled to no text
+#: at all, and the route reported the question as refused — for a list the service was
+#: holding and renders deterministically on `/meds`. Nothing about that turn is an
+#: absence, so the answer points at the list instead of saying nothing about it.
+#:
+#: The words name neither the provider nor the filter. Which filter responded is an
+#: implementation detail to a clinician, and what happened to the summary is the same
+#: either way: it did not come back, and the list did.
+MEDICATIONS_WITHHELD_SENTENCE = (
+    "I have this admission's discharge medication list, but no summary of it came back "
+    "with this answer. Run /meds to read the list itself, with the doses and frequencies "
+    "the record states."
+)
+
 #: `/ehr` on an outpatient record whose record-wide search returned nothing. The
 #: formatter had abstained with the silent-turn sentence, which named neither the
 #: encounter nor its consequence. The notice says what the record is, what it therefore
@@ -271,17 +290,50 @@ def apply_model_reply(state: dict, text: str) -> None:
     replace_final_text(state, text)
 
 
+def medication_list_retrieved(tool_calls: list[dict]) -> bool:
+    """Whether these calls fetched the patient's discharge medication list.
+
+    Read off the payload rather than the question's wording, because this decides what to
+    serve on a turn where the model produced no text at all: there is no interpretation of
+    the question to consult. A call that failed, or that came back with no passages, is not
+    a list — the sentence it would earn points the reader at `/meds`, and an empty section
+    is not a list to point at.
+    """
+    for call in tool_calls:
+        if call.get("name") != "discharge_medications":
+            continue
+        response = call.get("response")
+        if not isinstance(response, dict) or response.get("error"):
+            continue
+        if response.get("passages"):
+            return True
+    return False
+
+
 def reject_model_reply(state: dict) -> None:
-    """Withdraw an answer the turn may not serve.
+    """Withdraw an answer the turn may not serve, or point at what it could not say.
 
     A declined reply with no absence to report is not an answer: the model declined, and
     nothing was retrieved for it to decline against, so any sentence served here would be
     a claim the record does not support. The turn carries no text and the routes report an
     unavailable answer rather than a fabricated one.
 
+    The exception is a turn that DID retrieve the patient's discharge medication list and
+    came back with no text. That turn has something to serve, and it is not an
+    interpretation of the record — it is the record's own list, which `/meds` renders from
+    the same call. Serving nothing told the reader the question had been refused while the
+    answer sat in the turn (`MEDICATIONS_WITHHELD_SENTENCE`).
+
     Recorded by editing the message rather than by raising, so the finish reason and the
     content-filter verdict stay readable on the turn the caller was refused.
     """
+    retrieved = (
+        medication_list_retrieved(state.get("tool_calls") or [])
+        or medication_list_retrieved(state.get("replayed_tool_calls") or [])
+    )
+    if retrieved:
+        replace_final_text(state, MEDICATIONS_WITHHELD_SENTENCE)
+        return
     replace_final_text(state, "")
 
 

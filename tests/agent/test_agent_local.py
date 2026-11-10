@@ -131,6 +131,12 @@ def test_a_free_text_risk_question_enters_the_reasoning_loop(free_text_risk):
     failure this guards is unchanged: a risk FIGURE with nothing behind it. So a
     redirect is accepted only when it carries no number.
     """
+    assert final_text(free_text_risk).strip(), (
+        "a free-text risk question must be answered. A turn with no text is served to the "
+        "reader as a refused question, which is not what a question the service handled "
+        "looks like (2026-11-10: the medication twin of this test passed on a blank "
+        "answer because it only asserted the tool call)"
+    )
     assert "command" not in free_text_risk, "free text must not become a command"
     if free_text_risk["tool_calls"]:
         assert final_text(free_text_risk).strip()
@@ -148,10 +154,20 @@ def test_a_free_text_medication_question_enters_the_reasoning_loop(free_text_med
     It used to be withheld, so the only way to answer was to redirect to /meds. A
     follow-up that asked for a classification got the count again. The loop may call
     `discharge_medications` itself, and the guardrail still verifies the doses.
+
+    The tool call is not the whole assertion. On 2026-11-10 this question returned the
+    medication list to the turn and then settled to NO TEXT — the provider's filter
+    withheld the model's reply — and this test stayed green because it only asked whether
+    the tool ran. A blank answer is served to the reader as a refused question, so it is
+    now a failure here: the call is necessary, and it is not sufficient.
     """
     assert "command" not in free_text_meds, "free text must not become a command"
     assert any(call["name"] == "discharge_medications"
                for call in free_text_meds["tool_calls"]), free_text_meds["tool_calls"]
+    assert final_text(free_text_meds).strip(), (
+        "a free-text medication question must be answered. The call ran and the list is "
+        "in the turn, so an empty answer is a settlement failure, not an absent record"
+    )
 
 
 # --- the path that does own the tool ------------------------------------------

@@ -243,6 +243,9 @@ MEDICATIONS SCOPE & PROVENANCE
   transfer list that the instructions do not continue, or the course discontinues, is
   reported as on the transfer list and NOT continued — never as prescribed at discharge,
   whatever the transfer list says.
+- Answer a request for the list by enumerating the regimen `discharge_instructions` gives,
+  one drug per line, with a citation on the list; read the other section only to withhold a
+  drug that was not continued, never to add one.
 - When a passage gives a number AND a rule for changing it — "the patient is taking
   Coumadin 7 mg daily ... the dose will be adjusted according to the INRs" — state BOTH.
 - If an earlier turn in this conversation reported what the dedicated

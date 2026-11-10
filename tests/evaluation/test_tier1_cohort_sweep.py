@@ -28,6 +28,7 @@ from services.agent.presentation import domain as admission_phenotypes
 from services.agent.routing import encounter, routing
 from services.agent.engine import prompts
 from services.agent.postprocess import answer as answer_text
+from services.agent.postprocess.evidence_state import SessionEvidenceState
 from evaluation.outpatient_oracle import OUTPATIENT_HADM_IDS
 from services.agent.ingress import contracts as served_admissions
 from services.agent.engine import deterministic
@@ -460,30 +461,39 @@ def test_every_medication_passage_carries_the_text_the_parser_reads(sweep):
     assert not broken, broken
 
 
-def test_the_consolidation_invariant_holds_for_every_inpatient(sweep):
-    """Phase 02.5: `/meds` cites with one marker, so its passages are one passage.
+def test_the_medication_passages_stay_unmerged_in_the_session_record(sweep):
+    """Workstream 1, 2026-11-10: the record and the answer share one numbering.
 
-    The section key survives because citation resolution matches on it — the first
-    version of this check used the human label and resolution silently served the "no
-    information" sentence instead of the passage.
+    `/meds` used to join the tool's passages into the first one, because its narrative
+    cited with a single marker. The session record had already numbered both passages as
+    it ingested them, so the join left the marker naming the discharge list while the
+    model had extracted from the list AND the instructions — the split brain the audit
+    found. The passages now stay exactly as the tool returned them, and the record holds
+    one position per passage.
+
+    Checked on every inpatient record: nothing dropped, nothing merged, and the positions
+    the narrative may cite are inside the record's own array.
     """
     broken: dict[int, str] = {}
     for hadm_id in sorted(INPATIENT):
         payload = _payload_for(sweep, hadm_id, "meds")
-        recorded = _recorded_meds(hadm_id, dict(payload))
-        before = list(payload.get("passages") or [])
-        deterministic._consolidate_medication_passages(recorded)
-        after = recorded[0]["response"]["passages"]
-        if len(after) > 1:
-            broken[hadm_id] = f"{len(after)} passages after consolidation"
-        elif after and before and after[0].get("section") != before[0].get("section"):
-            broken[hadm_id] = "section key was relabelled"
-        elif after and len(before) > 1:
-            joined = after[0]["text"]
-            lost = [passage["text"] for passage in before
-                    if passage["text"] not in joined]
-            if lost:
-                broken[hadm_id] = f"{len(lost)} chunk(s) dropped"
+        passages = list(payload.get("passages") or [])
+        recorded = _recorded_meds(hadm_id, payload)
+
+        state = SessionEvidenceState(hadm_id=hadm_id)
+        state.ingest_tool_output("discharge_medications", {"hadm_id": hadm_id}, payload)
+
+        if len(recorded[0]["response"]["passages"]) != len(passages):
+            broken[hadm_id] = "the recorded payload was mutated"
+        elif state.position_count() != len(passages):
+            broken[hadm_id] = (
+                f"{state.position_count()} positions for {len(passages)} passages")
+        elif len(state.ordered_citable_units()) != len(passages):
+            broken[hadm_id] = "the record merged or dropped a unit"
+
+        positions = deterministic._medication_passage_positions(recorded, state, [])
+        if positions != tuple(range(1, len(passages) + 1)):
+            broken[hadm_id] = f"positions {positions} for {len(passages)} passages"
     assert not broken, broken
 
 
@@ -499,30 +509,52 @@ def test_the_medication_narrative_handles_both_outcomes(sweep):
         assert "warfarin" in with_rows, hadm_id
 
 
-def test_the_meds_payload_builds_and_its_marker_resolves(sweep):
-    """`^[1]` must address the consolidated text, on every record that has one."""
+def test_every_medication_marker_resolves_through_the_presentation_layer(sweep):
+    """Every marker the narrative writes opens a passage that exists, on every record.
+
+    The marker set is the positions the record gave the passages the rows came from, so
+    this walks the whole path: ingestion, position resolution, the narrative's markers,
+    and `resolve_sources` reading the same array. A marker that resolved to nothing, or
+    to a passage with no text, is the defect the audit reported.
+    """
     broken: dict[int, str] = {}
     rows = [{"medication": "warfarin", "dose": "4 mg"}]
     for hadm_id in sorted(INPATIENT):
         payload = _payload_for(sweep, hadm_id, "meds")
-        if not (payload.get("passages") or []):
+        passages = list(payload.get("passages") or [])
+        if not passages:
             continue
-        recorded = _recorded_meds(hadm_id, dict(payload))
-        deterministic._consolidate_medication_passages(recorded)
-        answer = answer_text.medication_narrative(rows, 1)
+        recorded = _recorded_meds(hadm_id, payload)
+        state = SessionEvidenceState(hadm_id=hadm_id)
+        state.ingest_tool_output("discharge_medications", {"hadm_id": hadm_id}, payload)
+
+        positions = deterministic._medication_passage_positions(recorded, state, rows)
+        if not positions:
+            broken[hadm_id] = "no position to cite"
+            continue
+        if any(position < 1 or position > state.position_count()
+               for position in positions):
+            broken[hadm_id] = f"position outside the record: {positions}"
+            continue
+
+        answer = answer_text.medication_narrative(
+            rows, len(passages), cite=positions)
         try:
             out = compose_presentation(
                 "What medications is she going home on?", answer, recorded,
-                {"medications": rows, "dropped": [], "returned_passages": 1},
-                "meds",
+                {"medications": rows, "dropped": [], "returned_passages": len(passages)},
+                "meds", evidence_state=state,
             )
         except Exception as exc:  # noqa: BLE001
             broken[hadm_id] = f"{type(exc).__name__}: {exc}"
             continue
-        if not out["sources"]:
-            broken[hadm_id] = "the ^[1] marker resolved to nothing"
-        elif out["sources"][0]["text"] != recorded[0]["response"]["passages"][0]["text"]:
-            broken[hadm_id] = "the cited passage is not the consolidated one"
+        cites = [source.get("cite") for source in out["sources"]]
+        if len(out["sources"]) != len(positions):
+            broken[hadm_id] = f"{len(out['sources'])} sources for {len(positions)} markers"
+        elif cites != list(positions):
+            broken[hadm_id] = f"cites {cites} for positions {list(positions)}"
+        elif any(not str(source.get("text") or "").strip() for source in out["sources"]):
+            broken[hadm_id] = "a marker opened a passage with no text"
     assert not broken, broken
 
 

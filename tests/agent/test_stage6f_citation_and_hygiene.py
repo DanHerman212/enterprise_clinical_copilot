@@ -112,6 +112,50 @@ def test_the_hub_keeps_one_passage_per_sentence():
     assert "`<admission_metadata>` carry no `^[k]`" in text
 
 
+def test_the_discharge_label_has_exactly_two_medication_sources():
+    """A drug named in the hospital course is not a discharge prescription.
+
+    `dev_t4_02` turn 1 opened the discharge section with a drug the hospital course told
+    the patient to take, and carried that passage's marker: the sentence was true of the
+    course and false of the discharge regimen, and it did not say which. The label now has
+    two sources, and the course's medication instruction has a home of its own.
+    """
+    text = " ".join(prompts.EHR_FORMATTING.split())
+
+    assert ("Those two sections are the only sources for a discharge medication"
+            in text)
+    assert "a drug named inside `brief_hospital_course` is a hospital-course fact" in text
+    assert ("Where neither section lists a medication, this label reports the disposition "
+            "and the non-medication instructions only") in text
+    assert "no sentence under it opens \"the patient was prescribed\"" in text
+    assert ("A medication, or a post-procedure medication instruction, that "
+            "`brief_hospital_course` states belongs here") in text
+
+
+def test_the_discharge_rule_no_longer_names_the_hospital_course_as_a_source():
+    """Asserted as an absence, so the third source cannot come back."""
+    text = " ".join(prompts.EHR_FORMATTING.split())
+
+    assert "or a discharge clause of `brief_hospital_course`" not in text
+    assert "say which passage says so: `discharge_medications` or `discharge_instructions`" in text
+
+
+def test_the_synthesis_turns_two_facts_into_two_sentences():
+    """One sentence states the empty section and cites nothing; the next cites the course.
+
+    A marker on the first sentence invites the reader to open a section that says the
+    opposite of what the sentence claims, and a trailing "not in the discharge
+    instructions" clause on the second reintroduces the second marker the rule removes.
+    """
+    text = " ".join(prompts.MEDS_SPOKE.split())
+
+    assert "write TWO SENTENCES" in text
+    assert "carries NO marker, even if an earlier turn cited that section" in text
+    assert ("The second names `brief_hospital_course`, states only what that passage notes, "
+            "and carries only its single marker") in text
+    assert "no trailing clause about what another section does not contain" in text
+
+
 @pytest.mark.parametrize("wording", [
     "carries both markers",
     "cite both passages on the one sentence",
@@ -130,11 +174,17 @@ def test_no_prompt_still_invites_two_markers_on_one_sentence(wording):
 
 
 def test_the_medication_rules_keep_the_two_facts_in_two_sentences():
+    """Superseded in wording by Stage 6H, kept as the rule it states.
+
+    Stage 6H tightened the instruction to say which sentence carries the marker and which
+    carries none; the requirement that the empty section and the course's medication clause
+    are two sentences is unchanged, and the test below this one pins the tightened form.
+    """
     text = " ".join(prompts.MEDS_SPOKE.split())
 
-    assert "TWO SEPARATE SENTENCES" in text
-    assert "what the dedicated section held" in text
-    assert "carrying only that passage's marker" in text
+    assert "write TWO SENTENCES" in text
+    assert "the dedicated section documents no medications" in text
+    assert "carries only its single marker" in text
 
 
 # --- the parser keeps its defence in depth ------------------------------------------

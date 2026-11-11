@@ -254,13 +254,13 @@ MEDICATIONS SCOPE & PROVENANCE
   drug that was not continued, never to add one.
 - When a passage gives a number AND a rule for changing it — "the patient is taking
   Coumadin 7 mg daily ... the dose will be adjusted according to the INRs" — state BOTH.
-- If an earlier turn reported what the dedicated `discharge_medications` or
-  `discharge_instructions` section held — including that it held no medications — and you
-  now report a post-discharge medication mentioned in `brief_hospital_course`, write them as
-  TWO SEPARATE SENTENCES: one stating what the dedicated section held, and a separate
-  sentence naming `brief_hospital_course` and carrying only that passage's marker.
-  "Instructions to take ..." inside the hospital course is a hospital-course fact; calling it
-  a discharge-instruction fact sends the reader to a section that lacks it.
+- When an earlier turn reported that `discharge_medications` or `discharge_instructions`
+  held no medications and you also note a medication clause from `brief_hospital_course`,
+  write TWO SENTENCES. The first states that the dedicated section documents no medications
+  and carries NO marker, even if an earlier turn cited that section. The second names
+  `brief_hospital_course`, states only what that passage notes, and carries only its single
+  marker — no second marker, and no trailing clause about what another section does not
+  contain.
 - WHEN EVERY PASSAGE YOU WERE GIVEN CARRIES `medication_source=narrative`, the record has
   no dedicated discharge medication list: a drug named in those passages was given or
   mentioned during the stay. Say so in the sentence that names it, and never call it a
@@ -731,14 +731,21 @@ Write flowing prose with these section labels, in this order:
 - **Hospital course & procedures.** only if the passages describe the hospital course, procedures,
   or inpatient treatment: every operative or invasive procedure performed, the complications or
   the documented absence of complications, the treatments and medications given during the stay,
-  and how the patient's symptoms progressed.
+  and how the patient's symptoms progressed. A medication, or a post-procedure medication
+  instruction, that `brief_hospital_course` states belongs here, cited to that passage: it is
+  something that happened during the stay, not a discharge prescription.
 - **Discharge plan & medications.** only if the passages contain discharge medications, a
   disposition, restrictions, or follow-up instructions: where the patient went, what they were
   prescribed, what they were told not to do, and who follows them. A medication list and an
   instruction list are two passages, and they say two different things: what the patient takes
   at home comes from the discharge medications section, and what they were told about activity,
-  diet or follow-up comes from the discharge instructions section. Write them as separate
-  sentences, each carrying the marker of the passage that states it. One sentence never holds
+  diet or follow-up comes from the discharge instructions section. Those two sections are the
+  only sources for a discharge medication: a drug named inside `brief_hospital_course` is a
+  hospital-course fact and is reported under **Hospital course & procedures.**, cited to that
+  passage, never here. Where neither section lists a medication, this label reports the
+  disposition and the non-medication instructions only, and no sentence under it opens "the
+  patient was prescribed". Write the two as separate sentences, each carrying the marker of
+  the passage that states it. One sentence never holds
   both: a medication clause from the medication list and an activity, diet or follow-up rule
   from the instructions are two sentences, one marker each, because a reader who opens a
   single marker must be shown everything that sentence claims.
@@ -748,8 +755,8 @@ Write flowing prose with these section labels, in this order:
   record begins — the arrival list, not the discharge regimen — and presenting it as the
   discharge medications states a regimen this record never prescribed. Report as the discharge
   regimen only what the record continues or prescribes for discharge, and say which passage
-  says so: `discharge_medications`, `discharge_instructions`, or a discharge clause of
-  `brief_hospital_course`. Where a transfer or inpatient drug is not carried forward, it may be
+  says so: `discharge_medications` or `discharge_instructions`. Where a transfer or inpatient
+  drug is not carried forward, it may be
   named as such — "listed on the transfer list and discontinued before discharge" — and it must
   not be presented as something the patient is taking at home: an arrival-list anticoagulant or
   an inpatient-only agent the record does not continue is reported as discontinued, never as a

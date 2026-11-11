@@ -33,6 +33,7 @@ from langchain_core.messages import AIMessage
 
 from services.agent.postprocess import citations
 from services.agent.postprocess import discharge_section
+from services.agent.postprocess import risk_lab_citation
 from services.agent.routing import routing
 
 
@@ -699,6 +700,21 @@ def settle_answer(
             units=_citable_units(tool_calls or [], evidence_state),
         )
         flags.extend(unplaced)
+
+    # A risk model's own value cited to a laboratory series that never held it. `0.47` is
+    # `top_factors[0].value`; the drawn `monocytes` series reproduces that anchor at the
+    # precision the analyte is REPORTED at, which is one decimal, so the series says `0.5`
+    # (`dev_t4_01` turn 3, 2026-11-11). Both numbers are true of their own source and the
+    # sentence used one to cite the other. After the bound, for the same reason the
+    # discharge filter is: the marker has to resolve before what it opens can be read.
+    if settled_prose:
+        settled_prose, mismatched = risk_lab_citation.filter_risk_value_lab_citations(
+            settled_prose,
+            tool_calls=tool_calls or [],
+            replayed_tool_calls=replayed_tool_calls or [],
+            evidence_state=evidence_state,
+        )
+        flags.extend(mismatched)
 
     # The page's numbering, last and separate from the array's. A marker's number is the
     # position of its unit in the conversation's evidence array — cumulative across

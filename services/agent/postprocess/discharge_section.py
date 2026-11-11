@@ -261,4 +261,13 @@ def filter_discharge_section(
         # the patient went. One unmarked sentence restores the fact a reader needs.
         new_body = f"{new_body} The patient was discharged {discharge_location}."
 
-    return f"{prose[:start]}{DISCHARGE_LABEL} {new_body}{prose[end:]}", flags
+    # The paragraph break belongs to the boundary, not to any sentence, so rebuilding the
+    # body from sentences loses it: `split_sentences` returns no trailing whitespace and
+    # `end` stops at the next heading's first character. `dev_t4_02` turn 1 was served
+    # `... ^[5].**Readmission risk & trajectory.**` — the heading running into the full
+    # stop of the sentence before it — on every turn where a sentence was kept. Restored
+    # here, from what follows the paragraph rather than from what was in it.
+    tail = prose[end:]
+    if not tail.strip():
+        return f"{prose[:start]}{DISCHARGE_LABEL} {new_body}", flags
+    return f"{prose[:start]}{DISCHARGE_LABEL} {new_body}\n\n{tail.lstrip()}", flags

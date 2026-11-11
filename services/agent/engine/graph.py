@@ -292,6 +292,12 @@ EVIDENCE_FLAG_KEY = "evidence_found"
 # arrived in.
 EVIDENCE_TEXT_KEYS = ("narrative_text", "answer", "text")
 
+#: The whole reply as one markdown fence. Anchored at both ends, so a fence that wraps
+#: part of a longer message does not match: what this unwraps is a reply the model wrote
+#: AS a fenced object rather than a code sample inside prose it also wrote.
+_FENCED_REPLY_RE = re.compile(
+    r"\A```[A-Za-z0-9_-]*[ \t]*\r?\n(?P<body>.*?)\r?\n?```\Z", re.DOTALL)
+
 
 @dataclass(frozen=True)
 class EvidenceReply:
@@ -311,13 +317,29 @@ def read_evidence_reply(text: str) -> EvidenceReply:
     """Read the model's final message for the decline, and for prose either way.
 
     The cost of being strict here is a JSON object rendered to a clinician as if it
-    were an answer, so an envelope that carries prose is unwrapped and served. The
+    were an answer, so an envelope that carries prose is unwrapped and served, and an
+    envelope the model fenced instead of writing prose is read through the fence. The
     cost of being clever is an answer edited by a parser, so a message that is not
     this object is returned exactly as it arrived, whatever it looks like.
+
+    A message that CONTAINS the object rather than being it — prose, then
+    `{"evidence_found": false}` on its own line — is returned unchanged here and the
+    object is removed at settlement, by `citations.strip_printed_constructs`. The two
+    halves are deliberate: a decline has to be READ to change what the turn serves, and
+    a stray object has to be REMOVED to keep it out of the prose, and a turn can need
+    either one without the other.
     """
     stripped = text.strip()
     if not stripped:
         return EvidenceReply(declined=True, text="")
+    # A decline the model fenced. The prompt asks for the object bare, and a model that
+    # wraps it in a code fence has still declined — reading it as prose would serve a
+    # fenced `{"evidence_found": false}` to a clinician, which is the same leak in a
+    # different costume. Only when the fence IS the whole reply: a fenced block inside a
+    # longer message is prose the model chose to write, and is returned as it arrived.
+    fenced = _FENCED_REPLY_RE.match(stripped)
+    if fenced is not None:
+        stripped = fenced.group("body").strip()
     if not stripped.startswith("{"):
         return EvidenceReply(declined=False, text=text)
     try:

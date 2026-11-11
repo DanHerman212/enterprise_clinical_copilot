@@ -972,6 +972,50 @@ def cited_numbers(answer: str) -> list[int]:
                    for n in _expand_citations(m.group(1))})
 
 
+def remove_citations(answer: str, numbers: "Iterable[int]") -> str:
+    """Take the named positions out of every numeric marker, keeping the others.
+
+    The ONE place a marker's spelling is edited from outside `enforce_citations`, and it
+    is here for the same reason: the marker language belongs to this module, and a caller
+    that removed a number with its own pattern would be a second definition of it.
+
+    A marker that carries several numbers loses only the named ones — `^[2, 4]` with `4`
+    named becomes `^[2]` — and a marker left with none goes entirely, with the whitespace
+    in front of it, so a sentence that ended `… 0.47 x10^3/uL ^[4].` ends `… 0.47
+    x10^3/uL.` and does not keep a space before its full stop.
+
+    `^[PMID: ...]` badges are left alone. They name a record rather than a position, so no
+    position list can describe them.
+    """
+    drop = {int(number) for number in numbers or ()}
+    if not answer or not drop or "^[" not in answer:
+        return answer
+    out: list[str] = []
+    last = 0
+    removed = False
+    for match in _ANY_MARKER_RE.finditer(answer):
+        body = match.group(1).strip()
+        if not _NUMERIC_BODY_RE.fullmatch(body):
+            continue
+        expanded = _expand_citations(body)
+        kept = [number for number in expanded if number not in drop]
+        if len(kept) == len(expanded):
+            continue
+        start = match.start()
+        if not kept:
+            while start > last and answer[start - 1] in " \t":
+                start -= 1
+        out.append(answer[last:start])
+        if kept:
+            out.append(" ".join(f"^[{number}]" for number in kept))
+        last = match.end()
+        removed = True
+    if not removed:
+        return answer
+    out.append(answer[last:])
+    return _tidy_removed_markers("".join(out))
+
+
 def citation_remap(answer: str) -> dict[str, int]:
     """{renumbered citation number: original passage number} for the client.
 
@@ -1942,6 +1986,25 @@ _ADMISSION_BLOCK_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+#: The relevance verdict, in the one spelling the prompt asks for it, with or without a
+#: markdown fence around it. `graph.read_evidence_reply` reads a reply that IS this object;
+#: this is the rule for a reply that CONTAINS one.
+#:
+#: `dev_t6_01` turn 3 (2026-11-11) answered a false premise correctly and then appended
+#: `{"evidence_found": false}` as a second paragraph. The reader was served the object,
+#: because the reader only recognised a reply that began with it. An object the model
+#: writes into a paragraph is the same leak as the bracket it copied on 2026-11-01, and it
+#: is removed by the rule that does not depend on the model complying.
+#:
+#: Matched on the quoted key plus a JSON boolean, never on the bare word: an answer is
+#: allowed to discuss whether evidence was found, and does.
+_EVIDENCE_SENTINEL_RE = re.compile(
+    r"(?:```[A-Za-z0-9_-]*[ \t]*\r?\n?[ \t]*)?"
+    r"\{[^{}]*\"evidence_found\"[^{}]*:[^{}]*(?:true|false)[^{}]*\}"
+    r"(?:[ \t]*\r?\n?[ \t]*```)?",
+    re.IGNORECASE,
+)
+
 
 def _marker_mask(text: str) -> list[bool]:
     """Which characters of `text` belong to a citation marker.
@@ -2031,6 +2094,14 @@ def strip_printed_constructs(answer: str) -> tuple[str, list[str]]:
 
     flags: list[str] = []
     text = answer
+
+    # The relevance verdict FIRST, and by the same principle as the rest of this pass: the
+    # prompt asks for that object in a spelling a model can copy, and a model that copied
+    # it INTO its answer served JSON to a clinician. Removed before the bracket scan,
+    # because the object carries braces and quotes the scan has no business reading.
+    if _EVIDENCE_SENTINEL_RE.search(text):
+        text = _EVIDENCE_SENTINEL_RE.sub("", text)
+        flags.append("citation_printed_construct:evidence_found")
 
     if _ADMISSION_BLOCK_RE.search(text):
         text = _ADMISSION_BLOCK_RE.sub("", text)

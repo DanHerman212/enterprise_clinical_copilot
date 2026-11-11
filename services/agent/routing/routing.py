@@ -529,16 +529,22 @@ def asks_for_administrative_detail(question: str) -> bool:
 #: negative returns the answer that failed. Both words are required — "risk" alone is a
 #: score question, which /risk owns and this must not answer.
 _RISK_DRIVER_WORDS = frozenset({"driver", "drivers", "drives", "drive", "driving"})
+#: The words that ask for a reason. `what` and `which` are here because a driver question
+#: is written that way as often as it is written with "why" — "what's driving that?",
+#: "what drives her risk?", "which factors drive it?" — and the interrogative is doing the
+#: same work. Measured on 2026-11-11: "how likely is she to bounce back within a month, and
+#: what's driving that?" reached the model with no attribution available, because no word
+#: in it was "why" and no token in it was "risk".
 _WHY_WORDS = frozenset({"why", "explain", "explains", "explained", "explaining",
                         "reason", "because", "contributes", "contribute",
                         "contributed", "contributing", "contribution",
-                        "contributions"})
+                        "contributions", "what", "whats", "which"})
 
 
 def asks_why_risk_driver(question: str) -> bool:
     """Whether this question asks for the model's reasoning about a risk driver."""
     tokens = (question or "").lower().translate(_PUNCTUATION).split()
-    if "risk" not in tokens and "readmission" not in tokens:
+    if not mentions_readmission(question):
         return False
     return (any(token in _RISK_DRIVER_WORDS for token in tokens)
             and any(token in _WHY_WORDS for token in tokens))
@@ -630,10 +636,56 @@ def wants_risk_driver(question: str, intent: str | None = None) -> bool:
 #: against its threshold. Kept separate from `_RISK_DRIVER_WORDS` because the two answer
 #: different questions: a driver question wants the attribution, and a score question
 #: wants the number and the comparison.
-_RISK_SUBJECTS = frozenset({"risk", "readmission", "probability"})
+#:
+#: `rate` is deliberately absent. "What rate of readmission did that cohort report?" is a
+#: literature question, and binding the predictor for it puts this patient's estimate
+#: beside somebody else's population figure.
 _RISK_SCORE_WORDS = frozenset({"score", "scores", "probability", "percent",
-                               "percentage", "threshold"})
+                               "percentage", "threshold",
+                               "likely", "likelihood", "chance", "chances", "odds",
+                               "estimate", "estimated"})
 _RISK_SCORE_COMPARISONS = frozenset({"above", "below", "exceeds", "exceed"})
+
+
+#: The words that name the thirty-day unplanned readmission itself, in the register a
+#: clinician types and in the register a patient's relative uses.
+_READMISSION_TOKENS = frozenset({
+    "risk", "readmission", "readmissions", "readmitted", "readmit",
+    "rehospitalization", "rehospitalisation", "rehospitalized", "rehospitalised",
+})
+
+#: How the same event is named without the word for it. A question can ask for the
+#: estimate in plain English — "how likely is she to bounce back within a month?" — and
+#: every predicate below that keys on the word "risk" misses it.
+_READMISSION_PHRASES = ("bounce back", "bounceback", "bouncing back",
+                        "back in the hospital", "back in hospital",
+                        "return to hospital", "come back in")
+
+#: A return, and the window it is asked about in.
+_RETURN_TOKENS = frozenset({"return", "returns", "returning", "come", "comes",
+                            "coming", "back"})
+_HOSPITAL_TOKENS = frozenset({"hospital", "hospitals", "hospitalized", "hospitalised"})
+_RETURN_WINDOWS = ("30 day", "30 days", "within a month", "within 30 days",
+                   "within thirty days", "a month")
+
+
+def mentions_readmission(question: str) -> bool:
+    """Whether this question asks about a readmission, in any of the ways it is asked.
+
+    One definition, asked by both risk predicates. It existed twice before — once as
+    `"risk" not in tokens and "readmission" not in tokens` in the driver test and once as
+    `_RISK_SUBJECTS` in the score test — and both spellings missed the same question.
+    """
+    text = (question or "").lower()
+    tokens = text.translate(_PUNCTUATION).split()
+    if any(token in _READMISSION_TOKENS for token in tokens):
+        return True
+    if any(phrase in text for phrase in _READMISSION_PHRASES):
+        return True
+    if not any(token in _RETURN_TOKENS for token in tokens):
+        return False
+    return (any(token in _HOSPITAL_TOKENS for token in tokens)
+            or any(window in text for window in _RETURN_WINDOWS))
 
 
 def asks_for_risk_score(question: str) -> bool:
@@ -651,7 +703,8 @@ def asks_for_risk_score(question: str) -> bool:
     A driver question is excluded even though it names the score: `asks_why_risk_driver`
     is the other crossing, and it has its own reason for binding the same tool. Two
     predicates admitting the same call for different reasons would make the binding
-    unauditable.
+    unauditable. A question asking both binds the tool through the driver predicate, so
+    the exclusion costs nothing.
 
     A false positive costs one bound tool on a turn that turns out to want prose; a
     false negative is the deflection above.
@@ -661,7 +714,7 @@ def asks_for_risk_score(question: str) -> bool:
         return False
     if asks_why_risk_driver(question):
         return False
-    if not any(token in _RISK_SUBJECTS for token in tokens):
+    if not mentions_readmission(question):
         return False
     if any(token in _RISK_SCORE_WORDS for token in tokens):
         return True

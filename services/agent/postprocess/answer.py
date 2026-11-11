@@ -31,6 +31,7 @@ from typing import Any, Iterable
 
 from langchain_core.messages import AIMessage
 
+from services.agent.postprocess import answer_hygiene
 from services.agent.postprocess import citations
 from services.agent.postprocess import discharge_section
 from services.agent.postprocess import risk_lab_citation
@@ -715,6 +716,34 @@ def settle_answer(
             evidence_state=evidence_state,
         )
         flags.extend(mismatched)
+
+    # What the answer asserts about the evidence it cites, three checks with one reason to
+    # be here: the marker has resolved, so what it opens can be compared with the claim.
+    # All three are in `answer_hygiene`, and all three edit attributions rather than prose.
+    if settled_prose:
+        settled_prose, restored = answer_hygiene.restore_chart_acronyms(
+            settled_prose,
+            # This turn's own `/ehr` retrieval. An acronym a replayed turn's passage
+            # defined is still the chart's shorthand, but the passage is no longer in
+            # front of the reader, and inserting a definition for it would be this pass
+            # inventing the chart's vocabulary from a memory of it.
+            passages=_summary_passages(tool_calls or []) if command == "summarize" else (),
+        )
+        flags.extend(restored)
+        settled_prose, overstated = answer_hygiene.strip_absence_claim_citations(
+            settled_prose,
+            tool_calls=tool_calls or [],
+            replayed_tool_calls=replayed_tool_calls or [],
+            evidence_state=evidence_state,
+        )
+        flags.extend(overstated)
+        settled_prose, blanketed = answer_hygiene.strip_blanket_lab_marker_runs(
+            settled_prose,
+            tool_calls=tool_calls or [],
+            replayed_tool_calls=replayed_tool_calls or [],
+            evidence_state=evidence_state,
+        )
+        flags.extend(blanketed)
 
     # The page's numbering, last and separate from the array's. A marker's number is the
     # position of its unit in the conversation's evidence array — cumulative across

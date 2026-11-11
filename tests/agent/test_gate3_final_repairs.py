@@ -97,17 +97,25 @@ def test_the_output_allowance_leaves_room_for_a_sixteen_drug_extraction():
     assert GEMINI_MAX_OUTPUT_TOKENS >= 4096
 
 
-def test_a_sixteen_drug_reply_parses_to_sixteen_verified_rows():
-    """The reply the model writes for this record survives verification intact."""
+def test_a_sixteen_row_reply_parses_to_fifteen_drugs_and_one_supply():
+    """The reply the model writes for this record survives verification intact.
+
+    The list has sixteen numbered entries and the reply has sixteen rows, which is what
+    this test was written to prove the output allowance could carry. The first entry is
+    home oxygen, and a supply is not a drug: from Stage 11B `parse_medications` refuses
+    durable medical equipment and non-drug supplies, so the row is dropped with that
+    reason and the count the narrative states is the fifteen prescriptions beside it.
+    """
     verified, dropped = parse_medications(_EXTRACTION_REPLY, _DISCHARGE_LIST)
 
-    assert dropped == []
-    assert len(verified) == 16
+    assert dropped == [{"medication": "Home oxygen",
+                        "reason": "durable medical equipment or non-drug supply"}]
+    assert len(verified) == 15
     assert [row["medication"] for row in verified][-2:] == ["Prednisone", "Clindamycin"]
 
     narrative = medication_narrative(
         verified, returned_passages=3, sections=("discharge_medications",))
-    assert narrative.startswith("16 discharge medications, as recorded in the discharge")
+    assert narrative.startswith("15 discharge medications, as recorded in the discharge")
     assert "Aspirin" in narrative
 
 

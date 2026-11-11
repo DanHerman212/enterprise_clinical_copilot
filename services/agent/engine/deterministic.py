@@ -196,7 +196,9 @@ def parse_medications(
         if not name:
             continue
         reason = None
-        if name not in source:
+        if _non_pharmacologic(name):
+            reason = "durable medical equipment or non-drug supply"
+        elif name not in source:
             reason = "medication not present in the note text"
         elif dosage and not _dose_supported(dosage, source):
             reason = "dosage not present in the note text"
@@ -229,6 +231,46 @@ def _dose_supported(dosage: str, source: str) -> bool:
     if match:
         return _normalise(match.group(0)) in source
     return dosage in source
+
+
+#: Equipment and supplies whose meaning spans two words, so a whole-word test misses them.
+#: Each is prescribed and each is numbered in the same discharge list as the drugs, which
+#: is why an extractor reading a numbered list returns them as medications.
+_NON_PHARMACOLOGIC_PHRASES = (
+    "home oxygen", "supplemental oxygen", "portable oxygen", "oxygen therapy",
+    "oxygen concentrator", "nasal cannula", "incentive spirometer", "nebulizer machine",
+    "hospital bed", "compression stockings", "compression stocking", "ted hose",
+    "test strips", "glucose strips", "blood pressure cuff", "suction machine",
+    "feeding pump", "shower chair", "grab bar",
+)
+
+#: Equipment that is named by one word. A whole-word test, so "o2" matches and
+#: "oxygenation" does not.
+#:
+#: `nebulizer` and `stockings` are deliberately absent as single words: "albuterol
+#: nebulizer solution" and "compression stockings" name a drug and a supply respectively,
+#: and only the second is in the phrase list above. Dropping a bronchodilator because the
+#: route is spelled out is the failure this list must not cause.
+_NON_PHARMACOLOGIC_WORDS = frozenset({
+    "oxygen", "o2", "cpap", "bipap", "spirometer", "glucometer", "lancet", "lancets",
+    "walker", "wheelchair", "cane", "crutches", "commode",
+})
+
+
+def _non_pharmacologic(name: str) -> bool:
+    """Whether this "medication" row is equipment, a gas or a supply rather than a drug.
+
+    The `/meds` count is a clinical number, and a record that lists home oxygen and a
+    walker beside nine drugs does not put eleven medications in the patient's hands.
+    Counting them inflates the one figure the answer states, so the row is refused here
+    rather than left to the extractor's judgement — the instruction in the prompt states
+    the same rule, and this is the half that cannot be talked out of it.
+    """
+    text = f" {_normalise(name)} "
+    if any(f" {phrase} " in text for phrase in _NON_PHARMACOLOGIC_PHRASES):
+        return True
+    words = re.split(r"[^a-z0-9]+", text)
+    return any(word in _NON_PHARMACOLOGIC_WORDS for word in words if word)
 
 
 def _extract_json_object(text: str) -> dict[str, Any] | None:

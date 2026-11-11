@@ -524,6 +524,17 @@ def compose_presentation(question: str, answer: str,
     # synthesis, so an uncited `/ehr` answering is still the thing this flag exists to
     # report.
     payload_evidenced = bool(command_payload) and command == "meds"
+    # The estimate is a fifth channel, and it is the one `/risk` has: a widget-only turn
+    # carries no prose and no passage, and its evidence is the model's own scoring of
+    # this admission. A driver question reaches the same place from free text.
+    #
+    # Computed HERE, above the suppression rule, because it is an exemption that rule
+    # reads (2026-11-11). It was computed below it until a free-text turn that called
+    # `predict_readmission` and cited nothing was reported as synthesis without
+    # citations: the scope was nulled and `verified` withdrawn from an answer resting on
+    # this admission's own estimate, which is the same false positive `/labs`, `/meds`
+    # and the manifest turn had already each been granted.
+    estimate_evidenced = _usable_estimate(predict_payload(tool_calls)) is not None
     # A widget-only turn has no prose to evidence. Flagging "synthesis without
     # citations" against an empty sentence describes an omission that did not happen:
     # the canvas is the answer, and the reader was never shown a claim needing
@@ -539,6 +550,7 @@ def compose_presentation(question: str, answer: str,
     # reason: they too rest on something that publishes no passage.
     scope_suppressed = (scope == SCOPE_PATIENT and not record_sources
                         and not lab_evidenced and not payload_evidenced
+                        and not estimate_evidenced
                         and not context_grounded
                         and not no_prose)
     if scope_suppressed:
@@ -580,10 +592,6 @@ def compose_presentation(question: str, answer: str,
     #
     # The guardrail's own verdict is ANDed by the caller (`http`), because only that
     # layer knows whether the answer survived it or was replaced by an abstention.
-    # The estimate is a fifth channel, and it is the one `/risk` has: a widget-only turn
-    # carries no prose and no passage, and its evidence is the model's own scoring of
-    # this admission. A driver question reaches the same place from free text.
-    estimate_evidenced = _usable_estimate(predict_payload(tool_calls)) is not None
     grounded_in_record = (
         bool(record_sources) or lab_evidenced or payload_evidenced or estimate_evidenced
         or bool(context_grounded)

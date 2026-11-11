@@ -225,25 +225,71 @@ def _discharge_point(trend: dict[str, Any]) -> dict[str, Any]:
     return series[-1] if series else {}
 
 
-def _excursion(trend: dict[str, Any]) -> float:
-    """How far outside its reference range a discharge value sits, in range-widths.
+def _point_excursion(point: dict[str, Any], low: Any, high: Any) -> float:
+    """How far outside its reference range one reading sits, in range-widths.
 
-    The ranking rule for "which lab was worst": a plain distance would rank a wide
-    reference interval above a narrow one however abnormal the reading is.
+    A plain distance would rank a wide reference interval above a narrow one however
+    abnormal the reading is, so the distance is divided by the interval's own width.
+
+    The interval is passed in rather than read from the point: the tool puts
+    `reference_low`/`reference_high` on the analyte, and a point carries only the day,
+    the value and the flag. Two callers below read a different point of the same trend
+    against the same interval.
     """
-    point = _discharge_point(trend)
-    value = point.get("value")
-    low, high = trend.get("reference_low"), trend.get("reference_high")
+    value = point.get("value") if isinstance(point, dict) else None
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         return 0.0
     if not isinstance(low, (int, float)) or not isinstance(high, (int, float)):
         return 0.0
+    if isinstance(low, bool) or isinstance(high, bool):
+        return 0.0
     width = max(float(high) - float(low), 1e-9)
-    if value > high:
+    if float(value) > float(high):
         return (float(value) - float(high)) / width
-    if value < low:
+    if float(value) < float(low):
         return (float(low) - float(value)) / width
     return 0.0
+
+
+def _excursion(trend: dict[str, Any]) -> float:
+    """How far outside its reference range the DISCHARGE value sits, in range-widths.
+
+    The one reading that makes the chip's own wording true: `_LAB_ABNORMAL` says
+    "the abnormal discharge {label}", so the analyte it names has to be abnormal at
+    discharge, whatever it did earlier in the stay.
+    """
+    return _point_excursion(_discharge_point(trend), trend.get("reference_low"),
+                            trend.get("reference_high"))
+
+
+def _max_series_excursion(trend: dict[str, Any]) -> float:
+    """The worst excursion anywhere in the stay, in range-widths.
+
+    Which value a reader means by "the worst lab" is not always the discharge one. An
+    analyte that peaked at twice its upper bound and settled by discharge is the more
+    clinically notable series, and the chip that asks about it is the one worth offering
+    first — the key's notion of the interesting analyte is the series' extreme, not its
+    last point.
+    """
+    low, high = trend.get("reference_low"), trend.get("reference_high")
+    series = trend.get("series") or []
+    return max(
+        (_point_excursion(point, low, high) for point in series if isinstance(point, dict)),
+        default=0.0,
+    )
+
+
+def _has_critical_flag(trend: dict[str, Any]) -> bool:
+    """Whether any reading in the stay reached a critical bound.
+
+    First in the ranking because a critical reading is a different order of fact from a
+    high one: it outranks every excursion however wide, and a panel that contains one
+    should be asked about through it.
+    """
+    return any(
+        str(point.get("flag") or "") in _CRITICAL_FLAGS
+        for point in trend.get("series") or [] if isinstance(point, dict)
+    )
 
 
 def _formatted_value(trend: dict[str, Any]) -> str:
@@ -340,6 +386,11 @@ _LITERATURE = "What else does the published literature report on {topic}?"
 #: which keeps lab chips and nothing else on a record with no note text.
 _LAB_PREFIXES = ("How does the abnormal discharge ", "What were the discharge values ")
 
+#: The two flags the tool reserves for a value past a critical bound, as opposed to past
+#: the reference interval. `services/mcp/contracts.py` owns the vocabulary; this module
+#: reads the same two strings.
+_CRITICAL_FLAGS = frozenset({"critical_low", "critical_high"})
+
 
 def _filled(template: str, **slots: str) -> str:
     """The template with its slots, or "" when any slot is empty.
@@ -399,8 +450,24 @@ def _second_drug(rows: list[str], text: str) -> tuple[str, str]:
 
 
 def _rank_abnormal(trends: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The analytes abnormal at discharge, worst first.
+
+    Three keys, in this order: whether the stay touched a critical bound at all, how far
+    the worst reading of the stay went outside the interval, and then how far the discharge
+    value did. The filter stays on the discharge value so the chip built from the first
+    entry can call it an abnormal DISCHARGE value without lying; the remaining two keys
+    decide which discharge abnormality is the most interesting.
+
+    Ordering by the discharge value alone put a marginally low count ahead of a series that
+    had peaked far outside its interval and corrected — the second is what a clinician
+    would ask about, and it is the one the record's own extreme makes notable.
+    """
     abnormal = [t for t in trends if _excursion(t) > 0]
-    return sorted(abnormal, key=_excursion, reverse=True)
+    return sorted(
+        abnormal,
+        key=lambda t: (_has_critical_flag(t), _max_series_excursion(t), _excursion(t)),
+        reverse=True,
+    )
 
 
 # ----------------------------------------------------------------------------- engine

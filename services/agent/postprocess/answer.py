@@ -730,18 +730,34 @@ def settle_answer(
         # display number is assigned per marker, so compaction has to see all of them or
         # the reader is handed a pill-less `[5]` beside a numbered pill (Stage 6C).
         settled_prose = citations.normalise_carets(settled_prose)
-        settled_prose, display = citations.compact_display_numbers(settled_prose)
+        # `/pubmed` keeps the numbering its records were published under. On this route the
+        # marker is not a position in an evidence array — a `search_literature` result
+        # contributes no citable unit, so there is no array for it to address — it is the
+        # record's index in the list the model was shown, and `render_numbered` stamps the
+        # articles `1..N` in retrieval order while `a2ui` numbers `sources`, the pills and
+        # `references` `1..N` in that same order. Compacting the prose to the order it
+        # happens to cite them renames the page and leaves the drawer alone: `dev_t1_06`
+        # turn 1 wrote `^[2] ^[1] ^[3] ^[2]`, was served `^[1] ^[2] ^[3] ^[1]`, and the
+        # reader's first pill then opened a paper the sentence was not about (2026-11-11).
+        # So the map stays empty here, and `resolve_sources` reads the numbers directly.
+        if command != "literature":
+            settled_prose, display = citations.compact_display_numbers(settled_prose)
     if settled_deterministic:
-        compacted, deterministic_map = citations.compact_display_numbers(
-            citations.normalise_carets(settled_deterministic))
-        settled_deterministic = compacted
-        # The deterministic answer WINS at the point of serving — `turn.compose_success`
-        # reads `deterministic_answer` in preference to the model's prose — so its map is
-        # the one that describes the numbers a reader will click. It used to be kept only
-        # when the prose carried no markers at all (`display = display or deterministic_map`),
-        # which meant a turn that had both served the deterministic sentence through the
-        # prose's numbering and drew the wrong passage behind every marker.
-        display = deterministic_map or display
+        if command == "literature":
+            # Same reason: nothing on this route renumbers, so nothing may publish a map
+            # from a numbering that was never applied.
+            settled_deterministic = citations.normalise_carets(settled_deterministic)
+        else:
+            compacted, deterministic_map = citations.compact_display_numbers(
+                citations.normalise_carets(settled_deterministic))
+            settled_deterministic = compacted
+            # The deterministic answer WINS at the point of serving — `turn.compose_success`
+            # reads `deterministic_answer` in preference to the model's prose — so its map is
+            # the one that describes the numbers a reader will click. It used to be kept only
+            # when the prose carried no markers at all (`display = display or deterministic_map`),
+            # which meant a turn that had both served the deterministic sentence through the
+            # prose's numbering and drew the wrong passage behind every marker.
+            display = deterministic_map or display
 
     return Settlement(prose=settled_prose, deterministic=settled_deterministic,
                       display=display, flags=tuple(flags))

@@ -379,9 +379,21 @@ COMPARISON_DUE_DAYS = 90
 # means an evaluation of what this product actually gets asked; the first candidate
 # for review is dangerous content, because a discharge note describes dangerous
 # things.
+#
+# Dangerous content moved to BLOCK_ONLY_HIGH on 2026-11-11, and the measurement is
+# the reason. `dev_t3_02` turn 2 asked which discharge medication has a taper and how
+# it is dosed; the reply reported an opioid step-down of 20 mg to 10 mg every twelve
+# hours and was withheld with `finish_reason=SAFETY`, `HARM_CATEGORY_DANGEROUS_CONTENT`
+# blocked at `probability: MEDIUM` with `severity: HARM_SEVERITY_LOW` — a dosing
+# schedule, rated low severity and blocked for the category it was written in. Under
+# this threshold set the same rating is reported rather than withheld, which is the
+# trade this product makes: a median-severity dangerous-content rating on a discharge
+# note is not the failure mode the filter exists to stop, and withholding the answer
+# serves the reader a sentence about a safety filter instead of a dose. The other
+# three categories stay where they were; nothing about this moves them.
 GEMINI_SAFETY_THRESHOLDS = {
     "HARM_CATEGORY_HATE_SPEECH": "BLOCK_MEDIUM_AND_ABOVE",
     "HARM_CATEGORY_HARASSMENT": "BLOCK_MEDIUM_AND_ABOVE",
     "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_MEDIUM_AND_ABOVE",
-    "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_MEDIUM_AND_ABOVE",
+    "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_ONLY_HIGH",
 }

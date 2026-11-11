@@ -694,13 +694,32 @@ def _drop_unknown_markers(answer: str) -> str:
     note section was cited by name). Raw markup in the prose is worse than a
     missing citation: it reads as corruption, and the claim it was attached to is
     still checked by the guardrails either way.
+
+    A marker body can also be a TOOL name — `^[predict_readmission]`, written twice on
+    2026-11-11 — and deleting it left the horizontal whitespace that preceded it, so the
+    reader was served `contribution of 0.0824 .` and a turn that reported no sources. The
+    space in front of a removed marker goes with it, the same rule `remove_citations` and
+    `strip_numeric_markers` apply, and the debris tidy runs only when something was
+    actually removed: a clean answer is returned byte-identical.
     """
     if "^[" not in (answer or ""):
         return answer
-    return _ANY_MARKER_RE.sub(
-        lambda m: m.group(0) if _KNOWN_MARKER_RE.fullmatch(m.group(0)) else "",
-        answer,
-    )
+    out: list[str] = []
+    last = 0
+    removed = False
+    for match in _ANY_MARKER_RE.finditer(answer):
+        if _KNOWN_MARKER_RE.fullmatch(match.group(0)):
+            continue
+        start = match.start()
+        while start > last and answer[start - 1] in " \t":
+            start -= 1
+        out.append(answer[last:start])
+        last = match.end()
+        removed = True
+    if not removed:
+        return answer
+    out.append(answer[last:])
+    return _tidy_removed_markers("".join(out))
 
 
 def strip_markers(answer: str) -> str:

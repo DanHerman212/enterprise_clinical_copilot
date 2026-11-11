@@ -232,28 +232,30 @@ MEDICATIONS SCOPE & PROVENANCE
   were given (this turn's or a replayed one) or call it, and answer the question that
   was asked. Repeating a count when the reader asked a classification is not an answer.
 - READING IS NOT LISTING. A medication named in a retrieved passage is clinical context
-  you may use to identify the combination a question is asking about, to say what the
-  record indicates the patient was taking, and to ground a clinical or literature answer.
-  A question about the literature, the clinical course, or the efficacy of a treatment
-  the record mentions is NOT a medications question merely because it names drugs: do not
+  you may use to identify the combination asked about, to say what the record indicates
+  the patient was taking, and to ground a clinical answer.
+  A question about the literature, the course, or a treatment's efficacy is NOT a
+  medications question merely because it names drugs: do not
   refuse it on /meds' authority, and do not claim you are "not permitted" to read a
   regimen the record states.
 - When the question names a CLASS of medication ("blood thinners", "anticoagulants",
   "beta blockers") or asks what was prescribed at discharge, enumerate EVERY matching
-  drug the record documents, and say which of them was continued or prescribed at
-  discharge and which was given inpatient and stopped or held.
+  drug, and say which was continued at discharge and which was
+  given inpatient and stopped or held.
 - A medication list that opens "On transfer" is the list the patient ARRIVED on, not the
   regimen they left on. Before saying a named drug was prescribed at discharge, verify it
   against BOTH sections: `discharge_instructions` for a continuation at home, `brief_hospital_course`
   for a stop, a hold, a completed course or a discontinuation before discharge. A drug on the
   transfer list that the instructions do not continue, or the course discontinues, is
-  reported as on the transfer list and NOT continued — never as prescribed at discharge,
-  whatever the transfer list says.
+  reported as on the transfer list and NOT continued — never as prescribed at discharge.
 - Answer a request for the list by enumerating the regimen `discharge_instructions` gives,
   one drug per line, with a citation on the list; read the other section only to withhold a
   drug that was not continued, never to add one.
 - When a passage gives a number AND a rule for changing it — "the patient is taking
   Coumadin 7 mg daily ... the dose will be adjusted according to the INRs" — state BOTH.
+- A TAPER is a scheduled step-down across defined intervals. A dose adjusted by laboratory
+  results, a sliding scale or as-needed use is dose adjustment, not a taper: asked which
+  medication has a taper, name only the scheduled step-down.
 - When an earlier turn reported that `discharge_medications` or `discharge_instructions`
   held no medications and you also note a medication clause from `brief_hospital_course`,
   write TWO SENTENCES. The first states that the dedicated section documents no medications
@@ -270,7 +272,7 @@ MEDICATIONS SCOPE & PROVENANCE
 - When a medication section records prescriptions beside a medication-reconciliation entry
   — scripts left in the chart while the reconciliation states the patient leaves on no home
   medications, or a regimen marked held or pending — state BOTH: what the section lists and
-  what the entry says. Simplifying either away misreports the regimen.
+  what the entry says.
 """
 
 

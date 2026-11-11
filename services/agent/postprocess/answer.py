@@ -32,6 +32,7 @@ from typing import Any, Iterable
 from langchain_core.messages import AIMessage
 
 from services.agent.postprocess import citations
+from services.agent.postprocess import discharge_section
 from services.agent.routing import routing
 
 
@@ -539,6 +540,47 @@ class Settlement:
     flags: tuple[str, ...] = ()
 
 
+def _summary_passages(tool_calls: Iterable[dict]) -> list[dict]:
+    """This turn's `/ehr` retrieval, passage by passage, as the filter reads it.
+
+    The retrieved passage and not the citable unit: the filter's first question is what kind
+    of passage the turn holds, and a passage the model was not shown a marker for is still a
+    passage the turn read.
+    """
+    passages: list[dict] = []
+    for call in tool_calls:
+        if str(call.get("name") or "") != "rag_search_sections":
+            continue
+        response = call.get("response")
+        if not isinstance(response, dict):
+            continue
+        for passage in response.get("passages") or []:
+            if isinstance(passage, dict):
+                passages.append(passage)
+    return passages
+
+
+def _citable_units(tool_calls: list[dict], evidence_state: Any) -> list[dict]:
+    """What a pre-compaction marker number indexes, position `n` at `[n - 1]`.
+
+    The session record when the turn has one, because that is the array the marker was
+    written against — a passage the thread already held keeps its position and does not take
+    a second one. The concatenation of the calls otherwise, which is the same array for a
+    turn that is the first of its thread.
+    """
+    if evidence_state is not None:
+        try:
+            return list(evidence_state.ordered_citable_units())
+        except (AttributeError, ValueError):
+            pass
+    units: list[dict] = []
+    for call in tool_calls:
+        response = call.get("response") if isinstance(call, dict) else None
+        if isinstance(response, dict):
+            units.extend(citations.citable_passages(response))
+    return units
+
+
 def settle_answer(
     *,
     prose: str | None,
@@ -550,6 +592,7 @@ def settle_answer(
     thread_literature: list[dict] | None = None,
     fallback_literature: list[dict] | None = None,
     evidence_state: Any = None,
+    command: str | None = None,
 ) -> Settlement:
     """Decide the answer's markers: vocabulary, bound, then the reader's numbering.
 
@@ -642,6 +685,21 @@ def settle_answer(
     else:
         settled_deterministic = deterministic
 
+    # Which sentences a `/ehr` discharge section may contain, decided against the sections
+    # this turn actually holds. Here rather than in the prompt because a formatting turn is
+    # a model turn: the instruction was made explicit three times and the fourth answer
+    # still reported a hospital-course drug as a home prescription under the heading that
+    # promises the discharge regimen. After the bound, because the marker has to resolve
+    # before its section can be known; before the page's numbering, because compacting a
+    # paragraph this pass is about to shorten would leave the reader a gap.
+    if settled_prose and command == "summarize":
+        settled_prose, unplaced = discharge_section.filter_discharge_section(
+            settled_prose,
+            passages=_summary_passages(tool_calls or []),
+            units=_citable_units(tool_calls or [], evidence_state),
+        )
+        flags.extend(unplaced)
+
     # The page's numbering, last and separate from the array's. A marker's number is the
     # position of its unit in the conversation's evidence array — cumulative across
     # turns, which is what makes a follow-up citable at all — and a reader should not be
@@ -699,6 +757,10 @@ def sanitize_answer_markers(state: dict, text: str | None = None) -> None:
         thread_literature=state.get("thread_literature") or [],
         # And the record, for the same reason: the bound is a length of ONE array.
         evidence_state=state.get("evidence_state"),
+        # Which command this turn was. The `/ehr` discharge section is the one passage this
+        # package filters by section, and only a formatting turn for that command can
+        # contain it.
+        command=state.get("command"),
     )
     if message is not None and settled.prose is not None:
         message.content = settled.prose

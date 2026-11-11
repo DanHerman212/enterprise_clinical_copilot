@@ -100,6 +100,7 @@ AGENT_MODULES = frozenset({
     'postprocess/__init__.py',
     'postprocess/answer.py',
     'postprocess/citations.py',
+    'postprocess/discharge_section.py',
     'postprocess/evidence_state.py',
     'postprocess/followups.py',
     'postprocess/guardrail.py',
@@ -166,12 +167,14 @@ ALLOWED = {
 #: Where a package may import postprocess from, when it may at all. A package allowed to
 #: read `citations` is not thereby allowed to read the guardrails: the citation contract
 #: is a shared vocabulary, the guardrails are the answer pipeline.
-POSTPROCESS_LEAVES = {"citations", "guardrail", "answer", "followups", "evidence_state"}
+POSTPROCESS_LEAVES = {"citations", "guardrail", "answer", "followups",
+                      "evidence_state", "discharge_section"}
 
 POSTPROCESS_MODULES = {
     "root": {"citations", "guardrail", "answer", "followups"},    "engine": {"citations", "answer", "evidence_state"},
     "presentation": {"citations", "evidence_state"},
-    "postprocess": {"citations", "guardrail", "answer", "followups"},
+    "postprocess": {"citations", "guardrail", "answer", "followups",
+                    "discharge_section"},
 }
 
 

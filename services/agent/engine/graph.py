@@ -2075,6 +2075,10 @@ def _settle(state: dict, *, prose: str | None) -> None:
         # record positions — which is what `presentation` resolves through and what
         # `turn.py` republishes for the next turn's replay.
         evidence_state=state.get("evidence_state"),
+        # Which command this turn was, so settlement knows whether the `/ehr` discharge
+        # section is even present. A property of the path, not of the prose: only the
+        # formatting turn for that command writes that heading.
+        command=state.get("command"),
     )
     message = final_message(state)
     if message is not None and settled.prose is not None:

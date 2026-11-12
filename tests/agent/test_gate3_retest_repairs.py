@@ -118,7 +118,18 @@ def test_the_global_number_survives_the_offset_of_a_later_turn():
 
 
 def test_the_prompt_requires_a_marker_on_every_synthesis_paragraph():
+    """Chart claims carry their own marker; the model's own numbers carry none.
+
+    The second assertion used to read `including one restating an estimate the thread
+    established`, which instructed the opposite of the bullet two lines below it
+    (`<readmission_risk>` carries no `^[k]`) and produced `^[1]` on a risk driver in
+    `dev_t4_01` turn 3. Stage 12C replaced it with the provenance rule, and the bullet it
+    lived on was the sentence the first assertion used to match: that pin now points at the
+    citation rule that survived, which states the same requirement for chart claims.
+    """
     prompt = " ".join(SYSTEM_PROMPT.split())
 
-    assert "states a positive clinical fact carries its own" in prompt
-    assert "including one restating an estimate the thread established" in prompt
+    assert "Every sentence that states a positive clinical fact from the chart carries" in prompt
+    assert "including one restating an estimate the thread established" not in prompt
+    assert "An estimate, driver, contribution or model `value` carries none" in prompt
+    assert "never shares a sentence with a cited chart claim" in prompt

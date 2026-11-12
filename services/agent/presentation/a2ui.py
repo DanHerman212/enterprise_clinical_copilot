@@ -74,7 +74,7 @@ from services.agent.presentation.domain import (
 # The analyte vocabulary, from the shared leaf rather than from `routing/`: this layer
 # may not import the routing package (Charter 13 §5), and the answer it needs — "did the
 # question name a measurement?" — is a label question, not a routing decision.
-from shared.labels import names_an_analyte
+from shared.labels import asks_about_labs, names_an_analyte
 
 # The citation records live in `note_presentation`. Imported by name here because
 # this is where the rest of the package — and the tests — reach for them:
@@ -427,14 +427,20 @@ def compose_presentation(question: str, answer: str,
     # another one (reported from the production UI, 2026-10-25). The comparative matrix
     # beside it is gated the same way and for the same reason (see `_draws_matrix`).
     #
-    # And it is drawn only when the turn ASKED for it: `/labs`, or a question that names
-    # an analyte. A free-text turn that read the panel to answer something else — "which
-    # issue should be treated first?" — kept the panel out of an answer that never
+    # And it is drawn only when the turn ASKED for it: `/labs`, a question that names an
+    # analyte, or a question that asks about the panel by name ("were any of his discharge
+    # labs abnormal?"). A free-text turn that read the panel to answer something else —
+    # "which issue should be treated first?" — kept the panel out of an answer that never
     # discussed it, one column wide and out of context (2026-10-31, turn 3 of the
     # 90000023 thread). The evidence is not lost: the series is still in `evidence_calls`,
     # so a marker into it resolves and the scope still reads the chart.
+    #
+    # The panel noun is the third condition because a panel question is the one case where
+    # the reader asked for the values without naming one: an answer that says the discharge
+    # labs were normal, drawn above nothing, leaves the reader unable to check it.
     labs = (lab_trend_payload(tool_calls)
-            if command == "labs" or names_an_analyte(question) else None)
+            if command == "labs" or names_an_analyte(question) or asks_about_labs(question)
+            else None)
     # Resolved against the conversation's evidence, and against EVERY kind of it. A marker
     # addresses one array — the citable units the model was shown, numbered continuously
     # across the replayed turns and this one — and that array now holds laboratory
@@ -1517,28 +1523,34 @@ def _pill_journal(name: object, abbreviation: object = "") -> str:
 
 #: How much of an abstract a hover card carries.
 #:
-#: The card is 340px wide and floats over the answer being read, so it is a place to judge
-#: a source, not a place to read one. 400 characters is the opening of a structured
-#: abstract — enough to see what the study did and found — and the record itself is one
-#: click away on the title above it. Cut at a sentence end where there is one inside the
-#: budget, because a cut mid-clause reads as a truncation error rather than as a summary.
-_CITE_EXCERPT_CHARS = 400
+#: An abstract is served WHOLE up to this bound. A structured abstract carries its
+#: METHODS, RESULTS and CONCLUSIONS labels, and the figures a reader needs — the cohort
+#: sizes, the two arms' rates — live in RESULTS: cutting at 400 characters served the
+#: opening of a 1,866-character abstract, dropped those figures without a marker, and left
+#: a citation card that could not show the number the answer had just quoted (2026-11-12).
+#: 2,400 characters covers an abstract PubMed serves in full; the title above the card is
+#: still the link to the record for anything longer.
+_CITE_EXCERPT_CHARS = 2400
 
 
-def _excerpt(text: object) -> str:
-    """The opening of an abstract, bounded and marked as an opening.
+def _excerpt(text: object, limit: int = _CITE_EXCERPT_CHARS) -> str:
+    """The opening of a text, bounded and marked as an opening.
 
     Idempotent on its own output: a string that already ends with the ellipsis this
     function appends is an excerpt already, and re-cutting it would move the cut each time
     it passes through another layer (a comparator's `text` reaches the drawer through
     `reference_rows`, and the two must agree byte for byte).
+
+    `limit` is the caller's, because the two callers read in different places: an abstract
+    is served whole up to `_CITE_EXCERPT_CHARS`, and a cited note section is windowed to
+    `_FOCUSED_EXCERPT_CHARS` because it lands in a hover card.
     """
     body = " ".join(str(text or "").split())
-    if len(body) <= _CITE_EXCERPT_CHARS or body.endswith("…"):
+    if len(body) <= limit or body.endswith("…"):
         return body
-    cut = body[:_CITE_EXCERPT_CHARS]
+    cut = body[:limit]
     stop = max(cut.rfind(". "), cut.rfind("? "), cut.rfind("! "))
-    if stop > _CITE_EXCERPT_CHARS // 2:
+    if stop > limit // 2:
         return cut[: stop + 1]
     space = cut.rfind(" ")
     return (cut[:space] if space > 0 else cut).rstrip(" ,.;:") + "…"
@@ -1655,12 +1667,12 @@ def _focused_note_excerpt(section_text: str, claim_context: str = "",
                     continue
                 low, high, chosen = min(low, candidate), max(high, candidate), joined
             if len(chosen) > max_chars:
-                chosen = _excerpt(chosen)
+                chosen = _excerpt(chosen, max_chars)
             else:
                 chosen = ("… " if low > 0 else "") + chosen + (
                     " …" if high < len(sentences) - 1 else "")
             return chosen
-    return _excerpt(body)
+    return _excerpt(body, max_chars)
 
 
 def _article_record(article: dict, index: int) -> dict:

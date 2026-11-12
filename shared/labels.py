@@ -138,3 +138,72 @@ def analytes_named(text: str) -> tuple[str, ...]:
         found.append(word)
     return tuple(found)
 
+
+# --- The laboratory-question vocabulary -------------------------------------
+#
+# A question can be about the laboratory panel without naming an analyte: "were any of
+# his discharge labs abnormal?" and "what did the blood work show?" are panel questions,
+# and a surface that only recognised analyte names drew nothing for either. The vocabulary
+# is here because `presentation` and `postprocess` both need it and neither may import the
+# other.
+
+#: The nouns a clinician uses for the panel as a whole.
+LAB_PANEL_NOUNS = re.compile(
+    r"\b(?:labs?|laboratory|bloodwork|blood\s+work|panel)\b",
+    re.IGNORECASE,
+)
+
+
+def asks_about_labs(text: str) -> bool:
+    """Whether this text asks about the laboratory panel rather than one measurement.
+
+    Deliberately narrow: the nouns above, and nothing else. A question about a treatment,
+    an issue or a diagnosis is not a laboratory question however clinical it reads, and a
+    false positive draws a trajectory table under an answer that never mentioned one.
+    """
+    return bool(LAB_PANEL_NOUNS.search(text or ""))
+
+
+# --- The equipment / supply vocabulary -------------------------------------
+#
+# A numbered discharge list also numbers what the patient takes home but does not swallow.
+# One list, asked by three callers, because the alternative is three copies that drift:
+# `/meds` reports which numbered items are supplies rather than prescriptions, the
+# follow-up chips never offer a dosing question about oxygen, and the extraction question
+# is phrased with this vocabulary in mind.
+
+#: Equipment and supplies whose meaning spans two words, so a whole-word test misses them.
+EQUIPMENT_OR_SUPPLY_PHRASES: tuple[str, ...] = (
+    "home oxygen", "supplemental oxygen", "portable oxygen", "oxygen therapy",
+    "oxygen concentrator", "nasal cannula", "incentive spirometer", "nebulizer machine",
+    "hospital bed", "compression stockings", "compression stocking", "ted hose",
+    "test strips", "glucose strips", "blood pressure cuff", "suction machine",
+    "feeding pump", "shower chair", "grab bar",
+)
+
+#: Equipment named by one word. A whole-word test, so "o2" matches and "oxygenation" does
+#: not.
+#:
+#: `nebulizer` and `stockings` are deliberately absent as single words: "albuterol
+#: nebulizer solution" names a drug and "compression stockings" names a supply, and only
+#: the second is in the phrase list above. Classifying a bronchodilator as equipment
+#: because its route is spelled out would keep a real prescription out of a dosing answer.
+EQUIPMENT_OR_SUPPLY_WORDS: frozenset[str] = frozenset({
+    "oxygen", "o2", "cpap", "bipap", "spirometer", "glucometer", "lancet", "lancets",
+    "walker", "wheelchair", "cane", "crutches", "commode",
+})
+
+
+def is_equipment_or_supply(name: str) -> bool:
+    """Whether a medication-list row names equipment, a gas or a supply rather than a drug.
+
+    A classification, never a deletion: a line the chart numbered is reported to the
+    reader, and what this decides is whether it is counted as a prescription when a
+    sentence or a chip has to distinguish the two.
+    """
+    text = f" {' '.join(str(name or '').split()).lower()} "
+    if any(f" {phrase} " in text for phrase in EQUIPMENT_OR_SUPPLY_PHRASES):
+        return True
+    words = re.split(r"[^a-z0-9]+", text)
+    return any(word in EQUIPMENT_OR_SUPPLY_WORDS for word in words if word)
+

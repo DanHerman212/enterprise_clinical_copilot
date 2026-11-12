@@ -31,11 +31,10 @@ from typing import Any, Iterable
 
 from langchain_core.messages import AIMessage
 
-from services.agent.postprocess import answer_hygiene
 from services.agent.postprocess import citations
 from services.agent.postprocess import discharge_section
-from services.agent.postprocess import risk_lab_citation
 from services.agent.routing import routing
+from shared import labels
 
 
 NO_EVIDENCE_TEMPLATE = (
@@ -191,6 +190,18 @@ def _split_by_setting(verified: list[dict[str, str]]) -> tuple[list[dict[str, st
     return discharge, inpatient
 
 
+def _is_equipment_or_supply(name: str) -> bool:
+    """Whether a list row names equipment, a gas or a supply rather than a drug.
+
+    A classification the answer and the follow-up chips both ask, defined once in
+    `shared/labels.py`: the extraction verifies every numbered line, and what has to be
+    decided afterwards is whether a line is counted as a prescription. Home oxygen is
+    ordered, numbered and reported; it is not a drug, and a count that silently drops it
+    contradicts the list a reader can see.
+    """
+    return labels.is_equipment_or_supply(name)
+
+
 def _cite_suffix(cite: int | Iterable[int] | None) -> str:
     """The markers this sentence carries, or `""` when the caller has no position.
 
@@ -288,11 +299,38 @@ def medication_narrative(verified: list[dict[str, str]], returned_passages: int,
         return " ".join(sentences)
     if names:
         if dedicated:
-            count = len(names)
+            drug_names = [name for name in names if not _is_equipment_or_supply(name)]
+            supply_names = [name for name in names if _is_equipment_or_supply(name)]
+            if not drug_names:
+                # Nothing here is a prescription. The list is a supply list, and calling
+                # its items medications would name oxygen as a drug.
+                count = len(supply_names)
+                noun = "equipment or supply order" if count == 1 else \
+                    "equipment or supply orders"
+                return (
+                    f"{count} discharge {noun}, as recorded in the discharge note: "
+                    f"{', '.join(supply_names)}{source}."
+                )
+            count = len(drug_names)
             noun = "medication" if count == 1 else "medications"
+            # The count is of DRUGS, and the list the note numbered may hold supplies
+            # beside them. Both facts are stated rather than one being dropped: a record
+            # that numbers home oxygen first and fifteen drugs after it is fifteen
+            # medications and sixteen listed items, and a sentence saying only "15"
+            # invites a reader holding the page to count sixteen.
+            total = len(names)
+            if supply_names:
+                if len(supply_names) == 1:
+                    aside = (f" (plus {supply_names[0]} ordered as equipment/supply, "
+                             f"{total} listed items in total)")
+                else:
+                    aside = (f" (plus {len(supply_names)} equipment/supply orders: "
+                             f"{', '.join(supply_names)}; {total} listed items in total)")
+            else:
+                aside = ""
             return (
-                f"{count} discharge {noun}, as recorded in the discharge note: "
-                f"{', '.join(names)}{source}."
+                f"{count} discharge {noun}{aside}, as recorded in the discharge note: "
+                f"{', '.join(drug_names)}{source}."
             )
         # Direct clinical prose. The sentence used to open with a statement about the
         # NOTE — "The clinical record does not contain a dedicated discharge medications
@@ -583,6 +621,26 @@ def _citable_units(tool_calls: list[dict], evidence_state: Any) -> list[dict]:
     return units
 
 
+def _lab_positions(tool_calls: list[dict], replayed_tool_calls: list[dict],
+                   evidence_state: Any) -> frozenset[int]:
+    """Which marker numbers open a laboratory series, over the array the markers address.
+
+    Built from the same ledger `citation_bound` counts, in the same order — the replayed
+    turns first, then this one — and from the session record when the turn has one, so a
+    position here is the same position a marker carries. The citation owner is given the
+    set rather than the units: what it enforces is one rule about a laboratory panel, and
+    that rule only needs to know which numbers are series.
+    """
+    ledger = citations.EvidenceLedger.of(
+        list(replayed_tool_calls or []), list(tool_calls or []),
+        evidence_state=evidence_state,
+    )
+    return frozenset(
+        position for position, unit in enumerate(ledger.units, start=1)
+        if isinstance(unit, dict) and unit.get("section") == citations.LAB_SECTION
+    )
+
+
 def settle_answer(
     *,
     prose: str | None,
@@ -662,6 +720,12 @@ def settle_answer(
     )
 
     flags: list[str] = []
+    # Which positions in the conversation's array are laboratory SERIES. The citation
+    # owner needs them to apply the one domain rule about a panel: four or more lab
+    # markers on a sentence that names no analyte is an attribution for a statement the
+    # panel cannot support, because no single trajectory says "all of them were normal".
+    lab_positions = _lab_positions(tool_calls or [], replayed_tool_calls or [],
+                                  evidence_state)
     settled_prose: str | None = None
     if prose:
         # The constructs we PRINT first, then the marker VOCABULARY, then the bound. The
@@ -674,7 +738,8 @@ def settle_answer(
         stripped, printed = citations.strip_printed_constructs(prose)
         flags.extend(printed)
         swept = citations.drop_unknown_markers(stripped)
-        settled_prose, found = citations.enforce_citations(swept, bound, pmids)
+        settled_prose, found = citations.enforce_citations(
+            swept, bound, pmids, lab_positions=lab_positions)
         flags.extend(found)
 
     settled_deterministic: str | None = None
@@ -682,7 +747,8 @@ def settle_answer(
         stripped, printed = citations.strip_printed_constructs(deterministic)
         flags.extend(printed)
         swept = citations.drop_unknown_markers(stripped)
-        settled_deterministic, found = citations.enforce_citations(swept, bound, pmids)
+        settled_deterministic, found = citations.enforce_citations(
+            swept, bound, pmids, lab_positions=lab_positions)
         flags.extend(found)
     else:
         settled_deterministic = deterministic
@@ -701,49 +767,6 @@ def settle_answer(
             units=_citable_units(tool_calls or [], evidence_state),
         )
         flags.extend(unplaced)
-
-    # A risk model's own value cited to a laboratory series that never held it. `0.47` is
-    # `top_factors[0].value`; the drawn `monocytes` series reproduces that anchor at the
-    # precision the analyte is REPORTED at, which is one decimal, so the series says `0.5`
-    # (`dev_t4_01` turn 3, 2026-11-11). Both numbers are true of their own source and the
-    # sentence used one to cite the other. After the bound, for the same reason the
-    # discharge filter is: the marker has to resolve before what it opens can be read.
-    if settled_prose:
-        settled_prose, mismatched = risk_lab_citation.filter_risk_value_lab_citations(
-            settled_prose,
-            tool_calls=tool_calls or [],
-            replayed_tool_calls=replayed_tool_calls or [],
-            evidence_state=evidence_state,
-        )
-        flags.extend(mismatched)
-
-    # What the answer asserts about the evidence it cites, three checks with one reason to
-    # be here: the marker has resolved, so what it opens can be compared with the claim.
-    # All three are in `answer_hygiene`, and all three edit attributions rather than prose.
-    if settled_prose:
-        settled_prose, restored = answer_hygiene.restore_chart_acronyms(
-            settled_prose,
-            # This turn's own `/ehr` retrieval. An acronym a replayed turn's passage
-            # defined is still the chart's shorthand, but the passage is no longer in
-            # front of the reader, and inserting a definition for it would be this pass
-            # inventing the chart's vocabulary from a memory of it.
-            passages=_summary_passages(tool_calls or []) if command == "summarize" else (),
-        )
-        flags.extend(restored)
-        settled_prose, overstated = answer_hygiene.strip_absence_claim_citations(
-            settled_prose,
-            tool_calls=tool_calls or [],
-            replayed_tool_calls=replayed_tool_calls or [],
-            evidence_state=evidence_state,
-        )
-        flags.extend(overstated)
-        settled_prose, blanketed = answer_hygiene.strip_blanket_lab_marker_runs(
-            settled_prose,
-            tool_calls=tool_calls or [],
-            replayed_tool_calls=replayed_tool_calls or [],
-            evidence_state=evidence_state,
-        )
-        flags.extend(blanketed)
 
     # The page's numbering, last and separate from the array's. A marker's number is the
     # position of its unit in the conversation's evidence array — cumulative across

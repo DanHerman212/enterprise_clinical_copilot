@@ -633,12 +633,17 @@ def test_a_citation_carries_the_abstract_as_its_excerpt():
 
 
 def test_a_long_abstract_is_an_opening_rather_than_the_whole_record():
-    """The card is 340px wide. A 2,000-character abstract in it would push the page
-    it is hovering over off the screen."""
+    """A structured abstract is served whole up to a bound that reaches its RESULTS.
+
+    The bound was 400 characters, which is the opening of a structured abstract and stops
+    before the section that carries the figures — a 1,866-character abstract was served as
+    its first 394 characters, with the two arms' rates missing and no marker saying a cut
+    had happened (2026-11-12). 2,400 characters covers an abstract PubMed serves in full.
+    """
     long_abstract = "BACKGROUND: Cellulitis is common. " * 200
     citation = literature_citations([{**ARTICLE, "abstract": long_abstract}])[0]
 
-    assert len(citation["excerpt"]) <= 401
+    assert len(citation["excerpt"]) <= 2401
     assert citation["excerpt"].startswith("BACKGROUND: Cellulitis is common.")
     # Marked as an opening: either it lands on a sentence end inside the budget, or the
     # cut is shown with an ellipsis. What it must never be is an unmarked cut, which reads

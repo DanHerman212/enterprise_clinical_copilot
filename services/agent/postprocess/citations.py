@@ -437,6 +437,8 @@ def enforce_citations(
     answer: str,
     slots: int,
     pmids: "Iterable[str]" = (),
+    *,
+    lab_positions: "frozenset[int] | None" = None,
 ) -> tuple[str, list[str]]:
     """Keep the markers that resolve; delete the ones that do not; report the latter.
 
@@ -509,12 +511,72 @@ def enforce_citations(
     out.append(answer[last:])
     kept, collapse_flags = collapse_repeated_citations(
         _tidy_removed_markers("".join(out)))
-    return kept, flags + collapse_flags
+    flags.extend(collapse_flags)
+    if lab_positions:
+        kept, run_flags = strip_panel_wide_lab_runs(kept, lab_positions)
+        flags.extend(run_flags)
+    return kept, flags
 
 
 def _marker_key(body: str) -> str:
     """One marker's identity, compared rather than printed: `1, 2` and `1,2` agree."""
     return ",".join(part.strip() for part in str(body or "").split(","))
+
+
+#: How many laboratory markers on one sentence make a statement about the PANEL rather
+#: than about a value. Two analytes named in a sentence is a sentence; four markers with
+#: no analyte named is a claim no single trajectory makes.
+_PANEL_RUN_MIN = 4
+
+#: The flag a turn records when that run comes off. One spelling, so a counter reads it.
+PANEL_WIDE_LAB_RUN_FLAG = "citation_panel_wide_lab_run_stripped"
+
+
+def strip_panel_wide_lab_runs(
+    answer: str,
+    lab_positions: "frozenset[int]",
+) -> tuple[str, list[str]]:
+    """Laboratory markers taken off a sentence that names no analyte.
+
+    A trajectory passage is one analyte's series. "All laboratory values remained within
+    their respective reference ranges ^[1]^[2]…^[9]." points nine badges at nine series to
+    support a statement none of them makes: the claim is the interpretation of the panel
+    together, and a reader who opens any one badge is shown one value that says nothing
+    about the other eight. The domain rule is that a laboratory marker is
+    analyte-specific, so a sentence that names no analyte has no laboratory citation to
+    make — and a panel-wide statement carries none.
+
+    Unconditional, including on an answer where this is the only sentence. A `/labs`
+    answer is grounded by the drawn table (`lab_evidenced`), not by prose markers, and a
+    turn that keeps nine badges to avoid an empty `sources` list has kept the defect the
+    badges caused.
+
+    Nor does a sentence earn an exemption by naming the analytes. Four or more laboratory
+    markers on ONE sentence is a table written as prose: "RDW 12.8, red cells 4.3, sodium
+    136, creatinine 0.9 and eGFR 101 were all normal ^[5]^[6]^[7]^[8]^[9]" lists five
+    values and cites five series to say each is normal, which is what the drawn panel says
+    without a badge per row. A sentence citing one to three series is a sentence about
+    those values and keeps its markers.
+    """
+    if not answer or not lab_positions:
+        return answer, []
+    pieces: list[str] = []
+    flags: list[str] = []
+    cursor = 0
+    for match in _SENTENCE_RE.finditer(answer):
+        sentence = match.group(0)
+        cited = cited_numbers(sentence)
+        if (len(cited) >= _PANEL_RUN_MIN
+                and all(position in lab_positions for position in cited)):
+            pieces.append(answer[cursor:match.start()])
+            pieces.append(remove_citations(sentence, cited))
+            cursor = match.end()
+            flags.append(PANEL_WIDE_LAB_RUN_FLAG)
+            continue
+    if not flags:
+        return answer, []
+    pieces.append(answer[cursor:])
+    return "".join(pieces), flags
 
 
 def collapse_repeated_citations(answer: str) -> tuple[str, list[str]]:

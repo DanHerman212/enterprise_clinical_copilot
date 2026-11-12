@@ -1,7 +1,10 @@
-"""Stage 8B: the three defects the 2026-11-11 Dev gate exposed, held shut.
+"""Stage 8B: the defects the 2026-11-11 Dev gate exposed that survived Stage 12C.
 
-Two of them are the same failure in two places — a machine token served as if it were
-prose — and the third is a served document losing its paragraph break.
+A machine token served as if it were prose, and a served document losing its paragraph
+break. The third block this module was written for — a post-hoc pass that matched the
+model's own input against a laboratory series and removed the marker — was deleted in
+Stage 12C as a postprocess patch; the prompt rule that keeps an attribution out of a
+cited sentence is pinned in `test_prompt_contract.py`.
 
 `dev_t6_01` turn 3 answered a false premise correctly and then appended the decline object
 as a second paragraph. `graph.read_evidence_reply` only recognises a reply that BEGINS with
@@ -29,11 +32,12 @@ import pytest
 
 from services.agent.engine import graph, prompts
 from services.agent.postprocess import answer as answer_text
-from services.agent.postprocess import citations, discharge_section, risk_lab_citation
-from services.agent.postprocess import evidence_state as session_evidence
+from services.agent.postprocess import citations, discharge_section
 
-HADM = 90000108
 FENCE = "```"
+
+#: The admission the two case studies in this module belong to.
+HADM = 90000108
 
 #: `dev_t6_01` turn 3, verbatim as served, with the object it appended. The answer's own
 #: two sentences are correct; the artefact is what made the item a structural failure.
@@ -45,62 +49,6 @@ T6_ANSWER = (
     "complications ^[1], ^[2]."
 )
 T6_SENTINEL = '{"evidence_found": false}'
-
-#: `dev_t4_01` turn 2, the monocytes trajectory as the tool returned it. One decimal, and
-#: the anchor it reproduces is 0.47 — so the series says 0.5.
-MONOCYTE_SERIES = [0.7, 0.5, 0.5, 0.5, 0.5, 0.6]
-
-#: The model's own inputs for that admission, from `predict_readmission`.
-TOP_FACTORS = [
-    {"feature": "monocytes_min", "contribution": -0.5619, "direction": "decreases",
-     "value": 0.47},
-    {"feature": "rdw_max", "contribution": 0.1172, "direction": "increases",
-     "value": 17.5},
-    {"feature": "sodium_min", "contribution": 0.1125, "direction": "increases",
-     "value": 133},
-]
-
-
-def _prediction() -> dict:
-    return {"hadm_id": HADM, "probability": 0.175919, "threshold": 0.11,
-            "decision": 1, "top_factors": list(TOP_FACTORS)}
-
-
-def _trend(key: str, label: str, unit: str, decimals: int, low: float, high: float,
-           values: list[float]) -> dict:
-    return {"key": key, "label": label, "unit": unit, "decimals": decimals,
-            "reference_low": low, "reference_high": high,
-            "anchored": [], "series": [{"day": float(index), "value": value,
-                                        "flag": "normal"}
-                                       for index, value in enumerate(values)]}
-
-
-def _lab_calls() -> list[dict]:
-    """The three series the failing turn cited, in the order the panel gave them.
-
-    Position 1 is the note passage the same thread retrieved, so RDW is 2, sodium is 3 and
-    monocytes is 4 — the numbering the stored `dev_t4_01` answer carries.
-    """
-    return [
-        {"name": "rag_search_sections", "args": {}, "response": {
-            "hadm_id": HADM,
-            "passages": [{"id": "p-1", "section": "history_of_present_illness",
-                          "text": "Presented with jaundice and weight loss."}],
-        }},
-        {"name": "predict_readmission", "args": {}, "response": _prediction()},
-        {"name": "get_lab_trends", "args": {}, "response": {
-            "hadm_id": HADM, "synthetic": True,
-            "trends": [
-                _trend("rdw", "RDW", "%", 1, 11.5, 14.5,
-                       [12.0, 13.3, 14.2, 15.5, 16.5, 17.5]),
-                _trend("sodium", "Sodium", "mmol/L", 0, 135.0, 145.0,
-                       [137.0, 134.0, 133.0, 134.0, 134.0, 136.0]),
-                _trend("monocytes", "Monocytes", "x10^3/uL", 1, 0.2, 0.8,
-                       MONOCYTE_SERIES),
-            ],
-        }},
-    ]
-
 
 # --------------------------------------------------------------------------------------
 # 1. The sentinel never reaches the prose.
@@ -187,207 +135,6 @@ def test_the_whole_turn_settles_without_the_object_and_with_the_flag():
     assert "evidence_found" not in (settled.prose or "")
     assert "citation_printed_construct:evidence_found" in settled.flags
     assert settled.prose.endswith("complications ^[1], ^[2].")
-
-
-# --------------------------------------------------------------------------------------
-# 2. A risk value is not a laboratory reading.
-# --------------------------------------------------------------------------------------
-
-
-def _record() -> session_evidence.SessionEvidenceState:
-    return session_evidence.SessionEvidenceState.hydrate_from_calls(HADM, _lab_calls())
-
-
-def test_the_array_the_failing_turn_was_numbered_against():
-    """The premise of every test below: RDW 2, sodium 3, monocytes 4."""
-    state = _record()
-
-    sections = [state.items[position].section for position in (2, 3, 4)]
-
-    assert sections == ["rdw", "sodium", "monocytes"]
-
-
-def test_the_risk_value_loses_the_marker_and_the_readings_keep_theirs():
-    """The measured sentences, all four of them, from `dev_t4_01` turn 3."""
-    prose = (
-        "His RDW, which peaked at 17.5% at discharge, is a risk driver that increases his "
-        "readmission probability ^[2]. His sodium level, which reached a nadir of "
-        "133 mmol/L during the stay, is also identified as a risk driver ^[3]. "
-        "Conversely, the model attributes a decrease in risk to his lowest monocyte count "
-        "of 0.47 x10^3/uL ^[4]. The notes do not account for that attribution."
-    )
-
-    out, flags = risk_lab_citation.filter_risk_value_lab_citations(
-        prose, tool_calls=_lab_calls(), evidence_state=_record())
-
-    assert flags == ("risk_value_lab_citation_stripped:^4",)
-    assert "0.47 x10^3/uL." in out, "the marker goes; the value is the model's own input"
-    assert "readmission probability ^[2]." in out
-    assert "as a risk driver ^[3]." in out
-    assert "risk_value_lab_citation_stripped" not in out
-
-
-def test_a_sentence_that_quotes_the_series_keeps_its_marker():
-    """The limit that keeps the rule off correct prose.
-
-    A sentence quoting 0.5 is citing the trajectory it names, so the marker stays — even
-    when the model's own 0.47 sits in the same paragraph.
-    """
-    prose = ("His monocyte count reached its lowest recorded value of "
-             "0.5 x10^3/uL ^[4].")
-
-    out, flags = risk_lab_citation.filter_risk_value_lab_citations(
-        prose, tool_calls=_lab_calls(), evidence_state=_record())
-
-    assert out == prose
-    assert flags == ()
-
-
-def test_a_risk_value_that_the_series_does_hold_keeps_its_marker():
-    """Sodium's `133` is both the model's input and a reading, so nothing is stripped."""
-    prose = "His sodium reached 133 mmol/L ^[3]."
-
-    out, flags = risk_lab_citation.filter_risk_value_lab_citations(
-        prose, tool_calls=_lab_calls(), evidence_state=_record())
-
-    assert out == prose
-    assert flags == ()
-
-
-def test_a_note_passage_marker_is_never_touched():
-    """The rule is about laboratory series only; a note citation is not in its scope."""
-    prose = "He presented with jaundice and weight loss ^[1]."
-
-    out, flags = risk_lab_citation.filter_risk_value_lab_citations(
-        prose, tool_calls=_lab_calls(), evidence_state=_record())
-
-    assert out == prose
-    assert flags == ()
-
-
-def _administrative_calls() -> list[dict]:
-    """The same thread, with a panel whose first position is hemoglobin.
-
-    `oncology_flag` and `prior_inpatient_days` are in `top_factors` because they are in
-    the real payload: the failing admission's estimate is driven mostly by them, and they
-    are the factors whose values are counts rather than measurements.
-    """
-    prediction = _prediction()
-    prediction["top_factors"] = [
-        {"feature": "monocytes_min", "contribution": -0.5619, "direction": "decreases",
-         "value": 0.47},
-        {"feature": "oncology_flag", "contribution": 0.3075, "direction": "increases",
-         "value": 1},
-        {"feature": "prior_inpatient_days", "contribution": -0.2527,
-         "direction": "decreases", "value": 0},
-    ]
-    return [
-        {"name": "predict_readmission", "args": {}, "response": prediction},
-        {"name": "get_lab_trends", "args": {}, "response": {
-            "hadm_id": HADM, "synthetic": True,
-            "trends": [
-                {"key": "hemoglobin", "label": "Hemoglobin", "unit": "g/dL",
-                 "decimals": 1, "reference_low": 12.0, "reference_high": 15.5,
-                 "anchored": ["hemoglobin_min"],
-                 "series": [{"day": 0.0, "value": 11.2}, {"day": 4.0, "value": 6.1},
-                            {"day": 9.0, "value": 10.0}]},
-            ],
-        }},
-    ]
-
-
-def test_a_qualitative_lab_sentence_keeps_its_marker():
-    """No number, so no claim about a value — and no administrative value to match one.
-
-    `oncology_flag` is 1 and `prior_inpatient_days` is 0 in this payload. Read as values,
-    `1` and `0` are numbers any sentence may happen to contain, which is why they are no
-    longer in the comparison set at all.
-    """
-    prose = "His hemoglobin remained low at discharge ^[1]."
-
-    out, flags = risk_lab_citation.filter_risk_value_lab_citations(
-        prose, tool_calls=_administrative_calls(), evidence_state=None)
-
-    assert out == prose
-    assert flags == ()
-
-
-def test_an_administrative_count_is_not_a_risk_value():
-    """The exclusion, where it bites: a sentence quoting a count keeps its marker.
-
-    `1` here is `oncology_flag`'s value and `0` is `prior_inpatient_days`'s. Neither is a
-    measurement, neither is in the hemoglobin series — and if either were read as the
-    model's own input, this sentence would lose a marker it has every right to.
-    """
-    prose = ("He has 1 active oncology diagnosis and 0 prior inpatient days "
-             "this admission ^[1].")
-
-    out, flags = risk_lab_citation.filter_risk_value_lab_citations(
-        prose, tool_calls=_administrative_calls(), evidence_state=None)
-
-    assert out == prose
-    assert flags == ()
-
-
-def test_the_laboratory_factor_still_qualifies():
-    """The restriction narrows the rule; it does not disable it."""
-    prose = ("The model attributes a decrease in risk to his lowest monocyte count of "
-             "0.47 x10^3/uL ^[1].")
-
-    out, flags = risk_lab_citation.filter_risk_value_lab_citations(
-        prose, tool_calls=_administrative_calls(), evidence_state=None)
-
-    assert out == ("The model attributes a decrease in risk to his lowest monocyte "
-                   "count of 0.47 x10^3/uL.")
-    assert flags == ("risk_value_lab_citation_stripped:^1",)
-
-
-def test_a_unit_exponent_is_not_a_quoted_value():
-    """`x10^3` carries a `3`; read as a value it would match any series holding 3."""
-    calls = _administrative_calls()
-    calls[1]["response"]["trends"][0]["series"].append({"day": 5.0, "value": 3.0})
-
-    prose = "His hemoglobin was 6.1 g/dL at its lowest ^[1]."
-
-    out, flags = risk_lab_citation.filter_risk_value_lab_citations(
-        prose, tool_calls=calls, evidence_state=None)
-
-    assert out == prose
-    assert flags == ()
-
-
-def test_a_turn_with_no_estimate_is_left_alone():
-    """No prediction, no risk value, nothing to confuse with a reading."""
-    calls = [call for call in _lab_calls() if call["name"] != "predict_readmission"]
-    prose = "His monocyte count reached its lowest recorded value of 0.47 x10^3/uL ^[3]."
-
-    out, flags = risk_lab_citation.filter_risk_value_lab_citations(
-        prose, tool_calls=calls, evidence_state=None)
-
-    assert out == prose
-    assert flags == ()
-
-
-def test_the_remaining_markers_compact_to_one_through_k():
-    """The point of running before the page is numbered: no gap is left behind."""
-    prose = (
-        "His RDW peaked at 17.5% ^[2]. His sodium reached 133 mmol/L ^[3]. "
-        "The model attributes a decrease in risk to his monocyte count of "
-        "0.47 x10^3/uL ^[4]."
-    )
-
-    settled = answer_text.settle_answer(
-        prose=prose,
-        deterministic=None,
-        tool_calls=[],
-        replayed_tool_calls=_lab_calls(),
-        evidence_state=_record(),
-        command=None,
-    )
-
-    assert "risk_value_lab_citation_stripped:^4" in settled.flags
-    assert citations.cited_numbers(settled.prose) == [1, 2]
-    assert settled.display == {"1": 2, "2": 3}
 
 
 # --------------------------------------------------------------------------------------
@@ -495,11 +242,18 @@ def test_the_hub_forbids_a_mechanism_the_sources_do_not_state():
 
 
 def test_the_risk_spoke_says_a_factor_value_takes_no_marker():
+    """A model `value` is not a reading, and a series never evidences one.
+
+    The second assertion used to pin the rationale for the post-hoc pass that compared a
+    risk value against a laboratory series (`a series rounded to fewer decimals never held
+    a higher-precision model input`). Stage 12C deleted that pass as a postprocess patch;
+    what the prompt must still say is the rule itself, which is that no laboratory marker
+    goes on a sentence quoting the model's own number.
+    """
     text = " ".join(prompts.RISK_SPOKE.split())
 
     assert "take no `^[n]` marker" in text
-    assert ("a series rounded to fewer decimals never held a higher-precision model "
-            "input") in text
+    assert "no laboratory marker belongs on a sentence quoting one" in text
     # The rule is stated without a Dev-set record: the pair that produced it belongs to
     # `dev_t4_01` and shipped its own numbers into a prompt writing about another patient.
     assert "0.47" not in text

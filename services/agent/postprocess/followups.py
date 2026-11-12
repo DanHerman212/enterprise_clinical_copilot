@@ -49,6 +49,7 @@ from typing import Any
 
 from services.agent.postprocess.citations import literature_calls
 from services.agent.routing import routing
+from shared import labels
 from shared.labels import humanize
 
 logger = logging.getLogger(__name__)
@@ -188,7 +189,14 @@ def _sections(state: dict[str, Any]) -> dict[str, str]:
 
 
 def _medication_rows(state: dict[str, Any]) -> list[str]:
-    """The verified drug names an extraction produced, in the order it produced them."""
+    """The verified DRUG names an extraction produced, in the order it produced them.
+
+    Equipment and supplies are excluded here and nowhere else: a chip asking for the
+    dosing and taper schedule of "Home oxygen" is a question with no answer, and the row
+    itself is still verified, counted and reported by `/meds`. The vocabulary is
+    `shared/labels.py`'s, so this module and the narrative cannot disagree about which
+    numbered line is a prescription.
+    """
     payload = state.get("command_payload")
     if not isinstance(payload, dict):
         return []
@@ -196,7 +204,7 @@ def _medication_rows(state: dict[str, Any]) -> list[str]:
     for row in payload.get("medications") or []:
         if isinstance(row, dict):
             name = str(row.get("medication") or "").strip()
-            if name and name not in names:
+            if name and name not in names and not labels.is_equipment_or_supply(name):
                 names.append(name)
     return names
 

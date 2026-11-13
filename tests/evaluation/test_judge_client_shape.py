@@ -14,6 +14,11 @@ Three rules, one per layer:
   * any other non-object reply is an ERROR, so the retry ladder in `judge()` answers it;
   * no evaluator ever assumes a dict, because one unmeasurable item must not stop the
     other twenty-five from being measured.
+
+Sprint 03 moved the transport to GCP's OpenAI-compatible endpoint for `xai/grok-4.7`, so
+the doubles below are shaped like `openai.OpenAI` (`chat.completions.create`) rather than
+like `google.genai` (`models.generate_content`). The rules the file asserts are
+unchanged; what changed is the client they are asserted through.
 """
 
 from __future__ import annotations
@@ -29,22 +34,65 @@ SAMPLE = {"verdict": "PASS", "dimensions": {"fidelity": 3, "grounding": 3, "cita
           "reasoning": "Fine."}
 
 
-class _Reply:
-    def __init__(self, text: str) -> None:
-        self.text = text
+class _Message:
+    def __init__(self, text: str, refusal: str = "") -> None:
+        self.content = text
+        self.refusal = refusal
 
 
-class _Models:
-    def __init__(self, text: str) -> None:
+class _Choice:
+    def __init__(self, text: str, refusal: str = "") -> None:
+        self.message = _Message(text, refusal)
+        self.finish_reason = "stop"
+
+
+class _Usage:
+    def __init__(self, prompt: int = 900, completion: int = 120,
+                 cached: int = 0) -> None:
+        self.prompt_tokens = prompt
+        self.completion_tokens = completion
+        self.prompt_tokens_details = type("D", (), {"cached_tokens": cached})()
+        self.completion_tokens_details = type("D", (), {"reasoning_tokens": 40})()
+
+    def model_dump(self) -> dict:
+        return {"input": self.prompt_tokens, "output": self.completion_tokens,
+                "prompt_tokens_details":
+                    {"cached_tokens": self.prompt_tokens_details.cached_tokens},
+                "completion_tokens_details":
+                    {"reasoning_tokens": 40}}
+
+
+class _Completion:
+    def __init__(self, text: str, usage: _Usage | None = None,
+                 refusal: str = "") -> None:
+        self.choices = [_Choice(text, refusal)]
+        self.usage = usage if usage is not None else _Usage()
+        self.model = "xai/grok-4.7"
+
+
+class _Completions:
+    """The `chat.completions` half of the OpenAI-compatible client."""
+
+    def __init__(self, text: str, seen: dict | None = None) -> None:
         self._text = text
+        self.seen = seen
 
-    def generate_content(self, **_kwargs) -> _Reply:
-        return _Reply(self._text)
+    def create(self, **kwargs) -> _Completion:
+        if self.seen is not None:
+            self.seen.update(kwargs)
+        return _Completion(self._text)
+
+
+class _Chat:
+    def __init__(self, text: str, seen: dict | None = None) -> None:
+        self.completions = _Completions(text, seen)
 
 
 class _Client:
-    def __init__(self, text: str) -> None:
-        self.models = _Models(text)
+    """Shaped like `openai.OpenAI`, because that is what the call is made on."""
+
+    def __init__(self, text: str, seen: dict | None = None) -> None:
+        self.chat = _Chat(text, seen)
 
 
 def _once(text: str) -> dict:
@@ -54,48 +102,88 @@ def _once(text: str) -> dict:
 def test_a_bare_object_is_returned_as_is():
     result = _once(__import__("json").dumps(SAMPLE))
     assert result["verdict"] == "PASS"
+    # The usage travels with the verdict, so a grading can be priced without a second
+    # reading of the trace.
+    assert result["_usage"]["input"] == 900
+    assert result["_usage"]["output"] == 120
+    assert result["_model"] == "xai/grok-4.7"
 
 
-def test_the_judge_call_declares_a_response_schema():
-    """The reply shape is declared, not described in prose.
+def test_the_judge_call_declares_a_strict_json_schema():
+    """The reply shape is declared, not described in prose, and declared strictly.
 
-    `response_mime_type="application/json"` allows any valid JSON, including the array
-    that left `dev_t6_03` unscored on six consecutive attempts. A schema makes it
-    unrepresentable.
+    Constraining the reply to any valid JSON is what left `dev_t6_03` unscored across six
+    attempts: an array is valid JSON. The schema makes it unrepresentable — and on the
+    OpenAI-compatible endpoint `strict: True` is what makes the server enforce it, with
+    `additionalProperties: false` and a complete `required` list on every object node.
     """
-    from google.genai import types
+    wrapper = judge_client.reply_schema()
+    schema = wrapper["schema"]
 
-    schema = judge_client.reply_schema()
-
-    assert schema.type == types.Type.OBJECT
-    assert set(schema.properties) == {"reasoning", "dimensions", "verdict", "flags",
-                                      "reason"}
-    assert "dimensions" in schema.required
-    assert "verdict" in schema.required
-    assert schema.properties["flags"].type == types.Type.ARRAY
-    assert schema.properties["dimensions"].type == types.Type.OBJECT
+    assert wrapper["strict"] is True
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is False
+    assert set(schema["properties"]) == {"reasoning", "dimensions", "verdict",
+                                         "flags", "reason"}
+    assert set(schema["required"]) == set(schema["properties"])
+    dimensions = schema["properties"]["dimensions"]
+    assert dimensions["type"] == "object"
+    assert dimensions["additionalProperties"] is False
+    assert set(dimensions["required"]) == set(dimensions["properties"])
+    assert set(dimensions["properties"]) == {"fidelity", "grounding", "citation",
+                                            "responsiveness", "safety", "context"}
+    assert schema["properties"]["flags"]["type"] == "array"
     # `apply_pass_rule` compares against the exact string "PASS", so the wire has to
     # carry exactly "PASS" or "FAIL". A free string let the model answer "Pass", which
     # the rule read as a failure.
-    assert schema.properties["verdict"].enum == ["PASS", "FAIL"]
+    assert schema["properties"]["verdict"]["enum"] == ["PASS", "FAIL"]
+
+
+def test_every_object_node_is_closed_and_fully_required():
+    """Strict mode is a recursive property, and a single open node fails the request."""
+
+    def walk(node: dict, path: str) -> None:
+        if node.get("type") == "object":
+            assert node.get("additionalProperties") is False, path
+            assert set(node.get("required") or []) == set(node.get("properties") or {}), path
+            for name, child in (node.get("properties") or {}).items():
+                walk(child, f"{path}.{name}")
+
+    walk(judge_client.reply_schema()["schema"], "schema")
 
 
 def test_the_config_passed_to_the_model_carries_the_schema():
     seen: dict = {}
 
-    class _Capturing:
-        def generate_content(self, **kwargs):
-            seen.update(kwargs)
-            return _Reply(__import__("json").dumps(SAMPLE))
+    judge_client._judge_once(_Client(__import__("json").dumps(SAMPLE), seen),
+                             "system", "user")
 
-    class _CapturingClient:
-        models = _Capturing()
+    assert seen["model"] == judge_client.JUDGE_MODEL
+    assert seen["temperature"] == 0
+    assert seen["reasoning_effort"] == judge_client.JUDGE_REASONING_EFFORT
+    assert seen["response_format"]["type"] == "json_schema"
+    assert seen["response_format"]["json_schema"]["strict"] is True
+    roles = [message["role"] for message in seen["messages"]]
+    assert roles == ["system", "user"]
 
-    judge_client._judge_once(_CapturingClient(), "system", "user")
 
-    config = seen["config"]
-    assert config.response_schema is not None
-    assert config.response_mime_type == "application/json"
+def test_a_refusal_is_an_error_not_an_empty_reply():
+    """Strict structured output has a second way to fail: the model declines."""
+
+    class _Refusing(_Completions):
+        def create(self, **kwargs) -> _Completion:
+            return _Completion("", refusal="I cannot evaluate this.")
+
+    class _Chat:
+        completions = _Refusing("")
+
+    class _Client:
+        chat = _Chat()
+
+    result = judge_client._judge_once(_Client(), "system", "user")
+
+    assert "error" in result
+    assert "refused" in result["error"]
 
 
 def test_a_one_element_array_is_rejected_not_unwrapped():

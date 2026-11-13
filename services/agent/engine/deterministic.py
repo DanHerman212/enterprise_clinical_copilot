@@ -61,6 +61,7 @@ from services.agent.postprocess import answer as answer_text
 from services.agent.postprocess import evidence_state as session_evidence
 from shared.labels import humanize
 from services.agent.engine.model import text_of
+from services.agent.engine import gateway
 from services.agent.engine import model as model_gateway
 from services.agent.engine import model as model_turn
 from services.agent.engine import prompts
@@ -726,25 +727,14 @@ RETRY_MAX_SECONDS = 20.0
 
 #: What a capacity refusal looks like in an exception, without importing the provider.
 #:
-#: Duck-typed on purpose: the same refusal arrives from `langchain_google_genai` as
-#: `GoogleRateLimitError`, from `google.genai` as `ClientError` with a 429 status, and from
-#: the transport as a plain server error carrying the phrase. Naming the class would make
-#: this module depend on which of the three raised it.
-_RATE_LIMIT_MARKERS = ("RESOURCE_EXHAUSTED", "RATE LIMIT", "RATELIMIT", "TOO MANY REQUESTS")
-
-
+#: The table moved to `engine/gateway.py`, which is the one module allowed to know how a
+#: provider phrases a refusal: the same question is asked of the judge client and of the
+#: adapter's own callers, and three copies of a marker list is how one of them ends up
+#: missing a phrase. What stays here is the decision — a capacity refusal is retried, and
+#: nothing else is.
 def _rate_limited(exc: BaseException) -> bool:
     """Whether the provider refused this call for capacity rather than for content."""
-    status = getattr(exc, "code", None)
-    if callable(status):
-        try:
-            status = status()
-        except Exception:  # noqa: BLE001 - a code that cannot be read is not a code
-            status = None
-    if status == 429:
-        return True
-    text = f"{type(exc).__name__} {exc}".upper()
-    return any(marker in text for marker in _RATE_LIMIT_MARKERS)
+    return gateway.classify_error(exc) == gateway.CAPACITY
 
 
 async def _pause_before_retry(attempt: int, what: str) -> None:
@@ -2118,6 +2108,13 @@ STRUCTURED_MAX_ATTEMPTS = 2
 #:
 #: Set per call rather than at construction: the client is built once and shared with the
 #: formatting turn, which must keep its thinking.
+#:
+#: These are the DEFAULT provider's spellings, and they are named that rather than hidden:
+#: `_bounded_call` hands them to `engine/gateway.py`, which translates them into whatever
+#: the model serving the call accepts. So this module states what the extraction wants —
+#: think as little as the model allows, and answer in JSON — in the one dialect that was
+#: here before the adapter existed, and the adapter is the only place that decides what
+#: that means for a model that speaks a different one.
 _STRUCTURED_CALL_PARAMS: dict[str, Any] = {
     "thinking_level": "minimal",
     "response_mime_type": "application/json",
@@ -2845,32 +2842,28 @@ COMPARATOR_POOL_SPLIT_THRESHOLD = 1
 
 
 def _bounded_call(llm, params: dict[str, Any]):
-    """The model with extra generation parameters for one call, when it can carry them.
+    """The model with one call's generation parameters bound.
 
-    `bind` is how a LangChain chat model takes per-call generation settings, and the
-    callers that pass a fake model into these functions do not have it. Asking for it and
-    falling back keeps the parameters a property of the real client rather than a
-    requirement every test double has to implement — the same rule `_bounded` follows for
-    the output ceiling, which this is the general form of.
+    The parameters arrive in the *default* provider's spelling — that is what
+    `_STRUCTURED_CALL_PARAMS` is — and the adapter re-expresses them for whichever model
+    is actually serving the call. That indirection is the point: a candidate that rejects
+    a thinking level, or spells "answer in JSON" differently, gets its own spelling without
+    this module learning a single provider fact.
+
+    A client with no `bind` is returned unchanged, which is what keeps a test double usable
+    here without implementing LangChain's binding surface.
     """
-    binder = getattr(llm, "bind", None)
-    if binder is None:
-        return llm
-    return binder(**params)
+    return gateway.bind(llm, params)
 
 
 def _bounded(llm, tokens: int):
     """The model with an explicit output ceiling, when it can carry one.
 
-    `bind` is how a LangChain chat model takes a per-call generation parameter, and the
-    callers that pass a fake model into this function do not have it. Asking for it and
-    falling back keeps the ceiling a property of the real client rather than a requirement
-    every test double has to implement.
+    `max_output_tokens` is the one generation parameter every provider this deployment can
+    reach spells the same way, so it goes through the same binder for consistency rather
+    than because it needs translating.
     """
-    binder = getattr(llm, "bind", None)
-    if binder is None:
-        return llm
-    return binder(max_output_tokens=tokens)
+    return gateway.bind(llm, {"max_output_tokens": tokens})
 
 
 def _reply_rows(payload: dict, pool: list[dict], target: ClinicalTarget,

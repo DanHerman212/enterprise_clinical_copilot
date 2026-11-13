@@ -35,6 +35,7 @@ from services.agent.postprocess import citations
 from services.agent.postprocess import discharge_section
 from services.agent.routing import routing
 from shared import labels
+from shared import model_outcomes
 
 
 NO_EVIDENCE_TEMPLATE = (
@@ -414,28 +415,23 @@ def medication_list_retrieved(tool_calls: list[dict]) -> bool:
     return False
 
 
-#: `prompt_feedback.block_reason` values that mean the prompt was not blocked. Gemini
-#: reports the field on ordinary responses too, so treating any value as a block would
-#: make every turn look withheld.
-_NO_PROMPT_BLOCK = frozenset({"", "BLOCK_REASON_UNSPECIFIED", "UNSPECIFIED",
-                              "BLOCKED_REASON_UNSPECIFIED", "NONE"})
-
-
 def turn_reply_withheld(state: dict) -> bool:
     """Whether the provider took this turn's reply away, read off its own message.
 
-    `reply_withheld` is the rule; this is where the two facts it needs come from. Read
-    from the message's metadata rather than imported from the engine, because
-    `postprocess/` may not import `engine/` and the values are the provider's own.
+    `reply_withheld` is the rule; this is where the facts it needs come from. The
+    interpretation of a provider's metadata lives in `shared.model_outcomes` rather than
+    here, for two reasons: this layer may not import `engine/`, and the same question is
+    asked there about the same message — a second reading of one response is how two
+    layers come to disagree about whether an answer was withheld.
     """
+
     message = _final_message(state)
     if message is None:
         return False
-    metadata = dict(getattr(message, "response_metadata", None) or {})
-    reason = str(metadata.get("finish_reason") or "").upper() or None
-    feedback = metadata.get("prompt_feedback") or {}
-    blocked_reason = str(feedback.get("block_reason") or "").upper()
-    return reply_withheld(reason, blocked=blocked_reason not in _NO_PROMPT_BLOCK)
+    if model_outcomes.is_blocked(message):
+        return True
+    return model_outcomes.is_withheld_reason(
+        model_outcomes.native_reason(message))
 
 
 def reject_model_reply(state: dict) -> None:
@@ -474,15 +470,22 @@ def reject_model_reply(state: dict) -> None:
 def reply_withheld(finish_reason: str | None, *, blocked: bool = False) -> bool:
     """Whether the provider took the model's reply away rather than the model stopping.
 
-    `SAFETY` and a blocked prompt are the two forms measured live, and they are the two
-    this answers for. It is deliberately not every refusal reason: a truncation is the
-    model running out of room, which is a different statement about the turn, and a turn
-    that stopped for an unlisted reason has no reply to explain.
+    A blocked prompt and a withheld reply are the same statement to a reader, and both
+    mean the same thing whatever produced them. Which token a provider writes to say so is
+    `shared.model_outcomes`'s business: it holds the one table, so this rule and the
+    engine's outcome rule cannot drift apart about the same response.
 
-    The reason is read by whoever holds the response; this function is the one place that
-    decides what the reason means, so the two routes cannot disagree about it.
+    It is deliberately not every refusal reason. A truncation is the model running out of
+    room, which is a different statement about the turn, and a turn that stopped for an
+    unlisted reason has no reply to explain.
+
+    The reason arrives as a token rather than as a message because the caller holds one:
+    the command path decides what to serve before the message reaches this layer, and the
+    shared table is what makes one token mean one thing in both places.
     """
-    return blocked or finish_reason == "SAFETY"
+    if blocked:
+        return True
+    return model_outcomes.is_withheld_reason(finish_reason)
 
 
 def silent_turn_sentence(*, outpatient: bool = False) -> str:

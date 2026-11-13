@@ -217,38 +217,71 @@ NCBI_TIMEOUT_SECONDS = positive_int_env("NCBI_TIMEOUT_SECONDS", 10)
 # 3.5 buys three more months of runway (2027-07-21 against 2027-05-07) and costs that.
 GEMINI_MODEL = "gemini-3.1-flash-lite"
 
+# Which model the agent asks for, which is the pin above unless a deployment names
+# another. It is read from the environment rather than pinned because the whole point of
+# the multi-model programme is to run the SAME code against several models and compare;
+# what is pinned is the default, so an unconfigured deployment is exactly the deployment
+# that shipped before this constant existed.
+#
+# A configured value must be a canonical id the adapter knows (see
+# `services/agent/engine/gateway.py`); an id it does not know is served by the default
+# provider profile, which is what happened to every id before the adapter existed. The
+# execution record and `/health` report whichever one answered, so a run can never be
+# attributed to the pin when it was not the pin.
+AGENT_MODEL = (os.environ.get("AGENT_MODEL") or "").strip() or GEMINI_MODEL
+
+# Where each provider's models are reached. The Google family has its own constant above
+# for a measured reason; the partner families are addressed on the global endpoint unless
+# a deployment pins them, because the regional endpoints carry per-region quota that the
+# evaluation harness would then be measuring instead of the model.
+PROVIDER_LOCATIONS = {
+    "google": GEMINI_LOCATION,
+    "anthropic": (os.environ.get("VERTEX_ANTHROPIC_LOCATION") or "").strip() or "global",
+    "meta": (os.environ.get("VERTEX_META_LOCATION") or "").strip() or "global",
+}
+
 # The endpoint the model is reached on is `GEMINI_LOCATION` above, which is not
 # `LOCATION` any more — see the note there. The swap is what forced the split: the
 # pinned model has no regional endpoint in any region checked, and the constant it used
 # to be reached through also names the vector index and the prediction endpoint, which
 # do live in us-east1.
 
-# The JUDGE. A different model from the one under test, reached on a different
-# endpoint, and pinned here for the same reason everything else on this page is pinned.
-#
-# Why it must differ: a judge that loads the agent's own model cannot be relied on to
-# detect a failure mode the two share, so its verdicts would rest on the agent's blind
-# spots and measure agreement with itself. `gemini-2.5-pro` is independent on two axes
-# at once — a different model generation from the pinned `gemini-3.1-flash-lite`, and a
-# higher tier — which is as much separation as one vendor provides. It is not family
-# independence; a model from another vendor would be, and that remains a recorded
-# limitation rather than a claim.
-#
-# Availability was measured rather than assumed (2026-09-30): `gemini-2.5-pro` and
-# `gemini-2.5-flash` answer on the regional endpoint and are NOT_FOUND on the global
-# one, which is the reverse of the pinned model's arrangement. Hence a location
-# constant of its own.
-#
-# Re-measured 2026-10-28: BOTH endpoints answer `gemini-2.5-pro` (a one-token probe
-# returned 200 from each within the same minute), so the 2026-09-30 finding no longer
-# holds. The default is now `global`, because the judge is the one caller that runs
-# several requests in the same second and the regional endpoint's per-region quota is
-# what produced the `429 RESOURCE_EXHAUSTED` rows that blocked the Gate 2 judge passes:
-# a single region's token window is a shared resource, and a global endpoint pools it.
-# `VERTEX_JUDGE_LOCATION` overrides, so a run can be pinned back to a region without a
-# code change — and the constant is read at call time by `judge._judge`'s client.
-JUDGE_MODEL = "gemini-2.5-pro"
+#: The JUDGE. A different model from the one under test, reached on a different
+#: endpoint, and pinned here for the same reason everything else on this page is pinned.
+#:
+#: Why it must differ: a judge that loads the agent's own model cannot be relied on to
+#: detect a failure mode the two share, so its verdicts would rest on the agent's blind
+#: spots and measure agreement with itself. Until Sprint 03 the judge was
+#: `gemini-2.5-pro` — a different generation and a higher tier than the pinned
+#: `gemini-3.1-flash-lite`, which is as much separation as one vendor provides, and not
+#: family independence. That limitation is now closed: the judge is `xai/grok-4.7`, which
+#: shares no vendor or model family with any arm of the roster (`gemini-3.8-flash`,
+#: `gemini-3.1-pro`, `muse-spark-1.3`, `claude-sonnet-5-5`), so a Grading candidate
+#: cannot be graded by its own family (SCAR-19).
+#:
+#: Availability was measured rather than assumed, twice. On 2026-09-30 `gemini-2.5-pro`
+#: answered on the regional endpoint and was NOT_FOUND on the global one; re-measured
+#: 2026-10-28, both answered, and the default moved to `global` because the judge is the
+#: one caller that issues several requests in the same second and a global endpoint pools
+#: the per-region quota that produced the `429 RESOURCE_EXHAUSTED` rows blocking Gate 2.
+#: `xai/grok-4.7` is reached through GCP's OpenAI-compatible MaaS endpoint, which is why
+#: the location matters to the URL as well as to the quota: `global` and a region build
+#: different hostnames (`judge_call.endpoint_url`).
+#:
+#: `VERTEX_JUDGE_LOCATION` overrides the location without a code change. The client reads
+#: both at call time, so a run can be re-pinned to a region for one experiment.
+JUDGE_MODEL = "xai/grok-4.7"
 JUDGE_LOCATION = os.environ.get("VERTEX_JUDGE_LOCATION") or "global"
+
+#: How hard the judge thinks before answering. Grok on GCP defaults to `"high"` when the
+#: field is omitted, and the endpoint's output-token ceiling (21,000 OTPM at `global`) is
+#: what bounds a grading pass, not the 150-second per-attempt timer: at `high` the
+#: reasoning alone can hold a call open past the ceiling, and a retry then lands inside
+#: the same window. `medium` is enough for a rubric that asks for six integers and two
+#: short prose fields, and it keeps the OTPM budget spread across the run's concurrency.
+#: A level, not a token budget, exactly like `GEMINI_REASONING_EFFORT` above: what
+#: thinking spends is known only afterwards.
+JUDGE_REASONING_EFFORT = (os.environ.get("JUDGE_REASONING_EFFORT") or "").strip() or "medium"
 
 # Thinking and the answer share this allowance, and the model stops when it runs out
 # without raising: the call returns 200 with empty text and finish_reason=MAX_TOKENS.

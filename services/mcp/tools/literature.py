@@ -186,6 +186,82 @@ def _text(node: ElementTree.Element | None) -> str:
     return " ".join("".join(node.itertext()).split())
 
 
+#: What a record's title says when the record has one. Every entry is a string that
+#: carries no information about the paper, so serving one tells the reader the journal
+#: published a record and nothing else.
+_TITLE_PLACEHOLDERS = frozenset({
+    "", "not available", "not available]", "no title", "untitled", "untitled article",
+    "n/a", "na", "none", "title not available", "no title available",
+})
+
+#: Served when a record states no usable title in either field. A clean label rather than a
+#: placeholder that leaked out of the XML: the record is real, the article is linkable by
+#: its PMID, and "Untitled article" says exactly what is missing without pretending the
+#: journal printed the words "Not Available".
+UNTITLED_ARTICLE = "Untitled article"
+
+
+def _strip_title_brackets(text: str) -> str:
+    """One title, with the brackets PubMed wraps a translated title in removed.
+
+    PubMed states a non-English article's title in the original language inside square
+    brackets: `[Cervical spondylotic myelopathy].` The brackets are markup — they say
+    "this is a translation" — and the trailing full stop belongs to the title, not to the
+    markup, so it survives.
+
+    Matched PAIRS only. A lone leading `[` or a trailing `]` with no partner is left
+    exactly as the record wrote it: the first version of this stripped the opening bracket
+    unconditionally, and `[Not Available].` came out as `Not Available].` — a string that
+    is neither the record's title nor a clean label, and that no reader can interpret.
+    Trailing punctuation is peeled off before the pair is tested and restored afterwards
+    for the same reason.
+    """
+    body = " ".join(str(text or "").split())
+    if not body:
+        return ""
+    trailing = ""
+    while body and body[-1] in ".!?,;:":
+        trailing = body[-1] + trailing
+        body = body[:-1].rstrip()
+    if len(body) >= 2 and body.startswith("[") and body.endswith("]"):
+        inner = body[1:-1].strip()
+        if inner:
+            return inner + trailing
+    return body + trailing
+
+
+def _is_placeholder_title(text: str) -> bool:
+    """Whether a title carries no information about the paper.
+
+    Checked on the de-bracketed, punctuation-stripped form, so `[Not Available].`,
+    `Not Available` and `not available` are one case rather than three.
+    """
+    core = _strip_title_brackets(text).strip().rstrip(".!?,;: ").strip().lower()
+    return core in _TITLE_PLACEHOLDERS
+
+
+def _title(article: ElementTree.Element) -> str:
+    """The article's title, from the record's preferred field and then its fallback.
+
+    `<ArticleTitle>` is what the journal published. For a non-English article it is
+    sometimes the literal string `[Not Available].` with the real title in
+    `<VernacularTitle>` — PubMed's own placeholder, not a failure of the request. Serving
+    the placeholder puts the words "Not Available" in a reference drawer above an abstract
+    that is present, and on 2026-11-12 it also produced a citation pill labelled from it.
+
+    So the fallback order is ArticleTitle, then VernacularTitle, and then a clean label.
+    Order matters: a bracketed translated title in ArticleTitle is REAL (it is the paper's
+    title in its own language) and outranks the English rendering in VernacularTitle, which
+    is why the placeholder test runs before the fallback rather than the bracket strip
+    doing the choosing.
+    """
+    for path in (".//Article/ArticleTitle", ".//Article/VernacularTitle"):
+        candidate = _strip_title_brackets(_text(article.find(path)))
+        if not _is_placeholder_title(candidate):
+            return candidate
+    return UNTITLED_ARTICLE
+
+
 def _pub_date(article: ElementTree.Element) -> str:
     """Publication date as the record states it, or empty.
 
@@ -290,7 +366,10 @@ def _articles(root: ElementTree.Element) -> list[dict[str, str]]:
         )
         articles.append({
             "pmid": pmid,
-            "title": _text(node.find(".//Article/ArticleTitle")),
+            # Never the record's placeholder: see `_title`. An article with no usable
+            # title in either field is labelled, not left empty, so the contract check
+            # below still sees a string.
+            "title": _title(node),
             "journal": journal,
             # The compact form a citation uses and a pill prints — `JAMA Netw Open`,
             # `N Engl J Med`, `Spine`. Carried beside the title rather than derived from

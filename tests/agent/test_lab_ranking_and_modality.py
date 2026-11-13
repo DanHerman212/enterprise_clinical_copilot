@@ -104,14 +104,22 @@ def test_a_quota_retry_waits_past_the_rolling_window(monkeypatch, capsys):
     """
     from evaluation.platform import judge_client
 
-    class _Models:
-        def generate_content(self, **kwargs):
+    # Shaped like `openai.OpenAI`, because that is the client `judge_client.judge` calls
+    # on since Sprint 03: the judge is `xai/grok-4.7` on GCP's OpenAI-compatible endpoint,
+    # not `google.genai`. The double's only job is to raise a quota error, and the
+    # assertions below are unchanged — including the `quota_metric` string, which is the
+    # error body the ladder has to print whole.
+    class _Completions:
+        def create(self, **kwargs):
             raise RuntimeError(
                 "429 RESOURCE_EXHAUSTED quota_metric="
                 "GenerateContentInputTokensPerModelPerMinute")
 
+    class _Chat:
+        completions = _Completions()
+
     class _Client:
-        models = _Models()
+        chat = _Chat()
 
     waits: list[int] = []
     monkeypatch.setattr(judge_client.time, "sleep",

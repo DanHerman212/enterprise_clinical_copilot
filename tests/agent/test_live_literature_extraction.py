@@ -429,7 +429,8 @@ def test_the_extraction_client_is_temperature_zero():
     """Both extraction calls share the formatting client, which is pinned at zero."""
     import inspect
 
-    assert "temperature=0" in inspect.getsource(model_gateway._client)
+    assert "temperature=0" in inspect.getsource(
+        model_gateway.gateway._google_client)
 
 
 def test_the_extraction_client_turns_the_consumer_filters_off():

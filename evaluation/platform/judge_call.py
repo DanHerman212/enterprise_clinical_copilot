@@ -15,13 +15,118 @@ call moved to `judge_client.py`.
 from __future__ import annotations
 
 import json
+import os
+import threading
+import time
 from pathlib import Path
 from typing import Any, Callable
 
+import google.auth
+import google.auth.transport.requests
+
 from evaluation.platform import judge_client
+from services.mcp.config import JUDGE_LOCATION, PROJECT
 
 #: The canonical clinical grading rubric. Top-level, shared, and read once.
 RUBRIC = (Path(__file__).resolve().parents[1] / "rubric.md").read_text()
+
+
+# --- The GCP OpenAI-compatible endpoint ---------------------------------------------
+#
+# `xai/grok-4.7` is served on Vertex AI's MaaS endpoint, not on `generateContent`. The
+# hostname is a function of the location, and the three cases are not interchangeable:
+#
+#   * `global` pools quota across a multi-region pool and is the default;
+#   * `us` and `eu` are multi-region pools with their own `rep.` hostnames;
+#   * a single region is its own hostname prefix.
+#
+# Built here rather than in `judge_client` because this module owns the transport: the
+# client, its address and its credentials. `judge_client` owns the call and its bounds.
+
+_TOKEN_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
+
+#: How long before expiry a cached token stops being reused. A token is valid for an hour
+#: and a full census runs for nearly three, so a token captured once at run start is the
+#: defect this margin prevents: the call fails mid-run with a 401 that reads like a
+#: permission problem rather than an expired clock.
+_TOKEN_REFRESH_MARGIN_SECONDS = 300
+
+#: The lifetime assumed when the credentials library reports no expiry. Google's own
+#: guidance is to cache for a short window and re-request, so a missing expiry is treated
+#: as a soon-to-expire token rather than a permanent one.
+_FALLBACK_TOKEN_LIFETIME_SECONDS = 600
+
+_token_lock = threading.Lock()
+_token_cache: dict[str, Any] = {"token": "", "expires_at": 0.0}
+
+
+def endpoint_url(project: str | None = None, location: str | None = None) -> str:
+    """The OpenAI-compatible base URL for this project and location.
+
+    Trailing path included: the SDK appends `/chat/completions`, and the MaaS endpoint's
+    root is `.../endpoints/openapi` rather than `/v1`.
+    """
+    place = (location or JUDGE_LOCATION or "global").strip() or "global"
+    if place == "global":
+        host = "https://aiplatform.googleapis.com"
+    elif place in ("us", "eu"):
+        host = f"https://aiplatform.{place}.rep.googleapis.com"
+    else:
+        host = f"https://{place}-aiplatform.googleapis.com"
+    return (f"{host}/v1/projects/{project or PROJECT}/locations/{place}"
+            "/endpoints/openapi")
+
+
+def access_token() -> str:
+    """A Cloud-platform bearer token, refreshed on demand rather than captured once.
+
+    Passed to the OpenAI client as a CALLABLE, so every request asks for the current
+    token. A string captured at import expires after sixty minutes and turns a three-hour
+    run's grading into 401s that look like an IAM failure.
+    """
+    with _token_lock:
+        now = time.time()
+        if _token_cache["token"] and now < _token_cache["expires_at"]:
+            return str(_token_cache["token"])
+        credentials, _project = google.auth.default(scopes=[_TOKEN_SCOPE])
+        credentials.refresh(google.auth.transport.requests.Request())
+        token = str(getattr(credentials, "token", "") or "")
+        if not token:
+            raise RuntimeError(
+                "google.auth returned no access token; the judging client cannot "
+                "authenticate to the Vertex OpenAI-compatible endpoint"
+            )
+        expiry = getattr(credentials, "expiry", None)
+        expires_at = now + _FALLBACK_TOKEN_LIFETIME_SECONDS
+        if expiry is not None:
+            try:
+                expires_at = float(expiry.timestamp())
+            except (AttributeError, TypeError, ValueError, OSError):
+                expires_at = now + _FALLBACK_TOKEN_LIFETIME_SECONDS
+        _token_cache["token"] = token
+        _token_cache["expires_at"] = expires_at - _TOKEN_REFRESH_MARGIN_SECONDS
+        return token
+
+
+def judge_client_instance() -> Any:
+    """The OpenAI-compatible client, addressed at this deployment's judge endpoint.
+
+    `max_retries=0` because the retry ladder is `judge_client.judge`'s: the SDK's own
+    backoff would multiply with it, and a 429 the ladder is timing out deliberately is
+    not a 429 the transport should silently absorb. The socket timeout is deliberately
+    longer than the per-attempt ceiling so the ceiling is what fires first — otherwise a
+    slow call is reported as a transport error rather than as a timeout, and the ladder
+    treats those two differently on purpose.
+    """
+    from openai import OpenAI  # noqa: PLC0415 — heavy import, needed only here
+
+    return OpenAI(
+        base_url=endpoint_url(),
+        api_key=access_token,          # a callable, refreshed per request
+        max_retries=0,
+        timeout=judge_client.judge_timeout_seconds() + 30,
+    )
+
 
 
 MANIFEST_RULES = (
@@ -292,11 +397,7 @@ def make_judge_fn(client_factory: Callable[[], Any] | None = None) -> Callable[.
             if client_factory is not None:
                 cached["client"] = client_factory()
             else:
-                from google import genai  # noqa: PLC0415 — heavy import, needed only here
-
-                cached["client"] = genai.Client(
-                    vertexai=True, project=judge_client.PROJECT,
-                    location=judge_client.JUDGE_LOCATION)
+                cached["client"] = judge_client_instance()
         return cached["client"]
 
     def judge_fn(*, input: dict[str, Any], output: dict[str, Any],

@@ -553,13 +553,21 @@ import logging
 import os
 from collections.abc import Iterable, Mapping, Sequence
 
-from services.mcp.config import GEMINI_MODEL
+from services.mcp.config import AGENT_MODEL
 
 logger = logging.getLogger(__name__)
 
-# The chain's model. Imported rather than redefined so there is exactly one
-# place the string lives; this name is what the rest of the chain reads.
-MODEL_ID = GEMINI_MODEL
+# The chain's model: the one this deployment is configured to ask for. Imported rather than
+# redefined so there is exactly one place the string lives; this name is what the rest of
+# the chain reads, and it is what `/health` reports and what every execution record is
+# attributed to.
+#
+# It is `AGENT_MODEL` rather than the pin because the deployment can be pointed at another
+# model, and a record that named the pin while another model answered would be a false
+# attribution — the one failure an evaluation programme cannot survive. With `AGENT_MODEL`
+# unset it IS the pin, so an unconfigured deployment reports exactly what it reported
+# before this line.
+MODEL_ID = AGENT_MODEL
 
 
 def resolve_code_revision(env: Mapping[str, str] | None = None) -> str:

@@ -651,31 +651,51 @@ def _conclude(
     if not body:
         return [], ["citation_out_of_range:^[]"]
     # A record identifier, in either form the model writes it: the labelled
-    # `^[PMID: 35186616]`, or the bare `^[35186616]` it produces when it has been told
-    # twice not to label one. Both name the same record, so both resolve the same way.
+    # `^[PMID: 35186616]`, or the bare form it produces when it has been told twice not to
+    # label one. The bare form is handled BELOW, in the numeric branch, and that is the
+    # point of this note: it used to be handled here, and "handled" meant kept exactly as
+    # written.
     if _PMID_LIST_BODY_RE.fullmatch(body):
         return _conclude_pmids(body, allowed)
     if not _NUMERIC_BODY_RE.fullmatch(body):
         # A section name or other invention: `_drop_unknown_markers` decides its fate.
         return None
 
-    def resolves(number: int) -> bool:
-        return 1 <= number <= limit or str(number) in allowed
-
-    numbers = _expand_citations(body)
-    valid: list[int] = []
+    numbers = list(dict.fromkeys(_expand_citations(body)))
+    emitted: list[int | str] = []
+    flags: list[str] = []
     for number in numbers:
-        if resolves(number) and number not in valid:
-            valid.append(number)
-    missing = [n for n in dict.fromkeys(numbers) if not resolves(n)]
-    flags = [f"citation_out_of_range:^{n}" for n in missing]
-    if len(numbers) == 1:
-        # One number, and it resolves: the marker is already correct, so it is left
-        # byte-for-byte. Anything else here would rewrite a good citation.
-        return (None if valid else ([], flags))
+        if 1 <= number <= limit:
+            # A position in the conversation's evidence, which is what a bare number
+            # means to every reader of this answer.
+            emitted.append(number)
+        elif str(number) in allowed:
+            # An identifier written without its label. It resolves — the number names a
+            # record this turn retrieved — but it is written back WITH the label, because
+            # a bare eight-digit number between `^[` and `]` is a POSITION to every layer
+            # downstream: `presentation.resolve_sources` looks it up as a passage index,
+            # finds nothing at 36208893, and publishes a "not available" note row in its
+            # place. Measured live on 2026-11-12, on `/pubmed cervical spondylosis`: three
+            # PMIDs became three phantom Clinical Note rows at 36208893/39320076/40591976,
+            # the three real records were pushed to 40591977–40591979, and the prose
+            # carried four pills labelled "Not Available". Leaving a valid identifier in
+            # the shape nothing can resolve is not leniency; it is the defect.
+            emitted.append(f"PMID: {number}")
+        else:
+            flags.append(f"citation_out_of_range:^{number}")
+    if len(numbers) == 1 and emitted == numbers:
+        # One number, a real position, and it resolves: the marker is already correct, so
+        # it is left byte-for-byte. Anything else here would rewrite a good citation.
+        #
+        # `None`, not `(None, …)`: the caller tests `conclusion is None`, and a tuple
+        # holding None is read as "emit nothing", which deletes the marker. That shape was
+        # in this function until 2026-11-12 and survived because the branch it guards is
+        # reached constantly and every delete looked like the bound doing its job.
+        return None
     # A cluster is expanded whether or not any of it is out of range: one number per
-    # marker is the only shape the browser can turn into a control.
-    return valid, flags
+    # marker is the only shape the browser can turn into a control. A single number is
+    # returned as a one-element list when it was rewritten or dropped.
+    return emitted, flags
 
 
 def _conclude_pmids(body: str, allowed: "set[str]") -> "tuple[list[str], list[str]] | None":

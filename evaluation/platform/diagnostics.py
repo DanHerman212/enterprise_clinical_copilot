@@ -128,6 +128,42 @@ def record(*, input: dict[str, Any], output: dict[str, Any],
         "judge_comment": str(result.get("reasoning") or result.get("reason") or ""),
         "samples": result.get("_samples"),
         "trace_ids": (output or {}).get("turn_trace_ids") or [],
+        # What the grading call cost, as the provider reported it. Kept on this line
+        # because it is a property of the judgement above it: a retried judge was paid
+        # for every attempt, so `_usage` is the merged total and `_attempts` says how
+        # many calls that total covers.
+        "judge_model": result.get("_model"),
+        "judge_usage": result.get("_usage"),
+        "judge_attempts": result.get("_attempts"),
+    }
+    line = json.dumps(entry, ensure_ascii=False, default=str)
+    with _LOCK:
+        with sink.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+
+
+def record_cost(item_id: str, *, agent: dict[str, Any] | None,
+                judge: dict[str, Any] | None = None) -> None:
+    """Append the priced half of one item: what the AGENT's generations cost.
+
+    A second line rather than more fields on the judged one, because the two are learned
+    at different times: the verdict exists the moment the judge answers, and the agent's
+    token usage does not exist until its traces have been read back. Writing them on one
+    line would mean holding every judged item in memory until the run ends.
+
+    `reason: "cost"` is what a reader filters on, and it is the only line shape in this
+    file with no `turns`. `None` values mean unattributed — a trace that could not be
+    read, or a model this package cannot price — and are written as JSON `null` rather
+    than dropped, so "we did not measure it" and "it cost nothing" stay distinguishable.
+    """
+    sink = _SINK
+    if sink is None:
+        return
+    entry = {
+        "item_id": item_id,
+        "reason": "cost",
+        "agent": agent or {},
+        "judge": judge or {},
     }
     line = json.dumps(entry, ensure_ascii=False, default=str)
     with _LOCK:

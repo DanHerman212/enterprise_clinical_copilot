@@ -82,13 +82,17 @@ def test_the_layer4_runtime_does_not_import_the_training_package_either():
 # --- the Phase 7 manifest ---------------------------------------------------
 #
 # Pinned as an exact frozenset of relative paths rather than a count: a count says
-# something changed, the set says what. The tree is 26 files — 7 `__init__.py`,
-# `turn.py`, and 18 subpackage modules — with no compatibility shims at the root.
+# something changed, the set says what. The tree is 27 files — 7 `__init__.py`,
+# `turn.py`, and 19 subpackage modules — with no compatibility shims at the root.
+#
+# `engine/gateway.py` joined the tree in Sprint 01: it is the one module allowed to import
+# a provider SDK, which is what keeps that import out of the other eighteen.
 AGENT_MODULES = frozenset({
     '__init__.py',
     'turn.py',
     'engine/__init__.py',
     'engine/deterministic.py',
+    'engine/gateway.py',
     'engine/graph.py',
     'engine/mcp_client.py',
     'engine/model.py',

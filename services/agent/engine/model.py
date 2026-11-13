@@ -21,19 +21,15 @@ name they replace.
 
 
 from langchain_core.messages import AIMessage, AIMessageChunk
-from langchain_google_genai import ChatGoogleGenerativeAI
 
+from services.agent.engine import gateway
 from services.agent.postprocess import answer
 from services.agent.telemetry import stages
 from services.agent.telemetry.stages import emit
-from services.mcp.config import (
-    GEMINI_LOCATION,
-    GEMINI_MAX_OUTPUT_TOKENS,
-    GEMINI_REASONING_EFFORT,
-    GEMINI_SAFETY_THRESHOLDS,
-    PROJECT,
-)
-from services.mcp.runtime import timeout_chain
+# Re-exported because the rest of the service reads it here and because it is the value
+# `build_llm` produces for the served path; the adapter owns the choice.
+from services.mcp.config import GEMINI_REASONING_EFFORT  # noqa: F401
+from shared import model_outcomes
 
 # One model call, bounded. The bound is part of the chain `timeout_chain`
 # enforces at startup — model < tool < ask < the proxy's own limit — and it is set
@@ -42,7 +38,7 @@ from services.mcp.runtime import timeout_chain
 # like a slow answer, and with no timeout at all the SDK's retry-on-timeout can
 # never fire, so the retry policy would be inert for the one failure it is most
 # needed for.
-MODEL_TIMEOUT_SECONDS = timeout_chain().model
+MODEL_TIMEOUT_SECONDS = gateway.MODEL_TIMEOUT_SECONDS
 
 #: How many times the SDK retries one model call before the failure is ours.
 #:
@@ -56,12 +52,19 @@ MODEL_TIMEOUT_SECONDS = timeout_chain().model
 #: google-api-core retry layer, which backs off on 429 and 503 and not on 4xx). This
 #: module's job is to state the bound and to make sure it is passed — see
 #: `tests/agent/test_model_bounds.py`, which reads it back off the constructed client.
-MODEL_MAX_RETRIES = 3
+MODEL_MAX_RETRIES = gateway.MODEL_MAX_RETRIES
 
 
-def build_llm(model: str) -> ChatGoogleGenerativeAI:
-    """The chat model, bound to the Vertex backend with our generation config."""
-    return _client(model, GEMINI_SAFETY_THRESHOLDS)
+def build_llm(model: str):
+    """The chat model for the served path, from the adapter.
+
+    The adapter decides which provider serves an id, what that provider's endpoint and
+    credentials are, and which parameters it accepts. This module keeps the name because
+    eleven tests patch `graph._build_llm` and `deterministic.py` resolves it from there.
+    """
+    return gateway.chat_model(
+        model, safety_profile=gateway.SAFETY_SERVED, effort=gateway.EFFORT_SERVED,
+    )
 
 
 #: Every configurable content filter off, for the extraction turns only.
@@ -81,12 +84,7 @@ def build_llm(model: str) -> ChatGoogleGenerativeAI:
 #:
 #: Two categories are not configurable and still apply, so this is not an off switch for
 #: everything.
-CLINICAL_SAFETY_SETTINGS = {
-    "HARM_CATEGORY_HATE_SPEECH": "BLOCK_NONE",
-    "HARM_CATEGORY_HARASSMENT": "BLOCK_NONE",
-    "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_NONE",
-    "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_NONE",
-}
+CLINICAL_SAFETY_SETTINGS = gateway.CLINICAL_SAFETY_SETTINGS
 
 
 #: The reasoning level the structured EXTRACTION calls run at.
@@ -101,10 +99,10 @@ CLINICAL_SAFETY_SETTINGS = {
 #: So the effort is a property of the JOB, passed at construction, and the served path
 #: keeps `GEMINI_REASONING_EFFORT`: a clinician's answer is the one place the thinking is
 #: doing work the reader will read.
-EXTRACTION_REASONING_EFFORT = "low"
+EXTRACTION_REASONING_EFFORT = gateway.EXTRACTION_REASONING_EFFORT
 
 
-def build_extraction_llm(model: str) -> ChatGoogleGenerativeAI:
+def build_extraction_llm(model: str):
     """The chat model for structured extraction over clinical text.
 
     Same client, same generation config, different content-filter thresholds — the only
@@ -115,44 +113,14 @@ def build_extraction_llm(model: str) -> ChatGoogleGenerativeAI:
     The reasoning level is the second difference, and it is passed here rather than by the
     callers for the same reason: the two extraction steps are inside `deterministic.py`
     and neither should have to remember which effort its job wants.
+
+    Which parameter expresses "low effort" is the adapter's answer, not this module's: one
+    candidate rejects the level its siblings require, and the mapping from the job to the
+    provider's spelling belongs in the one place that knows the provider.
     """
-    return _client(model, CLINICAL_SAFETY_SETTINGS,
-                   reasoning_effort=EXTRACTION_REASONING_EFFORT)
-
-
-def _client(model: str, safety_settings: dict, *,
-            reasoning_effort: str = GEMINI_REASONING_EFFORT) -> ChatGoogleGenerativeAI:
-    """One construction, so the two thresholds cannot diverge in anything else."""
-    return ChatGoogleGenerativeAI(
-        model=model,
-        project=PROJECT,
-        # The model's endpoint, not the project's region: the pinned model has no
-        # regional endpoint, and `LOCATION` also names the vector index and the
-        # prediction endpoint, which do. See the note on `GEMINI_LOCATION`.
-        location=GEMINI_LOCATION,
-        vertexai=True,
-        temperature=0,
-        # The allowance covers thinking AND the answer. Too small and the model
-        # spends it all on thoughts, returns finish_reason=MAX_TOKENS with empty
-        # text, and raises nothing — which in a graph looks like a silently
-        # skipped tool call. See §9.
-        max_output_tokens=GEMINI_MAX_OUTPUT_TOKENS,
-        # ...so thinking is bounded separately rather than left to take what it
-        # likes from that allowance. A level bounds effort rather than tokens, so
-        # what it will spend is only known afterwards; `GEMINI_REASONING_EFFORT`
-        # carries the measurements. The pin and this parameter move together: the
-        # 2.5 family rejects a level outright, and the 3.x family deprecates the
-        # budget, so there is no value both accept.
-        reasoning_effort=reasoning_effort,
-        max_retries=MODEL_MAX_RETRIES,
-        timeout=MODEL_TIMEOUT_SECONDS,
-        # The content filters are set explicitly, per category, rather than left to
-        # the model's default — which differs between models, and is `OFF` on the
-        # ones this pin is due to move to. What is set here is what applies; there
-        # is no other place content filtering is configured. Which thresholds arrive
-        # is the caller's: `build_llm` passes the product control, and
-        # `build_extraction_llm` passes the clinical one.
-        safety_settings=dict(safety_settings),
+    return gateway.chat_model(
+        model, safety_profile=gateway.SAFETY_EXTRACTION,
+        effort=gateway.EFFORT_EXTRACTION,
     )
 
 
@@ -213,6 +181,12 @@ async def streamed_turn(llm, messages, on_event) -> AIMessage:
     if turn is None:
         raise RuntimeError("the model returned no chunks")
 
+    # The settled turn carries the neutral outcome before anyone reads it. A streamed turn
+    # arrives as fragments and the metadata a provider reports the reason in is on the last
+    # of them, so this is the one place the whole turn exists — stamping here means the
+    # streaming path and the blocking path are read by the same rules.
+    gateway.stamp(turn)
+
     # Deliberation is never announced: not its held prefix, not the paragraph it wrote
     # first. The turn is a routing turn, so none of it is the answer.
     if not has_tool_call(turn):
@@ -250,30 +224,13 @@ async def streamed_turn(llm, messages, on_event) -> AIMessage:
 
 from typing import Any
 
-# What happened to the turn, in the terms a caller cares about.
+# What happened to the turn, in the terms a caller cares about. These four words are this
+# module's public vocabulary and the execution record's; the neutral vocabulary they are
+# derived from is `shared.model_outcomes`, which is what the code below actually reads.
 OK = "ok"
 TRUNCATED = "truncated"
 REFUSED = "refused"
 UNKNOWN = "unknown"
-
-# A decision rather than a failure: these cannot be fixed by trying again.
-# From Google's finish-reason table for the Gemini API.
-_REFUSALS = frozenset({
-    "SAFETY",
-    "RECITATION",
-    "SPII",
-    "PROHIBITED_CONTENT",
-    "BLOCKLIST",
-    "IMAGE_SAFETY",
-})
-
-# The allowance ran out — thinking and answer share it on a reasoning model.
-_TRUNCATIONS = frozenset({"MAX_TOKENS", "UNKNOWN_0"})
-
-# A prompt that was not blocked reports no block reason. 0 is
-# BLOCK_REASON_UNSPECIFIED, which means "not blocked" rather than "blocked for an
-# unstated reason", so it must not be treated as a refusal.
-_NO_BLOCK = (0, None, "", "BLOCK_REASON_UNSPECIFIED")
 
 # The sentence a caller sees when nothing can be said about the turn.
 UNKNOWN_SENTENCE = "The agent did not produce an answer. Please retry."
@@ -288,24 +245,23 @@ def metadata(message: Any) -> dict:
 
 
 def finish_reason(message: Any) -> str | None:
-    """The model's own reason for stopping, upper-cased, or None if unreported."""
-    reason = metadata(message).get("finish_reason")
-    return str(reason).upper() if reason else None
+    """The model's own reason for stopping, upper-cased, or None if unreported.
+
+    Which key holds it is the provider's business and is decided in
+    `shared.model_outcomes`, which reads every shape a reason arrives in. This function is
+    the name the rest of the service calls.
+    """
+    return model_outcomes.native_reason(message)
 
 
 def blocked_reason(message: Any) -> str | None:
     """Why the prompt was blocked, or None when the prompt reached the model."""
-    feedback = metadata(message).get("prompt_feedback") or {}
-    reason = feedback.get("block_reason")
-    if reason in _NO_BLOCK:
-        return None
-    return str(reason)
+    return model_outcomes.prompt_block_reason(message)
 
 
 def safety_ratings(message: Any) -> list[dict]:
-    """The per-category scores the model returned, when it returned any."""
-    ratings = metadata(message).get("safety_ratings")
-    return list(ratings) if isinstance(ratings, list) else []
+    """The per-category scores the provider returned, when it returned any."""
+    return model_outcomes.safety_ratings(message)
 
 
 def filtered_categories(message: Any) -> list[str] | None:
@@ -320,19 +276,7 @@ def filtered_categories(message: Any) -> list[str] | None:
     empty list: one means the response was scored and passed, the other that no
     scoring happened at all.
     """
-    flagged: list[str] = []
-    meta = metadata(message)
-    feedback = meta.get("prompt_feedback") or {}
-    for ratings in (meta.get("safety_ratings"), feedback.get("safety_ratings")):
-        if not isinstance(ratings, list):
-            continue
-        for rating in ratings:
-            if not isinstance(rating, dict) or not rating.get("blocked"):
-                continue
-            category = str(rating.get("category") or "unspecified")
-            if category not in flagged:
-                flagged.append(category)
-    return flagged or None
+    return list(model_outcomes.blocked_categories(message)) or None
 
 
 def served_model(message: Any) -> str | None:
@@ -360,38 +304,56 @@ def token_usage(state: dict) -> dict | None:
 
     Returns None when no turn reported usage at all, rather than a dict of zeros.
     A zero is a measurement somebody made; absence is not.
+
+    `thinking` and `cached` follow the same rule one level down: a provider that reports
+    a reasoning breakdown is reporting a number, and zero is that number when it thought
+    nothing. A provider with no such concept reports nothing, and the honest value there
+    is None — a reported 0 would put a fabricated measurement into the cost table the
+    programme is about to build.
     """
-    totals = {"input": 0, "output": 0, "total": 0, "thinking": 0, "cached": 0}
+    totals = {"input": 0, "output": 0, "total": 0}
     reported = False
+    thinking = 0
+    cached = 0
+    thinking_reported = False
+    cached_reported = False
     for message in state.get("messages") or []:
         usage = getattr(message, "usage_metadata", None)
         if not usage:
             continue
         reported = True
-        turn_in = usage.get("input_tokens") or 0
-        turn_out = usage.get("output_tokens") or 0
-        totals["input"] += turn_in
-        totals["output"] += turn_out
+        totals["input"] += usage.get("input_tokens") or 0
+        totals["output"] += usage.get("output_tokens") or 0
         totals["total"] += usage.get("total_tokens") or 0
-        totals["thinking"] += (
-            (usage.get("output_token_details") or {}).get("reasoning") or 0
-        )
-        totals["cached"] += (
-            (usage.get("input_token_details") or {}).get("cache_read") or 0
-        )
-    return totals if reported else None
+        output_details = usage.get("output_token_details")
+        if isinstance(output_details, dict):
+            thinking_reported = True
+            thinking += output_details.get("reasoning") or 0
+        input_details = usage.get("input_token_details")
+        if isinstance(input_details, dict):
+            cached_reported = True
+            cached += input_details.get("cache_read") or 0
+    if not reported:
+        return None
+    totals["thinking"] = thinking if thinking_reported else None
+    totals["cached"] = cached if cached_reported else None
+    return totals
 
 
 def outcome(message: Any) -> str:
-    """What happened to this turn: ok, truncated, refused or unknown."""
-    if blocked_reason(message) is not None:
+    """What happened to this turn: ok, truncated, refused or unknown.
+
+    The four neutral outcomes are `shared.model_outcomes`'; these four words are the
+    record's, and the mapping between them is the whole of this function. Reading the
+    neutral outcome rather than the provider's token is what makes a refusal mean the same
+    thing whichever model produced it.
+    """
+    result = model_outcomes.read(message)
+    if result.refused:
         return REFUSED
-    reason = finish_reason(message)
-    if reason in _REFUSALS:
-        return REFUSED
-    if reason in _TRUNCATIONS:
+    if result.truncated:
         return TRUNCATED
-    if reason in (None, "STOP"):
+    if result.outcome == model_outcomes.STOP:
         return OK
     return UNKNOWN
 
@@ -471,12 +433,42 @@ def text_of(content: Any) -> str:
     contribute nothing. A list entry that is not a dict is stringified rather than
     dropped, which is what the original unwrapping did and is what keeps a plain
     list of strings working.
+
+    A block whose type says it is deliberation contributes nothing either, and the type
+    is checked before the `text` field is read. This matters now that more than one model
+    can answer: a reasoning block that carries its prose under `text` would put the
+    model's thinking on a clinician's screen, and a block that carries some other key
+    would be stringified into the answer if the fallback went looking for one. Reading a
+    block only when it is text, and never reading anything else out of it, is the rule
+    that keeps the announcement equal to the answer.
     """
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return "".join(
-            block.get("text", "") if isinstance(block, dict) else str(block)
-            for block in content
-        )
+        pieces: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                pieces.append(block)
+            elif isinstance(block, dict):
+                if _is_deliberation(block):
+                    continue
+                text = block.get("text")
+                if isinstance(text, str):
+                    pieces.append(text)
+            else:
+                pieces.append(str(block))
+        return "".join(pieces)
     return ""
+
+
+#: Block types that carry reasoning rather than answer, across the providers this
+#: deployment can reach. A block of one of these types is never announced and never read
+#: into the answer, whatever field it happens to carry its prose in.
+_DELIBERATION_BLOCK_TYPES = frozenset({
+    "thinking", "reasoning", "reasoning_content", "redacted_thinking", "thought",
+    "thought_signature", "analysis",
+})
+
+
+def _is_deliberation(block: dict) -> bool:
+    return str(block.get("type") or "").strip().lower() in _DELIBERATION_BLOCK_TYPES

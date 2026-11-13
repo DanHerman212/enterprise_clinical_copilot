@@ -34,6 +34,7 @@ if str(REPO) not in sys.path:
 
 from evaluation.platform.evaluators import gate_verdict  # noqa: E402
 from evaluation.platform.schemas import MIN_PASS_RATE  # noqa: E402
+from services.mcp.config import JUDGE_MODEL  # noqa: E402
 
 #: Hardcoded targets (spec §5). Deliberately not a parameter.
 #:
@@ -353,12 +354,19 @@ def run(datasets: tuple[str, ...], *, run_name: str,
             outcomes=experiment.item_results, run_evaluators=run_evaluators,
         )
 
+        # Both channels' tokens and dollars, read from the traces rather than from the
+        # service: the agent's wire contract carries no token counts and is not going to.
+        # Informational only — the gate below reads none of it.
+        costs = _record_costs(client, experiment.item_results,
+                              dataset_name=dataset_name,
+                              dataset_run_id=experiment.dataset_run_id)
+
         _print_item_report(experiment.item_results, dataset_name=dataset_name,
                            run_name=run_name,
                            dataset_run_id=experiment.dataset_run_id)
 
         summary[dataset_name] = {
-            "items": len(items), **stats,
+            "items": len(items), **stats, "cost": costs,
             "dataset_run_id": experiment.dataset_run_id,
             "gate_pass": gate_verdict(stats),
         }
@@ -368,8 +376,128 @@ def run(datasets: tuple[str, ...], *, run_name: str,
     return summary
 
 
+def _judge_channel(outcome: Any) -> dict[str, Any]:
+    """The grading cost this item already carries, read off its own scores.
+
+    The composite writes `judge_*_tokens` and `judge_cost_usd` from the usage the judge
+    returned, so the grading total is a read rather than a second measurement. Reading it
+    here keeps one number: a re-derivation would be a second place for the price table to
+    be applied, and the two could drift.
+    """
+    scores = {evaluation.name: evaluation.value for evaluation in outcome.evaluations}
+    usage = {
+        field: int(scores[f"judge_{field}_tokens"])
+        for field in ("input", "cached", "output", "thinking")
+        if f"judge_{field}_tokens" in scores
+    }
+    cost = scores.get("judge_cost_usd")
+    return {"usage": usage or None,
+            "cost_usd": float(cost) if isinstance(cost, (int, float)) else None}
+
+
+def _record_costs(client: Any, outcomes: list[Any], *,
+                  dataset_name: str,
+                  dataset_run_id: str | None = None) -> dict[str, Any]:
+    """Price every item from its traces, then report the run's two cost channels.
+
+    Called after the run's scores are written and before its summary is printed, because
+    the agent's usage does not exist until its traces can be read: a turn's generations
+    are recorded by the tracer, not returned by the service. Nothing here can change a
+    verdict — `gate_verdict` never reads a price — and an item that could not be priced is
+    counted `unattributed` rather than costed at zero.
+    """
+    from evaluation.platform import diagnostics
+    from evaluation.platform import evaluators as ev
+    from evaluation.platform import trace_export
+
+    agent_total = 0.0
+    agent_priced: list[float] = []
+    agent_turn_costs: list[float] = []
+    judge_total = 0.0
+    judge_priced = 0
+    tokens = {f"agent_{field}_tokens": 0 for field in ev.TOKEN_FIELDS}
+    tokens.update({f"judge_{field}_tokens": 0 for field in ev.TOKEN_FIELDS})
+    generations = 0
+    unattributed = 0
+
+    print(f"\n--- cost: {dataset_name} ---", flush=True)
+    for outcome in outcomes:
+        usage = trace_export.scenario_usage(client, outcome.output or {})
+        agent_cost = usage.get("cost_usd")
+        evaluations = ev.agent_cost_evaluations(usage, agent_cost)
+        for evaluation in evaluations:
+            if outcome.trace_id:
+                client.create_score(
+                    trace_id=outcome.trace_id, name=evaluation.name,
+                    value=evaluation.value, comment=evaluation.comment,
+                    data_type=evaluation.data_type)
+        judge = _judge_channel(outcome)
+
+        if agent_cost is None:
+            unattributed += 1
+            agent_phrase = "unattributed"
+        else:
+            agent_total += float(agent_cost)
+            agent_priced.append(float(agent_cost))
+            agent_phrase = f"${float(agent_cost):.4f}"
+            turns = int(usage.get("turn_count") or 0)
+            if turns:
+                agent_turn_costs.append(float(agent_cost) / turns)
+        if judge["cost_usd"] is None:
+            judge_phrase = "unattributed"
+        else:
+            judge_total += float(judge["cost_usd"])
+            judge_priced += 1
+            judge_phrase = f"${float(judge['cost_usd']):.4f}"
+        for field in ev.TOKEN_FIELDS:
+            value = usage.get(field)
+            if isinstance(value, int):
+                tokens[f"agent_{field}_tokens"] += value
+            value = (judge["usage"] or {}).get(field)
+            if isinstance(value, int):
+                tokens[f"judge_{field}_tokens"] += value
+        generations += int(usage.get("generations") or 0)
+
+        diagnostics.record_cost(outcome.item_id, agent=usage, judge=judge)
+        reason = f" — {usage['reason']}" if usage.get("reason") else ""
+        print(f"  {outcome.item_id[:8]} agent={agent_phrase} judge={judge_phrase} "
+              f"turns={usage.get('turn_count')} "
+              f"generations={usage.get('generations')}{reason}", flush=True)
+
+    scenarios = len(agent_priced)
+    totals = {
+        "agent_cost_usd": agent_total,
+        "agent_scenarios_priced": scenarios,
+        "agent_cost_mean_per_scenario": (agent_total / scenarios) if scenarios else None,
+        "agent_cost_mean_per_turn": (
+            sum(agent_turn_costs) / len(agent_turn_costs) if agent_turn_costs else None),
+        "judge_cost_usd": judge_total,
+        "judge_scenarios_priced": judge_priced,
+        "unattributed": unattributed,
+        "generations": generations,
+        **tokens,
+    }
+    # The two totals as run-level scores, so the Datasets view can sort runs by what they
+    # cost without a reader re-deriving it from item scores. Informational like the rest:
+    # the gate score written by `record_run_scores` reads none of this.
+    if dataset_run_id:
+        client.create_score(
+            dataset_run_id=dataset_run_id, name="agent_cost_usd",
+            value=float(agent_total), data_type="NUMERIC",
+            comment=(f"{scenarios} priced scenario(s), {unattributed} unattributed, "
+                     f"{generations} generation(s)"))
+        client.create_score(
+            dataset_run_id=dataset_run_id, name="judge_cost_usd",
+            value=float(judge_total), data_type="NUMERIC",
+            comment=f"{judge_priced} priced grading(s) at {JUDGE_MODEL}")
+    return totals
+
+
 def _print_item_report(outcomes: list[Any], *, dataset_name: str, run_name: str,
                        dataset_run_id: str | None) -> None:
+
+
+
     """One block per item: what was asked, what came back, how it scored.
 
     The run's aggregate cannot answer the questions a gate asks — which chip was
@@ -489,6 +617,24 @@ def main(argv: list[str] | None = None) -> int:
     print("\n=== STEP 8 SUMMARY ===")
     for name, stats in summary.items():
         print(f"  {name}: {stats}")
+        cost = stats.get("cost") or {}
+        if cost:
+            print(
+                f"    cost: agent ${cost.get('agent_cost_usd', 0.0):.4f} total, "
+                f"${cost.get('agent_cost_mean_per_scenario') or 0.0:.4f} mean/scenario, "
+                f"${cost.get('agent_cost_mean_per_turn') or 0.0:.4f} mean/turn, "
+                f"judge ${cost.get('judge_cost_usd', 0.0):.4f} total, "
+                f"{cost.get('unattributed', 0)} unattributed, "
+                f"{cost.get('generations', 0)} generation(s)", flush=True)
+            print(
+                f"    tokens: agent in={cost.get('agent_input_tokens', 0)} "
+                f"cached={cost.get('agent_cached_tokens', 0)} "
+                f"out={cost.get('agent_output_tokens', 0)} "
+                f"thinking={cost.get('agent_thinking_tokens', 0)} | judge "
+                f"in={cost.get('judge_input_tokens', 0)} "
+                f"cached={cost.get('judge_cached_tokens', 0)} "
+                f"out={cost.get('judge_output_tokens', 0)} "
+                f"thinking={cost.get('judge_thinking_tokens', 0)}", flush=True)
     return 0
 
 

@@ -18,6 +18,7 @@ from typing import Any, Callable
 from langfuse import Evaluation
 
 from evaluation.platform import diagnostics
+from evaluation.platform import pricing
 from evaluation.platform.judge_call import turn_questions
 from evaluation.platform.schemas import (
     DIMENSIONS,
@@ -62,6 +63,85 @@ def _score(name: str, value: float, comment: str | None = None,
            data_type: str = "NUMERIC") -> Evaluation:
     return Evaluation(name=name, value=float(value), comment=comment,
                       data_type=data_type)
+
+
+#: The informational token/cost scores. Reported, never gated: `gate_verdict` reads five
+#: terms and none of them is a price. They are named with a channel prefix so a reader
+#: can never mistake the grader's spend for the spend of the system being graded — the
+#: two are the whole point of keeping them apart.
+AGENT_COST = "agent_cost_usd"
+JUDGE_COST = "judge_cost_usd"
+TOKEN_FIELDS = ("input", "cached", "output", "thinking")
+
+
+#: Names `summarise_item_results` must skip, so an informational score can never be read
+#: as a verdict term. Listed rather than pattern-matched: a prefix rule would also skip a
+#: future gate term that happened to start the same way.
+INFORMATIONAL_PREFIXES = ("agent_", "judge_")
+
+
+def is_informational(name: object) -> bool:
+    """Whether this score reports a measurement rather than a gate term."""
+    return str(name or "").startswith(INFORMATIONAL_PREFIXES)
+
+
+def agent_cost_evaluations(usage: object, cost: float | None) -> list[Evaluation]:
+    """The AGENT channel's tokens and cost, for `run_evals` to write onto the trace.
+
+    A named entry point rather than a prefix string, because the agent's cost is learned
+    from its traces after the item has already been judged and the caller needs one place
+    to say which channel it is spending on.
+
+    `cost` arrives already computed: a scenario can run more than one model — a `/ehr`
+    turn's command and its reasoning loop use the same pin, but a replayed thread may
+    not — and `trace_export` prices each generation against its own model. Re-deriving a
+    single total here from one model id would be wrong for exactly those items.
+    """
+    return cost_evaluations("agent", usage, cost=cost)
+
+
+def cost_evaluations(prefix: str, usage: object, model: object = None, *,
+                     cost: float | None = None) -> list[Evaluation]:
+    """Token counts and USD cost for one channel, as informational scores.
+
+    Returns nothing at all when the usage is missing, and returns the token counts without
+    a cost when the model cannot be priced. Both are the same decision: a score named
+    `cost_usd` must never be written as `0` because the number was not obtained. A reader
+    can tell the two apart — no cost score means unattributed, `0` means free — and the
+    run summary reports the unattributed count separately.
+
+    `thinking` is a sub-count of `output`, reported beside it and never added to it. The
+    provider's own totals already include it (measured on all three families in Sprint
+    01b), so summing the two would double-bill reasoning at the output rate.
+    """
+    block = usage if isinstance(usage, dict) else {}
+    if not block or all(block.get(field) is None for field in TOKEN_FIELDS):
+        return []
+    emitted: list[Evaluation] = []
+    for field in TOKEN_FIELDS:
+        value = block.get(field)
+        if isinstance(value, int):
+            emitted.append(_score(
+                f"{prefix}_{field}_tokens", float(value),
+                comment=(f"{value} {field} tokens (thinking is a sub-count of output, "
+                         "not an addition)" if field == "thinking" else None)))
+    if cost is None and model is not None:
+        try:
+            cost = pricing.cost_usd(model, block)
+        except pricing.UnknownModelError as exc:
+            emitted.append(_score(
+                f"{prefix}_cost_usd_unattributed", 1.0,
+                comment=f"measured but not priced — {exc}"))
+            return emitted
+    if cost is None:
+        emitted.append(_score(
+            f"{prefix}_cost_usd_unattributed", 1.0,
+            comment="measured but not priced — no model id on the trace"))
+        return emitted
+    emitted.append(_score(
+        f"{prefix}_cost_usd", cost,
+        comment=f"{model or 'mixed models'} at the pinned ≤200K-context rates"))
+    return emitted
 
 
 #: The command a fixture asks for, mapped to the command the service reports having
@@ -830,6 +910,12 @@ def make_judge_composite(judge_fn: Callable[..., dict]) -> Callable[..., list[Ev
 
         emitted: list[Evaluation] = []
         dims: dict[str, float] = {}
+
+        # The grading call's own tokens and price, beside the judgement it bought. Written
+        # here rather than by the caller because this is the only place the judge's own
+        # dict still exists; a later reader would have to re-price a call it cannot see.
+        emitted.extend(cost_evaluations("judge", result.get("_usage"),
+                                        result.get("_model")))
 
         # The score comments are capped, so the full reasoning is written here, where the
         # judge's own dict is still in hand.

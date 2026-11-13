@@ -642,12 +642,22 @@ def test_a_marker_naming_a_pmid_that_was_never_retrieved_is_stripped():
     assert flags == ["citation_out_of_range:^99999999"]
 
 
-def test_a_bare_identifier_resolves_the_same_as_a_labelled_one():
+def test_a_bare_identifier_is_kept_and_given_its_label():
+    """The number resolves either way; the SHAPE it is served in is what changed.
+
+    This test asserted that `^[35186616]` survived byte-for-byte, and it did — as a bare
+    eight-digit number between `^[` and `]`, which is exactly the shape every layer
+    downstream reads as a POSITION in the conversation's evidence. On `/pubmed cervical
+    spondylosis` (2026-11-12) that produced three phantom "not available" rows where the
+    records belonged, and numbered the three real cards from 40591977. So a record
+    identifier is now written back with the label that says what it is: the number still
+    resolves, and nothing has to guess whether 35186616 is a passage or a PMID.
+    """
     cleaned, flags = citations.enforce_citations(
         "A claim ^[35186616].", slots=1, pmids={"35186616"}
     )
 
-    assert "^[35186616]" in cleaned
+    assert "^[PMID: 35186616]" in cleaned
     assert flags == []
 
 

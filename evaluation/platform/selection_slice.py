@@ -28,59 +28,64 @@ from evaluation.platform.schemas import DatasetItemInput, MAX_TURNS
 REPO = Path(__file__).resolve().parents[2]
 SELECTION_SLICE_PATH = REPO / "evaluation" / "datasets" / "selection_slice.jsonl"
 
-#: The six records the Dev suite runs on, read from its own rows.
-DEV_HADM_IDS = frozenset({90000015, 90000023, 90000051, 90000105, 90000106, 90000108})
+#: The seven records the Dev suite runs on, read from its own rows.
+DEV_HADM_IDS = frozenset(
+    {90000015, 90000023, 90000051, 90000073, 90000105, 90000106, 90000108})
 
-#: The four records the Holdout suite runs on. Extracted as integers only.
-HOLDOUT_HADM_IDS = frozenset({90000028, 90000067, 90000087, 90000101})
+#: The six the Holdout suite runs on plus the two the census reserved for it. Extracted as
+#: integers only: no holdout prompt or expected output is read here.
+HOLDOUT_HADM_IDS = frozenset(
+    {90000026, 90000028, 90000050, 90000067, 90000087, 90000088, 90000101})
 
-#: The five the census inventories as `recommended_holdout`, minus the one the Holdout
-#: suite already took. Kept out of the slice for the same reason: they are holdout capacity.
-RESERVED_HADM_IDS = frozenset({90000088, 90000104, 90000014, 90000026})
+#: The two the census inventories as holdout capacity and no suite has taken.
+RESERVED_HADM_IDS = frozenset({90000014, 90000104})
 
-EXCLUDED_HADM_IDS = DEV_HADM_IDS | HOLDOUT_HADM_IDS | RESERVED_HADM_IDS
+#: The five records `ecc-model-selection-slice-v1` used. v2 is a clean-slate rebuild, so
+#: reusing one of them would carry the measurements v1 was retired for into the new matrix.
+SLICE_V1_HADM_IDS = frozenset({90000010, 90000011, 90000054, 90000081, 90000086})
 
-#: The slice's own records, one per archetype. The selection rule for each is recorded in
+EXCLUDED_HADM_IDS = (DEV_HADM_IDS | HOLDOUT_HADM_IDS | RESERVED_HADM_IDS
+                     | SLICE_V1_HADM_IDS)
+
+#: The slice's own records. Selection reasons are in
 #: `evaluation/inventory/selection_slice_fact_sheet.py`.
-SELECTED_HADM_IDS = (90000010, 90000086, 90000011, 90000081, 90000054)
+SELECTED_HADM_IDS = (90000020, 90000040, 90000041, 90000059, 90000069, 90000090,
+                     90000099)
 
-ARCHETYPES = {
-    90000010: "p1_complex_medication_taper",
-    90000086: "p2_high_risk_abnormal_labs",
-    90000011: "p3_all_normal_labs",
-    90000081: "p4_multisection_irregular_note",
-    90000054: "p5_outpatient_boundary",
+#: `evaluation/outpatient_oracle.py` is the independent answer key on encounter type. The
+#: matrix needs at least one outpatient record, because the missing-section trap is only a
+#: correct answer where the absence really is the record.
+OUTPATIENT_HADM_IDS = frozenset({90000040})
+
+#: The two axes of the matrix, and the cell allocation the directive fixes. A cell holding
+#: zero is stated rather than omitted: "no chip items at depth 1" is a fact about chips,
+#: not a gap in the data.
+DEPTH_TIERS: dict[str, int] = {"1_turn": 1, "2_turn": 2, "3_turn": 3}
+
+MODALITY_AXES = ("slash_command", "followup_chip", "free_form",
+                 "adversarial_perturbation")
+
+MATRIX: dict[tuple[str, str], int] = {
+    ("1_turn", "slash_command"): 2,
+    ("1_turn", "followup_chip"): 0,
+    ("1_turn", "free_form"): 1,
+    ("1_turn", "adversarial_perturbation"): 2,
+    ("2_turn", "slash_command"): 2,
+    ("2_turn", "followup_chip"): 2,
+    ("2_turn", "free_form"): 1,
+    ("2_turn", "adversarial_perturbation"): 1,
+    ("3_turn", "slash_command"): 1,
+    ("3_turn", "followup_chip"): 2,
+    ("3_turn", "free_form"): 1,
+    ("3_turn", "adversarial_perturbation"): 1,
 }
 
-TRAJECTORIES = {
-    "t1_declarative_command": 1,
-    "t2_dynamic_affordance_loopback": 2,
-    "t3_analytical_drilldown": 3,
-    "t4_cross_domain_synthesis": 4,
-    "t5_freetext_cold_start": 5,
-    "t6_adversarial_false_premise": 6,
-    "t7_adversarial_boundaries": 7,
-}
-
-#: Two scenarios per trajectory, and the count is the contract: one scenario per capability
-#: is a coin flip, and a model that wins a capability by one lucky run would win the matrix.
-PER_TRAJECTORY = 2
-EXPECTED_ITEMS = len(TRAJECTORIES) * PER_TRAJECTORY
+EXPECTED_ITEMS = sum(MATRIX.values())
+EXPECTED_TURNS = sum(count * DEPTH_TIERS[depth] for (depth, _), count in MATRIX.items())
 
 #: The commands the agent actually has. `/risk` was retired on 2026-10-26 and is not among
 #: them; a row naming it would be refused as an unknown command and would measure nothing.
 COMMAND_WIRES = frozenset({"ehr", "meds", "labs", "pubmed"})
-
-#: The turn count each trajectory scripts, from the directive.
-TURNS_PER_TRAJECTORY = {
-    "t1_declarative_command": 1,
-    "t2_dynamic_affordance_loopback": 2,
-    "t3_analytical_drilldown": 2,
-    "t4_cross_domain_synthesis": 3,
-    "t5_freetext_cold_start": 2,
-    "t6_adversarial_false_premise": 2,
-    "t7_adversarial_boundaries": 2,
-}
 
 ManifestProvider = Callable[[list[int]], dict[int, dict]]
 
@@ -122,7 +127,7 @@ def validate_rows(rows: list[dict[str, Any]]) -> None:
     written to Langfuse at all.
     """
     seen: set[str] = set()
-    counts: dict[str, int] = {name: 0 for name in TRAJECTORIES}
+    cells: dict[tuple[str, str], int] = {cell: 0 for cell in MATRIX}
     per_record: dict[str, int] = {}
 
     for row in rows:
@@ -140,29 +145,48 @@ def validate_rows(rows: list[dict[str, Any]]) -> None:
             raise SelectionSliceError(f"{scenario}: {hadm} is a Holdout suite record")
         if hadm in RESERVED_HADM_IDS:
             raise SelectionSliceError(f"{scenario}: {hadm} is reserved holdout capacity")
-        if hadm not in SELECTED_HADM_IDS:
-            raise SelectionSliceError(f"{scenario}: {hadm} is not one of the five records")
-        if row.get("archetype") != ARCHETYPES[hadm]:
+        if hadm in SLICE_V1_HADM_IDS:
             raise SelectionSliceError(
-                f"{scenario}: archetype {row.get('archetype')!r} does not match "
-                f"record {hadm}")
+                f"{scenario}: {hadm} was a slice v1 record and v2 is a clean rebuild")
+        if hadm not in SELECTED_HADM_IDS:
+            raise SelectionSliceError(
+                f"{scenario}: {hadm} is not one of the seven records this slice names")
+        if not str(row.get("archetype") or "").strip():
+            raise SelectionSliceError(f"{scenario}: archetype is mandatory")
         per_record[str(hadm)] = per_record.get(str(hadm), 0) + 1
-
-        trajectory = str(row.get("trajectory") or "")
-        if trajectory not in TRAJECTORIES:
-            raise SelectionSliceError(f"{scenario}: unknown trajectory {trajectory!r}")
-        counts[trajectory] += 1
 
         turns = row.get("turns")
         if not isinstance(turns, list) or not turns:
             raise SelectionSliceError(f"{scenario}: turns must be a non-empty list")
         if len(turns) > MAX_TURNS:
             raise SelectionSliceError(f"{scenario}: {len(turns)} turns exceeds {MAX_TURNS}")
-        wanted = TURNS_PER_TRAJECTORY[trajectory]
-        if len(turns) != wanted:
+        for index, turn in enumerate(turns, start=1):
+            if isinstance(turn, str):
+                text = turn.strip()
+            elif isinstance(turn, dict):
+                text = str(turn.get("prompt") or "").strip()
+            else:
+                raise SelectionSliceError(
+                    f"{scenario}: turn {index} is neither a prompt nor a turn object")
+            if not text:
+                raise SelectionSliceError(f"{scenario}: turn {index} is blank")
+            word = text.split()[0] if text.split() else ""
+            if word.startswith("/") and word.lstrip("/").lower() not in COMMAND_WIRES:
+                raise SelectionSliceError(
+                    f"{scenario}: turn {index} names an unknown command {word!r}")
+
+        metadata = row.get("metadata") or {}
+        depth = str(metadata.get("depth_tier") or "")
+        axis = str(metadata.get("modality_axis") or "")
+        if depth not in DEPTH_TIERS:
+            raise SelectionSliceError(f"{scenario}: unknown depth_tier {depth!r}")
+        if axis not in MODALITY_AXES:
+            raise SelectionSliceError(f"{scenario}: unknown modality_axis {axis!r}")
+        if DEPTH_TIERS[depth] != len(turns):
             raise SelectionSliceError(
-                f"{scenario}: trajectory {trajectory} scripts {wanted} turn(s), "
+                f"{scenario}: depth_tier {depth} needs {DEPTH_TIERS[depth]} turn(s), "
                 f"this row has {len(turns)}")
+        cells[(depth, axis)] += 1
 
         workflow = row.get("workflow_type")
         if workflow != workflow_for(len(turns)):
@@ -181,24 +205,35 @@ def validate_rows(rows: list[dict[str, Any]]) -> None:
             raise SelectionSliceError(f"{scenario}: expected_output.behaviour is mandatory")
         if not isinstance(expected.get("forbidden_claims", []), list):
             raise SelectionSliceError(f"{scenario}: forbidden_claims must be a list")
+        for token in expected.get("must_contain") or []:
+            # A dosage string or a unit in `must_contain` turns a paraphrase into a
+            # structural failure, so the contract refuses it before the row can be run.
+            if any(character.isdigit() for character in str(token)):
+                raise SelectionSliceError(
+                    f"{scenario}: must_contain {token!r} carries a number; "
+                    "entity names only")
+            if len(str(token).split()) > 3:
+                raise SelectionSliceError(
+                    f"{scenario}: must_contain {token!r} is a phrase, not an entity")
 
-        metadata = row.get("metadata") or {}
         if metadata.get("rubric_version") != "v8":
             raise SelectionSliceError(f"{scenario}: metadata.rubric_version must be v8")
-        if metadata.get("trajectory") != TRAJECTORIES[trajectory]:
-            raise SelectionSliceError(
-                f"{scenario}: metadata.trajectory must be {TRAJECTORIES[trajectory]}")
 
     if len(rows) != EXPECTED_ITEMS:
         raise SelectionSliceError(f"{len(rows)} scenarios, expected {EXPECTED_ITEMS}")
-    for name, index in TRAJECTORIES.items():
-        if counts[name] != PER_TRAJECTORY:
+    turns_total = sum(len(row.get("turns") or []) for row in rows)
+    if turns_total != EXPECTED_TURNS:
+        raise SelectionSliceError(f"{turns_total} turns, expected {EXPECTED_TURNS}")
+    for cell, wanted in MATRIX.items():
+        if cells[cell] != wanted:
             raise SelectionSliceError(
-                f"trajectory {index} ({name}) has {counts[name]} scenario(s), "
-                f"expected {PER_TRAJECTORY}")
+                f"cell {cell[0]}/{cell[1]} holds {cells[cell]} scenario(s), "
+                f"expected {wanted}")
     if set(per_record) != {str(hadm) for hadm in SELECTED_HADM_IDS}:
         raise SelectionSliceError(
-            f"records used {sorted(per_record)} do not match the five selected")
+            f"records used {sorted(per_record)} do not match the seven selected")
+    if not (set(per_record) & {str(hadm) for hadm in OUTPATIENT_HADM_IDS}):
+        raise SelectionSliceError("the matrix needs its outpatient record")
 
 
 def item_payload(row: dict[str, Any], manifest: dict[str, Any]) -> dict[str, Any]:

@@ -550,11 +550,11 @@ def test_an_unscored_item_leaves_the_pass_rate_denominator():
 
     # One scored item, one pass: the timeout neither helps nor hurts the rate.
     assert scores["pass_rate"] == pytest.approx(1.0)
-    assert scores["judge_errors"] == 1.0
-    # ...but the run is not complete, so the gate refuses to call it a pass.
+    # ...but the run is not complete, so the gate refuses to call it a pass. The unscored
+    # count is carried in memory (`gate_verdict`) rather than written as a Langfuse score
+    # row, so the refusal is what proves the count still reaches the gate.
     assert scores["gate_pass"] == 0.0
-    assert "unscored" in next(e.comment for e in gate(item_results=results)
-                              if e.name == "judge_errors")
+    assert "judge_errors" not in scores
 
 
 def test_the_legacy_composite_reports_an_error_instead_of_a_zero_verdict():

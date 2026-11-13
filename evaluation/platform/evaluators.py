@@ -85,6 +85,49 @@ def is_informational(name: object) -> bool:
     return str(name or "").startswith(INFORMATIONAL_PREFIXES)
 
 
+#: What the grader cost, per trace, held in this process for the run's cost summary.
+#:
+#: It is a dictionary rather than a set of scores because Langfuse's Scores table is for
+#: judgements only (Sprint 04d): a price in the same column as `grounding` is noise a reader
+#: has to filter out, and the grader's own call is already a GENERATION on the trace, metered
+#: natively. Keyed by trace id so a concurrent run cannot mis-attribute one item's grading
+#: to another, and cleared by the reader so a long-lived process does not accumulate them.
+JUDGE_CHANNEL: dict[str, dict[str, object]] = {}
+
+
+def _channel_key(output: object) -> str | None:
+    """The trace id this item's grading belongs to, from the output the judge was given.
+
+    The output arrives either as a plain dict or as the harness's own result object, so
+    both shapes are read; neither is guaranteed by the caller.
+    """
+    if isinstance(output, dict):
+        record: object = output
+        lookup = record.get
+    else:
+        record = output
+        lookup = lambda name: getattr(record, name, None)  # noqa: E731
+    value = lookup("langfuse_trace_id")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    ids = lookup("turn_trace_ids")
+    if isinstance(ids, list) and ids and isinstance(ids[0], str):
+        return ids[0].strip() or None
+    return None
+
+
+def _record_judge_channel(output: object, result: dict) -> None:
+    """Remember what one grading cost, against the trace it graded.
+
+    Called by both evaluator builders, because both hold the judge's own dict and neither
+    can hand it to the next layer: a score list carries numbers, not usage.
+    """
+    key = _channel_key(output)
+    if key:
+        JUDGE_CHANNEL[key] = {"usage": result.get("_usage"),
+                              "model": result.get("_model")}
+
+
 def agent_cost_evaluations(usage: object, cost: float | None) -> list[Evaluation]:
     """The AGENT channel's tokens and cost, for `run_evals` to write onto the trace.
 
@@ -911,15 +954,18 @@ def make_judge_composite(judge_fn: Callable[..., dict]) -> Callable[..., list[Ev
         emitted: list[Evaluation] = []
         dims: dict[str, float] = {}
 
-        # The grading call's own tokens and price, beside the judgement it bought. Written
-        # here rather than by the caller because this is the only place the judge's own
-        # dict still exists; a later reader would have to re-price a call it cannot see.
-        emitted.extend(cost_evaluations("judge", result.get("_usage"),
-                                        result.get("_model")))
+        # The grading call's own tokens and price are NOT scored onto the trace any more.
+        # Langfuse's Scores table is for judgements; the grader's spend is carried in the
+        # run's local cost summary and in the diagnostics JSONL, and its own call is a
+        # GENERATION on the trace where Langfuse already meters it natively. Writing
+        # `judge_cost_usd` here put a price in the same column as `grounding`, which is
+        # what Sprint 04d exists to remove.
 
         # The score comments are capped, so the full reasoning is written here, where the
-        # judge's own dict is still in hand.
+        # judge's own dict is still in hand. That record carries the usage and model the
+        # cost summary is computed from.
         diagnostics.record(input=input or {}, output=output or {}, result=result)
+        _record_judge_channel(output, result)
 
         # Every score carries the judge's own words. Without this the record says
         # `safety=1` and nothing else, so a failure cannot be explained or appealed
@@ -995,6 +1041,12 @@ def make_quality_evaluator(judge_fn: Callable[..., dict]) -> Callable[..., list[
         if result.get("error"):
             evaluations.append(_score(JUDGE_ERROR, 1.0, comment=str(result["error"])))
             return evaluations
+
+        # What the grading cost, kept in this process against the trace it graded. It is not
+        # scored onto the trace (Sprint 04d): the Scores table holds judgements, and the
+        # grader's own call is a GENERATION Langfuse already meters. `run_evals` reads this
+        # back to print the judge channel and to fill the off-trace cost column.
+        _record_judge_channel(output, result)
 
         for name in DIMENSIONS:
             value = (result.get("dimensions") or {}).get(name)
@@ -1152,9 +1204,6 @@ def make_run_evaluators(*, min_pass_rate: float = MIN_PASS_RATE,
                    comment=f"{safety_failures} item(s) scored safety below 2"),
             _score("structural_failures", float(structural_failures),
                    comment=f"{structural_failures} item(s) failed a structural check"),
-            _score("judge_errors", float(unscored),
-                   comment=(f"{unscored} item(s) unscored — judge unavailable, excluded "
-                            "from the pass rate and blocking the gate until rerun")),
             _score("unattributed", float(unattributed),
                    comment=f"{unattributed} item(s) could not be pointed at a trace"),
             _score("gate_pass", 1.0 if passed else 0.0,

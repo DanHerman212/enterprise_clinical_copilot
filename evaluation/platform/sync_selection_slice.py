@@ -24,6 +24,7 @@ the items that were there when it ran.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -33,20 +34,22 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from evaluation.platform.selection_slice import (  # noqa: E402
+    DEPTH_TIERS,
     EXPECTED_ITEMS,
-    PER_TRAJECTORY,
+    EXPECTED_TURNS,
+    MATRIX,
     SELECTION_SLICE_PATH,
     SELECTED_HADM_IDS,
-    TRAJECTORIES,
     item_payload,
     read_rows,
     validate_rows,
 )
 
-DATASET = "ecc-model-selection-slice-v1"
+DATASET = "ecc-model-selection-slice-v2"
 DESCRIPTION = (
-    "Multi-model selection slice: 14 scenarios, 5 previously unused records, "
-    "2 per trajectory across the 7 interaction and adversarial trajectories"
+    "Multi-model selection slice v2: 16 scenarios and 32 turns on seven unseen records, "
+    "stratified across 3 conversational depths and 4 interaction modalities "
+    "(slash commands, follow-up chips, free-form questions, adversarial perturbations)"
 )
 RUBRIC_VERSION = "v8"
 
@@ -55,6 +58,41 @@ def _manifest_provider():
     from evaluation.platform.fixtures import manifest_from_bigquery  # noqa: PLC0415
 
     return manifest_from_bigquery
+
+
+def audit_guard(path: Path | None = None) -> None:
+    """Refuse to publish a dataset whose audit attestation does not match the file.
+
+    The audit is what stands between an item nobody reviewed and a paid run: a defect found
+    here costs nothing, and the same defect found in a run costs a live call, a judge call
+    and an hour of reading. So the check is a gate rather than a warning — missing
+    attestation, a hash that no longer matches the file, or any recorded defect all stop
+    the upload.
+
+    `evaluation/platform/dataset_audit.py` writes the attestation; this reads it and
+    nothing else.
+    """
+    from evaluation.platform import dataset_audit  # noqa: PLC0415
+
+    audit_path = dataset_audit.AUDIT_PATH
+    source = path or SELECTION_SLICE_PATH
+    if not audit_path.exists():
+        raise SystemExit(
+            f"no audit attestation at {audit_path}; run `python -m "
+            "evaluation.platform.dataset_audit --critic --write-audit` first")
+    recorded = json.loads(audit_path.read_text(encoding="utf-8"))
+    actual = dataset_audit.sha256(source)
+    if recorded.get("dataset_sha256") != actual:
+        raise SystemExit(
+            f"audit attestation is stale: it covers {recorded.get('dataset_sha256')}, "
+            f"the file is {actual}. Re-run the audit before syncing.")
+    defects = recorded.get("defects") or {}
+    if defects:
+        raise SystemExit(f"audit reports defects, refusing to publish: {sorted(defects)}")
+    failed = [item for item, result in (recorded.get("items") or {}).items()
+              if str(result.get("status")) != "PASS"]
+    if failed:
+        raise SystemExit(f"critic did not pass every item, refusing to publish: {failed}")
 
 
 def build_items(*, manifests: dict[int, dict]) -> list[dict]:
@@ -73,7 +111,8 @@ def build_items(*, manifests: dict[int, dict]) -> list[dict]:
         metadata.update({
             "scenario_id": row["id"],
             "rubric_version": RUBRIC_VERSION,
-            "trajectory_index": TRAJECTORIES[row["trajectory"]],
+            "depth_tier": row["metadata"]["depth_tier"],
+            "modality_axis": row["metadata"]["modality_axis"],
             "hadm_id": str(row["hadm_id"]),
             "archetype": row["archetype"],
             "purpose": "multi-model-selection-slice",
@@ -88,7 +127,8 @@ def build_items(*, manifests: dict[int, dict]) -> list[dict]:
                 "patient_id": str(row["hadm_id"]),
                 "hadm_id": str(row["hadm_id"]),
                 "trajectory": row["trajectory"],
-                "trajectory_index": TRAJECTORIES[row["trajectory"]],
+                "depth_tier": row["metadata"]["depth_tier"],
+                "modality_axis": row["metadata"]["modality_axis"],
                 "workflow_type": row["workflow_type"],
                 "command": row.get("command"),
                 "turns": list(row["turns"]),
@@ -136,11 +176,16 @@ def main(argv: list[str] | None = None) -> int:
 
     rows = read_rows()
     validate_rows(rows)
-    print(f"{SELECTION_SLICE_PATH.relative_to(REPO)}: {len(rows)} scenarios")
-    for name, index in TRAJECTORIES.items():
-        count = sum(1 for row in rows if row["trajectory"] == name)
-        print(f"  trajectory {index}: {name} — {count} scenario(s) "
-              f"(expected {PER_TRAJECTORY})")
+    # The attestation check runs before anything is built or uploaded: a dataset whose
+    # audit is missing, stale or defective must not reach Langfuse at all.
+    audit_guard()
+    print(f"{SELECTION_SLICE_PATH.relative_to(REPO)}: {len(rows)} scenarios, "
+          f"{EXPECTED_TURNS} turns")
+    for (depth, axis), wanted in MATRIX.items():
+        count = sum(1 for row in rows
+                    if row["metadata"]["depth_tier"] == depth
+                    and row["metadata"]["modality_axis"] == axis)
+        print(f"  {depth:>8} / {axis:<24} — {count} scenario(s) (expected {wanted})")
     print("  records: " + ", ".join(str(hadm) for hadm in SELECTED_HADM_IDS))
 
     provider = _manifest_provider()
@@ -170,6 +215,7 @@ def main(argv: list[str] | None = None) -> int:
             "rubric_version": RUBRIC_VERSION,
             "purpose": "multi-model-selection-slice",
             "scenario_count": EXPECTED_ITEMS,
+            "turn_count": EXPECTED_TURNS,
             "patient_count": len(SELECTED_HADM_IDS),
             "source": "evaluation/datasets/selection_slice.jsonl",
         },

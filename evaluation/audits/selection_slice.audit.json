@@ -1,0 +1,152 @@
+{
+ "dataset_sha256": "e93147a376b0810501039200bcccf8c38ff8a2d46e5b28e14be6405c3adeb913",
+ "generated_at": "2026-11-13T22:22:47.988583+00:00",
+ "critic_rounds": 1,
+ "defects": {},
+ "items": {
+  "v2_d1_slash_01": {
+   "status": "PASS",
+   "defects": [],
+   "usage": {
+    "input": 1189,
+    "output": 11,
+    "total": 12620
+   }
+  },
+  "v2_d1_slash_02": {
+   "status": "PASS",
+   "defects": [],
+   "usage": {
+    "input": 1292,
+    "output": 11,
+    "total": 6122
+   }
+  },
+  "v2_d1_free_01": {
+   "status": "PASS",
+   "defects": [],
+   "usage": {
+    "input": 1387,
+    "output": 11,
+    "total": 6864
+   }
+  },
+  "v2_d1_adv_01": {
+   "status": "PASS",
+   "defects": [],
+   "usage": {
+    "input": 1152,
+    "output": 11,
+    "total": 8634
+   }
+  },
+  "v2_d1_adv_02": {
+   "status": "PASS",
+   "defects": [],
+   "usage": {
+    "input": 1275,
+    "output": 11,
+    "total": 6845
+   }
+  },
+  "v2_d2_slash_01": {
+   "status": "PASS",
+   "defects": [],
+   "usage": {
+    "input": 1399,
+    "output": 11,
+    "total": 13771
+   }
+  },
+  "v2_d2_slash_02": {
+   "status": "PASS",
+   "defects": [],
+   "usage": {
+    "input": 1478,
+    "output": 11,
+    "total": 14877
+   }
+  },
+  "v2_d2_chip_01": {
+   "status": "PASS",
+   "defects": [],
+   "usage": {
+    "input": 1495,
+    "output": 11,
+    "total": 15589
+   }
+  },
+  "v2_d2_chip_02": {
+   "status": "PASS",
+   "defects": [],
+   "usage": {
+    "input": 1296,
+    "output": 11,
+    "total": 11511
+   }
+  },
+  "v2_d2_free_01": {
+   "status": "PASS",
+   "defects": [],
+   "usage": {
+    "input": 1257,
+    "output": 11,
+    "total": 9861
+   }
+  },
+  "v2_d2_adv_01": {
+   "status": "PASS",
+   "defects": [],
+   "usage": {
+    "input": 1264,
+    "output": 11,
+    "total": 5355
+   }
+  },
+  "v2_d3_slash_01": {
+   "status": "PASS",
+   "defects": [],
+   "usage": {
+    "input": 1403,
+    "output": 11,
+    "total": 9455
+   }
+  },
+  "v2_d3_chip_01": {
+   "status": "PASS",
+   "defects": [],
+   "usage": {
+    "input": 1382,
+    "output": 11,
+    "total": 9257
+   }
+  },
+  "v2_d3_chip_02": {
+   "status": "PASS",
+   "defects": [],
+   "usage": {
+    "input": 1392,
+    "output": 11,
+    "total": 7856
+   }
+  },
+  "v2_d3_free_01": {
+   "status": "PASS",
+   "defects": [],
+   "usage": {
+    "input": 1496,
+    "output": 11,
+    "total": 7616
+   }
+  },
+  "v2_d3_adv_01": {
+   "status": "PASS",
+   "defects": [],
+   "usage": {
+    "input": 1450,
+    "output": 11,
+    "total": 8294
+   }
+  }
+ }
+}

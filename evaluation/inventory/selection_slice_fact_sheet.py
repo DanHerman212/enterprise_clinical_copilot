@@ -33,35 +33,46 @@ from google.cloud import bigquery  # noqa: E402
 from services.mcp.config import ENTITY_ID_COLUMN, PROJECT, TABLE  # noqa: E402
 from services.mcp.tools import (  # noqa: E402
     discharge_medications,
+    get_admission_profile,
     get_lab_trends,
+    predict_readmission,
     rag_search_sections,
 )
 
 INVENTORY = REPO / "evaluation" / "cohort_provenance_inventory.json"
 OUT = REPO / "evaluation" / "selection_slice_fact_sheet.md"
 
-#: The five records, with the archetype each was selected for. The selection rule for each
-#: is stated so the choice can be argued with rather than taken on trust:
+#: A machine-readable dump of the same facts, written outside the repository so that the
+#: dataset author works from exactly the numbers printed in the sheet and nothing else.
+AUTHORING_DUMP = Path("/tmp/selection_slice_facts_v2.json")
+
+#: The seven records Sprint 04c builds `ecc-model-selection-slice-v2` on, with the reason
+#: each was picked. Every one is disjoint from the Dev suite (7 records), the Holdout suite
+#: (6), the census's reserved set, and the five records `ecc-model-selection-slice-v1`
+#: used, and the exclusion is asserted by `tests/evaluation/test_selection_slice_schema.py`.
 #:
-#:   P1 — unused inpatient, dedicated medication section, a documented taper, highest
-#:        predicted risk among that set. Ties by larger medication text, then hadm id.
-#:   P2 — unused inpatient, highest predicted readmission risk overall; requires at least
-#:        one abnormal discharge lab so the risk drivers have something to point at.
-#:   P3 — unused inpatient, zero abnormal discharge labs at the lowest predicted risk.
-#:        Clean ground truth for a false-premise trap.
-#:   P4 — unused inpatient, the most note sections, so a cross-section question has
-#:        somewhere to go.
-#:   P5 — unused served outpatient confirmed by `evaluation/outpatient_oracle.py`, fewest
-#:        note sections, then lowest risk.
-#:
-#: Records reserved elsewhere are never candidates: the six the Dev suite uses, the four
-#: the Holdout suite uses, and the five the census inventories as `recommended_holdout`.
+#:   V1 — the outpatient admission. The slice needs one `outpatient_oracle.py`-confirmed
+#:        encounter so the missing-section boundary trap has a record where the absence is
+#:        the correct answer.
+#:   V2 — an inpatient whose medication record exists only in narrative sections, with a
+#:        documented taper. Tests the dedicated-section fallback without inventing one.
+#:   V3 — an inpatient with a dedicated medication section and abnormal discharge labs, so
+#:        `/meds`, `/labs` and the risk drivers all have real material on one record.
+#:   V4 — an inpatient with few abnormal labs and a low score: the clean record a
+#:        false-premise challenge needs, because the absence is verifiable.
+#:   V5 — the record with the most abnormal discharge labs, for the `/labs` items.
+#:   V6 — an inpatient with no dedicated medication section and several abnormal labs, for
+#:        the multi-turn chain that moves between the chart and the numbers.
+#:   V7 — an inpatient with four abnormal labs and no dedicated medication section, for a
+#:        cross-domain free-form question where two tools have to be chosen.
 SELECTION: dict[int, str] = {
-    90000010: "P1 — complex medication taper / regimen change (inpatient)",
-    90000086: "P2 — high predicted risk with abnormal discharge labs (inpatient)",
-    90000011: "P3 — every discharge lab normal, lowest risk (inpatient)",
-    90000081: "P4 — multi-section, irregular note formatting (inpatient)",
-    90000054: "P5 — served outpatient encounter, oracle-confirmed",
+    90000040: "V1 — oracle-confirmed outpatient encounter (outpatient)",
+    90000059: "V2 — narrative-only medication record with a documented taper (inpatient)",
+    90000090: "V3 — dedicated medication section plus abnormal discharge labs (inpatient)",
+    90000020: "V4 — clean record at low risk (inpatient)",
+    90000041: "V5 — most abnormal discharge labs (inpatient)",
+    90000069: "V6 — no dedicated medication section, several abnormal labs (inpatient)",
+    90000099: "V7 — four abnormal labs, narrative-only medications (inpatient)",
 }
 
 #: Drug classes the shorthand and false-premise trajectories will ask about, so the sheet
@@ -158,21 +169,24 @@ async def _async_facts() -> dict[int, dict]:
             "meds": await discharge_medications(hadm_id),
             "labs": await get_lab_trends(hadm_id),
             "notes": await rag_search_sections(hadm_id),
+            "risk": await predict_readmission(hadm_id),
+            "profile": await get_admission_profile(hadm_id),
         }
     return facts
 
 
 def render(inventory: dict, rows: dict[int, dict], facts: dict[int, dict]) -> str:
     lines: list[str] = [
-        "# Selection-Slice Fact Sheet — Sprint 02",
+        "# Selection-Slice Fact Sheet — Sprint 04c",
         "",
         "Generated by `evaluation/inventory/selection_slice_fact_sheet.py` from "
         "`evaluation/cohort_provenance_inventory.json`, the three patient-scoped "
         "deterministic tools, and the feature row each patient was scored on. "
         "**Zero LLM calls.** Every figure is copied; every note sentence is quoted.",
         "",
-        "Five records, one per archetype, none of them used by the Dev suite, the Holdout "
-        "suite, or the census's own `recommended_holdout`. Threshold is 0.11 on every "
+        "Seven records, one per column of the 2D matrix, none of them used by the Dev "
+        "suite (seven records), the Holdout suite (six), the census's reserved set, or the "
+        "five records `ecc-model-selection-slice-v1` used. Threshold is 0.11 on every "
         "record; the decision is the model's own.",
         "",
     ]
@@ -290,7 +304,13 @@ def main() -> int:
     rows = _rows(tuple(SELECTION))
     facts = asyncio.run(_async_facts())
     OUT.write_text(render(inventory, rows, facts), encoding="utf-8")
+    AUTHORING_DUMP.write_text(
+        json.dumps({"selection": {str(k): v for k, v in SELECTION.items()},
+                    "facts": {str(k): v for k, v in facts.items()}},
+                   indent=2, default=str),
+        encoding="utf-8")
     print(f"wrote {OUT.relative_to(REPO)} ({len(SELECTION)} records, 0 LLM calls)")
+    print(f"wrote {AUTHORING_DUMP}")
     return 0
 
 

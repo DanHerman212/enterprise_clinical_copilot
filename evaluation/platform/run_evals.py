@@ -377,13 +377,35 @@ def run(datasets: tuple[str, ...], *, run_name: str,
 
 
 def _judge_channel(outcome: Any) -> dict[str, Any]:
-    """The grading cost this item already carries, read off its own scores.
+    """The grading cost this item already carries, read from the run's own record.
 
-    The composite writes `judge_*_tokens` and `judge_cost_usd` from the usage the judge
-    returned, so the grading total is a read rather than a second measurement. Reading it
-    here keeps one number: a re-derivation would be a second place for the price table to
-    be applied, and the two could drift.
+    The composite stores the judge's usage beside the trace it graded, in process only:
+    since Sprint 04d the scoring onto Langfuse covers judgements and nothing else, so the
+    price of the grading is a local number rather than a score row. The price is applied
+    here, once, from the model the judge reported.
+
+    Falls back to the (now normally absent) `judge_*` scores so an older run still prices,
+    and reports `None` rather than `0` when nothing was recorded — an unscraped grading
+    must read as unattributed, not free.
     """
+    from evaluation.platform import evaluators as ev
+    from evaluation.platform import pricing
+
+    record: dict[str, Any] = {}
+    keys = [outcome.trace_id, *((outcome.output or {}).get("turn_trace_ids") or [])]
+    for key in keys:
+        if isinstance(key, str) and ev.JUDGE_CHANNEL.get(key):
+            record = dict(ev.JUDGE_CHANNEL.pop(key) or {})
+            break
+    if record:
+        usage = pricing.normalise_usage(record.get("usage"))
+        model = record.get("model")
+        try:
+            cost = pricing.cost_usd(model, usage) if model else None
+        except pricing.UnknownModelError:
+            cost = None
+        return {"usage": usage, "cost_usd": cost}
+
     scores = {evaluation.name: evaluation.value for evaluation in outcome.evaluations}
     usage = {
         field: int(scores[f"judge_{field}_tokens"])
@@ -424,13 +446,6 @@ def _record_costs(client: Any, outcomes: list[Any], *,
     for outcome in outcomes:
         usage = trace_export.scenario_usage(client, outcome.output or {})
         agent_cost = usage.get("cost_usd")
-        evaluations = ev.agent_cost_evaluations(usage, agent_cost)
-        for evaluation in evaluations:
-            if outcome.trace_id:
-                client.create_score(
-                    trace_id=outcome.trace_id, name=evaluation.name,
-                    value=evaluation.value, comment=evaluation.comment,
-                    data_type=evaluation.data_type)
         judge = _judge_channel(outcome)
 
         if agent_cost is None:
@@ -477,19 +492,11 @@ def _record_costs(client: Any, outcomes: list[Any], *,
         "generations": generations,
         **tokens,
     }
-    # The two totals as run-level scores, so the Datasets view can sort runs by what they
-    # cost without a reader re-deriving it from item scores. Informational like the rest:
-    # the gate score written by `record_run_scores` reads none of this.
-    if dataset_run_id:
-        client.create_score(
-            dataset_run_id=dataset_run_id, name="agent_cost_usd",
-            value=float(agent_total), data_type="NUMERIC",
-            comment=(f"{scenarios} priced scenario(s), {unattributed} unattributed, "
-                     f"{generations} generation(s)"))
-        client.create_score(
-            dataset_run_id=dataset_run_id, name="judge_cost_usd",
-            value=float(judge_total), data_type="NUMERIC",
-            comment=f"{judge_priced} priced grading(s) at {JUDGE_MODEL}")
+    # The two totals are computed here and reported by this function's return value, the
+    # CLI summary and the diagnostics JSONL. They are deliberately NOT written as
+    # dataset-run scores: Langfuse's Scores table holds judgements, and a run-level price
+    # in it sorts runs by money in the same column a reader checks for quality. The native
+    # trace cost is where a reader who wants money looks.
     return totals
 
 

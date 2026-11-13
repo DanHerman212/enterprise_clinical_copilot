@@ -250,7 +250,7 @@ def test_the_extraction_call_forbids_thinking_and_forces_json():
     bound = llm.seen[-1]
     # `thinking_level`, not `thinking_budget`: Gemini 3 gives the level precedence and
     # discards the budget, so binding the budget is a setting that never applies.
-    assert bound["thinking_level"] == "minimal"
+    assert bound["thinking_level"] == "low"
     assert "thinking_budget" not in bound
     assert bound["response_mime_type"] == "application/json"
 
@@ -285,8 +285,8 @@ def test_a_malformed_reply_is_not_retried():
 
 def test_the_structured_params_never_reach_the_formatting_turn():
     """`_formatting_turn` must keep its thinking: its prose is what the reader reads."""
-    assert "thinking_level" in deterministic._STRUCTURED_CALL_PARAMS
-    assert "thinking_level" not in inspect.getsource(
+    assert "effort" in deterministic._STRUCTURED_CALL_PARAMS
+    assert "effort" not in inspect.getsource(
         deterministic._formatting_turn)
 
 

@@ -68,7 +68,7 @@ def _generation(model: str, *, tokens_in: int, tokens_out: int,
     return _Observation("GENERATION", model, usage)
 
 
-FLASH = "gemini-3.1-flash-lite"
+FLASH = "gemini-3.8-flash"
 RATE = pricing.rate_for(FLASH)
 
 
@@ -244,7 +244,35 @@ def test_two_models_in_one_scenario_are_each_priced_at_their_own_rate(monkeypatc
 
     usage = trace_export.scenario_usage(client, {"turn_trace_ids": ["t"]})
 
-    assert usage["models"] == ["gemini-3.1-flash-lite", "xai/grok-4.7"]
+    assert usage["models"] == ["gemini-3.8-flash", "xai/grok-4.7"]
     assert usage["cost_usd"] == pytest.approx(
         (1000 * RATE.input + 100 * RATE.output) / 1e6
         + (1000 * 2.00 + 100 * 6.00) / 1e6)
+
+
+def test_the_reasoning_split_langfuse_stores_is_priced_as_output(monkeypatch):
+    """The Sprint 04 measurement, read back exactly as Langfuse stored it.
+
+    Langfuse's callback subtracts reasoning from `output` and keeps it beside it as
+    `output_reasoning`, so a turn that thought for 3,929 tokens and answered in 163 read
+    as 163 tokens of output and was costed at a tenth of the bill. The four numbers below
+    are the payload copied from trace `055d6373875661479ad9b3c60f3b5332`.
+    """
+
+    class _Stored:
+        type = "GENERATION"
+        model = "gemini-3.8-flash"
+        usage_details = {"input": 1361, "input_cache_read": 0, "output": 163,
+                         "output_reasoning": 3929, "total": 5453}
+
+    monkeypatch.setattr(trace_export.time, "sleep", lambda _s: None)
+    usage = trace_export.scenario_usage(
+        _Client({"t": _Trace([_Stored()])}), {"turn_trace_ids": ["t"]})
+
+    assert usage["input"] == 1361
+    assert usage["thinking"] == 3929
+    assert usage["output"] == 163
+    assert usage["total"] == 5453
+    assert usage["billable_output"] == 4092
+    assert usage["cost_usd"] == pytest.approx(0.01636575)
+    assert usage["unattributed"] is False

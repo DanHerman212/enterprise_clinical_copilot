@@ -113,6 +113,56 @@ class GatewayUnavailable(RuntimeError):
     """
 
 
+class UnsupportedLevel(ValueError):
+    """A thinking level was bound that no profile in this table can name.
+
+    A configuration error, not a transport failure, so it is raised here with the value and
+    the model in it rather than sent to an endpoint that will answer 400. The distinction
+    matters downstream: a 400 is classified as a content refusal and is not retried, which
+    is the correct treatment for a request the provider will not accept, but it arrives
+    attached to whatever call happened to be in flight and reads in the record as though
+    the provider disliked something about the patient text.
+    """
+
+    def __init__(self, key: str, value: Any, profile_: "ModelProfile") -> None:
+        accepted = ", ".join(sorted(_GEMINI_TO_SEMANTIC.get(key, {}))) or "none"
+        super().__init__(
+            f"{key}={value!r} is not a level this table can name for {profile_.name}; "
+            f"the levels it translates are: {accepted}. A caller states the effort "
+            f"semantically (`effort`) and the profile supplies the spelling."
+        )
+        self.key = key
+        self.value = value
+        self.profile = profile_
+
+
+#: Ids that used to be served and are not any more. A retired id is a configuration error
+#: rather than an unknown one: `profile()` still serves a string it has never heard of with
+#: the default facts, because that is what a test double needs, but an id that WAS in this
+#: table and was removed on purpose must stop the deployment rather than be measured.
+#:
+#: `gemini-3.1-flash-lite` retired on 2026-11-13 (Sprint 04b). No traffic is served for it
+#: and no run may be labelled with it, so both the deployment environment and a mistyped
+#: `AGENT_MODEL` fail here, before a request is made.
+RETIRED_MODELS: dict[str, str] = {
+    "gemini-3.1-flash-lite": (
+        "retired on 2026-11-13 (Sprint 04b): it was the only profile that accepted a "
+        "minimal thinking level and it is no longer in the registry. Use "
+        "gemini-3.8-flash, which is the default pin."
+    ),
+}
+
+
+class RetiredModel(GatewayUnavailable):
+    """A retired model id was asked for. Fails at construction, not at the first call."""
+
+    def __init__(self, model_id: object) -> None:
+        super().__init__(
+            f"model {model_id!r} is {RETIRED_MODELS[str(model_id).strip()]}"
+        )
+        self.model_id = model_id
+
+
 # ---------------------------------------------------------------------------
 # Error classification.
 #
@@ -271,20 +321,14 @@ def _build_registry(google_location: str, anthropic_location: str,
     def add(profile: ModelProfile) -> None:
         table[profile.name] = profile
 
-    # Google. The pin keeps `minimal` as its per-call extraction level because that is what
-    # it accepts and what it has always used. The two newer models reject `minimal`
-    # outright — the accepted levels are low, medium and high — so their per-call level is
-    # the lowest they accept. Encoding that difference here is the whole reason this table
-    # exists.
-    pin_construction, pin_call = _google_thinking(
-        served_effort, extraction_effort, call="minimal")
-    add(ModelProfile(
-        name="gemini-3.1-flash-lite", family=GOOGLE,
-        wire_model="gemini-3.1-flash-lite", location=google_location,
-        construction=pin_construction, call=pin_call, json_mode="mime",
-    ))
+    # Google. Every profile here maps the extraction effort to `low`, which is the lowest
+    # level these models accept. `gemini-3.1-flash-lite` was retired on 2026-11-13: it was
+    # the one profile whose per-call level was `minimal`, and it is deliberately absent from
+    # this table, so asking for it raises the unknown-model error below rather than being
+    # served by a profile that no longer has a maintenance window.
     for name in ("gemini-3.8-flash", "gemini-3.1-pro"):
-        construction, per_call = _google_thinking("medium", "low", call="low")
+        construction, per_call = _google_thinking(
+            served_effort, extraction_effort, call="low")
         add(ModelProfile(
             name=name, family=GOOGLE,
             # A canonical id and a wire id are not the same thing: `gemini-3.1-pro` is
@@ -344,7 +388,11 @@ def _build_registry(google_location: str, anthropic_location: str,
 #: sense: before this table existed, every id went to the Gemini client with its own wire
 #: name, and an id this table does not know still does exactly that. What changed is that
 #: a *known* id now gets the parameters it actually accepts.
-DEFAULT_PROFILE_NAME = "gemini-3.1-flash-lite"
+#:
+#: Moved from `gemini-3.1-flash-lite` to `gemini-3.8-flash` on 2026-11-13, when the
+#: retirement directive promoted the baseline to the pin. A retired id must not be the
+#: default, because a default is what an unconfigured deployment silently gets.
+DEFAULT_PROFILE_NAME = "gemini-3.8-flash"
 
 
 def _load_registry() -> None:
@@ -401,12 +449,69 @@ def _attach(model: Any, profile_: ModelProfile) -> Any:
     return model
 
 
+def _declared_model(model: Any, depth: int = 0) -> str | None:
+    """The model id a client — or a runnable derived from one — was built for.
+
+    Needed because binding loses the identity this module hangs a profile on. LangChain
+    returns a `_ChatModelBinding` from `bind` and `bind_tools`, and that object is not the
+    client, so neither the `gateway_profile` attribute nor the `_CONSTRUCTED` entry
+    applies to it. The binding does still carry the client it was made from, and the
+    client still names its model, so the name is what survives a bind.
+
+    Read in that order — the runnable itself, then its kwargs, then what it wraps — because
+    `RunnableBinding` proxies attribute access to the runnable it wraps, and a `model`
+    string found there is the same answer as one found directly.
+
+    `depth` stops a binding that wraps itself, which would otherwise recurse forever.
+    """
+    if depth > 4:
+        return None
+    for attribute in ("model", "model_name"):
+        value = getattr(model, attribute, None)
+        if isinstance(value, str) and value:
+            return value
+    kwargs = getattr(model, "kwargs", None)
+    if isinstance(kwargs, Mapping):
+        for key in ("model", "model_name"):
+            value = kwargs.get(key)
+            if isinstance(value, str) and value:
+                return value
+    inner = getattr(model, "bound", None)
+    if inner is not None and inner is not model:
+        return _declared_model(inner, depth + 1)
+    return None
+
+
+def _profile_named(name: str, table: Mapping[str, ModelProfile]) -> ModelProfile | None:
+    """The profile for a canonical id or a wire id, or None when neither names one.
+
+    Both are looked up because the two are not always the same string — a run is labelled
+    `gemini-3.1-pro` and the provider is asked for `gemini-3.1-pro-preview` — and a caller
+    can legitimately hold either.
+    """
+    if name in table:
+        return table[name]
+    for candidate in table.values():
+        if candidate.wire_model == name:
+            return candidate
+    return None
+
+
 def profile_for(model: Any) -> ModelProfile:
     """The profile a client was built from, or the default profile for a double.
 
     A test double has no profile, and pretending otherwise would make the mapping
     untestable: it gets the default profile's facts, which is precisely the behaviour the
     production default path must have.
+
+    A client derived by binding is a different case and the reason this function reads a
+    model name at all. Resolution by object identity misses every `bind` and `bind_tools`
+    result, and the fallback is silent — a binding made from `gemini-3.8-flash` resolved
+    to the pin's profile and was then given the pin's per-call level, `minimal`, which
+    `gemini-3.8-flash` refuses with a 400 INVALID_ARGUMENT. Measured 2026-11-13 on
+    `agent-00286` (Sprint 04 pre-flight, `sel_t2_01`): every structured or ceiling-bound
+    call made on a tool-bound client failed this way. So a client that names a model the
+    table knows is resolved by that name before the default is reached.
     """
     _load_registry()
     owned = getattr(model, "gateway_profile", None)
@@ -415,6 +520,11 @@ def profile_for(model: Any) -> ModelProfile:
     entry = _CONSTRUCTED.get(id(model))
     if entry is not None and entry[0] is model:
         return entry[1]
+    declared = _declared_model(model)
+    if declared is not None:
+        named = _profile_named(declared, PROFILES)
+        if named is not None:
+            return named
     return PROFILES[DEFAULT_PROFILE_NAME]
 
 
@@ -468,9 +578,17 @@ def wire_bindings(profile_: ModelProfile, request: Mapping[str, Any]) -> dict[st
 
     The request may be written either way round — semantic (`effort`, `json_mode`) or in
     the default provider's spelling (`thinking_level`, `response_mime_type`) — because the
-    two call sites that use it were written before this module existed and one of them is
-    frozen. A parameter this module does not recognise passes through untouched, so a
-    caller can still bind something provider-neutral such as `max_output_tokens`.
+    two call sites that use it were written before this module existed. A parameter this
+    module does not recognise passes through untouched, so a caller can still bind
+    something provider-neutral such as `max_output_tokens`.
+
+    One spelling is refused rather than passed through: a `thinking_level` this table
+    cannot name. Every level the Gemini client accepts is in `_GEMINI_TO_SEMANTIC`, so a
+    surviving `thinking_level` is a value no profile here agrees on, and sending it would
+    be asking a provider to interpret a word this module never verified. Raising names the
+    value instead of letting the endpoint answer with a 400 that is indistinguishable from
+    a transport failure — which is exactly what `THINKING_LEVEL_MINIMAL` on
+    `gemini-3.8-flash` looked like on 2026-11-13.
     """
     semantic = _semantic(request)
     out: dict[str, Any] = {}
@@ -487,6 +605,8 @@ def wire_bindings(profile_: ModelProfile, request: Mapping[str, Any]) -> dict[st
             # `prompt` adds nothing: the instruction already in the prompt is the whole
             # mechanism, and claiming a wire parameter this provider does not have would
             # be a setting that never applies.
+        elif key == "thinking_level":
+            raise UnsupportedLevel(key, value, profile_)
         else:
             out[key] = value
     return out
@@ -871,6 +991,9 @@ def chat_model(model_id: str | None, *, safety_profile: str = SAFETY_SERVED,
 
     The only place in the service that names a provider package.
     """
+    retired = RETIRED_MODELS.get(str(model_id or "").strip())
+    if retired is not None:
+        raise RetiredModel(model_id)
     profile_ = profile(model_id)
     if profile_.family == GOOGLE:
         return _attach(_google_client(profile_, safety_profile=safety_profile,

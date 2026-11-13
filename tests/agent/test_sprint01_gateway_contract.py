@@ -30,13 +30,15 @@ from shared import model_outcomes  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 
-PIN = "gemini-3.1-flash-lite"
+PIN = "gemini-3.8-flash"
 FLASH_CANDIDATE = "gemini-3.8-flash"
 PRO_CANDIDATE = "gemini-3.1-pro"
 CLAUDE = "claude-sonnet-5-5"
 MUSE = "muse-spark-1.3"
 
-ALL_FIVE = (PIN, FLASH_CANDIDATE, PRO_CANDIDATE, CLAUDE, MUSE)
+#: The four ids the programme can serve as of Sprint 04b. `gemini-3.1-flash-lite` was
+#: retired on 2026-11-13 and is deliberately absent from the registry, so it is not here.
+ALL_FIVE = (PIN, PRO_CANDIDATE, CLAUDE, MUSE)
 
 
 def _turn(text="", **metadata):
@@ -102,7 +104,7 @@ def test_the_extraction_path_thinks_less_at_construction():
 def test_the_pin_keeps_the_extraction_level_it_accepts():
     profile = gateway.profile(PIN)
     assert gateway.call_parameters(profile, gateway.EFFORT_EXTRACTION) == {
-        "thinking_level": "minimal",
+        "thinking_level": "low",
     }
 
 
@@ -122,7 +124,7 @@ def test_a_candidate_that_rejects_minimal_gets_the_lowest_level_it_accepts():
         }
     pin = gateway.profile(PIN)
     assert gateway.call_parameters(pin, gateway.EFFORT_EXTRACTION) == {
-        "thinking_level": "minimal",
+        "thinking_level": "low",
     }
     assert gateway.call_parameters(pin, gateway.EFFORT_SERVED) == {}
 
@@ -156,7 +158,7 @@ def test_the_extraction_request_round_trips_through_the_default_profile():
     bound = gateway.wire_bindings(
         gateway.profile(PIN), deterministic._STRUCTURED_CALL_PARAMS)
     assert bound == {
-        "thinking_level": "minimal",
+        "thinking_level": "low",
         "response_mime_type": "application/json",
     }
 
@@ -709,7 +711,7 @@ def test_the_wrapper_falls_through_to_the_wrapped_clients_own_attributes():
 
 GEMINI_LIVE_METADATA = {
     "finish_reason": "STOP",
-    "model_name": "gemini-3.1-flash-lite",
+    "model_name": "gemini-3.8-flash",
     "safety_ratings": [
         {"category": "HARM_CATEGORY_HATE_SPEECH", "probability": "NEGLIGIBLE",
          "blocked": False},
@@ -742,7 +744,7 @@ def test_the_gemini_shape_reads_as_a_stop_with_measured_thinking():
     assert model_turn.outcome(reply) == model_turn.OK
     assert model_turn.blocked_reason(reply) is None
     assert model_turn.filtered_categories(reply) is None
-    assert model_turn.served_model(reply) == "gemini-3.1-flash-lite"
+    assert model_turn.served_model(reply) == "gemini-3.8-flash"
     assert model_turn.text_of(reply.content) == "139 mEq/L."
     assert model_turn.token_usage({"messages": [reply]}) == {
         "input": 32, "output": 144, "total": 176, "thinking": 136, "cached": 0,

@@ -17,6 +17,7 @@ from services.agent.engine import deterministic
 from services.agent.engine import graph
 from services.agent.engine import model as model_gateway
 from services.agent.postprocess.evidence_state import SessionEvidenceState
+from services.mcp import config
 
 HADM = 90000069
 
@@ -61,7 +62,7 @@ def test_the_input_bound_is_five_and_the_reply_ceiling_is_the_client_default():
     which is what let the ceiling come back down from twice that.
     """
     assert deterministic.MAX_EXTRACTION_CANDIDATES == 5
-    assert deterministic.COMPARATOR_REPLY_TOKENS == 4096
+    assert deterministic.COMPARATOR_REPLY_TOKENS == config.GEMINI_MAX_OUTPUT_TOKENS
 
 
 def test_the_retry_over_halves_is_spent_only_on_a_reply_that_was_cut_off():

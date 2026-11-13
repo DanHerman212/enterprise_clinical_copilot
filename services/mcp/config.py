@@ -215,7 +215,14 @@ NCBI_TIMEOUT_SECONDS = positive_int_env("NCBI_TIMEOUT_SECONDS", 10)
 # returned identical reasoning-token counts every time and scattered ones at
 # temperature 2; 3.5 scattered at temperature 0 exactly as it did at temperature 2.
 # 3.5 buys three more months of runway (2027-07-21 against 2027-05-07) and costs that.
-GEMINI_MODEL = "gemini-3.1-flash-lite"
+#
+# Moved to `gemini-3.8-flash` on 2026-11-13 (Sprint 04b). `gemini-3.1-flash-lite` was
+# retired from the runtime stack rather than deprecated alongside: it was the only profile
+# that accepted a `minimal` thinking level, its output allowance was being spent on
+# deliberation rather than on answers, and keeping two pins alive meant every measurement
+# carried an arm nobody was going to ship. Lifecycle date and replacement checked against
+# Google Cloud's model-versions table the same day; the retirement date is in `MODEL_CHOICE`.
+GEMINI_MODEL = "gemini-3.8-flash"
 
 # Which model the agent asks for, which is the pin above unless a deployment names
 # another. It is read from the environment rather than pinned because the whole point of
@@ -304,7 +311,18 @@ JUDGE_REASONING_EFFORT = (os.environ.get("JUDGE_REASONING_EFFORT") or "").strip(
 # wording. Truncation is silent, costs a whole turn, and reads as a retrieval failure, so
 # the allowance is set where a discharge list of that size has room for thought as well as
 # rows. It is a ceiling, not a spend: a turn that needs 200 tokens still uses 200.
-GEMINI_MAX_OUTPUT_TOKENS = 4096
+#
+# Raised 4096 -> 16384 on 2026-11-13, for a reason the 2026-10-28 note does not cover:
+# this allowance is shared with THINKING, and a model that thinks harder at the same effort
+# level therefore has less room for the answer, not more. On Sprint 04 pre-flight
+# (`agent-00286`, `AGENT_MODEL=gemini-3.8-flash`, item `sel_t1_01`, 90000010 `/meds`) the
+# extraction spent 3,929 tokens deliberating and had 163 left, finished MAX_TOKENS, and the
+# JSON never closed — the same reader-facing sentence as the 2026-10-28 incident, from the
+# opposite cause. The ceiling has to clear deliberation before it can bound an answer, so it
+# is sized for a reasoning model rather than for a discharge list: 16,384 is comfortably
+# inside every Gemini 3.x per-request output limit, and it remains a ceiling rather than a
+# spend.
+GEMINI_MAX_OUTPUT_TOKENS = 16384
 
 # How much thinking the model may do, as a level rather than a token budget. The 3.x
 # family replaces `thinking_budget` with this and the 2.5 family rejects it outright
@@ -344,13 +362,13 @@ GEMINI_REASONING_EFFORT = "medium"
 # model under test, which is what `evaluation/platform/judge_client.py` is today.
 MODEL_CHOICE = {
     "model": GEMINI_MODEL,
-    "decided": "2026-09-16",
+    "decided": "2026-11-13",
     "tier": "entry",
     "cheaper_alternative": None,
-    "retires": "2027-05-07",
+    "retires": "2027-09-02",
     "replacements": (),
-    "previous": "gemini-2.5-flash",
-    "previous_retired": "2026-10-20",
+    "previous": "gemini-3.1-flash-lite",
+    "previous_retired": "2027-05-07",
     "evidence": {
         "comparison": None,
         "why": (

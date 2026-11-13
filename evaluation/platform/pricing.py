@@ -66,8 +66,8 @@ def _register(rate: Rate, *aliases: str) -> None:
         _RATES[name.lower()] = rate
 
 
-_DEFAULT_PIN = Rate("gemini-3.1-flash-lite", "default pin",
-                    input=0.25, cached_read=0.025, cache_write=0.0, output=1.50)
+_DEFAULT_PIN = Rate("gemini-3.8-flash", "default pin",
+                    input=0.75, cached_read=0.075, cache_write=0.0, output=3.75)
 _register(_DEFAULT_PIN)
 
 _BASELINE = Rate("gemini-3.8-flash", "active baseline",
@@ -97,7 +97,6 @@ _register(_LEGACY_JUDGE)
 #: The order a report lists the roster in. Named rather than taken from the dict, so a
 #: table in a report does not reorder itself when an alias is added.
 ROSTER: tuple[str, ...] = (
-    "gemini-3.1-flash-lite",
     "gemini-3.8-flash",
     "gemini-3.1-pro",
     "muse-spark-1.3",

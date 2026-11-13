@@ -38,7 +38,7 @@ def test_every_roster_model_has_a_rate():
     ("muse-spark-1.3", "muse-spark-1.3"),
     ("gemini-3.1-pro-preview", "gemini-3.1-pro"),
     ("gemini-3.1-pro", "gemini-3.1-pro"),
-    ("  GEMINI-3.1-FLASH-LITE  ", "gemini-3.1-flash-lite"),
+    ("  GEMINI-3.8-FLASH  ", "gemini-3.8-flash"),
 ])
 def test_a_served_alias_prices_as_its_canonical_id(alias, canonical):
     assert pricing.rate_for(alias) == pricing.rate_for(canonical)
@@ -58,7 +58,6 @@ def test_an_unknown_model_raises_rather_than_costing_zero():
 def test_the_published_rate_table_is_what_the_code_says():
     """The six rows a report prints, transcribed once and asserted once."""
     expected = {
-        "gemini-3.1-flash-lite": (0.25, 0.025, 0.0, 1.50),
         "gemini-3.8-flash": (0.75, 0.075, 0.0, 3.75),
         "gemini-3.1-pro": (2.00, 0.20, 0.0, 12.00),
         "muse-spark-1.3": (1.25, 0.15, 0.0, 4.25),
@@ -81,9 +80,9 @@ class TestNoDoubleCounting:
         """
         usage = {"input": 32, "output": 160, "thinking": 153, "total": 192,
                  "cached": None, "cache_write": None}
-        rate = pricing.rate_for("gemini-3.1-flash-lite")
+        rate = pricing.rate_for("gemini-3.8-flash")
 
-        cost = pricing.cost_usd("gemini-3.1-flash-lite", usage)
+        cost = pricing.cost_usd("gemini-3.8-flash", usage)
 
         assert pricing.billable_output(usage) == 160
         assert cost == pytest.approx((32 * rate.input + 160 * rate.output) / 1e6)
@@ -166,8 +165,8 @@ class TestNoDoubleCounting:
                  "thinking": None}
         assert pricing.cost_usd("claude-sonnet-5-5", usage) == pytest.approx(
             (1000 * 2.00 + 1000 * 2.50) / 1e6)
-        assert pricing.cost_usd("gemini-3.1-flash-lite", usage) == pytest.approx(
-            (1000 * 0.25) / 1e6)
+        assert pricing.cost_usd("gemini-3.8-flash", usage) == pytest.approx(
+            (1000 * 0.75) / 1e6)
 
 
 class TestUsageNormalisation:

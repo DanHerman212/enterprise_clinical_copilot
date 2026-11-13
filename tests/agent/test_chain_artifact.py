@@ -88,7 +88,7 @@ def test_the_model_is_pinned_and_ignores_the_environment(monkeypatch):
     try:
         importlib.reload(config)
         assert config.GEMINI_MODEL != "gemini-imaginary-1"
-        assert config.GEMINI_MODEL == "gemini-3.1-flash-lite"
+        assert config.GEMINI_MODEL == "gemini-3.8-flash"
     finally:
         monkeypatch.delenv("GEMINI_MODEL", raising=False)
         importlib.reload(config)

@@ -91,6 +91,7 @@ from services.agent.routing.routing import (
     supplementary_arguments,
     tool_arguments,
 )
+from services.mcp import config as mcp_config
 from services.mcp.retrieval.sections import ADMISSION_DIAGNOSIS
 
 logger = logging.getLogger(__name__)
@@ -2083,41 +2084,31 @@ STRUCTURED_MAX_ATTEMPTS = 2
 
 #: The generation parameters a structured reply is asked for under.
 #:
-#: `thinking_level="minimal"` because the two questions are extraction, not reasoning —
-#: "which condition is this admission for" and "which abstract states a 30-day rate" are
-#: answered by reading, and the tokens spent deliberating them are spent before the first
-#: character of JSON. Measured on `4ed74ac0` (2026-11-08): 3928 and 3933 reasoning tokens
-#: for 164 and 159 tokens of output, 36.8 s of an 88.7 s turn, and BOTH replies failed to
-#: parse — the allowance went to thoughts and the answer arrived truncated.
+#: The extraction effort, because the two questions are extraction, not reasoning — "which
+#: condition is this admission for" and "which abstract states a 30-day rate" are answered
+#: by reading, and the tokens spent deliberating them are spent before the first character
+#: of JSON. Measured on `4ed74ac0` (2026-11-08): 3928 and 3933 reasoning tokens for 164
+#: and 159 tokens of output, 36.8 s of an 88.7 s turn, and BOTH replies failed to parse —
+#: the allowance went to thoughts and the answer arrived truncated.
 #:
-#: NOT `thinking_budget=0`, which is what this first tried and what the directive asked
-#: for. On Gemini 3+ the client maps `reasoning_effort` to `thinking_level` and the LEVEL
-#: wins, so a budget of zero is discarded with a warning while the model keeps its effort:
+#: Stated as an EFFORT rather than as a provider's level. This once read
+#: `{"thinking_level": "minimal", "response_mime_type": "application/json"}`, which was the
+#: pin's spelling spoken by a module that was never told which model would serve the call.
+#: The pin accepts `minimal`; `gemini-3.8-flash` and `gemini-3.1-pro` refuse it with a 400
+#: INVALID_ARGUMENT, so on 2026-11-13 (Sprint 04 pre-flight, `sel_t2_01`) every structured
+#: call made on a tool-bound client failed, and the failure surfaced as `agent_failed` with
+#: no trace id. The level a provider maps this effort onto is a property of the model, so it
+#: is answered in `engine/gateway.py` and nowhere else.
 #:
-#:     Both 'thinking_level' and 'thinking_budget' were set after merging thinking
-#:     configuration values. 'thinking_level' takes precedence for Gemini 3+ models;
-#:     'thinking_budget' will be ignored.
-#:
-#: `thinking_level` has no "off" — the accepted values are minimal, low, medium, high
-#: (`ChatGoogleGenerativeAI.thinking_level`) — so `minimal` is the floor this model
-#: exposes. A reasoning count of exactly zero is not reachable here, and reporting one
-#: would be a measurement nobody took.
-#:
-#: `response_mime_type` makes the reply a JSON object by contract rather than by
-#: instruction, which is the half of the directive that does hold.
+#: `json_mode` makes the reply a JSON object by contract rather than by instruction. Which
+#: wire parameter expresses that — a response mime type, an OpenAI-style `response_format`,
+#: or nothing at all but the prompt — is a provider fact for the same reason.
 #:
 #: Set per call rather than at construction: the client is built once and shared with the
 #: formatting turn, which must keep its thinking.
-#:
-#: These are the DEFAULT provider's spellings, and they are named that rather than hidden:
-#: `_bounded_call` hands them to `engine/gateway.py`, which translates them into whatever
-#: the model serving the call accepts. So this module states what the extraction wants —
-#: think as little as the model allows, and answer in JSON — in the one dialect that was
-#: here before the adapter existed, and the adapter is the only place that decides what
-#: that means for a model that speaks a different one.
 _STRUCTURED_CALL_PARAMS: dict[str, Any] = {
-    "thinking_level": "minimal",
-    "response_mime_type": "application/json",
+    "effort": gateway.EFFORT_EXTRACTION,
+    "json_mode": True,
 }
 
 
@@ -2130,10 +2121,10 @@ async def _structured_reply(
     than read: a condition becomes a query string, and a row becomes a claim that has to
     match the abstract it came from. Prose in either place would be unfalsifiable.
 
-    The call carries `_STRUCTURED_CALL_PARAMS`: no thinking, and a JSON mime type. Both are
-    latency and reliability, not fidelity — the model is being asked to transcribe what it
-    read, and the two failure modes observed in production were a reply that spent its
-    allowance on deliberation (`4ed74ac0`) and one that arrived as prose.
+    The call carries `_STRUCTURED_CALL_PARAMS`: the extraction effort and a JSON reply.
+    Both are latency and reliability, not fidelity — the model is being asked to transcribe
+    what it read, and the two failure modes observed in production were a reply that spent
+    its allowance on deliberation (`4ed74ac0`) and one that arrived as prose.
 
     A capacity refusal is retried ONCE (`STRUCTURED_MAX_ATTEMPTS`) and, exhausted, reported
     as `REPLY_RATE_LIMITED` rather than raised: both callers have a defined answer for a
@@ -2825,13 +2816,17 @@ async def candidate_pass(search, target: ClinicalTarget) -> CandidatePass:
 
 #: The output ceiling for one comparator extraction, in tokens.
 #:
-#: The client's default (`GEMINI_MAX_OUTPUT_TOKENS`, 4096), and it is enough now that the
-#: pool is bounded at `MAX_EXTRACTION_CANDIDATES`. It was raised to twice that when one
-#: call could be handed twenty-five abstracts: measured 2026-11-06 on `90000069`, the reply
-#: came back `finish_reason=MAX_TOKENS`, `_extract_json_object` found no object, and a table
-#: that had two verifiable cohorts in it drew nothing. Bounding the input fixes the cause;
-#: the retry over halves stays for the residue.
-COMPARATOR_REPLY_TOKENS = 4096
+#: Derived from the client's own default (`GEMINI_MAX_OUTPUT_TOKENS`) rather than restated,
+#: because the two numbers were 4096 twice and the second one was the lower of the pair the
+#: moment the default moved. A ceiling here that is smaller than the client's would be a
+#: cap nobody wrote down as a decision: the bind succeeds, the model truncates, and the
+#: failure reads as an unparseable reply. It is enough now that the pool is bounded at
+#: `MAX_EXTRACTION_CANDIDATES`. It was doubled once when one call could be handed
+#: twenty-five abstracts: measured 2026-11-06 on `90000069`, the reply came back
+#: `finish_reason=MAX_TOKENS`, `_extract_json_object` found no object, and a table that had
+#: two verifiable cohorts in it drew nothing. Bounding the input fixes the cause; the retry
+#: over halves stays for the residue.
+COMPARATOR_REPLY_TOKENS = mcp_config.GEMINI_MAX_OUTPUT_TOKENS
 
 #: How many abstracts one extraction call is given before the pool is split.
 #:
@@ -2844,11 +2839,10 @@ COMPARATOR_POOL_SPLIT_THRESHOLD = 1
 def _bounded_call(llm, params: dict[str, Any]):
     """The model with one call's generation parameters bound.
 
-    The parameters arrive in the *default* provider's spelling — that is what
-    `_STRUCTURED_CALL_PARAMS` is — and the adapter re-expresses them for whichever model
-    is actually serving the call. That indirection is the point: a candidate that rejects
-    a thinking level, or spells "answer in JSON" differently, gets its own spelling without
-    this module learning a single provider fact.
+    The parameters are semantic — an effort level and "answer in JSON" — and the adapter
+    re-expresses them for whichever model is actually serving the call. That indirection is
+    the point: a candidate that refuses a level, or spells "answer in JSON" differently,
+    gets its own spelling without this module learning a single provider fact.
 
     A client with no `bind` is returned unchanged, which is what keeps a test double usable
     here without implementing LangChain's binding surface.

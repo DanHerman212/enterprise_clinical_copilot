@@ -124,6 +124,40 @@ def export_item(client: Any, output: dict[str, Any], **kwargs: Any) -> list[dict
 # ===========================================================================
 
 
+#: The names Langfuse's LangChain handler gives the counts it splits out of a provider's
+#: usage block, and the term this harness calls each one.
+#:
+#: The handler subtracts a sub-category from its parent before storing it — `output`
+#: becomes the tokens the reader saw and `output_reasoning` the ones the model spent
+#: thinking — which is the opposite convention to the raw provider payload, where reasoning
+#: is inside `output`. Read without translating, a turn whose model thought for 3,929
+#: tokens and answered in 163 was costed at 163 tokens of output: `trace_export` reported
+#: `agent_cost_usd 0.001632` on 2026-11-13 where the trace's own `calculated_total_cost`
+#: was `0.01636575`, a factor of ten, in the column the arms are compared on.
+#:
+#: The mapping is by name rather than by arithmetic, so nothing is inferred: the two counts
+#: are reported, and `pricing.billable_output` decides from `total` whether the reasoning
+#: has already been billed once.
+_LANGFUSE_SUBCOUNTS: tuple[tuple[str, str], ...] = (
+    ("output_reasoning", "thinking"),
+    ("input_cache_read", "cached"),
+    ("input_cache_write", "cache_write"),
+)
+
+
+def _langfuse_terms(block: dict[str, Any]) -> dict[str, Any]:
+    """One stored usage block, with Langfuse's sub-category names read as ours.
+
+    A name that is already present is left alone, because a block that reports both
+    spellings is reporting the same count twice and the first one wins.
+    """
+    out = dict(block)
+    for source, target in _LANGFUSE_SUBCOUNTS:
+        if source in out and target not in out:
+            out[target] = out.pop(source)
+    return out
+
+
 def _observation_usage(observation: Any) -> dict[str, int | None]:
     """One generation's usage, normalised. Reads `usage_details` then `usage`."""
     block: Any = getattr(observation, "usage_details", None)
@@ -134,7 +168,9 @@ def _observation_usage(observation: Any) -> dict[str, int | None]:
             block = block.model_dump()
         except Exception:  # noqa: BLE001 — a usage block may not fail an export
             block = None
-    return pricing.normalise_usage(block if isinstance(block, dict) else None)
+    if not isinstance(block, dict):
+        return pricing.normalise_usage(None)
+    return pricing.normalise_usage(_langfuse_terms(block))
 
 
 def _is_generation(observation: Any) -> bool:
@@ -180,6 +216,11 @@ def _totals(generations: list[dict[str, Any]]) -> dict[str, Any]:
             priced = False
     return {
         **merged,
+        # What the cost was computed from, stated beside the counts it was computed from:
+        # `output` is what the reader saw and `billable_output` is what the provider
+        # charges for, and on a model that thinks they are different numbers.
+        "billable_input": pricing.billable_input(merged),
+        "billable_output": pricing.billable_output(merged),
         "cost_usd": total if priced else None,
         "models": sorted({generation["model"] for generation in generations
                           if generation["model"]}),
@@ -249,7 +290,7 @@ def scenario_usage(client: Any, output: dict[str, Any], **kwargs: Any) -> dict[s
              for index, trace_id in enumerate(ids)]
     merged = pricing.merge_usage(
         {key: turn.get(key) for key in ("input", "cached", "output", "cache_write",
-                                        "thinking")}
+                                        "thinking", "total")}
         for turn in turns)
     costs = [turn.get("cost_usd") for turn in turns]
     priced_values = [float(cost) for cost in costs if isinstance(cost, (int, float))]
@@ -259,6 +300,8 @@ def scenario_usage(client: Any, output: dict[str, Any], **kwargs: Any) -> dict[s
         "turns": turns,
         "turn_count": len(turns),
         **merged,
+        "billable_input": pricing.billable_input(merged),
+        "billable_output": pricing.billable_output(merged),
         "cost_usd": (sum(priced_values) if priced else None),
         "generations": sum(int(turn.get("generations") or 0) for turn in turns),
         "models": sorted({model for turn in turns for model in turn.get("models") or []}),

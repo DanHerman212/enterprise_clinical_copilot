@@ -176,8 +176,10 @@ def test_the_three_profiles_are_the_three_budgets_the_directive_names():
     synthesis = gateway.call_profile(gateway.CALL_PROFILE_EHR_SYNTHESIS)
     default = gateway.call_profile(gateway.CALL_PROFILE_DEFAULT)
 
-    assert (helper.thinking_budget, helper.max_output_tokens) == (0, 2048)
-    assert (synthesis.thinking_budget, synthesis.max_output_tokens) == (512, 1200)
+    # Thinking budgets only. A capped reply is not a shorter reply: it is one that stops
+    # mid-sentence, which is a worse answer rather than a faster one.
+    assert (helper.thinking_budget, helper.max_output_tokens) == (0, None)
+    assert (synthesis.thinking_budget, synthesis.max_output_tokens) == (512, None)
     # The default sets NOTHING, which is what keeps every other route on the baseline.
     assert (default.thinking_budget, default.max_output_tokens) == (None, None)
 
@@ -193,10 +195,10 @@ def test_the_profiles_are_spelled_for_the_family_that_serves_them():
 
     assert gateway.call_profile_parameters(
         profile, gateway.call_profile(gateway.CALL_PROFILE_FAST_HELPER),
-    ) == {"thinking_budget": 0, "max_output_tokens": 2048}
+    ) == {"thinking_budget": 0}
     assert gateway.call_profile_parameters(
         profile, gateway.call_profile(gateway.CALL_PROFILE_EHR_SYNTHESIS),
-    ) == {"thinking_budget": 512, "max_output_tokens": 1200}
+    ) == {"thinking_budget": 512}
     # The default adds no parameter at all, so it cannot move a baseline.
     assert gateway.call_profile_parameters(
         profile, gateway.call_profile(gateway.CALL_PROFILE_DEFAULT),
@@ -222,12 +224,13 @@ def test_the_default_client_carries_no_budget_and_the_served_ceiling():
     assert llm.max_output_tokens == config.GEMINI_MAX_OUTPUT_TOKENS
 
 
-def test_the_ehr_synthesis_client_is_budgeted():
+def test_the_ehr_synthesis_client_keeps_its_thinking_budget_and_no_ceiling():
     llm = model_gateway.build_llm(
         PIN, call_profile=model_gateway.CALL_PROFILE_EHR_SYNTHESIS)
 
     assert llm.thinking_budget == 512
-    assert llm.max_output_tokens == 1200
+    # No profile sells a reply short: the deployment's own ceiling still applies.
+    assert llm.max_output_tokens == config.GEMINI_MAX_OUTPUT_TOKENS
 
 
 def test_the_ehr_helper_client_thinks_not_at_all():
@@ -235,26 +238,30 @@ def test_the_ehr_helper_client_thinks_not_at_all():
         PIN, call_profile=model_gateway.CALL_PROFILE_FAST_HELPER)
 
     assert llm.thinking_budget == 0
-    assert llm.max_output_tokens == 2048
+    assert llm.max_output_tokens == config.GEMINI_MAX_OUTPUT_TOKENS
     # The content filter is still the extraction one: this is the same constructor.
     assert llm.reasoning_effort == gateway.EXTRACTION_REASONING_EFFORT
 
 
 def test_the_route_decides_the_profile_and_the_trace_records_the_same_one():
-    """`/ehr` is budgeted for its synthesis, `/meds` and `/labs` for their answers.
+    """`/ehr` is budgeted for its synthesis, `/labs` for its answer, `/meds` not at all.
 
     Both readers of `model.FORMATTING_PROFILES` are asserted here against the route alone,
     which is how the trace and the client construction are kept from disagreeing.
     """
     assert graph._call_profile_for("summarize") == gateway.CALL_PROFILE_EHR_SYNTHESIS
-    for kind in ("meds", "labs"):
-        assert graph._call_profile_for(kind) == gateway.CALL_PROFILE_FAST_HELPER
-    for kind in ("literature", None):
+    assert graph._call_profile_for("labs") == gateway.CALL_PROFILE_FAST_HELPER
+    for kind in ("meds", "literature", None):
         assert graph._call_profile_for(kind) == gateway.CALL_PROFILE_DEFAULT
 
 
 def test_the_ehr_helper_steps_are_built_on_the_fast_helper_profile(monkeypatch):
-    """Both `/ehr` helper calls come from one factory, and that factory is budgeted."""
+    """Both `/ehr` helper calls ask for the profile at the call site.
+
+    The suite's offline seam is put back to the module default for this test, so the
+    production branch is the one under assertion, and the constructor it reaches is patched
+    to record the keyword it was given.
+    """
     seen: dict = {}
 
     def _build(model, **kwargs):
@@ -262,8 +269,10 @@ def test_the_ehr_helper_steps_are_built_on_the_fast_helper_profile(monkeypatch):
         seen.update(kwargs)
         return object()
 
+    monkeypatch.setattr(deterministic, "extraction_llm_factory",
+                        deterministic._DEFAULT_EXTRACTION_FACTORY)
     monkeypatch.setattr(model_gateway, "build_extraction_llm", _build)
-    deterministic._ehr_extraction_client("test-model")
+    deterministic._ehr_helper_llm("test-model")
 
     assert seen == {
         "model": "test-model",
@@ -271,25 +280,37 @@ def test_the_ehr_helper_steps_are_built_on_the_fast_helper_profile(monkeypatch):
     }
 
 
+def test_a_replaced_extraction_seam_still_decides_the_helper_client(monkeypatch):
+    """The seam wins over the profile.
+
+    `conftest` replaces the factory with `lambda model: None` so no `/ehr` test reaches a
+    model. If the profile were applied unconditionally, that replacement would be bypassed
+    and every one of those tests would build a real client.
+    """
+    monkeypatch.setattr(deterministic, "extraction_llm_factory", lambda model: None)
+
+    assert deterministic._ehr_helper_llm("test-model") is None
+
+
 @pytest.mark.parametrize(
     "wire, expected",
     [("summarize", gateway.CALL_PROFILE_EHR_SYNTHESIS),
      ("labs", gateway.CALL_PROFILE_FAST_HELPER),
-     ("meds", gateway.CALL_PROFILE_FAST_HELPER),
+     ("meds", None),
      ("literature", None)],
 )
 def test_the_formatting_turn_names_the_profile_of_its_own_command(
         wire, expected, monkeypatch):
     """Every command's formatting turn, at the profile its job wants.
 
-    `/ehr` writes the briefing and keeps a thinking budget under a smaller ceiling.
-    `/meds` and `/labs` answer over results the tool has already retrieved, so both run at
-    no thinking and a bounded answer — that is where their latency comes from, and it is
-    the whole of the change: the extraction and the panel are unchanged.
+    `/ehr` writes the briefing and keeps a thinking budget; `/labs` describes a panel that
+    is drawn beside it. `/meds` is absent from the table on purpose: its formatting turn is
+    the medication extraction, and de-thinking it would change what the grid contains rather
+    than how fast it arrives.
 
     `None` is the assertion that matters as much as the profiles: a command with no entry
-    in `_FORMATTING_PROFILE` calls the factory with no keyword at all, so anything added to
-    this table later cannot move `/pubmed`.
+    calls the factory with no keyword at all, so nothing added to this table can move
+    `/meds` or `/pubmed`.
     """
     seen: dict = {}
 
@@ -309,8 +330,7 @@ def test_the_formatting_turn_names_the_profile_of_its_own_command(
 
 
 def test_the_medication_and_laboratory_turns_keep_their_own_answers(monkeypatch):
-    """The budget is the only thing that changed. `/meds` still extracts, `/labs` still
-    describes, and both still write their own reply into the answer."""
+    """`/meds` is unchanged, `/labs` keeps its own reply, and neither loses its payload."""
     monkeypatch.setattr(model_gateway, "build_llm",
                         lambda model, **_kw: _FormattingModel())
 
@@ -325,7 +345,7 @@ def test_the_medication_and_laboratory_turns_keep_their_own_answers(monkeypatch)
         "medications": [], "dropped": [], "returned_passages": 0, "sections": [],
     }
     assert labs["command"] == "labs"
-    # The formatting turn still ran for both, which is what a bounded ceiling allows.
+    # Both still ran a formatting turn and still wrote its reply into the answer.
     assert meds["messages"][-1].content
     assert labs["messages"][-1].content
 

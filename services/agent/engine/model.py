@@ -71,14 +71,14 @@ call_profile = gateway.call_profile
 #: 512-token ceiling on a turn that ran uncapped reads as a slow model rather than as a
 #: wiring mistake.
 #:
-#: `/ehr` writes the briefing, so it keeps a thinking budget under a smaller ceiling.
-#: `/meds` and `/labs` produce a short structured answer over results the tool has already
-#: retrieved, so neither benefits from thinking tokens and both are bounded. `/pubmed` and
-#: every free-text turn are deliberately absent: they reason over prose and are the answer
-#: a reader is given, so they keep the served allowance.
+#: `/ehr` writes the briefing, so it keeps a thinking budget. `/labs` describes a panel that
+#: is drawn beside it, so it does not. `/meds` is deliberately absent: its formatting turn is
+#: the medication extraction, whose reply is a JSON row list, and capping or de-thinking it
+#: changes what the grid contains rather than how fast it arrives. `/pubmed` and every
+#: free-text turn are absent for the same reason as `/meds`: they reason over prose and are
+#: the answer a reader is given.
 FORMATTING_PROFILES: dict[str, str] = {
     "summarize": CALL_PROFILE_EHR_SYNTHESIS,
-    "meds": CALL_PROFILE_FAST_HELPER,
     "labs": CALL_PROFILE_FAST_HELPER,
 }
 

@@ -679,30 +679,25 @@ CALL_PROFILES: dict[str, CallProfile] = {
     # No budget, no ceiling: the deployment's own settings, exactly as before this table
     # existed. Every served answer, every free-text turn and `/pubmed`.
     CALL_PROFILE_DEFAULT: CallProfile(name=CALL_PROFILE_DEFAULT),
-    # The `/ehr` helper steps and the `/meds` and `/labs` formatting turns. Each of these
-    # returns a compact answer over material already in front of it — a query and a few
-    # anchor phrases, a rate and the sentence stating it, a JSON row list, a description of
-    # a panel — and at the served level `/ehr`'s first helper spent fifteen to thirty
-    # seconds thinking before it wrote a twenty-token object
-    # (`deterministic._readmission_comparators`).
+    # The `/labs` formatting turn and the two `/ehr` helper steps. Each returns a compact
+    # answer over material already in front of it — a description of a panel, a query and
+    # a few anchor phrases, a rate and the sentence stating it.
     #
-    # The ceiling is 2,048 rather than 512 because the same profile now serves commands
-    # whose reply is a list: `/meds` returns one JSON object per drug, and a sixteen-drug
-    # discharge list is several hundred tokens before any prose around it. 512 was enough
-    # for the two `/ehr` helpers and would have truncated a large medication list into
-    # unparseable JSON — a silent empty grid rather than a visible failure. 2,048 is still
-    # a fraction of the served allowance, and the thinking budget, which is where these
-    # turns' latency lives, is unchanged.
+    # The ceiling is deliberately None: an allowance that is too small does not shorten a
+    # reply, it cuts it off mid-sentence and the turn serves a fragment that reads as the
+    # answer. These steps write a sentence or two, so the risk is low and the cost of being
+    # wrong is high. What they need is the thinking budget, which is zero, and that is
+    # unchanged — a reply that never had to plan is short without being capped.
     CALL_PROFILE_FAST_HELPER: CallProfile(
-        name=CALL_PROFILE_FAST_HELPER, thinking_budget=0, max_output_tokens=2048,
+        name=CALL_PROFILE_FAST_HELPER, thinking_budget=0, max_output_tokens=None,
     ),
-    # The `/ehr` synthesis: four named sections written from retrieved evidence. It gets a
-    # real thinking budget — 512 tokens is the level at which the model may still plan the
-    # comparison before writing — and a 1,200-token ceiling, which is several times the
-    # longest section set measured on the pin and stops a runaway reply from consuming the
-    # call's whole deadline.
+    # The `/ehr` synthesis: four named sections written from retrieved evidence. It keeps a
+    # 512-token thinking budget, which is the level at which the model may still plan the
+    # comparison before writing. The output ceiling is None for the same reason as above:
+    # a briefing that stops mid-section is worse than a slow one, and the turn's latency
+    # lives in the thinking budget rather than in the length of the answer.
     CALL_PROFILE_EHR_SYNTHESIS: CallProfile(
-        name=CALL_PROFILE_EHR_SYNTHESIS, thinking_budget=512, max_output_tokens=1200,
+        name=CALL_PROFILE_EHR_SYNTHESIS, thinking_budget=512, max_output_tokens=None,
     ),
 }
 

@@ -843,26 +843,33 @@ async def _formatting_turn(
 #: offline. `tests/agent/conftest.py` sets it to `lambda model: None`, and a `None` client
 #: means "this environment provides no extraction" — the step is skipped, no model is
 #: called, and the production path learns nothing about tests.
-def _ehr_extraction_client(model: str) -> Any:
-    """The extraction client the two `/ehr` helper steps are built with.
+#:
+#: The plain constructor, as it has always been: `/meds`'s extraction builds through the
+#: same name, and it must keep constructing exactly what it did before any call profile
+#: existed. The two `/ehr` helper calls are the only ones that ask for a profile, and they
+#: ask for it at the call site (`_ehr_helper_llm`) rather than by changing this seam.
+_DEFAULT_EXTRACTION_FACTORY = model_gateway.build_extraction_llm
 
-    A named function rather than the bare factory, because the profile is part of the job.
-    This factory has exactly one reader — `_readmission_comparators`, which is `/ehr` — and
-    both of its model calls are helper steps: the query generator writes a query and a few
-    anchor phrases, and the abstract selector returns a rate and the sentence that states
-    it. Both run on `fast_helper`, which asks for no thinking and a bounded answer; at the
-    served level the first of them spent fifteen to thirty seconds per call before writing
-    a twenty-token object (`gateway.CALL_PROFILES`). The same profile serves the `/meds`
-    and `/labs` formatting turns, whose replies are compact but can be lists.
+extraction_llm_factory: Callable[[str], Any] = _DEFAULT_EXTRACTION_FACTORY
 
-    Kept a separate function from the assignment below so the binding is testable while the
-    seam stays a one-argument callable that `conftest` can still replace.
+
+def _ehr_helper_llm(model: str) -> Any:
+    """The client the two `/ehr` PubMed helper calls run on.
+
+    Both steps write a sentence or two out of text already in front of them — a query and
+    a few anchor phrases, then a rate and the sentence stating it — so they run at no
+    thinking budget. At the served level the first of them spent fifteen to thirty seconds
+    per call before writing a twenty-token object (`gateway.CALL_PROFILES`).
+
+    The seam is respected before the profile is applied: if a test has replaced
+    `extraction_llm_factory`, that replacement is what runs, including the `None` that
+    means "no extraction in this environment". Only the production seam — the module-level
+    default this file was imported with — asks for the profile.
     """
+    if extraction_llm_factory is not _DEFAULT_EXTRACTION_FACTORY:
+        return extraction_llm_factory(model)
     return model_gateway.build_extraction_llm(
         model, call_profile=model_gateway.CALL_PROFILE_FAST_HELPER)
-
-
-extraction_llm_factory: Callable[[str], Any] = _ehr_extraction_client
 
 
 def _pass_rows(passes: list["ComparatorPass"]) -> list[dict]:
@@ -947,7 +954,7 @@ async def _readmission_comparators(
     # cohort because a number could not be read would trade a wrong cohort for no cohort.
     patient_age, patient_sex = patient_demographics(admission_context, sections)
 
-    llm = extraction_llm if extraction_llm is not None else extraction_llm_factory(model)
+    llm = extraction_llm if extraction_llm is not None else _ehr_helper_llm(model)
     if llm is None:
         # No extraction client in this environment. Stated on the state rather than left
         # silent: `comparators: []` and "nobody looked" are different answers, and the

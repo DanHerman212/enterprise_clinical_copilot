@@ -844,10 +844,10 @@ async def _formatting_turn(
 #: means "this environment provides no extraction" — the step is skipped, no model is
 #: called, and the production path learns nothing about tests.
 #:
-#: The plain constructor, as it has always been: `/meds`'s extraction builds through the
-#: same name, and it must keep constructing exactly what it did before any call profile
-#: existed. The two `/ehr` helper calls are the only ones that ask for a profile, and they
-#: ask for it at the call site (`_ehr_helper_llm`) rather than by changing this seam.
+#: The plain constructor, as it has always been. `/meds`'s extraction is its formatting
+#: turn and builds through `_formatting_client`, so this seam has one reader — the two
+#: `/ehr` helper calls, which ask for their profile at the call site (`_ehr_helper_llm`)
+#: rather than by changing the seam a test replaces.
 _DEFAULT_EXTRACTION_FACTORY = model_gateway.build_extraction_llm
 
 extraction_llm_factory: Callable[[str], Any] = _DEFAULT_EXTRACTION_FACTORY
@@ -857,9 +857,10 @@ def _ehr_helper_llm(model: str) -> Any:
     """The client the two `/ehr` PubMed helper calls run on.
 
     Both steps write a sentence or two out of text already in front of them — a query and
-    a few anchor phrases, then a rate and the sentence stating it — so they run at no
-    thinking budget. At the served level the first of them spent fifteen to thirty seconds
-    per call before writing a twenty-token object (`gateway.CALL_PROFILES`).
+    a few anchor phrases, then a rate and the sentence stating it — so they run at the
+    lowest thinking level rather than the served one. At the served level the first of
+    them spent fifteen to thirty seconds per call before writing a twenty-token object
+    (`gateway.CALL_PROFILES`).
 
     The seam is respected before the profile is applied: if a test has replaced
     `extraction_llm_factory`, that replacement is what runs, including the `None` that
@@ -1102,7 +1103,9 @@ def _formatting_client(command: Command, model: str) -> Any:
 
     A command with no entry is built exactly as it always was — `build_llm(model)` with no
     keyword — so `/pubmed` and every other default caller is untouched down to the call
-    signature.
+    signature. `/meds` is in the table because its formatting turn is its extraction: the
+    reply is a JSON row list that has to parse, which is why it takes the same level as
+    `/ehr`'s briefing rather than the level `/labs` describes a panel at.
     """
     profile = _FORMATTING_PROFILE.get(str(command.wire))
     if profile is None:

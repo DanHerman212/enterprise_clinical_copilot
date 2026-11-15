@@ -9,8 +9,8 @@ have been:
   already under the turn span — so it was a payload-free row above every turn. Skipped
   now, not renamed;
 * `/ehr` ran its query generator, its abstract selector and its four-section synthesis on
-  the served thinking level and the 16,384-token ceiling. The two helper steps now run on
-  `fast_helper` and the synthesis on `ehr_synthesis`;
+  the served thinking level. The two helper steps now run at `minimal`, the synthesis at
+  `low`, and no profile caps a reply;
 * a trace recorded the tools a turn RAN and never the tools it COULD run, so a mis-bound
   turn and a correctly bound turn that chose nothing looked identical.
 """
@@ -167,21 +167,27 @@ def test_the_free_text_path_still_opens_its_own_span_with_no_turn(monkeypatch):
 
 
 # --------------------------------------------------------------------------------------
-# 2. Call profiles: stated once, wired to `/ehr` and nowhere else.
+# 2. Call profiles: stated once, wired to `/ehr`, `/meds` and `/labs` and nowhere else.
 # --------------------------------------------------------------------------------------
 
 
-def test_the_three_profiles_are_the_three_budgets_the_directive_names():
+def test_the_three_profiles_are_the_two_levels_and_the_baseline():
     helper = gateway.call_profile(gateway.CALL_PROFILE_FAST_HELPER)
     synthesis = gateway.call_profile(gateway.CALL_PROFILE_EHR_SYNTHESIS)
     default = gateway.call_profile(gateway.CALL_PROFILE_DEFAULT)
 
-    # Thinking budgets only. A capped reply is not a shorter reply: it is one that stops
-    # mid-sentence, which is a worse answer rather than a faster one.
-    assert (helper.thinking_budget, helper.max_output_tokens) == (0, None)
-    assert (synthesis.thinking_budget, synthesis.max_output_tokens) == (512, None)
+    # Levels, not token budgets: Gemini 3 deprecated the budget and keeps the level when
+    # both arrive, so a budget beside a level was a control that never applied.
+    assert (helper.thinking_level, helper.thinking_budget) == ("minimal", None)
+    assert (synthesis.thinking_level, synthesis.thinking_budget) == ("low", None)
     # The default sets NOTHING, which is what keeps every other route on the baseline.
-    assert (default.thinking_budget, default.max_output_tokens) == (None, None)
+    assert (default.thinking_level, default.thinking_budget) == (None, None)
+
+    # And no profile caps a reply. A capped reply is not a shorter reply: it is one that
+    # stops mid-sentence, and a medication list cut off there does not parse.
+    for name in (gateway.CALL_PROFILE_DEFAULT, gateway.CALL_PROFILE_FAST_HELPER,
+                 gateway.CALL_PROFILE_EHR_SYNTHESIS):
+        assert gateway.call_profile(name).max_output_tokens is None
 
 
 def test_an_unknown_profile_name_is_the_default_rather_than_an_error():
@@ -195,63 +201,110 @@ def test_the_profiles_are_spelled_for_the_family_that_serves_them():
 
     assert gateway.call_profile_parameters(
         profile, gateway.call_profile(gateway.CALL_PROFILE_FAST_HELPER),
-    ) == {"thinking_budget": 0}
+    ) == {"thinking_level": "minimal"}
     assert gateway.call_profile_parameters(
         profile, gateway.call_profile(gateway.CALL_PROFILE_EHR_SYNTHESIS),
-    ) == {"thinking_budget": 512}
+    ) == {"thinking_level": "low"}
     # The default adds no parameter at all, so it cannot move a baseline.
     assert gateway.call_profile_parameters(
         profile, gateway.call_profile(gateway.CALL_PROFILE_DEFAULT),
     ) == {}
 
 
-def test_a_refused_budget_falls_back_to_the_level_the_profile_accepts():
-    """The second attempt drops the budget and uses the family's lowest level."""
+def test_a_profile_never_names_both_thinking_knobs_for_gemini():
+    """One spelling or none.
+
+    The client publishes this setting twice — `thinking_level` and `reasoning_effort` —
+    and its request builder warns on every call that carries both, then keeps the level.
+    A budget sent beside a level is therefore a control that never applied, which is what
+    the live logs showed on every budgeted turn before this change.
+    """
+    profile = gateway.profile("gemini-3.8-flash")
+
+    for name in (gateway.CALL_PROFILE_FAST_HELPER, gateway.CALL_PROFILE_EHR_SYNTHESIS):
+        parameters = gateway.call_profile_parameters(
+            profile, gateway.call_profile(name))
+        assert "thinking_budget" not in parameters
+        assert parameters["thinking_level"] in ("minimal", "low")
+
+
+def test_a_refused_level_falls_back_to_the_level_the_profile_accepts():
+    """The second attempt drops the level and uses the family's lowest one."""
     profile = gateway.profile(PIN)
 
     for name in (gateway.CALL_PROFILE_FAST_HELPER, gateway.CALL_PROFILE_EHR_SYNTHESIS):
         parameters = gateway.call_profile_parameters(
             profile, gateway.call_profile(name), fallback=True)
         assert "thinking_budget" not in parameters
+        assert "thinking_level" not in parameters
         assert parameters["reasoning_effort"] == "low"
 
 
-def test_the_default_client_carries_no_budget_and_the_served_ceiling():
+def test_the_default_client_carries_no_level_and_the_served_ceiling():
     llm = model_gateway.build_llm(PIN)
 
     assert type(llm).__name__ == "ChatGoogleGenerativeAI"
     assert llm.thinking_budget is None
+    assert llm.reasoning_effort == config.GEMINI_REASONING_EFFORT
     assert llm.max_output_tokens == config.GEMINI_MAX_OUTPUT_TOKENS
 
 
-def test_the_ehr_synthesis_client_keeps_its_thinking_budget_and_no_ceiling():
+def test_the_ehr_synthesis_client_runs_at_the_low_level():
     llm = model_gateway.build_llm(
         PIN, call_profile=model_gateway.CALL_PROFILE_EHR_SYNTHESIS)
 
-    assert llm.thinking_budget == 512
+    assert llm.reasoning_effort == "low"
+    # And no budget beside it, which is what the request builder warns about.
+    assert llm.thinking_budget is None
     # No profile sells a reply short: the deployment's own ceiling still applies.
     assert llm.max_output_tokens == config.GEMINI_MAX_OUTPUT_TOKENS
 
 
-def test_the_ehr_helper_client_thinks_not_at_all():
+def test_the_ehr_helper_client_runs_at_the_minimal_level():
     llm = model_gateway.build_extraction_llm(
         PIN, call_profile=model_gateway.CALL_PROFILE_FAST_HELPER)
 
-    assert llm.thinking_budget == 0
+    assert llm.reasoning_effort == "minimal"
+    assert llm.thinking_budget is None
     assert llm.max_output_tokens == config.GEMINI_MAX_OUTPUT_TOKENS
-    # The content filter is still the extraction one: this is the same constructor.
-    assert llm.reasoning_effort == gateway.EXTRACTION_REASONING_EFFORT
+
+
+def test_building_a_gemini_3_client_warns_at_no_profile():
+    """Construction is silent at all three profiles.
+
+    The warning this replaces fired on every request that carried a budget beside a level,
+    so a build that emits a `UserWarning` is the first sign the two knobs are being sent
+    together again. Under `simplefilter("error")` a warning is the failure, which is how
+    this test can assert silence rather than merely read it.
+    """
+    import warnings
+
+    profile = gateway.profile("gemini-3.8-flash")
+
+    for name in (gateway.CALL_PROFILE_DEFAULT, gateway.CALL_PROFILE_FAST_HELPER,
+                 gateway.CALL_PROFILE_EHR_SYNTHESIS):
+        extra = gateway.call_profile_parameters(
+            profile, gateway.call_profile(name))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            client = gateway._google_client(
+                profile, safety_profile=gateway.SAFETY_SERVED,
+                effort=gateway.EFFORT_SERVED, extra=extra)
+        assert client.thinking_budget is None
+        expected = gateway.call_profile(name).thinking_level
+        assert client.reasoning_effort == (expected or config.GEMINI_REASONING_EFFORT)
 
 
 def test_the_route_decides_the_profile_and_the_trace_records_the_same_one():
-    """`/ehr` is budgeted for its synthesis, `/labs` for its answer, `/meds` not at all.
+    """`/ehr` and `/meds` plan before writing, `/labs` does not, `/pubmed` keeps served.
 
     Both readers of `model.FORMATTING_PROFILES` are asserted here against the route alone,
     which is how the trace and the client construction are kept from disagreeing.
     """
     assert graph._call_profile_for("summarize") == gateway.CALL_PROFILE_EHR_SYNTHESIS
+    assert graph._call_profile_for("meds") == gateway.CALL_PROFILE_EHR_SYNTHESIS
     assert graph._call_profile_for("labs") == gateway.CALL_PROFILE_FAST_HELPER
-    for kind in ("meds", "literature", None):
+    for kind in ("literature", None):
         assert graph._call_profile_for(kind) == gateway.CALL_PROFILE_DEFAULT
 
 
@@ -296,21 +349,20 @@ def test_a_replaced_extraction_seam_still_decides_the_helper_client(monkeypatch)
     "wire, expected",
     [("summarize", gateway.CALL_PROFILE_EHR_SYNTHESIS),
      ("labs", gateway.CALL_PROFILE_FAST_HELPER),
-     ("meds", None),
+     ("meds", gateway.CALL_PROFILE_EHR_SYNTHESIS),
      ("literature", None)],
 )
 def test_the_formatting_turn_names_the_profile_of_its_own_command(
         wire, expected, monkeypatch):
     """Every command's formatting turn, at the profile its job wants.
 
-    `/ehr` writes the briefing and keeps a thinking budget; `/labs` describes a panel that
-    is drawn beside it. `/meds` is absent from the table on purpose: its formatting turn is
-    the medication extraction, and de-thinking it would change what the grid contains rather
-    than how fast it arrives.
+    `/ehr` writes the briefing and `/meds` returns a JSON row list, so both are allowed to
+    plan; `/labs` describes a panel that is drawn beside it, so it is not. `/pubmed` is
+    absent from the table on purpose: its reply is the answer a reader is given.
 
     `None` is the assertion that matters as much as the profiles: a command with no entry
     calls the factory with no keyword at all, so nothing added to this table can move
-    `/meds` or `/pubmed`.
+    `/pubmed`.
     """
     seen: dict = {}
 
@@ -507,7 +559,7 @@ def test_the_route_level_metadata_names_the_profile_from_the_route_alone():
     """`turn.py` calls `turn_scope` before any question shape is known."""
     _, command_meta = graph.turn_scope("summarize", 90000001)
     assert command_meta["llm_profile"] == "ehr_synthesis"
-    assert command_meta["thinking_budget"] == 512
+    assert command_meta["thinking_budget"] is None
     assert command_meta["allowed_tools"] == []
     # `/pubmed` declares its subject, so the one predicate that is a fact about the
     # route is answered here rather than left absent.

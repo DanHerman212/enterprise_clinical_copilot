@@ -68,17 +68,19 @@ call_profile = gateway.call_profile
 #: One table, two readers: `deterministic._formatting_client` builds the formatting turn
 #: from it, and `graph._call_profile_for` records the same answer on the trace. Two copies
 #: would eventually disagree, and the disagreement would be invisible — a trace claiming a
-#: 512-token ceiling on a turn that ran uncapped reads as a slow model rather than as a
-#: wiring mistake.
+#: level on a turn that ran at another reads as a slow model rather than as a wiring
+#: mistake.
 #:
-#: `/ehr` writes the briefing, so it keeps a thinking budget. `/labs` describes a panel that
-#: is drawn beside it, so it does not. `/meds` is deliberately absent: its formatting turn is
-#: the medication extraction, whose reply is a JSON row list, and capping or de-thinking it
-#: changes what the grid contains rather than how fast it arrives. `/pubmed` and every
-#: free-text turn are absent for the same reason as `/meds`: they reason over prose and are
-#: the answer a reader is given.
+#: `/ehr` writes the briefing and `/meds` returns a JSON row list, so both run at `low`: a
+#: model that has to hold four sections, or a record list that must parse, in mind before
+#: writing it needs to be allowed to plan. At the lowest level the medication reply came
+#: back as JSON that did not parse (measured 2026-11-15 on revision `8b01115`).
+#: `/labs` describes a panel that is drawn beside it, so it runs at `minimal`. `/pubmed`
+#: and every free-text turn are absent: they reason over prose and are the answer a reader
+#: is given, so they keep the served level.
 FORMATTING_PROFILES: dict[str, str] = {
     "summarize": CALL_PROFILE_EHR_SYNTHESIS,
+    "meds": CALL_PROFILE_EHR_SYNTHESIS,
     "labs": CALL_PROFILE_FAST_HELPER,
 }
 
@@ -97,8 +99,8 @@ def build_llm(model: str, *, call_profile: str = CALL_PROFILE_DEFAULT):
 
     `call_profile` names the JOB, not a parameter: how much model this call is allowed to
     spend. The default passes nothing extra, so every caller that does not name one gets
-    exactly the client this service has always built. The one caller that does is `/ehr`,
-    whose synthesis is bounded — see `deterministic.run_command` and `gateway.CALL_PROFILES`.
+    exactly the client this service has always built. The callers that do are `/ehr`,
+    `/meds` and `/labs` — see `deterministic.run_command` and `gateway.CALL_PROFILES`.
     """
     return gateway.chat_model(
         model, safety_profile=gateway.SAFETY_SERVED, effort=gateway.EFFORT_SERVED,
@@ -158,7 +160,7 @@ def build_extraction_llm(model: str, *, call_profile: str = CALL_PROFILE_DEFAULT
     provider's spelling belongs in the one place that knows the provider.
 
     `call_profile` is the third difference and the only one a caller states: `/ehr`'s two
-    helper steps run on `fast_helper`, which asks for no thinking and a 512-token answer,
+    helper steps run on `fast_helper`, which asks for the lowest level and no ceiling,
     because both return a small JSON object read out of text already in front of them.
     """
     return gateway.chat_model(

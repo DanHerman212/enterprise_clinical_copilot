@@ -105,7 +105,7 @@ def _run(wire, *, prose_stream, payload=PREDICTION, pieces=RISK_PIECES):
     model = _RecordingModel(pieces)
     command = routing.command_for(wire)
     topic = "a clinical topic" if command.topic_arg else None
-    with patch.object(model_gateway, "build_llm", lambda name: model):
+    with patch.object(model_gateway, "build_llm", lambda name, **_kw: model):
         state = asyncio.run(run_command(
             box, command, 90000064, topic=topic, question="a command",
             model="test-model", on_event=events.append, prose_stream=prose_stream,

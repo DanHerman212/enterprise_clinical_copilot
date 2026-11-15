@@ -25,6 +25,7 @@ evidence of record, and it survives the tracing stack being torn down.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import operator
@@ -1150,9 +1151,29 @@ def build_graph(
     return graph.compile()
 
 
+def _call_profile_for(question_kind: str | None) -> str:
+    """Which call profile a turn's model work runs on, from its route alone.
+
+    Read from `model.FORMATTING_PROFILES`, the same table `deterministic` builds the
+    formatting turn from, so the trace cannot claim a different allowance from the one the
+    client was given. `/ehr` keeps a thinking budget under a smaller ceiling; `/meds` and
+    `/labs` run at no thinking with a 512-token answer; `/pubmed` and every free-text turn
+    keep the served allowance, because their model work reasons over prose a reader will
+    read.
+
+    A turn that is not a command returns the default, which is also what a free-text turn
+    does — nothing in that path names a profile at all.
+    """
+    return model_gateway.formatting_profile(question_kind)
+
+
 def _trace_metadata(
     hadm_id: int | None, question_kind: str | None, run_tag: str | None = None,
     turns: list[dict[str, str]] | None = None, intent: str | None = None,
+    *,
+    allowed_tools: frozenset[str] | None = None,
+    predicates: dict[str, bool] | None = None,
+    call_profile: str | None = None,
 ) -> dict:
     """What a Langfuse trace needs in order to be found again by patient or by run.
 
@@ -1186,6 +1207,25 @@ def _trace_metadata(
     `observability.CODE_REVISION` — `CODE_REVISION` when the deploy supplies the commit,
     otherwise Cloud Run's `K_REVISION`, otherwise the literal `local`, which is an honest
     label rather than an invented one.
+
+    Four facts about the turn's model work ride along as metadata (Remediation 1.2):
+
+    * `llm_profile` and `thinking_budget`, which name the call profile the turn's client
+      was built from and the thinking allowance it carries. A turn meant to run on a
+      budgeted profile and built without one is otherwise invisible: it reads as a slow
+      model rather than as a wiring mistake, and the difference is the whole point of
+      having profiles.
+    * `allowed_tools`, the bound set the reasoning loop was given — the answer to "could
+      this turn have called that tool", which a trace could previously only imply by
+      whether a tool span appeared.
+    * the five routing predicates, written flat beside their own names: `risk_driver`,
+      `wants_literature`, `lab_driver`, `follow_up_declared`, `risk_score`. They are the
+      inputs `_freetext_allowed` decided the bound set from, so the metadata and the
+      bound set cannot disagree.
+
+    A caller that does not know a fact passes nothing, and the field is then absent rather
+    than guessed: a route-level call (`turn_scope`, from `turn.py`) knows the command and
+    not the question's shape.
     """
     tags: list[str] = []
     meta: dict[str, object] = {}
@@ -1223,6 +1263,21 @@ def _trace_metadata(
         # endless session, which is a worse lie than no grouping at all.
         if hadm_id is not None:
             meta["langfuse_session_id"] = f"{run_tag}:hadm_{hadm_id}"
+    profile_name = call_profile or _call_profile_for(question_kind)
+    meta["llm_profile"] = profile_name
+    meta["thinking_budget"] = model_gateway.call_profile(profile_name).thinking_budget
+    # Sorted so two turns of one route compare equal in a trace export, and empty for a
+    # command: a command's model turn binds nothing and its tool is fixed by the route, so
+    # `[]` is the truth there rather than a missing measurement.
+    meta["allowed_tools"] = sorted(allowed_tools or ())
+    if predicates is None and routing.is_command(question_kind):
+        # A command declares its own subject, so the one predicate that is a fact about
+        # the route rather than about the wording can be answered here: `/pubmed` is a
+        # literature turn by definition. The other four describe a decision free text made
+        # while routing, and a command makes none.
+        predicates = {"wants_literature": turn_is_about_literature("", question_kind)}
+    for name, value in (predicates or {}).items():
+        meta[name] = bool(value)
     meta["langfuse_tags"] = tags
     return meta
 
@@ -1404,10 +1459,25 @@ async def ask(
         turn_root = observability.current_turn_span()
         command_name, command_meta = turn_scope(
             question_kind, hadm_id, turns, run_tag, intent)
-        with observability.observation(
-            command_name,
-            trace_metadata=None if turn_root is not None else command_meta,
-        ) as root_span:
+        # The route names the TURN, and `turn.py` has already opened a span with that
+        # name. A second span here is not a second turn, and it is not a step either:
+        # measured on `067c06f743450d62006ff3a79928da79`, the inner row opened with no
+        # input and closed with no output, while everything that mattered — the tool
+        # calls and the formatting generation — had already nested under the turn. So
+        # when the turn span is open the step is SKIPPED, and the branch below runs
+        # directly on the turn span.
+        #
+        # It used to be renamed (`step.command.ehr`) instead, on the reasoning that a
+        # named row is better than a doubled one. It is not: the row carries nothing, and
+        # a span count then reads as one turn plus one step for every command ever run.
+        # `nullcontext` yields the turn span itself, so the two writes below — the
+        # `tools:<n>` tag and the trace id — still land where they were always addressed.
+        span = (
+            observability.observation(command_name, trace_metadata=command_meta)
+            if turn_root is None
+            else contextlib.nullcontext(turn_root)
+        )
+        with span as root_span:
             # The thread's evidence, replayed BEFORE the command runs (Stage 3,
             # 2026-11-08). This branch used to skip the replay entirely, so `/ehr` on
             # turn 1 and `/meds` on turn 2 started from an EMPTY record: the second
@@ -1594,7 +1664,41 @@ async def ask(
     )
 
     config: dict = {"recursion_limit": RECURSION_LIMIT}
-    trace_meta = _trace_metadata(hadm_id, question_kind, run_tag, turns, intent)
+    # The Hub plus only the spokes this turn can use. `_freetext_allowed` is asked HERE,
+    # before the trace is opened, rather than only inside `build_graph`, for two reasons:
+    # the bound set decides which rules the model needs — a turn that cannot call
+    # `get_lab_trends` and holds no panel is a turn the laboratory rules cannot apply to,
+    # and a rule that cannot apply is not free, it sits in the window beside the ones that
+    # can — and it is one of the facts the trace now records about the turn. It used to be
+    # computed inside the span, which meant the metadata written when the span opened could
+    # not have seen it.
+    #
+    # `build_graph` still calls it too, for its own binding, from the same five flags. Two
+    # calls of one pure function, not two opinions.
+    allowed_for_prompt = _freetext_allowed(
+        risk_driver_question,
+        wants_literature,
+        lab_driver_question,
+        follow_up_declared,
+        risk_score_question,
+    )
+    trace_meta = _trace_metadata(
+        hadm_id, question_kind, run_tag, turns, intent,
+        allowed_tools=allowed_for_prompt,
+        # The five answers routing gave about this question, recorded rather than
+        # re-derived. Remediation 1.2: a turn whose tools were bound the wrong way was
+        # indistinguishable in the trace from one that was bound correctly and simply
+        # chose not to use them, because none of the decisions that produced the bound
+        # set were written anywhere.
+        predicates={
+            "risk_driver": risk_driver_question,
+            "wants_literature": wants_literature,
+            "lab_driver": lab_driver_question,
+            "follow_up_declared": follow_up_declared,
+            "risk_score": risk_score_question,
+        },
+        call_profile=model_gateway.CALL_PROFILE_DEFAULT,
+    )
     if trace_meta:
         # Langfuse reads `langfuse_tags` from run metadata; the other keys ride along
         # so the admission and command are visible on the trace itself.
@@ -1624,25 +1728,16 @@ async def ask(
     # path gives above: the root must be the turn, because the turn is what has an
     # answer to record.
     turn_root = observability.current_turn_span()
-    with observability.observation(
-        f"free_text.turn{trace_meta.get('turn', 1)}",
-        trace_metadata=None if turn_root is not None else trace_meta,
-    ) as root_span:
-        # The Hub plus only the spokes this turn can use. `_freetext_allowed` is asked
-        # HERE rather than only inside `build_graph`, because the bound set decides which
-        # rules the model needs: a turn that cannot call `get_lab_trends` and holds no
-        # panel is a turn the laboratory rules cannot apply to, and a rule that cannot
-        # apply is not free — it sits in the window beside the ones that can.
-        #
-        # `build_graph` still calls it too, for its own binding, from the same five
-        # flags. Two calls of one pure function, not two opinions.
-        allowed_for_prompt = _freetext_allowed(
-            risk_driver_question,
-            wants_literature,
-            lab_driver_question,
-            follow_up_declared,
-            risk_score_question,
-        )
+    inner_name = f"free_text.turn{trace_meta.get('turn', 1)}"
+    # Same rule as the command path: when the route already opened the turn span, this
+    # wrapper adds no input, no output and no generation of its own — the `LangGraph`
+    # chain beneath it carries the message list — so it is skipped rather than renamed.
+    span = (
+        observability.observation(inner_name, trace_metadata=trace_meta)
+        if turn_root is None
+        else contextlib.nullcontext(turn_root)
+    )
+    with span as root_span:
         system_prompt = prompts.compose_system_prompt(
             allowed_tools=allowed_for_prompt,
             wants_literature=wants_literature,

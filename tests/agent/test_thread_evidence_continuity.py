@@ -193,7 +193,7 @@ def _box() -> MCPToolbox:
 
 def _ask(question: str, *, turns, model=None):
     model = model or _AnswersInProse()
-    with patch.object(model_gateway, "build_llm", lambda name: model):
+    with patch.object(model_gateway, "build_llm", lambda name, **_kw: model):
         state = asyncio.run(graph.ask(
             _box(), question, hadm_id=HADM, model="test", turns=turns,
         ))
@@ -563,7 +563,7 @@ def test_a_mid_thread_command_replays_the_thread_before_its_own_tools_run():
         captured["positions_before"] = record.position_count() if record else 0
         return await real(*args, **kwargs)
 
-    with patch.object(model_gateway, "build_llm", lambda name: _AnswersInProse()), \
+    with patch.object(model_gateway, "build_llm", lambda name, **_kw: _AnswersInProse()), \
             patch.object(graph, "run_command", spy):
         state = asyncio.run(graph.ask(
             box, "and the discharge medications?", hadm_id=HADM, model="test",

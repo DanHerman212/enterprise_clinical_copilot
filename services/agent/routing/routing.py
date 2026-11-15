@@ -646,6 +646,23 @@ _RISK_SCORE_WORDS = frozenset({"score", "scores", "probability", "percent",
                                "estimate", "estimated"})
 _RISK_SCORE_COMPARISONS = frozenset({"above", "below", "exceeds", "exceed"})
 
+#: The words that ask for the estimate without naming it as a number.
+#:
+#: Added 2026-11-15 from a measured deflection. Sprint 04f's `v2_d3_free_01` asked
+#: "And how does that leave his readmission risk looking?" — a clinician asking for the
+#: estimate in the register clinicians use — and this predicate returned False, so
+#: `predict_readmission` was not bound, the loop searched notes instead, and the answer
+#: said the record holds no quantitative estimate. The number existed; the question was
+#: never recognised as one that wanted it.
+#:
+#: These are asked ALONGSIDE a readmission term, never on their own, which is what keeps
+#: them from admitting the tool on a question that merely mentions a course of treatment.
+_RISK_OUTLOOK_WORDS = frozenset({
+    "looking", "looks", "look", "stand", "stands", "outlook", "trajectory",
+    "trajectories", "bounce", "bounces", "leaves", "leave", "sits", "sit",
+    "worse", "better",
+})
+
 
 #: The words that name the thirty-day unplanned readmission itself, in the register a
 #: clinician types and in the register a patient's relative uses.
@@ -658,8 +675,10 @@ _READMISSION_TOKENS = frozenset({
 #: estimate in plain English — "how likely is she to bounce back within a month?" — and
 #: every predicate below that keys on the word "risk" misses it.
 _READMISSION_PHRASES = ("bounce back", "bounceback", "bouncing back",
+                        "bounces back", "bounced back",
                         "back in the hospital", "back in hospital",
-                        "return to hospital", "come back in")
+                        "return to hospital", "come back in", "comes back in",
+                        "come back", "comes back")
 
 #: A return, and the window it is asked about in.
 _RETURN_TOKENS = frozenset({"return", "returns", "returning", "come", "comes",
@@ -717,6 +736,8 @@ def asks_for_risk_score(question: str) -> bool:
     if not mentions_readmission(question):
         return False
     if any(token in _RISK_SCORE_WORDS for token in tokens):
+        return True
+    if any(token in _RISK_OUTLOOK_WORDS for token in tokens):
         return True
     return ("risk" in tokens
             and any(token in _RISK_SCORE_COMPARISONS for token in tokens))

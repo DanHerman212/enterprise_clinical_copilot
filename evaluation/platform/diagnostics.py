@@ -87,6 +87,9 @@ def _turns(input_doc: dict[str, Any], output: dict[str, Any]) -> list[dict[str, 
     verified = output.get("turn_verified")
     if not isinstance(verified, list):
         verified = []
+    rendered = output.get("turn_rendered")
+    if not isinstance(rendered, list):
+        rendered = []
     out: list[dict[str, Any]] = []
     for index in range(max(len(questions), len(answers))):
         out.append({
@@ -96,6 +99,11 @@ def _turns(input_doc: dict[str, Any], output: dict[str, Any]) -> list[dict[str, 
             "sources": sources[index] if index < len(sources) else [],
             "tool_calls": calls[index] if index < len(calls) else [],
             "verified": verified[index] if index < len(verified) else None,
+            # The values a deterministic component drew. A `/meds` answer is a sentence
+            # about where the rows came from, so a report that kept only the answer could
+            # not say what the reader was looking at — which is the first thing a
+            # post-mortem of a wrong medication row asks.
+            "rendered": rendered[index] if index < len(rendered) else [],
         })
     return out
 

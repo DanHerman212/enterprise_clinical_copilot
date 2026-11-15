@@ -249,7 +249,7 @@ MANIFEST = (
 def _run(hadm_id: int, *, admission_context: str = ""):
     used = _RecordingModel()
     encounter.set_current(encounter.INPATIENT)
-    with patch.object(model_gateway, "build_llm", lambda name: used):
+    with patch.object(model_gateway, "build_llm", lambda name, **_kw: used):
         state = asyncio.run(run_command(
             _PassageToolbox(), routing.command_for("summarize"), hadm_id,
             question="/ehr", model="test-model",

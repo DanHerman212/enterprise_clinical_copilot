@@ -89,7 +89,7 @@ class _Model:
 def _run(hadm_id: int = 90000015, *, cabinet=None, reply: str = ANSWER):
     box = cabinet or _SectionToolbox()
     model = _Model(reply)
-    with patch.object(model_gateway, "build_llm", lambda name: model):
+    with patch.object(model_gateway, "build_llm", lambda name, **_kw: model):
         state = asyncio.run(run_command(
             box, SUMMARIZE, hadm_id, question="/ehr", model="test-model",
         ))
@@ -158,7 +158,7 @@ def test_no_command_re_orders_its_passages():
     labs = routing.command_for("labs")
     cabinet = _SectionToolbox(passages=(("sodium", "136"), ("potassium", "4.1")))
     model = _Model(reply="Sodium 136, potassium 4.1.")
-    with patch.object(model_gateway, "build_llm", lambda name: model):
+    with patch.object(model_gateway, "build_llm", lambda name, **_kw: model):
         state = asyncio.run(run_command(
             cabinet, labs, 90000015, question="/labs", model="test-model",
         ))

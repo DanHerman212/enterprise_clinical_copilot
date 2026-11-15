@@ -417,10 +417,26 @@ def _judge_channel(outcome: Any) -> dict[str, Any]:
             "cost_usd": float(cost) if isinstance(cost, (int, float)) else None}
 
 
+def _percentile(values: list[float], rank: int) -> float | None:
+    """The nearest-rank percentile of `values`, or None for an empty sample.
+
+    Nearest-rank rather than interpolated, because these are turn durations and a reader
+    asks "how long did the slow tail wait", not "what would a smooth curve say between
+    two turns". With eighteen turns the p95 is the 18th, which is the number a clinician
+    on the worst turn of the run actually waited.
+    """
+    if not values:
+        return None
+    ordered = sorted(values)
+    index = max(0, min(len(ordered) - 1,
+                       int(round((rank / 100.0) * len(ordered) + 0.5)) - 1))
+    return ordered[index]
+
+
 def _record_costs(client: Any, outcomes: list[Any], *,
                   dataset_name: str,
                   dataset_run_id: str | None = None) -> dict[str, Any]:
-    """Price every item from its traces, then report the run's two cost channels.
+    """Price every item from its traces, then report the run's cost and latency.
 
     Called after the run's scores are written and before its summary is printed, because
     the agent's usage does not exist until its traces can be read: a turn's generations
@@ -441,6 +457,7 @@ def _record_costs(client: Any, outcomes: list[Any], *,
     tokens.update({f"judge_{field}_tokens": 0 for field in ev.TOKEN_FIELDS})
     generations = 0
     unattributed = 0
+    turn_latencies: list[float] = []
 
     print(f"\n--- cost: {dataset_name} ---", flush=True)
     for outcome in outcomes:
@@ -478,6 +495,9 @@ def _record_costs(client: Any, outcomes: list[Any], *,
         print(f"  {outcome.item_id[:8]} agent={agent_phrase} judge={judge_phrase} "
               f"turns={usage.get('turn_count')} "
               f"generations={usage.get('generations')}{reason}", flush=True)
+        for value in usage.get("latencies_ms") or []:
+            if isinstance(value, (int, float)):
+                turn_latencies.append(float(value))
 
     scenarios = len(agent_priced)
     totals = {
@@ -490,6 +510,14 @@ def _record_costs(client: Any, outcomes: list[Any], *,
         "judge_scenarios_priced": judge_priced,
         "unattributed": unattributed,
         "generations": generations,
+        # The distribution a reader waits on, over every turn the run served. Reported
+        # beside the cost because the two are the same trade: a turn that thinks for
+        # thirty seconds costs thinking tokens, and a profile that spent fewer of them is
+        # only cheaper if it also answered sooner.
+        "turn_latency_count": len(turn_latencies),
+        "turn_latency_p50_ms": _percentile(turn_latencies, 50),
+        "turn_latency_p95_ms": _percentile(turn_latencies, 95),
+        "turn_latency_max_ms": (max(turn_latencies) if turn_latencies else None),
         **tokens,
     }
     # The two totals are computed here and reported by this function's return value, the

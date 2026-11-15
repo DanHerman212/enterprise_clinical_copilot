@@ -630,6 +630,244 @@ def bind(model: Any, request: Mapping[str, Any]) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# Call profiles: how much model ONE CALL is allowed to spend.
+#
+# Not a `ModelProfile`, because the two answer different questions. A `ModelProfile` is a
+# fact about a provider — this model rejects a temperature, that one spells effort as
+# `reasoning_effort` — and it is the same facts for every call made on that model. A call
+# profile is a fact about the JOB: the step that turns a discharge note into a PubMed
+# query answers with a handful of words and does not need the served thinking level, and
+# the `/ehr` synthesis writes four sections and does not need the 16,384-token ceiling a
+# served answer carries.
+#
+# Stated here, in one table, so that no call site has to know what a provider calls a
+# budget, and so that a reader can see every call in the pipeline that is NOT running on
+# the default allowance. Today that is `/ehr` and nothing else: `/pubmed`, `/meds`,
+# `/labs` and every free-text turn run `default`, which sets no budget at all and leaves
+# the deployment's own ceiling in place.
+# ---------------------------------------------------------------------------
+
+CALL_PROFILE_DEFAULT = "default"
+CALL_PROFILE_FAST_HELPER = "fast_helper"
+CALL_PROFILE_EHR_SYNTHESIS = "ehr_synthesis"
+
+
+@dataclass(frozen=True)
+class CallProfile:
+    """The budgets one call may spend, stated semantically.
+
+    `thinking_budget` is a TOKEN BUDGET and not an effort level, because that is the
+    question a call profile is answering: how much room does this job need for thought.
+    Zero asks the provider to think not at all. `None` asks for nothing, which leaves
+    whatever the client was constructed with, and that is what every call outside `/ehr`
+    gets — the default profile changes no parameter, so it cannot move the baseline.
+
+    `fallback_effort` is the second attempt when a provider refuses a zero budget. Two of
+    the four models in the registry cannot switch thinking off: the smallest level they
+    accept is the extraction level, which the profile table already knows how to spell for
+    each family. A refusal is therefore answered with the profile's own lowest level
+    rather than with an invented one.
+    """
+
+    name: str
+    thinking_budget: int | None = None
+    max_output_tokens: int | None = None
+    fallback_effort: str = EFFORT_EXTRACTION
+
+
+CALL_PROFILES: dict[str, CallProfile] = {
+    # No budget, no ceiling: the deployment's own settings, exactly as before this table
+    # existed. Every served answer, every free-text turn and `/pubmed`.
+    CALL_PROFILE_DEFAULT: CallProfile(name=CALL_PROFILE_DEFAULT),
+    # The `/ehr` helper steps and the `/meds` and `/labs` formatting turns. Each of these
+    # returns a compact answer over material already in front of it — a query and a few
+    # anchor phrases, a rate and the sentence stating it, a JSON row list, a description of
+    # a panel — and at the served level `/ehr`'s first helper spent fifteen to thirty
+    # seconds thinking before it wrote a twenty-token object
+    # (`deterministic._readmission_comparators`).
+    #
+    # The ceiling is 2,048 rather than 512 because the same profile now serves commands
+    # whose reply is a list: `/meds` returns one JSON object per drug, and a sixteen-drug
+    # discharge list is several hundred tokens before any prose around it. 512 was enough
+    # for the two `/ehr` helpers and would have truncated a large medication list into
+    # unparseable JSON — a silent empty grid rather than a visible failure. 2,048 is still
+    # a fraction of the served allowance, and the thinking budget, which is where these
+    # turns' latency lives, is unchanged.
+    CALL_PROFILE_FAST_HELPER: CallProfile(
+        name=CALL_PROFILE_FAST_HELPER, thinking_budget=0, max_output_tokens=2048,
+    ),
+    # The `/ehr` synthesis: four named sections written from retrieved evidence. It gets a
+    # real thinking budget — 512 tokens is the level at which the model may still plan the
+    # comparison before writing — and a 1,200-token ceiling, which is several times the
+    # longest section set measured on the pin and stops a runaway reply from consuming the
+    # call's whole deadline.
+    CALL_PROFILE_EHR_SYNTHESIS: CallProfile(
+        name=CALL_PROFILE_EHR_SYNTHESIS, thinking_budget=512, max_output_tokens=1200,
+    ),
+}
+
+
+def call_profile(name: str | None) -> CallProfile:
+    """The named call profile, or the default.
+
+    An unknown name is the default rather than an error: the profiles are a performance
+    control, and a typo in one must not be able to stop an answer. What it can do is make
+    a run slower than intended, so the name a call actually used is written to the trace
+    (`graph._trace_metadata`) and a run that meant `fast_helper` is visible as one that
+    did not get it.
+    """
+    return (CALL_PROFILES.get(str(name or CALL_PROFILE_DEFAULT))
+            or CALL_PROFILES[CALL_PROFILE_DEFAULT])
+
+
+def call_profile_parameters(profile_: ModelProfile, call_profile_: CallProfile, *,
+                            fallback: bool = False) -> dict[str, Any]:
+    """This provider's spelling of one call profile's budgets.
+
+    `fallback` is the second attempt after the provider refused the budget the first
+    attempt sent. The budget is dropped and the family's lowest accepted level is used
+    instead — for Gemini that is `reasoning_effort: low`, which is the same level its
+    structured-extraction calls already run at, and for Anthropic it is the
+    `between_tools` thinking mode its profile already declares.
+
+    A family with no verified budget parameter gets the ceiling and nothing else. Meta's
+    OpenAI-compatible Responses surface, as this deployment addresses it, publishes
+    reasoning effort and no token budget; sending one would be a parameter nobody has
+    measured, which is a setting that never applies dressed as a control.
+    """
+    out: dict[str, Any] = {}
+    if call_profile_.max_output_tokens is not None:
+        out["max_output_tokens"] = call_profile_.max_output_tokens
+    if call_profile_.thinking_budget is None:
+        return out
+    if fallback:
+        out.update(construction_parameters(profile_, call_profile_.fallback_effort))
+        return out
+    if profile_.family == GOOGLE:
+        out["thinking_budget"] = call_profile_.thinking_budget
+    elif profile_.family == ANTHROPIC and call_profile_.thinking_budget:
+        out["thinking"] = {
+            "type": "enabled", "budget_tokens": call_profile_.thinking_budget,
+        }
+    return out
+
+
+def budget_refused(exc: BaseException) -> bool:
+    """Whether this failure is the provider refusing the thinking budget we sent.
+
+    Narrow on purpose. The message has to be a content-class refusal AND name thinking or
+    a budget: retrying a safety refusal without a budget would send a second request the
+    provider has already answered, and retrying a 400 about something else would hide the
+    real fault behind a duplicate call.
+    """
+    if classify_error(exc) != CONTENT:
+        return False
+    text = f"{type(exc).__name__} {exc}".lower()
+    return "thinking" in text or "budget" in text
+
+
+class _BudgetFallback:
+    """A client that retries one call without a budget the provider refused.
+
+    The refusal cannot be predicted at construction. `gemini-3.8-flash` is validated by the
+    endpoint, not by the client, so the first sign that it will not accept
+    `thinking_budget=0` is a 400 on the first call — and the fallback has to happen there,
+    once, for that call.
+
+    Everything else falls through to the wrapped client, and the profile is carried on the
+    wrapper for the same reason `_WireWrapper` carries it: `gateway.profile_for` resolves a
+    derived client by identity first and then by the model name it declares, and a wrapper
+    that hid either would silently hand a bound client the default profile's facts.
+    """
+
+    def __init__(self, primary: Any, rebuild: Callable[[], Any],
+                 profile_: ModelProfile) -> None:
+        self._primary = primary
+        #: Called at most once, on the first refusal, and never again after that: the
+        #: fallback client is the same object for every later call on this wrapper.
+        self._rebuild = rebuild
+        self._fallback: Any = None
+        self.gateway_profile = profile_
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._primary, name)
+
+    def _fallback_client(self) -> Any:
+        if self._fallback is None:
+            self._fallback = self._rebuild()
+        return self._fallback
+
+    # --- binding ---------------------------------------------------------
+
+    def bind(self, **kwargs: Any) -> "_BudgetFallback":
+        return _BudgetFallback(
+            self._primary.bind(**kwargs),
+            lambda: self._fallback_client().bind(**kwargs),
+            self.gateway_profile,
+        )
+
+    def bind_tools(self, tools: Sequence[Any], **kwargs: Any) -> "_BudgetFallback":
+        return _BudgetFallback(
+            self._primary.bind_tools(tools, **kwargs),
+            lambda: self._fallback_client().bind_tools(tools, **kwargs),
+            self.gateway_profile,
+        )
+
+    # --- invocation ------------------------------------------------------
+
+    async def ainvoke(self, messages: Any, config: Any = None, **kwargs: Any) -> Any:
+        try:
+            return await _invoke(self._primary, messages, config, kwargs)
+        except Exception as exc:  # noqa: BLE001 — re-raised unless it is a budget refusal
+            if not budget_refused(exc):
+                raise
+            logger.warning(
+                "the provider refused a thinking budget; retrying at its lowest level: %s",
+                exc,
+            )
+            return await _invoke(self._fallback_client(), messages, config, kwargs)
+
+    async def astream(self, messages: Any, config: Any = None, **kwargs: Any):
+        """Stream, retrying only before the first chunk.
+
+        Once a piece has been announced the caller has shown it, and a second attempt
+        would print the prose twice — the same rule `deterministic._formatting_turn`
+        applies to the formatting call.
+        """
+        started = False
+        try:
+            async for chunk in _stream(self._primary, messages, config, kwargs):
+                started = True
+                yield chunk
+        except Exception as exc:  # noqa: BLE001
+            if started or not budget_refused(exc):
+                raise
+            logger.warning(
+                "the provider refused a thinking budget on a stream; retrying at its "
+                "lowest level: %s", exc,
+            )
+            async for chunk in _stream(self._fallback_client(), messages, config, kwargs):
+                yield chunk
+
+
+async def _invoke(client: Any, messages: Any, config: Any, kwargs: Mapping[str, Any]) -> Any:
+    """One call, with the config passed only when there is one to pass."""
+    if config is None:
+        return await client.ainvoke(messages, **kwargs)
+    return await client.ainvoke(messages, config=config, **kwargs)
+
+
+async def _stream(client: Any, messages: Any, config: Any, kwargs: Mapping[str, Any]):
+    """One streaming call, with the config passed only when there is one to pass."""
+    if config is None:
+        async for chunk in client.astream(messages, **kwargs):
+            yield chunk
+        return
+    async for chunk in client.astream(messages, config=config, **kwargs):
+        yield chunk
+
+
+# ---------------------------------------------------------------------------
 # Tool choice.
 # ---------------------------------------------------------------------------
 
@@ -743,12 +981,19 @@ def stamp(message: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def _google_client(profile_: ModelProfile, *, safety_profile: str, effort: str) -> Any:
+def _google_client(profile_: ModelProfile, *, safety_profile: str, effort: str,
+                   extra: Mapping[str, Any] | None = None) -> Any:
     """The Gemini client, built exactly as this service has always built it.
 
     Byte-identical parameters are a requirement, not a convenience: the default pin must
     behave as it did before this module existed, or every number in the programme would be
-    measured against a moved baseline.
+    measured against a moved baseline. That is why `extra` is applied last and is empty for
+    every call profile except the two `/ehr` ones: the default path passes nothing and the
+    construction below is the same construction it always was.
+
+    `extra` is where a call profile's ceiling lands, and it overrides rather than adds to
+    the deployment's `GEMINI_MAX_OUTPUT_TOKENS`. A profile that names a ceiling is asking
+    for a smaller allowance than the served answer's, never a larger one.
     """
     from langchain_google_genai import ChatGoogleGenerativeAI
 
@@ -756,18 +1001,20 @@ def _google_client(profile_: ModelProfile, *, safety_profile: str, effort: str) 
 
     safety = (config.GEMINI_SAFETY_THRESHOLDS if safety_profile == SAFETY_SERVED
               else CLINICAL_SAFETY_SETTINGS)
-    return ChatGoogleGenerativeAI(
-        model=profile_.wire_model,
-        project=config.PROJECT,
-        location=profile_.location,
-        vertexai=True,
-        temperature=0,
-        max_output_tokens=config.GEMINI_MAX_OUTPUT_TOKENS,
+    parameters: dict[str, Any] = {
+        "model": profile_.wire_model,
+        "project": config.PROJECT,
+        "location": profile_.location,
+        "vertexai": True,
+        "temperature": 0,
+        "max_output_tokens": config.GEMINI_MAX_OUTPUT_TOKENS,
         **construction_parameters(profile_, effort),
-        max_retries=MODEL_MAX_RETRIES,
-        timeout=MODEL_TIMEOUT_SECONDS,
-        safety_settings=dict(safety),
-    )
+        "max_retries": MODEL_MAX_RETRIES,
+        "timeout": MODEL_TIMEOUT_SECONDS,
+        "safety_settings": dict(safety),
+    }
+    parameters.update(extra or {})
+    return ChatGoogleGenerativeAI(**parameters)
 
 
 class BearerToken:
@@ -827,7 +1074,8 @@ class BearerToken:
         return self()
 
 
-def _anthropic_client(profile_: ModelProfile, *, effort: str) -> Any:
+def _anthropic_client(profile_: ModelProfile, *, effort: str,
+                      extra: Mapping[str, Any] | None = None) -> Any:
     """The Anthropic client, on Vertex, with this profile's wire facts applied."""
     ChatAnthropicVertex = _load_anthropic_class()
     from services.mcp import config
@@ -838,6 +1086,7 @@ def _anthropic_client(profile_: ModelProfile, *, effort: str) -> Any:
         "location": profile_.location,
     }
     kwargs.update(construction_parameters(profile_, effort))
+    kwargs.update(extra or {})
     # No temperature, no top_p, no top_k: this profile rejects them with a 400 rather than
     # ignoring them, which is why `sends_temperature` is a profile fact.
     client = ChatAnthropicVertex(**kwargs)
@@ -878,7 +1127,8 @@ def _load_anthropic_class() -> Any:
     )
 
 
-def _meta_client(profile_: ModelProfile, *, effort: str) -> Any:
+def _meta_client(profile_: ModelProfile, *, effort: str,
+                 extra: Mapping[str, Any] | None = None) -> Any:
     """The Meta client, on the GCP OpenAI-compatible Responses API."""
     try:
         from langchain_openai import ChatOpenAI
@@ -897,6 +1147,7 @@ def _meta_client(profile_: ModelProfile, *, effort: str) -> Any:
         "stream_usage": True,
     }
     kwargs.update(construction_parameters(profile_, effort))
+    kwargs.update(extra or {})
     return _WireWrapper(ChatOpenAI(**kwargs), profile_)
 
 
@@ -986,23 +1237,48 @@ class _WireWrapper:
 
 
 def chat_model(model_id: str | None, *, safety_profile: str = SAFETY_SERVED,
-               effort: str = EFFORT_SERVED) -> Any:
-    """The client for a canonical model id.
+               effort: str = EFFORT_SERVED,
+               call_profile_name: str | None = None) -> Any:
+    """The client for a canonical model id, at one call profile's budgets.
 
     The only place in the service that names a provider package.
+
+    `call_profile_name` names the JOB rather than a parameter — see `CALL_PROFILES`. The
+    default sets nothing, so a caller that does not name one gets the client this module
+    has always built, byte for byte.
+
+    A profile that asks for a thinking budget returns a client that can retry the call
+    without it. That is not a fallback in the "degrade quietly" sense: it is one retry,
+    only after a provider has refused the budget by name, and every retry is logged. The
+    alternative was to guess before the first call that a model refuses a zero budget,
+    which would have meant either sending nothing and never measuring the budget, or
+    sending it and failing the turn.
     """
     retired = RETIRED_MODELS.get(str(model_id or "").strip())
     if retired is not None:
         raise RetiredModel(model_id)
     profile_ = profile(model_id)
-    if profile_.family == GOOGLE:
-        return _attach(_google_client(profile_, safety_profile=safety_profile,
-                                      effort=effort), profile_)
-    if profile_.family == ANTHROPIC:
-        return _attach(_anthropic_client(profile_, effort=effort), profile_)
-    if profile_.family == META:
-        return _attach(_meta_client(profile_, effort=effort), profile_)
-    raise GatewayUnavailable(f"no client is registered for the {profile_.family!r} family")
+    wanted = call_profile(call_profile_name)
+
+    def build(*, fallback: bool = False) -> Any:
+        extra = call_profile_parameters(profile_, wanted, fallback=fallback)
+        if profile_.family == GOOGLE:
+            return _google_client(profile_, safety_profile=safety_profile,
+                                  effort=effort, extra=extra)
+        if profile_.family == ANTHROPIC:
+            return _anthropic_client(profile_, effort=effort, extra=extra)
+        if profile_.family == META:
+            return _meta_client(profile_, effort=effort, extra=extra)
+        raise GatewayUnavailable(
+            f"no client is registered for the {profile_.family!r} family")
+
+    primary = build()
+    if not ({"thinking_budget", "thinking"} & set(call_profile_parameters(profile_, wanted))):
+        # Nothing this family accepts was budgeted, so there is nothing to fall back from.
+        return _attach(primary, profile_)
+    return _attach(
+        _BudgetFallback(primary, lambda: build(fallback=True), profile_), profile_,
+    )
 
 
 def wire_model_name(model_id: str | None) -> str:

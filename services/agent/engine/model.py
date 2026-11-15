@@ -54,16 +54,55 @@ MODEL_TIMEOUT_SECONDS = gateway.MODEL_TIMEOUT_SECONDS
 #: `tests/agent/test_model_bounds.py`, which reads it back off the constructed client.
 MODEL_MAX_RETRIES = gateway.MODEL_MAX_RETRIES
 
+#: The call profiles, re-exported for the same reason as the two bounds above: the call
+#: sites that name one live in `deterministic.py` and `graph.py`, and neither should have
+#: to import the adapter to say "this is a helper step".
+CALL_PROFILE_DEFAULT = gateway.CALL_PROFILE_DEFAULT
+CALL_PROFILE_FAST_HELPER = gateway.CALL_PROFILE_FAST_HELPER
+CALL_PROFILE_EHR_SYNTHESIS = gateway.CALL_PROFILE_EHR_SYNTHESIS
+CALL_PROFILES = gateway.CALL_PROFILES
+call_profile = gateway.call_profile
 
-def build_llm(model: str):
+#: Which call profile each command's model work runs on, by wire name.
+#:
+#: One table, two readers: `deterministic._formatting_client` builds the formatting turn
+#: from it, and `graph._call_profile_for` records the same answer on the trace. Two copies
+#: would eventually disagree, and the disagreement would be invisible — a trace claiming a
+#: 512-token ceiling on a turn that ran uncapped reads as a slow model rather than as a
+#: wiring mistake.
+#:
+#: `/ehr` writes the briefing, so it keeps a thinking budget under a smaller ceiling.
+#: `/meds` and `/labs` produce a short structured answer over results the tool has already
+#: retrieved, so neither benefits from thinking tokens and both are bounded. `/pubmed` and
+#: every free-text turn are deliberately absent: they reason over prose and are the answer
+#: a reader is given, so they keep the served allowance.
+FORMATTING_PROFILES: dict[str, str] = {
+    "summarize": CALL_PROFILE_EHR_SYNTHESIS,
+    "meds": CALL_PROFILE_FAST_HELPER,
+    "labs": CALL_PROFILE_FAST_HELPER,
+}
+
+
+def formatting_profile(wire: str | None) -> str:
+    """The call profile this command's model work runs on; the default when it names none."""
+    return FORMATTING_PROFILES.get(str(wire or ""), CALL_PROFILE_DEFAULT)
+
+
+def build_llm(model: str, *, call_profile: str = CALL_PROFILE_DEFAULT):
     """The chat model for the served path, from the adapter.
 
     The adapter decides which provider serves an id, what that provider's endpoint and
     credentials are, and which parameters it accepts. This module keeps the name because
     eleven tests patch `graph._build_llm` and `deterministic.py` resolves it from there.
+
+    `call_profile` names the JOB, not a parameter: how much model this call is allowed to
+    spend. The default passes nothing extra, so every caller that does not name one gets
+    exactly the client this service has always built. The one caller that does is `/ehr`,
+    whose synthesis is bounded — see `deterministic.run_command` and `gateway.CALL_PROFILES`.
     """
     return gateway.chat_model(
         model, safety_profile=gateway.SAFETY_SERVED, effort=gateway.EFFORT_SERVED,
+        call_profile_name=call_profile,
     )
 
 
@@ -102,7 +141,7 @@ CLINICAL_SAFETY_SETTINGS = gateway.CLINICAL_SAFETY_SETTINGS
 EXTRACTION_REASONING_EFFORT = gateway.EXTRACTION_REASONING_EFFORT
 
 
-def build_extraction_llm(model: str):
+def build_extraction_llm(model: str, *, call_profile: str = CALL_PROFILE_DEFAULT):
     """The chat model for structured extraction over clinical text.
 
     Same client, same generation config, different content-filter thresholds — the only
@@ -117,10 +156,14 @@ def build_extraction_llm(model: str):
     Which parameter expresses "low effort" is the adapter's answer, not this module's: one
     candidate rejects the level its siblings require, and the mapping from the job to the
     provider's spelling belongs in the one place that knows the provider.
+
+    `call_profile` is the third difference and the only one a caller states: `/ehr`'s two
+    helper steps run on `fast_helper`, which asks for no thinking and a 512-token answer,
+    because both return a small JSON object read out of text already in front of them.
     """
     return gateway.chat_model(
         model, safety_profile=gateway.SAFETY_EXTRACTION,
-        effort=gateway.EFFORT_EXTRACTION,
+        effort=gateway.EFFORT_EXTRACTION, call_profile_name=call_profile,
     )
 
 

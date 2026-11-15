@@ -537,7 +537,7 @@ class _ProseOnly:
 
 
 def _free_text(question: str, *, turns, hadm_id, model):
-    with patch.object(model_gateway, "build_llm", lambda name: model):
+    with patch.object(model_gateway, "build_llm", lambda name, **_kw: model):
         box = _StubToolbox({"rag_search": _rag_payload(
             _note_passage("n1", "physical_exam", "Third."))})
         return asyncio.run(graph.ask(
@@ -583,7 +583,7 @@ def test_a_turn_with_no_admission_carries_no_state():
 
 def _command(command, *, hadm_id, payloads, model, question="/ehr", topic=None):
     box = _StubToolbox(payloads)
-    with patch.object(model_gateway, "build_llm", lambda name: model):
+    with patch.object(model_gateway, "build_llm", lambda name, **_kw: model):
         return asyncio.run(run_command(
             box, command, hadm_id, question=question, model="test",
             topic=topic,
@@ -1085,7 +1085,7 @@ def test_the_record_reaches_the_model_as_an_overlay_that_is_never_persisted():
     """
     model = _CapturingModel("rag_search", {"hadm_id": HADM}, "The exam was normal.")
 
-    with patch.object(model_gateway, "build_llm", lambda name: model):
+    with patch.object(model_gateway, "build_llm", lambda name, **_kw: model):
         box = _RecordingToolbox([_payload(D)])
         state = asyncio.run(graph.ask(
             box, "And the exam?", hadm_id=HADM, model="test", turns=[PRIOR_TURN],
@@ -1372,7 +1372,7 @@ CHART_QUESTION = "What does the discharge note say about her hospital course?"
 
 def _routed(question: str, *, turns, model):
     """One free-text turn through the real graph, with a stubbed toolbox."""
-    with patch.object(model_gateway, "build_llm", lambda name: model):
+    with patch.object(model_gateway, "build_llm", lambda name, **_kw: model):
         box = _StubToolbox({"rag_search": _rag_payload(
             _note_passage("n1", "physical_exam", "Third."))})
         return asyncio.run(graph.ask(

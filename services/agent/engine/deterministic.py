@@ -843,7 +843,26 @@ async def _formatting_turn(
 #: offline. `tests/agent/conftest.py` sets it to `lambda model: None`, and a `None` client
 #: means "this environment provides no extraction" — the step is skipped, no model is
 #: called, and the production path learns nothing about tests.
-extraction_llm_factory: Callable[[str], Any] = model_gateway.build_extraction_llm
+def _ehr_extraction_client(model: str) -> Any:
+    """The extraction client the two `/ehr` helper steps are built with.
+
+    A named function rather than the bare factory, because the profile is part of the job.
+    This factory has exactly one reader — `_readmission_comparators`, which is `/ehr` — and
+    both of its model calls are helper steps: the query generator writes a query and a few
+    anchor phrases, and the abstract selector returns a rate and the sentence that states
+    it. Both run on `fast_helper`, which asks for no thinking and a bounded answer; at the
+    served level the first of them spent fifteen to thirty seconds per call before writing
+    a twenty-token object (`gateway.CALL_PROFILES`). The same profile serves the `/meds`
+    and `/labs` formatting turns, whose replies are compact but can be lists.
+
+    Kept a separate function from the assignment below so the binding is testable while the
+    seam stays a one-argument callable that `conftest` can still replace.
+    """
+    return model_gateway.build_extraction_llm(
+        model, call_profile=model_gateway.CALL_PROFILE_FAST_HELPER)
+
+
+extraction_llm_factory: Callable[[str], Any] = _ehr_extraction_client
 
 
 def _pass_rows(passes: list["ComparatorPass"]) -> list[dict]:
@@ -1058,6 +1077,30 @@ async def _readmission_comparators(
                     rejection.get("pmid") or "(no pmid)",
                     rejection.get("reason") or "")
     return result.rows, payload, calls_made, passes, outcome, fallback_literature
+
+
+#: Which call profile each command's formatting turn runs on.
+#:
+#: Re-exported from `model.FORMATTING_PROFILES` rather than written here, because the same
+#: answer is recorded on the trace by `graph._call_profile_for`. A command with no entry is
+#: a command that runs the default, which is why the table is keyed by wire name.
+_FORMATTING_PROFILE = model_gateway.FORMATTING_PROFILES
+
+
+def _formatting_client(command: Command, model: str) -> Any:
+    """The client this command's formatting turn runs on.
+
+    One table, two readers, so the profile a turn runs on and the profile the trace records
+    cannot disagree (see `model.FORMATTING_PROFILES`).
+
+    A command with no entry is built exactly as it always was — `build_llm(model)` with no
+    keyword — so `/pubmed` and every other default caller is untouched down to the call
+    signature.
+    """
+    profile = _FORMATTING_PROFILE.get(str(command.wire))
+    if profile is None:
+        return model_gateway.build_llm(model)
+    return model_gateway.build_llm(model, call_profile=profile)
 
 
 async def run_command(
@@ -1336,7 +1379,7 @@ async def run_command(
         else ""
     )
 
-    llm = model_gateway.build_llm(model)  # no bind_tools: a formatting turn cannot call anything
+    llm = _formatting_client(command, model)  # no bind_tools: cannot call anything
     config = {"callbacks": list(callbacks)} if callbacks else {}
     if trace_metadata:
         config["metadata"] = dict(trace_metadata)

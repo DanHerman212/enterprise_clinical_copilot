@@ -84,7 +84,7 @@ def _run(hadm_id: int, *, reply: str = "a summary", model: object | None = None)
     box = _EmptyToolbox()
     used = model or _RecordingModel(reply)
     _classify(hadm_id)
-    with patch.object(model_gateway, "build_llm", lambda name: used):
+    with patch.object(model_gateway, "build_llm", lambda name, **_kw: used):
         state = asyncio.run(run_command(
             box, SUMMARIZE, hadm_id, question="/ehr", model="test-model",
         ))
@@ -188,7 +188,7 @@ def test_an_outpatient_formatter_that_says_nothing_uses_the_encounter_wording():
     box = _EmptyToolbox()
     used = _RecordingModel(reply="")
     _classify(OUTPATIENT[0])
-    with patch.object(model_gateway, "build_llm", lambda name: used):
+    with patch.object(model_gateway, "build_llm", lambda name, **_kw: used):
         state = asyncio.run(run_command(
             box, labs, OUTPATIENT[0], question="/labs", model="test-model",
         ))
@@ -220,7 +220,7 @@ def test_an_outpatient_record_with_a_note_gets_the_notice_not_a_summary():
     """
     used = _RecordingModel(reply="**Clinical course.** A short visit.")
     _classify(OUTPATIENT[0])
-    with patch.object(model_gateway, "build_llm", lambda name: used):
+    with patch.object(model_gateway, "build_llm", lambda name, **_kw: used):
         state = asyncio.run(run_command(
             _PassageToolbox(), SUMMARIZE, OUTPATIENT[0], question="/ehr",
             model="test-model",
@@ -237,7 +237,7 @@ def test_an_inpatient_record_with_a_note_still_reaches_the_formatter():
     records that happen to have one passage."""
     used = _RecordingModel(reply="**Presentation & diagnosis.** A short stay.")
     _classify(90000015)
-    with patch.object(model_gateway, "build_llm", lambda name: used):
+    with patch.object(model_gateway, "build_llm", lambda name, **_kw: used):
         state = asyncio.run(run_command(
             _PassageToolbox(), SUMMARIZE, 90000015, question="/ehr",
             model="test-model",

@@ -229,6 +229,21 @@ def _totals(generations: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _latency_ms(trace: Any) -> float | None:
+    """The trace's own duration in milliseconds, or None when it does not report one.
+
+    Langfuse reports a trace's `latency` in SECONDS, which is the unit a human reads in the
+    UI and the wrong unit for a report that prints four figures over a 26-second median. A
+    value that is absent is None rather than 0.0: a turn whose latency was not recorded is
+    not a turn that answered instantly, and averaging it in as zero would understate the
+    tail this report exists to show.
+    """
+    value = getattr(trace, "latency", None)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return round(float(value) * 1000.0, 1)
+
+
 def turn_usage(client: Any, trace_id: str, *, turn: int,
                attempts: int = 4, delay: float = 1.5,
                timeout: int = 90) -> dict[str, Any]:
@@ -247,7 +262,7 @@ def turn_usage(client: Any, trace_id: str, *, turn: int,
     if not trace_id:
         return {"turn": turn, "trace_id": "", "error": "no trace id for this turn",
                 **_totals([]), "cost_usd": None, "unattributed": True,
-                "reason": "no trace id for this turn"}
+                "latency_ms": None, "reason": "no trace id for this turn"}
 
     last_error = ""
     for attempt in range(max(1, attempts)):
@@ -265,6 +280,7 @@ def turn_usage(client: Any, trace_id: str, *, turn: int,
                     "trace_id": trace_id,
                     **summary,
                     "unattributed": summary["cost_usd"] is None,
+                    "latency_ms": _latency_ms(trace),
                     "reason": (f"unpriced model(s): {summary['unpriced_models']}"
                                if summary["cost_usd"] is None else None),
                     "error": None,
@@ -275,7 +291,7 @@ def turn_usage(client: Any, trace_id: str, *, turn: int,
 
     return {"turn": turn, "trace_id": trace_id, "error": last_error,
             **_totals([]), "cost_usd": None, "unattributed": True,
-            "reason": last_error}
+            "latency_ms": None, "reason": last_error}
 
 
 def scenario_usage(client: Any, output: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
@@ -304,6 +320,10 @@ def scenario_usage(client: Any, output: dict[str, Any], **kwargs: Any) -> dict[s
         "billable_output": pricing.billable_output(merged),
         "cost_usd": (sum(priced_values) if priced else None),
         "generations": sum(int(turn.get("generations") or 0) for turn in turns),
+        # Per TURN, not per item: a two-turn scenario has two request durations and the
+        # report's distribution is over the turns a reader waited on.
+        "latencies_ms": [turn.get("latency_ms") for turn in turns
+                         if isinstance(turn.get("latency_ms"), (int, float))],
         "models": sorted({model for turn in turns for model in turn.get("models") or []}),
         "unattributed": not priced,
         "reason": ("; ".join(dict.fromkeys(reasons)) if reasons else None),

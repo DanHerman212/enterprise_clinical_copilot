@@ -135,8 +135,12 @@ def test_an_inpatient_block_keeps_every_field_it_had():
     block = admission_context.render(90000015, decode_profile(
         {**ROW, "encounter_type": INPATIENT}))
 
-    assert "length_of_stay_days: 7.9" in block
-    assert "admission_type: Emergency (EW EMER.)" in block
+    # A stay is counted in whole days and a decoded level loses the warehouse's own code
+    # (2026-11-20): the row holds 7.91667 and says "Emergency (EW EMER.)", and the block
+    # states what a clinician reads rather than the encoding behind it.
+    assert "length_of_stay_days: 8" in block
+    assert "admission_type: Emergency" in block
+    assert "EW EMER." not in block
     assert "discharge_location: Home" in block
     assert "outpatient" not in block
 
@@ -144,7 +148,7 @@ def test_an_inpatient_block_keeps_every_field_it_had():
 def test_an_unknown_record_keeps_the_fields_it_had():
     block = admission_context.render(90000015, decode_profile(ROW))
 
-    assert "length_of_stay_days: 7.9" in block
+    assert "length_of_stay_days: 8" in block
     assert "outpatient" not in block
 
 

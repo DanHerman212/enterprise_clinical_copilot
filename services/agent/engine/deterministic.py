@@ -55,6 +55,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from services.agent.routing import routing
 from services.agent.routing import encounter
+from services.agent.routing import admission_context as admission_block
 from services.agent.telemetry import stages
 from services.agent.postprocess import citations
 from services.agent.postprocess import answer as answer_text
@@ -1188,6 +1189,18 @@ async def run_command(
     arguments = tool_arguments(command, hadm_id, topic)
     _emit(on_event, stages.planning_event(command.wire))
 
+    # The block's decoded administrative values, so the estimate's factors carry the words
+    # the reader was shown. Without this the `/ehr` briefing got a one-hot parent with no
+    # value at all — "discharge destination" stated beside factors that all had one —
+    # because `predict_readmission` has no single column to score for those features and
+    # the level exists only in the block (measured 2026-11-20, 90000069). The free-text
+    # loop has always passed this; the command path projected without it.
+    administrative = admission_block.administrative_values(admission_context)
+
+    def project(name: str, payload: Any) -> Any:
+        """What the MODEL reads for one command call: the same projection as free text."""
+        return _presented_for_model(name, payload, administrative)
+
     # The calls, named by the table rather than chosen by a model: the command's own
     # tool, then any the command declares alongside it. `/ehr` is the only command with
     # a second, and it takes one so a single turn can put the readmission score beside
@@ -1245,7 +1258,7 @@ async def run_command(
     replay_positions = evidence_state.position_count() if evidence_state is not None else 0
 
     tool_messages, recorded = await _execute_tool_calls(
-        toolbox, calls, on_event, project=_presented_for_model,
+        toolbox, calls, on_event, project=project,
         # This path opens `command.<wire>` around the whole turn, so its tool spans
         # have a parent to nest under. The reasoning loop does not, and spanning there
         # produced a separate root trace per tool.
@@ -1269,7 +1282,7 @@ async def run_command(
             "id": f"{command.wire}-record",
         }]
         extra_messages, extra_recorded = await _execute_tool_calls(
-            toolbox, fallback, on_event, project=_presented_for_model, traced=True,
+            toolbox, fallback, on_event, project=project, traced=True,
             order=None,
             # The record already holds whatever the numbered call registered, so its
             # length is where the fallback's units begin.

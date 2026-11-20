@@ -381,6 +381,10 @@ async def compose_success(
         # General Medical Evidence. The distinction is the search's own `scope`, and it is
         # preserved by handing the records over as an explicit argument (2026-11-08).
         fallback_literature=state.get("fallback_literature") or [],
+        # A driver question reads ONE analyte, so it draws that one series whether or not
+        # this turn had to fetch it. Stamped by the engine, read here as the fact it is:
+        # the composer may not re-derive "is this a driver question" from the wording.
+        driver_question=bool(state.get("risk_driver_question")),
     )
 
     # The records this turn actually rested on, stamped onto the search that found them.

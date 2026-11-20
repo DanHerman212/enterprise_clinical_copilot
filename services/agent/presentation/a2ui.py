@@ -43,6 +43,7 @@ from __future__ import annotations
 import re
 
 from services.agent.postprocess.citations import (
+    LAB_SECTION,
     MARKER_PATTERN,
     RETRIEVAL_TOOLS,
     EvidenceLedger,
@@ -74,7 +75,7 @@ from services.agent.presentation.domain import (
 # The analyte vocabulary, from the shared leaf rather than from `routing/`: this layer
 # may not import the routing package (Charter 13 §5), and the answer it needs — "did the
 # question name a measurement?" — is a label question, not a routing decision.
-from shared.labels import asks_about_labs, names_an_analyte
+from shared.labels import analytes_canonical, asks_about_labs, names_an_analyte
 
 # The citation records live in `note_presentation`. Imported by name here because
 # this is where the rest of the package — and the tests — reach for them:
@@ -181,6 +182,96 @@ def lab_trend_payload(tool_calls: list[dict]) -> dict | None:
     return None
 
 
+def _lab_card(question: str, command: str | None, tool_calls: list[dict],
+              evidence_calls: list[dict], driver_question: bool = False) -> dict | None:
+    """The trajectory this turn draws, or None.
+
+    Drawn only when the turn asked for it — `/labs`, a question that names an analyte, or a
+    question that asks about the panel by name. A free-text turn that read the panel to
+    answer something else keeps the panel out of an answer that never discussed it.
+
+    When this turn ran the call, its own payload is the card. On a DRIVER turn that ran
+    none — every driver click but the thread's first one, because the record already held
+    another analyte — the series the thread holds is cut to the analyte the question names:
+    without this two consecutive clicks about the same panel looked like two different
+    products, one drawing a sparkline and the next drawing nothing (measured 2026-11-20,
+    90000069). Cut to the named analytes rather than passed whole, because redrawing ten
+    series for a question about one is the panel-out-of-context defect the gating above
+    exists to prevent.
+
+    A non-driver follow-up that quotes the panel keeps the older behaviour — no card — which
+    is the 2026-10-25 rule that a follow-up about something else does not redraw a course it
+    did not read.
+    """
+    if command != "labs" and not (names_an_analyte(question) or asks_about_labs(question)):
+        return None
+    own = lab_trend_payload(tool_calls)
+    if own is not None:
+        return own
+    if not driver_question or not names_an_analyte(question):
+        return None
+    return _trends_for(lab_trend_payload(evidence_calls), analytes_canonical(question))
+
+
+def _trends_for(payload: dict | None, analytes: tuple[str, ...]) -> dict | None:
+    """The payload cut to these panel analytes, or None when it holds none of them."""
+    trends = (payload or {}).get("trends")
+    if not isinstance(trends, list) or not analytes:
+        return None
+    wanted = {str(analyte).strip().lower() for analyte in analytes}
+    kept = [trend for trend in trends
+            if isinstance(trend, dict)
+            and str(trend.get("key") or "").strip().lower() in wanted]
+    if not kept:
+        return None
+    return {**payload, "trends": kept, "returned": len(kept)}
+
+
+def _numbers_in(body: str) -> list[int]:
+    """The unit numbers a marker body names, or an empty list for a form this leaves alone.
+
+    Empty covers the PMID badge and any invented body: neither points at a trajectory, so
+    neither is this function's business.
+    """
+    numbers: list[int] = []
+    for part in str(body or "").split(","):
+        piece = part.strip()
+        if "-" in piece:
+            low, _, high = piece.partition("-")
+            try:
+                numbers.extend(range(int(low), int(high) + 1))
+            except ValueError:
+                return []
+        elif piece.isdigit():
+            numbers.append(int(piece))
+        else:
+            return []
+    return numbers
+
+
+def _without_markers(text: str, cites: set[int]) -> str:
+    """The answer with the markers numbered in `cites` removed, and nothing else touched.
+
+    A marker that names a trajectory the card beneath already draws adds a pill whose
+    popover repeats the row beside it. Only those numbers are removed: every other citation
+    is the answer's evidence and stays exactly as settlement wrote it. A marker naming two
+    units keeps the one that is not a trajectory — dropping the whole marker would delete a
+    real note citation because it was written beside a series.
+    """
+    def _drop(match: re.Match) -> str:
+        numbers = _numbers_in(match.group(1))
+        if not numbers or not set(numbers) & cites:
+            return match.group(0)
+        kept = [number for number in numbers if number not in cites]
+        if not kept:
+            return ""
+        return " ".join(f"^[{number}]" for number in kept)
+
+    cleaned = MARKER_PATTERN.sub(_drop, text or "")
+    cleaned = re.sub(r"[ \t]+([.,;:!?])", r"\1", cleaned)
+    return re.sub(r"[ \t]+\n", "\n", cleaned)
+
+
 def literature_payload(
     tool_calls: list[dict],
     replay_calls: "list[dict] | None" = None,
@@ -277,7 +368,8 @@ def compose_presentation(question: str, answer: str,
                          thread_literature: list[dict] | None = None,
                          evidence_state: SessionEvidenceState | None = None,
                          comparison_degraded: bool = False,
-                         fallback_literature: list[dict] | None = None) -> dict:
+                         fallback_literature: list[dict] | None = None,
+                         driver_question: bool = False) -> dict:
     """The full presentation contract for an answered question.
 
     One call produces every field the browser consumes, so the answer's
@@ -438,9 +530,7 @@ def compose_presentation(question: str, answer: str,
     # The panel noun is the third condition because a panel question is the one case where
     # the reader asked for the values without naming one: an answer that says the discharge
     # labs were normal, drawn above nothing, leaves the reader unable to check it.
-    labs = (lab_trend_payload(tool_calls)
-            if command == "labs" or names_an_analyte(question) or asks_about_labs(question)
-            else None)
+    labs = _lab_card(question, command, tool_calls, evidence_calls, driver_question)
     # Resolved against the conversation's evidence, and against EVERY kind of it. A marker
     # addresses one array — the citable units the model was shown, numbered continuously
     # across the replayed turns and this one — and that array now holds laboratory
@@ -454,6 +544,24 @@ def compose_presentation(question: str, answer: str,
     record_sources = resolve_sources(answer, citation_map or {}, rag, intent,
                                      evidence=evidence_calls,
                                      evidence_state=evidence_state)
+    # The card IS the citation on a DRIVER turn. When the turn draws the trajectory it
+    # answered from, the same series must not also arrive as a pill and a reference row: an
+    # RDW driver answer reading "…at day 30 ^[1]" drew the sparkline AND a drawer row
+    # reading "1. RDW trajectory · Clinical Note" (measured 2026-11-20, 90000069) — the
+    # series stated three times, one of them labelled as a note it is not. The markers that
+    # point at a trajectory go with it, so the prose keeps every real note citation.
+    #
+    # Scoped to the driver turn, not to every drawn card. A free-text question about an
+    # analyte ("how do the discharge red blood cells compare…") is a chart answer whose
+    # trajectory IS its evidence, and `test_the_free_text_lab_answer_still_cites` pins that
+    # boundary so a later edit cannot widen it into the `/labs` command's rule.
+    if labs is not None and driver_question:
+        lab_cites = {int(source.get("cite") or 0) for source in record_sources
+                     if str(source.get("section") or "") == LAB_SECTION}
+        if lab_cites:
+            answer = _without_markers(answer, lab_cites)
+            record_sources = [source for source in record_sources
+                              if int(source.get("cite") or 0) not in lab_cites]
     # What the reader is SHOWN as evidence, which for `/labs` is nothing at all
     # (2026-11-03). A laboratory turn already draws every reading it discusses — the
     # measurement, the reference interval, the course and the flag, one row per timepoint —

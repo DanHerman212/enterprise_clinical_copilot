@@ -188,25 +188,34 @@ ANCHOR_SUFFIXES: tuple[str, ...] = (
 #: anchor, so `rdw_max` and a future `rdw_last` are one entry. These are the units the
 #: `get_lab_trends` payload states for the same analyte, so a value quoted from a driver and
 #: a value quoted from a series cannot disagree about what they are measured in.
+#:
+#: A cell count is written the way a laboratory reports it: `×10³/µL`, with the multiplication
+#: sign and the superscript. The tool's own payload keeps the ASCII spelling it has always
+#: had (`x10^3/uL`), because that is the wire; this table is what the reader sees, and the
+#: guardrail accepts both.
 _ANALYTE_UNITS: dict[str, str] = {
     "rdw": "%",
     "hemoglobin": "g/dL",
     "sodium": "mmol/L",
     "potassium": "mmol/L",
     "creatinine": "mg/dL",
-    "rbc": "x10^6/uL",
-    "wbc": "x10^3/uL",
-    "monocytes": "x10^3/uL",
+    "rbc": "×10⁶/µL",
+    "wbc": "×10³/µL",
+    "monocytes": "×10³/µL",
     "egfr": "mL/min/1.73m2",
     "nt_probnp": "pg/mL",
 }
 
 #: Durations a reader counts, with their singular and plural forms. A number of days is
 #: read as "5 days" and "1 day", which no unit table can do with one string.
+#:
+#: `prior_inpatient_days` is deliberately absent. The factor's own label says days, so a
+#: unit beside the number repeated it — "prior inpatient days (0 days)", measured
+#: 2026-11-20 on `90000020` — while `length of stay` names a duration and no time unit, so
+#: it keeps one.
 _DURATION_UNITS: dict[str, tuple[str, str]] = {
     "age": ("year", "years"),
     "index_los_days": ("day", "days"),
-    "prior_inpatient_days": ("day", "days"),
 }
 
 #: The analytes the laboratory panel draws, taken from the unit table so the two lists

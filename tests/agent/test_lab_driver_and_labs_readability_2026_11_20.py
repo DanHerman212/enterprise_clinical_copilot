@@ -205,13 +205,13 @@ def test_a_literature_turn_is_still_badged_as_general_evidence():
 @pytest.mark.parametrize("feature, value, stated", [
     ("age", 68.0, "68 years"),
     ("index_los_days", 42.458333333333336, "42 days"),
-    ("prior_inpatient_days", 4.75, "5 days"),
+    ("prior_inpatient_days", 4.75, 5),
     ("index_los_days", 1.0, "1 day"),
     ("rdw_max", 15.5879, "15.59%"),
     ("hemoglobin_min", 6.8, "6.8 g/dL"),
     ("sodium_min", 131.0, "131 mmol/L"),
-    ("rbc_last", 3.09, "3.09 x10^6/uL"),
-    ("monocytes_min", 0.2, "0.2 x10^3/uL"),
+    ("rbc_last", 3.09, "3.09 ×10⁶/µL"),
+    ("monocytes_min", 0.2, "0.2 ×10³/µL"),
 ])
 def test_a_measurement_states_the_unit_it_is_measured_in(feature, value, stated):
     presented = _presented_factor(
@@ -242,7 +242,7 @@ def test_the_session_record_states_the_same_number_and_unit():
 
     rendered = state.render_for_prompt({})
 
-    assert "value=0.2 x10^3/uL" in rendered
+    assert "value=0.2 ×10³/µL" in rendered
 
 
 def test_a_value_with_its_unit_is_not_stripped_as_invented():

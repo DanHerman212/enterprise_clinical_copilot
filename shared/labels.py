@@ -153,6 +153,88 @@ def names_an_analyte(text: str) -> bool:
     return bool(_LAB_ANALYTE.search(text or ""))
 
 
+#: The PANEL key each vocabulary word answers to.
+#:
+#: The words above name a measurement as a clinician writes it — "lowest monocyte count",
+#: "red cell distribution width" — and the panel names the column it draws: `monocytes`,
+#: `rdw`. One is not the other, and the difference reached a live tool call: a driver
+#: question about the lowest monocyte count asked `get_lab_trends` for `monocytes_min`, the
+#: feature the model was scored on, and was refused (measured 2026-11-20, 90000015).
+#:
+#: Two words can name one column: "hgb" and "haemoglobin" are the same measurement, and a
+#: question that says both reads once.
+_PANEL_FOR_WORD: dict[str, str] = {
+    "hemoglobin": "hemoglobin",
+    "haemoglobin": "hemoglobin",
+    "hgb": "hemoglobin",
+    "hb": "hemoglobin",
+    "sodium": "sodium",
+    "red blood cell": "rbc",
+    "rbc": "rbc",
+    "erythrocyte": "rbc",
+    "rdw": "rdw",
+    "red cell distribution width": "rdw",
+    "monocyte": "monocytes",
+    "creatinine": "creatinine",
+    "egfr": "egfr",
+    "gfr": "egfr",
+    "potassium": "potassium",
+    "white blood cell": "wbc",
+    "wbc": "wbc",
+    "leukocyte": "wbc",
+    "nt-probnp": "nt_probnp",
+    "bnp": "nt_probnp",
+}
+
+
+def _panel_key(word: str) -> str | None:
+    """The panel key for one vocabulary word, singular or plural.
+
+    `_LAB_ANALYTE` matches a trailing `s`, so it returns "monocytes" where this table is
+    keyed on "monocyte". Stripping the plural here rather than storing both spellings is
+    what keeps one entry per measurement.
+    """
+    lowered = str(word or "").strip().lower()
+    if lowered in _PANEL_FOR_WORD:
+        return _PANEL_FOR_WORD[lowered]
+    if lowered.endswith("s") and lowered[:-1] in _PANEL_FOR_WORD:
+        return _PANEL_FOR_WORD[lowered[:-1]]
+    return None
+
+
+def canonical_analyte(text: str) -> str | None:
+    """The panel key for a name of a laboratory measurement, or None.
+
+    Accepts either a whole phrase ("lowest monocyte count") or a vocabulary word ("rdw"),
+    because both reach it: a question is a sentence and a chip label is a phrase.
+    """
+    lowered = " ".join(str(text or "").lower().split())
+    if not lowered:
+        return None
+    direct = _panel_key(lowered)
+    if direct:
+        return direct
+    match = _LAB_ANALYTE.search(lowered)
+    if match is None:
+        return None
+    return _panel_key(match.group(0))
+
+
+def analytes_canonical(text: str) -> tuple[str, ...]:
+    """Every panel analyte this text names, in the order it names them, once each.
+
+    The list a caller uses when it has to act PER analyte — one series to read, one card
+    to draw — rather than decide a yes/no. "The lowest monocyte count and the RDW" is two
+    analytes and two reads.
+    """
+    found: list[str] = []
+    for word in analytes_named(text):
+        key = _panel_key(str(word))
+        if key and key not in found:
+            found.append(key)
+    return tuple(found)
+
+
 def analytes_named(text: str) -> tuple[str, ...]:
     """Every analyte this text names, as the vocabulary spells it, once each, in order.
 

@@ -185,7 +185,7 @@ def has_tool_call(chunk: AIMessageChunk) -> bool:
     return bool(getattr(chunk, "tool_call_chunks", None))
 
 
-async def streamed_turn(llm, messages, on_event) -> AIMessage:
+async def streamed_turn(llm, messages, on_event, *, immediate: bool = False) -> AIMessage:
     """One model turn, announced once it has turned out to be the answer.
 
     Concatenates as it goes: `AIMessageChunk + AIMessageChunk` is how LangChain
@@ -212,6 +212,12 @@ async def streamed_turn(llm, messages, on_event) -> AIMessage:
     the turn then withdraws. The command path is untouched — `deterministic._format`
     announces on arrival, because no tool is bound there and a formatting turn cannot be
     anything but the answer.
+
+    `immediate` is the caller saying the hold has nothing to protect: with ZERO tools bound
+    the model cannot emit a tool call, so no sentence of the turn can be withdrawn and the
+    prose is announced as it arrives. `agent_node` passes it exactly when the answering
+    client is the unbound one. The delivered text is identical either way — this flag moves
+    the timing of the deltas and nothing else.
     """
     pieces: list[str] = []
     turn: AIMessageChunk | None = None
@@ -224,6 +230,8 @@ async def streamed_turn(llm, messages, on_event) -> AIMessage:
         piece = text_of(chunk.content)
         if piece:
             pieces.append(piece)
+            if immediate:
+                emit(on_event, stages.answer_delta_event(piece))
 
     if turn is None:
         raise RuntimeError("the model returned no chunks")
@@ -235,8 +243,10 @@ async def streamed_turn(llm, messages, on_event) -> AIMessage:
     gateway.stamp(turn)
 
     # Deliberation is never announced: not its held prefix, not the paragraph it wrote
-    # first. The turn is a routing turn, so none of it is the answer.
-    if not has_tool_call(turn):
+    # first. The turn is a routing turn, so none of it is the answer. With `immediate` the
+    # check cannot fire — no tool is bound, so there is no call to find — and it is kept
+    # because a turn that somehow produced one must not have its prose announced twice.
+    if not has_tool_call(turn) and not immediate:
         for piece in pieces:
             emit(on_event, stages.answer_delta_event(piece))
 

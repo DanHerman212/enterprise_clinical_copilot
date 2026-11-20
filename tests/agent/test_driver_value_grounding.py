@@ -230,7 +230,8 @@ def test_a_flag_is_stated_as_words_rather_than_as_the_encoding():
     presented = mcp_client._presented_factor(
         {"feature": "oncology_flag", "direction": "increases", "value": 1})
 
-    assert presented["value"] == "present"
+    # On is the factor's own name; only absence needs saying (2026-11-20).
+    assert "value" not in presented
     absent = mcp_client._presented_factor(
         {"feature": "oncology_flag", "direction": "decreases", "value": 0})
     assert absent["value"] == "not present"

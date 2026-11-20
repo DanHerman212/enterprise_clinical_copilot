@@ -41,6 +41,7 @@ compare row by row, which is the whole point of the exercise: the models must di
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Sequence
@@ -910,6 +911,100 @@ class _BudgetFallback:
                 yield chunk
 
 
+#: How long a `CALL_PROFILE_LOW` attempt may take to produce its first output.
+#:
+#: Every healthy generation on this profile in the 2026-11-20 session finished in 1.5-4.6 s
+#: and its first token arrived inside a second (nine generations, two patients). Two turns
+#: waited 8.5 s and 26.3 s for a first token and then streamed a 44-token answer for another
+#: fifteen seconds: a single span of 41.4 s with nothing in our logs to explain it — no
+#: retry, no 429, no budget fallback (measured 2026-11-20, `c28ffa84`).
+#:
+#: The bound is set well above a healthy call and well below a stall, so a slow-but-working
+#: answer is never cut off. `MODEL_TIMEOUT_SECONDS` stays the ceiling for the whole request;
+#: this is the bound on waiting for the provider to produce ANYTHING.
+LOW_ATTEMPT_TIMEOUT_SECONDS = 18.0
+
+
+def _stalled(exc: BaseException) -> bool:
+    """Whether this failure is a vendor stall that a second request can plausibly fix.
+
+    Quiet by construction: a stall arrives as `TimeoutError` from the bound above, or as one
+    of the transport failures `classify_error` already recognises. A content refusal, a
+    capacity refusal and a bug in our own request are all re-raised untouched.
+    """
+    if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+        return True
+    return classify_error(exc) == TRANSPORT
+
+
+class _StallRetry:
+    """A client that bounds each attempt and retries one that produced nothing.
+
+    Two rules, and they are the same rule:
+
+      * `ainvoke` bounds the whole call. A call that returns nothing within the bound is
+        abandoned and made again on a fresh request, which is what turns a 41-second
+        vendor stall into two bounded attempts rather than one hung span.
+      * `astream` bounds the FIRST chunk only. Once a piece has been announced the caller
+        has shown it, and a second attempt would print the prose twice — the rule
+        `_BudgetFallback.astream` already applies to a refused budget, for the same reason.
+
+    Wrapped inside `_BudgetFallback`, so a budget refusal is still retried and every retry
+    is still logged. `gateway_profile` is carried for the same reason every wrapper carries
+    it: `gateway.profile_for` resolves derived clients by identity and then by the model
+    name they declare, and a wrapper that hid either would hand a bound client the wrong
+    profile's facts.
+    """
+
+    def __init__(self, primary: Any, profile_: ModelProfile, timeout: float) -> None:
+        self._primary = primary
+        self._timeout = timeout
+        self.gateway_profile = profile_
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._primary, name)
+
+    def bind(self, **kwargs: Any) -> "_StallRetry":
+        return _StallRetry(
+            self._primary.bind(**kwargs), self.gateway_profile, self._timeout)
+
+    def bind_tools(self, tools: Sequence[Any], **kwargs: Any) -> "_StallRetry":
+        return _StallRetry(
+            self._primary.bind_tools(tools, **kwargs), self.gateway_profile, self._timeout)
+
+    async def ainvoke(self, messages: Any, config: Any = None, **kwargs: Any) -> Any:
+        for attempt in (1, 2):
+            try:
+                return await asyncio.wait_for(
+                    _invoke(self._primary, messages, config, kwargs), self._timeout)
+            except Exception as exc:  # noqa: BLE001 — re-raised unless it stalled
+                if attempt == 2 or not _stalled(exc):
+                    raise
+                logger.warning(
+                    "model call produced nothing in %.1fs; retrying once on a fresh "
+                    "request: %s", self._timeout, exc)
+        raise AssertionError("unreachable: both attempts returned or raised")  # pragma: no cover
+
+    async def astream(self, messages: Any, config: Any = None, **kwargs: Any):
+        for attempt in (1, 2):
+            stream = _stream(self._primary, messages, config, kwargs).__aiter__()
+            try:
+                first = await asyncio.wait_for(stream.__anext__(), self._timeout)
+            except StopAsyncIteration:
+                return
+            except Exception as exc:  # noqa: BLE001 — re-raised unless it stalled
+                if attempt == 2 or not _stalled(exc):
+                    raise
+                logger.warning(
+                    "model stream produced no chunk in %.1fs; retrying once on a fresh "
+                    "request: %s", self._timeout, exc)
+                continue
+            yield first
+            async for chunk in stream:
+                yield chunk
+            return
+
+
 async def _invoke(client: Any, messages: Any, config: Any, kwargs: Mapping[str, Any]) -> Any:
     """One call, with the config passed only when there is one to pass."""
     if config is None:
@@ -1347,6 +1442,11 @@ def chat_model(model_id: str | None, *, safety_profile: str = SAFETY_SERVED,
             f"no client is registered for the {profile_.family!r} family")
 
     primary = build()
+    if wanted.name == CALL_PROFILE_LOW:
+        # Bounded per attempt, and retried once when an attempt produces nothing. Applied
+        # here rather than in the callers, because a bound only one caller applies is a
+        # bound the other two routes do not have.
+        primary = _StallRetry(primary, profile_, LOW_ATTEMPT_TIMEOUT_SECONDS)
     if not ({"thinking_budget", "thinking", "thinking_level", "reasoning"}
             & set(call_profile_parameters(profile_, wanted))):
         # Nothing this family accepts was named, so there is nothing to fall back from.

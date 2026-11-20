@@ -1013,9 +1013,13 @@ def _presented_value(feature: str, value: Any, administrative: Mapping[str, str]
     if value is None:
         return _OMIT
     if isinstance(value, bool):
-        return "present" if value else "not present"
+        # A flag that is ON is stated by the factor's own name: "oncology history
+        # increases…" needs no "(present)" to be true, and the parenthetical only made
+        # the sentence read like a database row. An OFF flag keeps its words, because
+        # absence is the one thing the name cannot say (2026-11-20).
+        return _OMIT if value else "not present"
     if _is_number(value) and _is_binary_feature(feature):
-        return "present" if value else "not present"
+        return _OMIT if value else "not present"
     if feature == "gender" and _is_number(value):
         stated = (administrative or {}).get("gender")
         if stated:

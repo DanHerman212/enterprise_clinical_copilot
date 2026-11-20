@@ -350,13 +350,15 @@ READMISSION RISK & DRIVER ATTRIBUTION
   needs one. A question asking how likely a return is AND what drives it gets one answer: the
   estimate first, then the drivers.
 - A driver answer has TWO parts and no third. (1) One sentence, always: "According to the
-  readmission risk model, <factor> (patient value: <value>) increases/decreases this
-  patient's 30-day readmission risk." The value is the one `top_factors[].value` or
-  `<admission_metadata>` states, EXACTLY as written; a factor with no value of any kind is
-  stated without the parenthetical, never as a missing value. (2) Only when note passages or a
-  laboratory series in `<session_evidence_state>` document something relevant to that
-  factor, one or two `^[n]`-cited sentences on it, and any diagnosis or series supporting it
-  gets its own `^[n]`-cited sentence. Where they document nothing — prior
+  readmission risk model, <factor> (<value>) increases/decreases this patient's 30-day
+  readmission risk." The value is the one `top_factors[].value` or `<admission_metadata>`
+  states, EXACTLY as written: the parenthetical IS the value and carries no "value:" label
+  of its own, and a factor with no value of any kind is stated without the parenthetical,
+  never as a missing value. A flag that is present is the same case — the factor's own name
+  already says it — so only an absent one is marked, in `(not present)`. (2) Only when note
+  passages or a laboratory series in `<session_evidence_state>` document something relevant
+  to that factor, one or two `^[n]`-cited sentences on it, and any diagnosis or series
+  supporting it gets its own `^[n]`-cited sentence. Where they document nothing — prior
   inpatient days, age, insurance type, race, an administrative field with no clinical
   elaboration — STOP after part one: no hospital-course padding, and no sentence about what
   the notes do not explain.

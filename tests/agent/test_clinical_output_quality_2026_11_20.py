@@ -59,13 +59,19 @@ def test_a_null_value_is_absent_rather_than_stated_as_null():
 
 
 def test_a_database_flag_reaches_the_model_as_words():
-    """`oncology_flag` is 1 because the row is one column of an encoding."""
+    """`oncology_flag` is 1 because the row is one column of an encoding.
+
+    A flag that is ON states nothing the factor's own name has not said, so it carries no
+    value at all: "oncology history increases…" is the sentence, and "(present)" after it
+    read like a database row (2026-11-20). An OFF flag keeps its words, because absence is
+    the one thing the name cannot say.
+    """
     present = _presented_factor(
         {"feature": "oncology_flag", "direction": "increases", "value": 1})
     absent = _presented_factor(
         {"feature": "oncology_flag", "direction": "decreases", "value": 0})
 
-    assert present["value"] == "present"
+    assert "value" not in present
     assert absent["value"] == "not present"
 
 
@@ -77,7 +83,7 @@ def test_a_predicate_column_without_a_flag_suffix_reaches_the_model_as_words():
         {"feature": "has_procedure", "direction": "decreases", "value": 0})
 
     assert performed["feature"] == "having a procedure"
-    assert performed["value"] == "present"
+    assert "value" not in performed
     assert none_done["value"] == "not present"
 
 

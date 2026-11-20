@@ -1050,7 +1050,12 @@ _DISPOSITIONS = {
 _LAB_VALUE = re.compile(
     r"\b(\d{1,4}(?:\.\d{1,2})?)\s*"
     r"(mg/dl|mmol/l|meq/l|ml/min(?:/1\.73\s*m2)?|g/dl|mg/l|ng/ml|pg/ml|iu/l|u/l|"
-    r"units?/l|mmhg|%)\b",
+    r"units?/l|mmhg|%|"
+    # A cell count, in either spelling the pipeline produces: the laboratory's own
+    # typography ("×10³/µL", what the reader is shown) and the wire's
+    # ("x10^3/uL", what the tool's payload carries). A sentence using either is a
+    # measurement the record must support, so both are verified.
+    r"[×x]10\^?[³3]/[µu]l|[×x]10\^?[⁶6]/[µu]l)\b",
     re.IGNORECASE,
 )
 

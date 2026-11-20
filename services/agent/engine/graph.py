@@ -113,7 +113,7 @@ from services.agent.telemetry import stages
 # whether an analyte a question names is already explained by the estimate's own drivers
 # (`rdw_max` is `red cell distribution width (RDW)`), which is a label question and not a
 # routing decision.
-from shared.labels import label_for
+from shared.labels import analytes_canonical, label_for
 
 logger = logging.getLogger(__name__)
 
@@ -666,8 +666,7 @@ def _redundant_on_declared_turn(name: str, state: AgentState) -> bool:
     if name == "discharge_medications":
         return _record_holds(record, "discharge_medications")
     if name == "get_lab_trends":
-        return _record_holds(record, "get_lab_trends") or bool(
-            getattr(record, "checked_labs", {}) or {})
+        return _lab_analyte_already_read(state, record)
     if name == "predict_readmission":
         return getattr(record, "prediction", None) is not None
     if name == "search_literature":
@@ -675,6 +674,75 @@ def _redundant_on_declared_turn(name: str, state: AgentState) -> bool:
     if name in routing.NOTE_SEARCH_TOOLS:
         return _record_holds(record, *routing.NOTE_SEARCH_TOOLS)
     return False
+
+
+def _lab_analyte_already_read(state: AgentState, record: Any) -> bool:
+    """Whether the record already holds the analyte THIS question asks about.
+
+    Per analyte, not per tool. The check used to be "the record holds a laboratory item, or
+    any analyte at all", which is true from the second laboratory turn of a thread onward —
+    so consecutive driver clicks drifted apart: the first (RDW) bound the tool and read its
+    series, and the next (`lowest monocyte count`) had `get_lab_trends` withdrawn before the
+    model saw it, because RDW was already in the record (measured 2026-11-20, 90000069:
+    `tools: 1` then `tools: 0`, both `lab_driver: true`).
+
+    A question that names an analyte is answered only when EVERY analyte it names has been
+    read: reading RDW answers nothing about monocytes. A question that names none is the
+    panel question, and there any laboratory item settles it — the card exists because the
+    course was already drawn.
+    """
+    named = analytes_canonical(str(state.get("question") or ""))
+    held = {str(analyte).strip().lower()
+            for analyte in (getattr(record, "checked_labs", {}) or {})}
+    if named:
+        return all(analyte in held for analyte in named)
+    return _record_holds(record, "get_lab_trends") or bool(held)
+
+
+async def _prefetch_lab_series(
+    toolbox: Any, session: Any, *, question: str, hadm_id: int | None,
+    on_event: Any, cite_offset: int,
+) -> list[dict]:
+    """Read the analyte a driver question names, before the model runs.
+
+    A lab driver answer needs two things: the estimate, which the session already holds,
+    and that analyte's trajectory, which it does not. Reading the trajectory was left to
+    the model, and the model paid for it: the turn bound `get_lab_trends`, called it, and
+    then wrote the answer in a second round — 25 s where `/labs` spends 3.5 s (measured
+    2026-11-20, 90000069). Worse, the second lab click of a thread could not call it at
+    all once the first analyte was in the record, so it answered without its own series.
+
+    This is the same move the admission profile already makes: a deterministic read of a
+    fact the turn is about, done before the window is composed, so no round is spent on
+    it. What the model receives is the record's rendering (`<session_evidence_state>`),
+    which is the channel every other replayed read reaches it through.
+
+    Nothing happens when no analyte is named, when the session is not an admission, or
+    when every named analyte has already been read. A refusal costs the turn nothing and
+    its message is not served to anyone: the executor refuses before dispatch, so no
+    stage is announced (`ONCE_PER_TURN`'s rule 3).
+    """
+    if session is None or hadm_id is None:
+        return []
+    held = {str(analyte).strip().lower()
+            for analyte in (getattr(session, "checked_labs", {}) or {})}
+    wanted = [analyte for analyte in analytes_canonical(question)
+              if analyte not in held]
+    if not wanted:
+        return []
+    _messages, recorded = await _execute_tool_calls(
+        toolbox,
+        [{"name": "get_lab_trends", "args": {"analyte": analyte}, "id": ""}
+         for analyte in wanted],
+        on_event=on_event,
+        # The same outbound check the loop's calls get: a prefetch may not reach for an
+        # admission the turn is not about, and it carries none of the model's arguments.
+        guard=lambda name, args: _outbound_patient_identifier(name, args, hadm_id),
+        cite_offset=cite_offset,
+        evidence_state=session,
+        hadm_id=hadm_id,
+    )
+    return recorded
 
 
 def _still_bound(allowed: frozenset[str], state: AgentState) -> frozenset[str]:
@@ -1116,7 +1184,13 @@ def build_graph(
         if overlay:
             conversation = _with_overlay(conversation, overlay)
         if prose_stream and on_event is not None:
-            response = await _streamed_turn(answering_llm, conversation, on_event)
+            # Announced as it arrives when nothing is bound: with zero tools the model
+            # cannot emit a tool call, so there is no deliberation to hold back and the
+            # reader sees the answer being written rather than after the turn ends.
+            response = await _streamed_turn(
+                answering_llm, conversation, on_event,
+                immediate=answering_llm is chat_model,
+            )
         else:
             response = await answering_llm.ainvoke(conversation)
         if spent >= MAX_TOOL_CALLS_PER_TURN:
@@ -1885,6 +1959,17 @@ async def ask(
         else contextlib.nullcontext(turn_root)
     )
     with span as root_span:
+        # A driver question about a laboratory value reads that value's series HERE,
+        # before the window is composed, so the turn can answer in one pass. With the
+        # estimate and the series both in the record, `_still_bound` binds no tool at all
+        # and the model writes both parts of the answer at once.
+        prefetched = (
+            await _prefetch_lab_series(
+                toolbox, session, question=question, hadm_id=hadm_id,
+                on_event=on_event, cite_offset=replayed_positions,
+            )
+            if risk_driver_question and lab_driver_question else []
+        )
         system_prompt = prompts.compose_system_prompt(
             allowed_tools=allowed_for_prompt,
             wants_literature=wants_literature,
@@ -1926,7 +2011,7 @@ async def ask(
                     # read the wire value off the state.
                     HumanMessage(content=routing.strip_admission_suffix(question, hadm_id)),
                 ],
-                "tool_calls": [],
+                "tool_calls": list(prefetched),
                 # The other half of the tool budget (Sprint 2.2): what the turn asked
                 # for, which is what bounds the loop, where `tool_calls` holds only what
                 # ran. Seeded per run like `retrieval_demanded`.

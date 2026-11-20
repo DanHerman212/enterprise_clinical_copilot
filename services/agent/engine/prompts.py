@@ -368,9 +368,14 @@ READMISSION RISK & DRIVER ATTRIBUTION
   never explain why a value of zero increases risk.
 - When several drivers are asked about, give each its own part-one sentence, then the
   support for whichever of them has any.
-- A laboratory driver is named by the model and written by nobody: no note contains "red
-  cell distribution width" or "monocytes_min". Search for what the value means clinically
-  rather than for its name — a high RDW for anaemia or blood loss.
+- A laboratory driver is read from its own series. Where the panel is not already in
+  `<session_evidence_state>`, call `get_lab_trends` with the analyte's plain name —
+  `monocytes`, `rdw`, `hemoglobin`, `sodium`, `rbc` — and part two states what THAT analyte
+  did: its extreme and the value it ended on, carrying the series' own `^[n]`. Never pass
+  an anchor key — the analyte's name with an adjective suffix after it — and never search
+  the notes for a clinical proxy instead: a haemoglobin and a haematocrit are not a
+  statement about the red-cell distribution width. With no series and no passage on that
+  analyte, stop at part one.
 - When the driver is a count, a procedure, a diagnosis or a disposition, call `rag_search`
   before you write, and cite the passage with `^[n]` as any other chart claim. If the notes
   document nothing relevant, stop at part one.
@@ -662,30 +667,25 @@ asked what these measurements did during this admission.
 
 Read the question at the top of this input. Where it names specific analytes — "her
 hemoglobin and sodium", "the creatinine" — those analytes are the answer, and the prose is
-about them alone. Describe the named analytes and say nothing about the rest of the panel:
-a list of ten trajectories where two were asked for buries the answer, and the card already
-shows every series. Where the question names no analyte, describe the panel you were given.
+about them alone: say nothing about the rest of the panel, because a list of ten
+trajectories where two were asked for buries the answer.
 
-THE WHOLE PANEL MEANS EVERY ANALYTE IN IT. With no analyte named, the payload is the answer
-and no analyte in it may be silently omitted: name every one. Any analyte whose readings
-shifted across the stay is reported with where it started and where it ended, even when
-none of those readings left its reference interval — leaving it out because it was never
-abnormal loses a series the reader was shown. Every remaining in-range analyte is named
-together in one sentence, so no part of the panel is omitted: one statement that the rest
-stayed within its reference interval is a statement about the panel, and each analyte it
-covers must be named or described on its own.
+Where the question names no analyte, write this shape and no other.
 
-Write two to four sentences, in prose. Say what moved and in which direction, where each
-analyte started, and how far it went. Give the values you need to make that concrete, at the
-precision you were given them: the payload states each analyte's values to its own reporting
-precision, and a value re-rounded in your sentence would disagree with the number in the card
-beside it for no reason.
+- ONE opening sentence saying whether any analyte crossed a reference limit, and which one.
+  Where none did, that sentence is the answer: at most one more may name the largest
+  movement inside the ranges — a creatinine that nearly doubled is a finding even though it
+  never left its range — and then the answer stops.
+- ONE short bullet per ABNORMAL analyte, and no bullet for a normal one, in markdown:
+  "- **Hemoglobin:** critically low; nadir 6.8 g/dL on day 6, 10.6 g/dL at discharge."
+  A bullet states the reading's `flag` in its own term, the extreme value of the admission —
+  the nadir (the lowest value) or the peak (the highest) — and, when the two differ, the
+  value the series ends on at discharge.
+- AT MOST ONE closing sentence noting that the remaining analytes stayed within its
+  reference interval. Do not recite their start and end values: the card beneath the answer
+  draws every series, and repeating one costs the reader the sentence that matters.
 
-Name every abnormal reading. For each analyte you describe, state each timepoint the flag
-calls abnormal, with its value and the flag's own term. Name the nadir (the lowest value) or
-the peak (the highest) explicitly when the series has one that is abnormal, rather than
-leaving the reader to find it in the series: "it fell to 7.1 g/dL on hospital day 3" is the
-sentence that matters, and "it varied" is the sentence that loses it.
+Write "day 6", never "day 6.0": a hospital day is a whole number.
 
 For every analyte you call abnormal, state BOTH the most extreme value of the admission
 (the nadir or the peak) and the value the series ends on at discharge, when the two
@@ -715,11 +715,9 @@ that means something. Do not pick a single winner across analytes of different k
 question insists on one, name the reading whose flag is critical before any merely low or
 high one, and otherwise say the abnormal values are of a similar order.
 
-Never open with "all laboratory values remained within their reference ranges" when an
-analyte moved materially inside its interval. If nothing is flagged abnormal, say that no
-value crossed its reference limit, and then name the movements that did happen with their
-size: a creatinine that nearly doubled is a finding even though it never left its range,
-and a reassurance followed by a list of changes is a contradiction in two sentences.
+Never open with "all laboratory values remained within their reference ranges" and then list
+movements: a reassurance followed by a change is a contradiction in two sentences. Say what
+crossed a limit, or say that nothing did.
 
 Write no citation markers on this wire. Every value you state is in the table drawn directly
 under your sentence, row by row, with its own reference interval and flag — so `^[1]` or

@@ -475,20 +475,23 @@ def _flatten(text: str) -> str:
     return " ".join(text.split())
 
 
-def test_the_labs_rules_say_a_whole_panel_names_every_analyte():
-    """`dev_t1_05`: an all-normal panel, and the answer named the movers only.
+def test_the_labs_rules_say_a_whole_panel_is_scannable_and_complete():
+    """`dev_t1_05` was an all-normal panel that named only the movers.
 
-    Stage 6F replaced the illustrative values with the rule they illustrated, so what is
-    asserted here is the requirement: a moving in-range series is reported, and every
-    remaining analyte is named rather than dropped.
+    The shape changed on 2026-11-20 (live: 90000069's panel summary recited ten series of
+    start and end values over a card that already draws them). A whole-panel answer is now
+    one opening sentence, one bullet per ABNORMAL analyte, and one closing sentence covering
+    the rest — so nothing is dropped, and nothing normal is recited twice.
     """
     text = _flatten(prompts.LABS_FORMATTING)
 
-    assert "THE WHOLE PANEL MEANS EVERY ANALYTE IN IT" in text
-    assert "no analyte in it may be silently omitted" in text
-    assert "stayed within its reference interval" in text
-    assert "Any analyte whose readings shifted across the stay is reported" in text
-    assert "leaving it out because it was never abnormal loses a series" in text
+    assert "ONE opening sentence saying whether any analyte crossed a reference limit" in text
+    assert "ONE short bullet per ABNORMAL analyte" in text
+    assert "no bullet for a normal one" in text
+    assert "AT MOST ONE closing sentence noting that the remaining analytes stayed" in text
+    assert "Do not recite their start and end values" in text
+    # A day is a whole number, in the prompt and in the payload it reads.
+    assert 'Write "day 6", never "day 6.0"' in text
 
 
 def test_the_labs_rules_still_answer_only_what_was_asked():

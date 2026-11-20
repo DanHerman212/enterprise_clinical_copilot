@@ -59,15 +59,18 @@ def test_sex_is_decoded_without_a_block():
     assert female["value"] == "Female"
 
 
-@pytest.mark.parametrize("feature, stated", [
-    ("admission_type", "Emergency (EW EMER.)"),
-    ("discharge_location", "Home"),
-    ("insurance", "Medicare"),
-    ("race", "White"),
+@pytest.mark.parametrize("feature, stored, stated", [
+    # The decoder hands back the warehouse's own code beside the words; the block states the
+    # words, so the sentence reads "(patient value: Emergency)" rather than nesting a
+    # parenthetical inside one (2026-11-20, 90000015).
+    ("admission_type", "Emergency (EW EMER.)", "Emergency"),
+    ("discharge_location", "Home", "Home"),
+    ("insurance", "Medicare", "Medicare"),
+    ("race", "White", "White"),
 ])
-def test_a_one_hot_parent_carries_the_level_the_block_states(feature, stated):
+def test_a_one_hot_parent_carries_the_level_the_block_states(feature, stored, stated):
     """The payload omits these values; the block already holds the decoded level."""
-    fields = {feature: stated}
+    fields = {feature: stored}
     presented = _presented_factor(
         {"feature": feature, "direction": "increases"}, _block(**fields))
 
@@ -97,8 +100,7 @@ def test_the_session_record_states_the_same_values():
 
     rendered = state.render_for_prompt(admission_context.administrative_values(block))
 
-    assert "feature=admission type | direction=increases | value=Emergency (EW EMER.)" \
-        in rendered
+    assert "feature=admission type | direction=increases | value=Emergency" in rendered
     assert "feature=sex | direction=decreases | value=Female" in rendered
     # Nothing is invented for a factor the block does not state.
     assert "feature=insurance type | direction=increases" in rendered

@@ -784,6 +784,54 @@ def _with_session_admission(name: str, arguments: dict[str, Any],
     return {**arguments, "hadm_id": hadm_id}
 
 
+def _canonical_analyte(analyte: str) -> str:
+    """The panel's own name for the analyte the model asked for, or the name it wrote.
+
+    Lower-cased and trimmed, then the feature build's anchor suffix removed when what is
+    left is an analyte the panel draws: `monocytes_min` becomes `monocytes`, `rdw_max`
+    becomes `rdw`. A name this does not recognise comes back exactly as written, because a
+    tool that can answer it should be asked, and the tool's own refusal is a better message
+    than a guess made here.
+    """
+    cleaned = " ".join(str(analyte or "").strip().lower().split())
+    if cleaned in admission_context.PANEL_ANALYTES:
+        return cleaned
+    for suffix in admission_context.ANCHOR_SUFFIXES:
+        stem = cleaned[: -len(suffix)] if cleaned.endswith(suffix) else ""
+        if stem in admission_context.PANEL_ANALYTES:
+            return stem
+    return analyte
+
+
+def normalise_lab_analyte(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    """One call's arguments, with a laboratory analyte named the way the tool draws it.
+
+    A driver question reaches the tool with the name the ROW carries: `monocytes_min` is the
+    column the model was scored on, and it is the string a model holding that value will
+    hand to a laboratory tool that reads `monocytes`. Live, that cost a round trip and ten
+    seconds — the call was refused with `unknown_analyte`, the model read the refusal's own
+    list of analytes and called again (measured 2026-11-20, 90000015) — and the round is the
+    larger half of a 30-second driver turn.
+
+    Fixed here rather than in the prompt, for the reason the projection exists: a naming rule
+    the model may follow is a rule the client can simply keep. It runs before dispatch and
+    after the session's admission is filled in, so what is dispatched, recorded and ingested
+    is one set of arguments.
+
+    Narrow on purpose: only `get_lab_trends`, and only the `analyte` argument. Every other
+    call is returned untouched.
+    """
+    if name != "get_lab_trends" or not isinstance(arguments, dict):
+        return arguments
+    analyte = arguments.get("analyte")
+    if not isinstance(analyte, str):
+        return arguments
+    canonical = _canonical_analyte(analyte)
+    if canonical == analyte:
+        return arguments
+    return {**arguments, "analyte": canonical}
+
+
 
 def _passage_total(payload: Any) -> int:
     """How many citation numbers a payload consumes.
@@ -953,11 +1001,14 @@ def _presented_value(feature: str, value: Any, administrative: Mapping[str, str]
         spells it. `gender` is the third: the block says "Male" and the payload said `1`,
         so the block's word wins whenever the turn has one.
       * everything else is the number the tool published, at the clinical precision it
-        chose (`prediction._clinical_value`). A measurement, a count or a duration is a
+        chose (`prediction._clinical_value`), with the unit it is measured in beside it
+        (`admission_context.clinical_measure`). A measurement, a count or a duration is a
         fact about the patient and is stated as served — except a COUNT, which is stated
         whole: the row holds `medication_order_count` as 4.85 and `prior_inpatient_days`
         as 4.75, and "4.85 orders" is a formatting fault rather than a tally a reader can
-        use (`admission_context.clinical_value`, measured 2026-11-20).
+        use (`admission_context.clinical_value`, measured 2026-11-20). A measurement also
+        carries its unit, because the prose quotes this value verbatim and "lowest
+        monocyte count (patient value: 0.2)" left the reader to look the unit up.
     """
     if value is None:
         return _OMIT
@@ -971,7 +1022,13 @@ def _presented_value(feature: str, value: Any, administrative: Mapping[str, str]
             return stated
         return _GENDER_WORDS.get(int(value), value)
     if _is_number(value):
-        return admission_context.clinical_value(str(feature or ""), float(value))
+        key = str(feature or "")
+        # A measurement states its unit and a count does not. `unit_for` decides which this
+        # is, so the projection cannot invent a unit for a tally and cannot omit one for a
+        # measurement — the same table the session record and the guardrail read.
+        if admission_context.unit_for(key):
+            return admission_context.clinical_measure(key, float(value))
+        return admission_context.clinical_value(key, float(value))
     return value
 
 
@@ -1302,6 +1359,10 @@ async def _execute_tool_calls(
                    if argument_filter is not None and hadm_id is not None
                    else asked_for)
         arguments = _with_session_admission(name, offered, hadm_id)
+        # ...and the analyte named the way the laboratory tool draws it. Before dispatch,
+        # because a refusal costs a round trip and a feature key the model can read from
+        # the row is the client's to translate (`normalise_lab_analyte`).
+        arguments = normalise_lab_analyte(name, arguments)
         # Keyed on the complete arguments, because `prior` holds recorded calls and a
         # recorded call carries the admission that was dispatched. Keying on what the
         # model wrote would make the same call look new every round.

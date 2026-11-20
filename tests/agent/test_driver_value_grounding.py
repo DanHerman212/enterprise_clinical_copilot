@@ -130,13 +130,15 @@ def test_a_repeating_float_is_published_at_clinical_precision():
     (factor,) = payload["top_factors"]
 
     assert factor["value"] == 42.46
-    # And the copy the model reads is the same number, not a re-floated one.
+    # And the copy the model reads is the same number, stated as a day count with its unit
+    # (2026-11-20): nobody is admitted for 42.46 days, and "(patient value: 42)" alone left
+    # the reader to work out what was counted.
     presented = mcp_client._presented_for_model("predict_readmission", payload)
-    assert presented["top_factors"][0]["value"] == 42.46
+    assert presented["top_factors"][0]["value"] == "42 days"
 
 
-def test_the_guardrail_accepts_prose_quoting_the_published_value():
-    """The number the model quotes and the number the guard checks are the same one."""
+def test_the_guardrail_corrects_the_fraction_to_the_whole_day():
+    """The number the model is served is 42; a copied 42.46 is rewritten to it."""
     call = {"name": "predict_readmission", "response": {
         "top_factors": [{"feature": "index_los_days", "value": 42.46,
                          "direction": "increases"}],
@@ -146,9 +148,10 @@ def test_the_guardrail_accepts_prose_quoting_the_published_value():
     normalised, rounding_flags = normalise_factor_values(answer, [call])
     verified, risk_flags = verify_risk_numbers(normalised, [call])
 
-    assert normalised == answer
-    assert rounding_flags == []
-    assert "42.46" in verified
+    assert normalised == "Her length of stay was 42 days, which raises her risk."
+    assert rounding_flags == ["factor_value_rounded:42.46"]
+    assert risk_flags == []
+    assert "42 days" in verified
 
 
 def test_a_parent_feature_carries_no_value_rather_than_a_guessed_one():
@@ -204,7 +207,8 @@ def test_the_model_is_shown_the_value_beside_the_direction():
 
     assert presented["feature"] == "red cell distribution width (RDW)"
     assert presented["direction"] == "increases"
-    assert presented["value"] == 15.5
+    # The unit travels with the number, because the prose quotes this value verbatim.
+    assert presented["value"] == "15.5%"
     # The weight does NOT travel. It is the model's own SHAP arithmetic, and the prose is
     # no longer asked for it: every risk answer used to read "contribution 0.2592" beside
     # a bar the reader could see (2026-11-20). The recorded call keeps it for the widget.
@@ -352,12 +356,16 @@ def test_the_prompt_states_the_payloads_value_as_the_factor_s_own_number():
 
 
 def test_the_prompt_stops_the_note_search_for_the_feature_name():
-    """A discharge summary does not write "red cell distribution width"."""
-    text = _prompt()
+    """A discharge summary does not write "red cell distribution width".
 
-    assert "no note contains" in text
-    assert "red cell distribution width" in text
-    assert "Search for what the value means clinically" in text
+    2026-11-20: the rule used to name the warehouse key (`monocytes_min`) as an example, and
+    the model handed that string to `get_lab_trends` as an analyte. The instruction now names
+    the panel's own analytes and forbids the proxy search instead.
+    """
+    text = " ".join(_prompt().split())
+
+    assert "Never pass an anchor key" in text
+    assert "a haemoglobin and a haematocrit are not a statement about the red-cell" in text
     assert "is not the chart's account of the correlate" not in text
 
 

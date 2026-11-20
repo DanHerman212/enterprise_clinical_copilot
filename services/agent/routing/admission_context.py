@@ -45,6 +45,7 @@ import copy
 import json
 import logging
 import math
+import re
 import time
 from typing import Any, Mapping
 
@@ -94,17 +95,16 @@ def _display(value: Any, feature: str = "") -> str:
     verified ground truth that the judge holds the answer against, and a manifest stating
     "24.7" for a row holding 24.6667 is a manifest that disagrees with the dataset.
 
-    Both were half a rule. The risk result publishes the same row's value at TWO decimals
-    (`prediction._clinical_value`), so a briefing that read the manifest said "length of
-    stay was 42.4583 days" and then, three lines later, "the recorded value was 42.46" —
-    one number, two precisions, in one answer (measured 2026-11-20, 90000069). The
-    precision is now the published one, stated once: two decimals at most, trailing zeros
-    and a whole-number fraction dropped, so the manifest, the risk projection, the
-    guardrail and the prose all write the same digits. Anything that is not a number —
-    "Emergency (EMER)", "Home" — is returned untouched.
-
-    A feature named in `COUNT_FEATURES` is a whole number instead, whatever the row holds:
-    see `clinical_value`.
+    Both were half a rule, and so was the double-precision answer they produced. A duration
+    is not a measurement to two decimal places: the encoded row holds 42.458333333333336,
+    the risk result published 42.46, and a briefing read "length of stay was 42.4583 days"
+    three lines above "the recorded value was 42.46" — one number, two precisions, in one
+    answer (measured 2026-11-20, 90000069). A feature named in `COUNT_FEATURES` is stated
+    WHOLE, and length of stay is one of them: nobody is admitted for 42.46 days. Everything
+    else keeps two decimals at most, trailing zeros and a whole-number fraction dropped, so
+    the manifest, the risk projection, the guardrail and the prose all write the same
+    digits. Anything that is not a number — "Emergency (EMER)", "Home" — is returned
+    untouched.
     """
     if isinstance(value, bool):
         return str(value)
@@ -121,9 +121,11 @@ def _display(value: Any, feature: str = "") -> str:
 #: formatting fault — "4.85 orders" is not a number of orders — and the fraction carries no
 #: clinical meaning, so the last digit is not information the reader is owed.
 #:
-#: Length of stay is deliberately absent. It is a duration the record measures, `42.46`
-#: days is the number the risk result publishes for it, and rounding it to 42 would
-#: disagree with the payload beside it (see `_display`).
+#: Length of stay is here, and it is the correction this rule needed. The encoder holds
+#: `index_los_days` as 42.458333333333336 and the risk result published 42.46, so one
+#: answer stated "length of stay (patient value: 42.46)" — a prediction the reader cannot
+#: reconcile with a ward that counts days (measured 2026-11-20, 90000069). A day is a
+#: tally, not a measurement with a fraction, so it rounds whole like every other count.
 COUNT_FEATURES: frozenset[str] = frozenset({
     "procedure_count",
     "medication_count",
@@ -131,6 +133,7 @@ COUNT_FEATURES: frozenset[str] = frozenset({
     "prior_admission_count",
     "prior_inpatient_days",
     "recent_ed_visits",
+    "index_los_days",
 })
 
 
@@ -173,15 +176,129 @@ def _clinical_number_text(text: str, feature: str = "") -> str:
     return _clinical_number(number, feature)
 
 
+#: The suffixes the feature build adds to a laboratory anchor. `monocytes_min` is the row
+#: the model was scored on; `monocytes` is the analyte a laboratory tool reads. One is not
+#: the other, and a driver answer that states the value beside a sentence about the record
+#: needs the second (see `mcp_client.normalise_lab_analyte`).
+ANCHOR_SUFFIXES: tuple[str, ...] = (
+    "_min", "_max", "_last", "_first", "_mean", "_median", "_avg",
+)
+
+#: The unit each panel analyte is reported in, keyed by the analyte stem rather than by the
+#: anchor, so `rdw_max` and a future `rdw_last` are one entry. These are the units the
+#: `get_lab_trends` payload states for the same analyte, so a value quoted from a driver and
+#: a value quoted from a series cannot disagree about what they are measured in.
+_ANALYTE_UNITS: dict[str, str] = {
+    "rdw": "%",
+    "hemoglobin": "g/dL",
+    "sodium": "mmol/L",
+    "potassium": "mmol/L",
+    "creatinine": "mg/dL",
+    "rbc": "x10^6/uL",
+    "wbc": "x10^3/uL",
+    "monocytes": "x10^3/uL",
+    "egfr": "mL/min/1.73m2",
+    "nt_probnp": "pg/mL",
+}
+
+#: Durations a reader counts, with their singular and plural forms. A number of days is
+#: read as "5 days" and "1 day", which no unit table can do with one string.
+_DURATION_UNITS: dict[str, tuple[str, str]] = {
+    "age": ("year", "years"),
+    "index_los_days": ("day", "days"),
+    "prior_inpatient_days": ("day", "days"),
+}
+
+#: The analytes the laboratory panel draws, taken from the unit table so the two lists
+#: cannot drift: every analyte this module knows a unit for is one the panel reports, and a
+#: caller naming an analyte outside this set is naming something the panel does not have.
+PANEL_ANALYTES: frozenset[str] = frozenset(_ANALYTE_UNITS)
+
+
+def unit_for(feature: str) -> str:
+    """The unit a scored feature is measured in, or "" when it is a bare number.
+
+    A count is a bare number on purpose: "5 orders" needs no unit because the factor's own
+    name says what is being counted, and appending one would make the projection invent a
+    word the payload does not use.
+    """
+    name = str(feature or "")
+    if name in _DURATION_UNITS:
+        return _DURATION_UNITS[name][1]
+    stem = name
+    for suffix in ANCHOR_SUFFIXES:
+        if stem.endswith(suffix):
+            stem = stem[: -len(suffix)]
+            break
+    return _ANALYTE_UNITS.get(stem, "")
+
+
+def clinical_measure(feature: str, value: float) -> str:
+    """A feature's value with the unit it is measured in, as a clinician writes it.
+
+    The risk projection and the session record state a driver's value, and the prose quotes
+    it verbatim (`RISK_SPOKE`: "EXACTLY as written"). Without a unit the sentence read
+    "lowest monocyte count (patient value: 0.2)" — a number a reader has to look up (measured
+    2026-11-20, 90000015). With one it reads "0.2 x10^3/uL", which is the same value with
+    the thing it measures attached.
+
+    A feature with no unit returns the bare number, so this is safe to call for every
+    factor: a count comes back whole and unchanged.
+    """
+    text = _clinical_number(float(value), str(feature or ""))
+    unit = unit_for(feature)
+    if not unit:
+        return text
+    if unit == "%":
+        # A percentage takes no space before its sign: "15.6%", never "15.6 %".
+        return f"{text}%"
+    forms = _DURATION_UNITS.get(str(feature or ""))
+    if forms is not None:
+        return f"{text} {forms[0] if text == '1' else forms[1]}"
+    return f"{text} {unit}"
+
+
+#: A trailing parenthetical the warehouse wrote, not the decoder: `(DIRECT EMER.)`,
+#: `(EW EMER.)`, `(URGENT)`. It is the raw code beside the words that mean the same thing,
+#: and the reader was shown both — "admission type (patient value: Emergency, direct
+#: admission (DIRECT EMER.))", with the code inside a parenthetical of its own (measured
+#: 2026-11-20, 90000015). Uppercase only, which is what separates a code from a clinical
+#: aside a decoder might legitimately write.
+_WAREHOUSE_CODE = re.compile(r"\s*\([A-Z0-9][A-Z0-9 .\-/&']*\)$")
+
+
+def _without_warehouse_code(text: str) -> str:
+    """The value with any number of trailing uppercase parentheticals removed.
+
+    Repeated rather than single-shot, because a value can carry two (`Urgent (URGENT)
+    (EW EMER.)`). A value that is nothing BUT a code is left as it stands: stripping it
+    would leave an empty field, which states less than the code did.
+    """
+    stripped = text
+    while True:
+        trimmed = _WAREHOUSE_CODE.sub("", stripped).strip()
+        if trimmed == stripped or not trimmed:
+            return stripped
+        stripped = trimmed
+
+
 def _clean(value: Any, feature: str = "") -> str:
     """One line, no markup. The values are ours, and this keeps them ours.
 
     They reach a prompt, so a newline or an angle bracket in one would let a
     data value change the shape of the instruction around it. Nothing upstream
     produces such a value today; the check costs nothing and removes the class.
+
+    An administrative value also loses the warehouse's own code, so the block states
+    "Emergency, direct admission" rather than that phrase with `(DIRECT EMER.)` after it.
+    Only the five fields whose values are decoded levels: a clinical value is never a code,
+    and the strip is applied where the vocabulary is known rather than hopefully.
     """
     text = " ".join(_display(value, feature).split())
-    return text.replace("<", "(").replace(">", ")")
+    text = text.replace("<", "(").replace(">", ")")
+    if feature in ADMINISTRATIVE_FEATURES:
+        text = _without_warehouse_code(text)
+    return text
 
 
 #: Fields that only exist because there was a stay.

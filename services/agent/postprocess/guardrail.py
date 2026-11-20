@@ -581,6 +581,29 @@ def _clean_number(value: float, feature: str = "") -> str:
     return f"{number:.2f}".rstrip("0").rstrip(".")
 
 
+def _served_factor_text(tool_calls: list[dict]) -> str:
+    """The drivers' values in the form the prose is served, for the corpus checks.
+
+    `verify_lab_values` asks whether a measurement the answer states appears in what the
+    turn was given, and compares digits. It read the payload's raw floats, which is the
+    right number and the wrong spelling once the projection states a unit: "hemoglobin
+    (patient value: 6.8 g/dL)" was being judged against a payload holding `6.7999`, and the
+    sentence was removed for stating a value the turn had just been handed. The rendered
+    forms join the corpus, so what the model was shown is what the checks can find.
+    """
+    return "\n".join(
+        admission_context.clinical_measure(feature, value)
+        for feature, value in _factor_entries(tool_calls)
+    )
+
+
+#: A hospital day written directly before a number: `day 0.0`, `on day 6.0`. The
+#: trajectory's timepoints are floats, and a count whose served value happens to match one
+#: of them (`0.0` especially) must not be rewritten: "he was on day 0" is a corrupted
+#: timepoint, not a corrected tally (measured 2026-11-20, 90000069).
+_HOSPITAL_DAY = re.compile(r"\bday\s+$", re.IGNORECASE)
+
+
 def normalise_factor_values(answer: str,
                             tool_calls: list[dict]) -> tuple[str, list[str]]:
     """Rewrite a raw served factor value into the number a clinician would write.
@@ -608,6 +631,14 @@ def normalise_factor_values(answer: str,
             continue
         _, _, frac = raw.partition(".")
         count = feature in admission_context.COUNT_FEATURES
+        if count and not frac.strip("0"):
+            # A count whose row holds no fraction at all. `0.0` is how the encoded column
+            # spells zero, and treating it as a fraction to correct made the guard rewrite
+            # every `0.0` token in the answer — on a `/labs` turn, the trajectory's own
+            # timepoints — and report `factor_value_rounded:0.0` over prose that quoted no
+            # factor at all (measured 2026-11-20, 90000069). There is nothing to correct:
+            # the number is already the whole number the projection states.
+            continue
         if not count and len(frac.rstrip("0")) < 3:
             # The served value is already written the way a clinician would, so there is
             # nothing to correct and nothing a pattern could safely catch.
@@ -618,6 +649,10 @@ def normalise_factor_values(answer: str,
         # whole number — and matches the served fraction that stands for it.
         def _replace(match: re.Match, *, _feature: str = feature,
                      _value: float = value) -> str:
+            if _HOSPITAL_DAY.search(out[: match.start()]):
+                # A timepoint, not a factor value: the digits are where the reading was
+                # drawn, and rewriting them changes what the sentence says happened.
+                return match.group(0)
             try:
                 written = float(match.group(0))
             except ValueError:  # pragma: no cover - the pattern only matches numbers
@@ -1393,7 +1428,8 @@ def guard_answer(
     answer, f = verify_lab_values(answer, full_text, _lab_text(evidence),
                                   json.dumps(evidence, default=str)
                                   + "\n" + admission_context
-                                  + "\n" + record_text)
+                                  + "\n" + record_text
+                                  + "\n" + _served_factor_text(evidence))
     flags += f
     answer, f = normalise_factor_values(answer, evidence)
     flags += f

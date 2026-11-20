@@ -1274,6 +1274,18 @@ def _format_reading(value: object, decimals: object) -> str:
         return str(value)
 
 
+def _day_text(day: object) -> str:
+    """A hospital day written whole, so a citation's passage reads like the answer does.
+
+    `day 0.0` in the passage a marker opens, beside `day 12` in the row above it, is one
+    value written two ways. `:g` keeps a fractional timepoint (`1.3`) and drops the
+    fraction a whole one does not have.
+    """
+    if isinstance(day, bool) or not isinstance(day, (int, float)):
+        return str(day)
+    return f"{float(day):g}"
+
+
 def lab_passage(trend: dict) -> dict:
     """One analyte's trajectory, as a passage a citation can resolve to.
 
@@ -1291,7 +1303,7 @@ def lab_passage(trend: dict) -> dict:
         value = _format_reading(point.get("value"), trend.get("decimals"))
         day = point.get("day")
         flag = str(point.get("flag") or "").strip()
-        when = f"day {day}" if isinstance(day, (int, float)) else "day unknown"
+        when = f"day {_day_text(day)}" if isinstance(day, (int, float)) else "day unknown"
         # The flag is what made the value interesting, so it rides with the value rather
         # than in a separate list the reader has to line up by position.
         readings.append(f"{value} ({when}{', ' + flag if flag and flag != 'normal' else ''})")

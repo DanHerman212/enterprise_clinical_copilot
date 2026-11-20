@@ -707,10 +707,14 @@ class SessionEvidenceState:
                         if key == "value" and isinstance(value, (int, float)) \
                                 and not isinstance(value, bool):
                             # The record holds the tool's own row — 4.85 orders, 4.75
-                            # prior days — and this block is read on later turns as the
-                            # same evidence the prompt carried, so it states a count the
-                            # way the projection does: whole.
-                            value = admission_context.clinical_value(feature, float(value))
+                            # prior days, 0.21 monocytes — and this block is read on later
+                            # turns as the same evidence the prompt carried, so it states
+                            # the number the way the projection does: a count whole, a
+                            # measurement with the unit it is measured in. One
+                            # vocabulary (`admission_context.clinical_measure`), because
+                            # the prose quotes whichever of them it was shown.
+                            value = admission_context.clinical_measure(
+                                feature, float(value))
                         shown = "null" if value is None else _escape(value)
                         parts.append(f"{key}={shown}")
                 # A one-hot parent has no value of its own: the payload carries none, and

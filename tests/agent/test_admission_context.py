@@ -121,7 +121,10 @@ def test_the_block_states_the_values_and_never_names_the_admission():
     assert "hadm_id" not in block
     assert "90000015" not in block
     assert block.rstrip().endswith("</admission_metadata>")
-    assert "- admission_type: Urgent (URGENT)" in block
+    # The decoder's level without the warehouse's own code: `Urgent (URGENT)` stated the
+    # same fact twice, and the second time in a vocabulary no reader uses.
+    assert "- admission_type: Urgent" in block
+    assert "(URGENT)" not in block
     assert "- age: 61" in block
 
 
@@ -159,7 +162,7 @@ def test_hydration_reads_the_profile_once_for_the_admission():
     block = asyncio.run(admission_context.hydrate(box, 90000015))
 
     assert box.calls == [("get_admission_profile", {"hadm_id": 90000015})]
-    assert "admission_type: Urgent (URGENT)" in block
+    assert "admission_type: Urgent" in block
 
 
 def test_a_turn_with_no_admission_does_not_call_anything():
@@ -366,8 +369,9 @@ def test_a_machine_float_is_stated_at_the_published_precision():
 
     assert "prior_inpatient_days: 16" in block
     assert "prior_admissions: 4" in block
-    # A non-numeric column is quoted as it stands.
-    assert "admission_type: Emergency (EW EMER.)" in block
+    # A non-numeric column keeps its words and loses the warehouse code beside them.
+    assert "admission_type: Emergency" in block
+    assert "EW EMER." not in block
 
 
 def test_a_numeric_float_is_stated_at_the_same_precision():
@@ -376,7 +380,14 @@ def test_a_numeric_float_is_stated_at_the_same_precision():
     assert "prior_inpatient_days: 16" in block
 
 
-def test_a_genuinely_fractional_value_keeps_every_digit():
+def test_a_length_of_stay_is_stated_whole():
+    """A day is a tally: `4.46` days is a duration no ward keeps.
+
+    2026-11-20: 90000069's driver answer read "length of stay (patient value: 42.46)", the
+    encoder's float reaching a reader as a measurement. The row still holds the fraction —
+    the risk result publishes 42.46 — and every surface a reader sees states the whole day.
+    """
     block = admission_context.render(90000078, {"index_los_days": "4.46"})
 
-    assert "length_of_stay_days: 4.46" in block
+    assert "length_of_stay_days: 4" in block
+    assert admission_context.clinical_value("index_los_days", 42.46) == 42

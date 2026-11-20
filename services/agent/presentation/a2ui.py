@@ -540,7 +540,17 @@ def compose_presentation(question: str, answer: str,
     # citations: the scope was nulled and `verified` withdrawn from an answer resting on
     # this admission's own estimate, which is the same false positive `/labs`, `/meds`
     # and the manifest turn had already each been granted.
-    estimate_evidenced = _usable_estimate(predict_payload(tool_calls)) is not None
+    #
+    # Read from the CONVERSATION's evidence, and from the session record, not from this
+    # turn's calls alone. A driver question answered in one pass runs no tool at all — the
+    # estimate is already in the thread — so a reading of `tool_calls` alone found nothing
+    # and withdrew `verified` from an answer that quotes a value nobody could have invented
+    # (measured 2026-11-20, 90000015). `estimate_evidenced` is about what this answer rests
+    # on, and the session's own estimate is exactly that.
+    estimate_evidenced = (
+        _usable_estimate(predict_payload(evidence_calls)) is not None
+        or _usable_estimate(getattr(evidence_state, "prediction", None)) is not None
+    )
     # A widget-only turn has no prose to evidence. Flagging "synthesis without
     # citations" against an empty sentence describes an omission that did not happen:
     # the canvas is the answer, and the reader was never shown a claim needing

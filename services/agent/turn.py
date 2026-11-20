@@ -259,13 +259,16 @@ async def compose_success(
         # this is a read of the decision that let the search into the transcript rather
         # than a second opinion about the question.
         #
-        # Widened on 2026-11-08 to any turn whose thread carries published records. Gating
-        # it on the question's own wording meant a follow-up that quoted the thread — "why
-        # was the rate 0% in that cohort?" — had an empty PMID allowance, so
-        # `enforce_citations` deleted the citation from a correct answer. The record is the
-        # authority on what the thread holds, and the question's wording is not.
-        literature_replay=bool(state.get("wants_literature")
-                               or state.get("thread_literature")),
+        # Widened on 2026-11-08 to any turn whose thread carries published records, so a
+        # follow-up quoting the thread kept its badge. That widening cost every chart turn
+        # in such a thread its own evidence: the replayed search became this turn's
+        # literature surface, and a length-of-stay answer was served badged "General
+        # Medical Evidence" under a caption naming a search it never ran (measured
+        # 2026-11-20, 90000069). Nothing is withdrawn by narrowing it back — the thread's
+        # records reach this function through `state["thread_literature"]`, which
+        # `guard_answer` reads on its own, so a follow-up naming a PMID from turn one still
+        # resolves its badge.
+        literature_replay=bool(state.get("wants_literature")),
         # Why the reply stopped, so a reply the provider's filter took away is resolved
         # here rather than in the engine: replacement is prose work and it has to happen
         # on both routes (Charter 13 Law 2; Phase 3 Contract 1). Read off the turn's own
@@ -339,11 +342,14 @@ async def compose_success(
         # may not reach into `routing.encounter`'s process-global `ContextVar`, so the
         # boolean arrives as an argument.
         is_outpatient=encounter.current_is_outpatient(),
-        # The literature surface this turn draws: its own search, or — when the turn is
-        # about published records and ran no search — the one already in the transcript.
-        # Same flag as the guardrail's, read from the same state field.
-        literature_replay=bool(state.get("wants_literature")
-                               or state.get("thread_literature")),
+        # The literature surface this turn DRAWS: its own search, and only when the
+        # question is about published records. A thread that holds records is not a licence
+        # to draw them on this turn — a patient-chart answer inherited the replay and was
+        # captioned with the search that opened the thread (measured 2026-11-20,
+        # 90000069) — while the records a follow-up may CITE still arrive through
+        # `thread_literature` below. Same flag as the guardrail's, read from the same state
+        # field.
+        literature_replay=bool(state.get("wants_literature")),
         # Settlement compacted the served markers to the order they are cited (`^[1]`,
         # `^[2]` …) while the evidence array kept its cumulative numbering. This is the
         # map between the two, computed once by `citations` in `sanitize_answer_markers`;

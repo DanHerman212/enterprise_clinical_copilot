@@ -284,7 +284,7 @@ def test_the_lab_annotation_states_the_baseline_flag_and_the_ratio():
     block = deterministic.lab_flag_annotation(recorded)
 
     assert "2 of 3 readings flagged abnormal" in block
-    assert "baseline day 0.0 flag=normal" in block
+    assert "baseline day 0 flag=normal" in block
 
 
 def test_an_inherited_search_publishes_no_records_the_answer_does_not_name():

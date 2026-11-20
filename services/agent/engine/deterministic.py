@@ -443,6 +443,20 @@ def _patient_estimate(recorded: list[RecordedToolCall] | None) -> float | None:
     return None
 
 
+def _day_text(day: object) -> str:
+    """A hospital day written whole: `0.0` is day 0, never "day 0.0".
+
+    The payload's `day` is a float because two of MIMIC's own timepoints are not whole
+    (`1.3`, `3.8`), and printing the float as it arrives wrote "day 0.0" and "day 6.0"
+    beside the same answer's "day 12" — two conventions in one paragraph, for a value that
+    is a day count (measured 2026-11-20, 90000069). `:g` drops the fraction a whole number
+    does not have and keeps the one a fractional timepoint does.
+    """
+    if isinstance(day, bool) or not isinstance(day, (int, float)):
+        return str(day)
+    return f"{float(day):g}"
+
+
 def lab_flag_annotation(recorded: list[RecordedToolCall]) -> str:
     """Per analyte: how many readings are flagged, and the flag on the baseline.
 
@@ -477,7 +491,7 @@ def lab_flag_annotation(recorded: list[RecordedToolCall]) -> str:
             lines.append(
                 f"- {label}{f' ({unit})' if unit else ''}: {len(abnormal)} of "
                 f"{len(series)} readings flagged abnormal; baseline "
-                f"day {baseline.get('day')} flag={flags[0]}."
+                f"day {_day_text(baseline.get('day'))} flag={flags[0]}."
             )
     if not lines:
         return ""

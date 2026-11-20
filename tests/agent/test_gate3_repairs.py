@@ -92,7 +92,7 @@ def test_the_projection_takes_the_blocks_decoded_values_not_the_manifest():
     projected = _presented_for_model("predict_readmission", payload, values)
     parent, sex = projected["top_factors"]
 
-    assert parent["value"] == "Emergency (EW EMER.)"
+    assert parent["value"] == "Emergency"
     assert sex["value"] == "Female"
     # The manifest's own keys are not that mapping, so nothing is invented from them.
     plain = _presented_for_model("predict_readmission", payload, MANIFEST)

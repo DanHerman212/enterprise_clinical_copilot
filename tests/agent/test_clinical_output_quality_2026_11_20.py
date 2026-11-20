@@ -44,7 +44,7 @@ def test_a_driver_reaches_the_model_as_a_name_a_direction_and_a_value():
     assert presented == {
         "feature": "red cell distribution width (RDW)",
         "direction": "increases",
-        "value": 15.5,
+        "value": "15.5%",
     }
 
 
@@ -109,26 +109,32 @@ def test_the_recorded_call_still_carries_every_served_float():
 
 
 @pytest.mark.parametrize("row_value, stated", [
-    ("42.458333333333336", "42.46"),
-    (42.458333333333336, "42.46"),
-    ("24.6667", "24.67"),
-    ("16.0417", "16.04"),
-    ("4.75", "4.75"),
+    ("42.458333333333336", "42"),
+    (42.458333333333336, "42"),
+    ("24.6667", "25"),
+    ("16.0417", "16"),
+    ("4.75", "5"),
     ("3", "3"),
     ("3.00", "3"),
 ])
-def test_the_manifest_states_a_value_at_the_published_precision(row_value, stated):
-    """Two decimals, which is what the risk result publishes for the same row."""
+def test_the_manifest_states_a_day_count_whole(row_value, stated):
+    """A stay is counted in days. `42.46` is the encoder's float, not a duration.
+
+    2026-11-20: 90000069's driver answer read "length of stay (patient value: 42.46)", so the
+    block, the projection, the record and the guardrail all state the whole day now. The
+    served payload keeps the float the risk result publishes.
+    """
     block = admission_context.render(90000069, {"index_los_days": row_value})
 
     assert f"length_of_stay_days: {stated}" in block
 
 
-def test_a_non_numeric_column_is_left_exactly_as_it_arrived():
+def test_a_non_numeric_column_keeps_its_words_and_loses_the_warehouse_code():
     block = admission_context.render(90000069, {"admission_type": "Emergency (EW EMER.)",
                                                 "insurance": "Not recorded"})
 
-    assert "admission_type: Emergency (EW EMER.)" in block
+    assert "admission_type: Emergency" in block
+    assert "EW EMER." not in block
     assert "insurance: Not recorded" in block
 
 
@@ -143,7 +149,7 @@ def test_the_guardrail_rewrites_to_the_same_precision_the_record_states():
 
     out, flags = normalise_factor_values("Her length of stay was 42.4583 days.", calls)
 
-    assert "42.46 days" in out
+    assert "42 days" in out
     assert "42.4583" not in out
     assert flags == ["factor_value_rounded:42.458333333333336"]
 
@@ -313,20 +319,20 @@ def test_a_day_count_rounds_half_up():
     assert admission_context.clinical_value("prior_inpatient_days", 4.5) == 5
 
 
-def test_a_duration_is_a_measurement_and_keeps_two_decimals():
-    """Length of stay is not a count: `42.46` is the number the risk result publishes."""
+def test_a_duration_is_a_count_and_states_its_unit():
+    """Length of stay is counted in days, so it is whole and it says what it counts."""
     presented = _presented_factor({
         "feature": "index_los_days", "direction": "decreases",
         "value": 42.458333333333336})
 
-    assert presented["value"] == 42.46
+    assert presented["value"] == "42 days"
 
 
-def test_a_lab_value_keeps_its_own_precision():
+def test_a_lab_value_keeps_its_own_precision_and_states_its_unit():
     presented = _presented_factor(
         {"feature": "rdw_max", "direction": "increases", "value": 15.65})
 
-    assert presented["value"] == 15.65
+    assert presented["value"] == "15.65%"
 
 
 # ---------------------------------------------------------------------------------------
@@ -334,14 +340,14 @@ def test_a_lab_value_keeps_its_own_precision():
 # ---------------------------------------------------------------------------------------
 
 
-def test_the_manifest_states_the_count_whole_and_the_duration_at_two_decimals():
+def test_the_manifest_states_the_counts_whole():
     block = admission_context.render(90000020, {
         "prior_inpatient_days": "4.75",
         "index_los_days": "42.458333333333336",
     })
 
     assert "prior_inpatient_days: 5" in block
-    assert "length_of_stay_days: 42.46" in block
+    assert "length_of_stay_days: 42" in block
 
 
 def test_the_session_record_states_the_count_whole_too():

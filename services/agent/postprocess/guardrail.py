@@ -34,6 +34,7 @@ import re
 
 from services.agent.postprocess import answer as answer_text
 from services.agent.postprocess import citations
+from services.agent.routing import admission_context
 from services.agent.routing import routing
 
 logger = logging.getLogger(__name__)
@@ -112,9 +113,32 @@ _FREQ_PATTERNS = [
 ]
 
 
+#: A dot INSIDE a medical abbreviation: `b.i.d.`, `t.i.d.`, `q.12h`, `q.h.s.`, `p.r.n.`.
+#:
+#: Removing it is what lets the note and the answer speak the same language. This cohort's
+#: summaries write `oxycodone q.12h`, `Ativan 0.5 mg p.o. b.i.d.` and `as needed (p.r.n.)`,
+#: while an answer writes "every 12 hours" and "twice daily". Without this the
+#: canonicaliser found no frequency at all in the note, so every frequency the answer
+#: correctly repeated was "invented": 90000015's `/ehr` briefing was flagged
+#: `med_freq_mismatch:BID` and `med_freq_mismatch:PRN` over a note that states both
+#: (measured 2026-11-20).
+#:
+#: A dot between two DIGITS is left alone: `0.5 mg` is a dose. A dot after a word is left
+#: alone too, so "Dr. Alvarez" and a sentence's full stop survive.
+_DOTTED_ABBREVIATION = re.compile(
+    r"(?<=[A-Za-z0-9])\.(?=[A-Za-z])|(?<=[A-Za-z])\.(?=[0-9])")
+
+#: Two spellings of ONE schedule. Folding them keeps the check honest — it asks whether the
+#: answer's schedule is the note's, not whether the two used the same shorthand — and it is
+#: exact rather than approximate: four times a day IS every six hours.
+_FREQUENCY_EQUIVALENTS = {
+    "Q12H": "BID", "Q8H": "TID", "Q6H": "QID", "Q24H": "DAILY",
+}
+
+
 def _canon_freqs(text: str) -> set[str]:
     out: set[str] = set()
-    work = text
+    work = _DOTTED_ABBREVIATION.sub("", text)
     for pat, repl in _FREQ_PATTERNS:
         ms = list(pat.finditer(work))
         if not ms:
@@ -133,7 +157,7 @@ def _canon_freqs(text: str) -> set[str]:
             for i in range(m.start(), m.end()):
                 chars[i] = " "
         work = "".join(chars)
-    return out
+    return {_FREQUENCY_EQUIVALENTS.get(freq, freq) for freq in out}
 
 
 def _answer_freqs(text: str) -> set[str]:
@@ -483,7 +507,17 @@ def _factor_values(tool_calls: list[dict]) -> list[float]:
     these are the patient's own numbers — days, counts, measurements — which the model
     may quote in prose and which the service returns at full floating-point precision.
     """
-    values: list[float] = []
+    return [value for _, value in _factor_entries(tool_calls)]
+
+
+def _factor_entries(tool_calls: list[dict]) -> list[tuple[str, float]]:
+    """Each driver's feature key beside its value.
+
+    The key is what says whether the number is a measurement or a tally, and
+    `normalise_factor_values` needs that: a count is written whole, a measurement to two
+    decimals (`admission_context.COUNT_FEATURES`).
+    """
+    entries: list[tuple[str, float]] = []
     for tc in tool_calls or []:
         if tc.get("name") != "predict_readmission":
             continue
@@ -495,24 +529,25 @@ def _factor_values(tool_calls: list[dict]) -> list[float]:
                 continue
             v = factor.get("value")
             if isinstance(v, (int, float)) and not isinstance(v, bool):
-                values.append(float(v))
-    return values
+                entries.append((str(factor.get("feature") or ""), float(v)))
+    return entries
 
 
 def _contributions(tool_calls: list[dict]) -> list[float]:
     """The model's own attribution weight for each top factor, exactly as served.
 
-    A driver answer is supposed to say how far a factor moved this patient's estimate, and
-    that number is `top_factors[].contribution` — 0.0824 on one admission. It is not in
-    `_predict_values` (the score and the threshold) nor in `_factor_values` (the patient's
-    own measurements), so a sentence quoting it was stripped as a fabricated probability:
-    the guard read a figure the turn had been served and called it invented.
+    Still read from the RECORDED call, even though the model is no longer shown one. The
+    projection stopped carrying contributions on 2026-11-20: a SHAP weight in logit space
+    is not a fact a clinician can use, and every risk answer had been quoting it
+    ("contribution 0.3246"). What this keeps is the other half of that decision — a thread
+    replayed from before the change still has answers quoting a served figure, and a guard
+    that forgot the number would strip a real one out of a stored turn as invented.
 
     Kept out of `_factor_values` on purpose. Those values go to `normalise_factor_values`,
-    which rounds a served number to one decimal because `16.0417 days` claims a precision
-    the record does not have. A contribution has the opposite requirement: it is the
-    model's arithmetic, four decimals are what it means, and rounding it would make the
-    sentence disagree with the payload it describes.
+    which rounds a served number to the published two decimals because `16.0417 days`
+    claims a precision the record does not have. A contribution has the opposite
+    requirement: it is the model's arithmetic, four decimals are what it means, and
+    rounding it would make the sentence disagree with the payload it describes.
     """
     values: list[float] = []
     for tc in tool_calls or []:
@@ -530,12 +565,20 @@ def _contributions(tool_calls: list[dict]) -> list[float]:
     return values
 
 
-def _clean_number(value: float) -> str:
-    """One decimal at most, and no trailing zeros: 16.0417 -> "16", 2.5 -> "2.5"."""
-    rounded = round(value, 1)
-    if rounded == int(rounded):
-        return str(int(rounded))
-    return f"{rounded:.1f}"
+def _clean_number(value: float, feature: str = "") -> str:
+    """The published precision, and no trailing zeros: 16.0417 -> "16.04", 2.5 -> "2.5".
+
+    Two decimals, because that is what `prediction._clinical_value` publishes for the same
+    row and what `<admission_metadata>` now states. One decimal was the old answer, and it
+    made a rewritten sentence disagree with the payload beside it: a served `42.46`
+    corrected to `42.5` is a different number from the one the risk result shows. A count
+    is written whole instead — `medication_order_count` 4.85 is "5" — by the same rule the
+    projection and the manifest use (`admission_context.clinical_value`).
+    """
+    number = admission_context.clinical_value(feature, value)
+    if isinstance(number, int):
+        return str(number)
+    return f"{number:.2f}".rstrip("0").rstrip(".")
 
 
 def normalise_factor_values(answer: str,
@@ -550,35 +593,46 @@ def normalise_factor_values(answer: str,
     the same reason: a rule the model may follow is not a guarantee, and the number is
     arithmetic rather than a clinical fact.
 
-    Only a value the turn was actually served is rewritten, and only when it was written
-    with three or more decimals, so a lab value quoted from a note passage keeps its own
-    precision. Runs after the lab and risk guards so it cannot make a number they have
-    already checked disagree with them.
+    Only a value the turn was actually served is rewritten, so a lab value quoted from a
+    note passage keeps its own precision. A measurement is rewritten only when it was
+    written with three or more decimals; a COUNT is rewritten at any precision, because
+    the projection states it whole and a sentence repeating the served fraction would
+    disagree with the payload beside it. Runs after the lab and risk guards so it cannot
+    make a number they have already checked disagree with them.
     """
     flags: list[str] = []
     out = answer
-    for value in _factor_values(tool_calls):
+    for feature, value in _factor_entries(tool_calls):
         raw = repr(value)
         if "." not in raw:
             continue
         _, _, frac = raw.partition(".")
-        if len(frac.rstrip("0")) < 3:
+        count = feature in admission_context.COUNT_FEATURES
+        if not count and len(frac.rstrip("0")) < 3:
             # The served value is already written the way a clinician would, so there is
             # nothing to correct and nothing a pattern could safely catch.
             continue
-        # Any token carrying two or more decimals that names the same value at two
-        # decimals. The model may copy `16.0417` whole or write `16.04`; both claim a
-        # precision the feature does not have, and both are the same served arithmetic.
-        def _replace(match: re.Match) -> str:
+        # Any token carrying two or more decimals that names the same value. The model may
+        # copy `16.0417` whole or write `16.04`; both claim a precision the feature does
+        # not have, and both are the same served arithmetic. A count has one target — the
+        # whole number — and matches the served fraction that stands for it.
+        def _replace(match: re.Match, *, _feature: str = feature,
+                     _value: float = value) -> str:
             try:
                 written = float(match.group(0))
             except ValueError:  # pragma: no cover - the pattern only matches numbers
                 return match.group(0)
-            if abs(written - round(value, 2)) > 0.005:
+            if abs(written - round(_value, 2)) > 0.005:
                 return match.group(0)
-            return _clean_number(value)
+            return _clean_number(_value, _feature)
 
-        rewritten = re.sub(r"(?<![\d.])\d+\.\d{2,}(?![\d])", _replace, out)
+        # The `%` exclusion is why this is not the `_RISK_DECIMAL` pattern: a rate that
+        # happens to equal a served count is a percentage, not the count, and rewriting
+        # "4.85%" to "5%" would change what the sentence claims.
+        rewritten = re.sub(
+            r"(?<![\d.])\d+\.\d+(?![\d])(?!\s*%)" if count
+            else r"(?<![\d.])\d+\.\d{2,}(?![\d])(?!\s*%)",
+            _replace, out)
         if rewritten != out:
             flags.append(f"factor_value_rounded:{raw}")
             out = rewritten

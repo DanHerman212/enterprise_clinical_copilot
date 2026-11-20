@@ -14,6 +14,8 @@ Each is pinned here against its own mechanism, with no model and no network.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from services.agent.engine.mcp_client import (
@@ -46,22 +48,25 @@ MANIFEST = {"recent_ed_visits": "0", "prior_inpatient_days": "0",
 
 # --- 1. an attribution is not a finding about the patient ---------------------------
 
-def test_a_driver_carries_its_name_its_direction_and_its_contribution():
+def test_a_driver_carries_its_name_and_its_direction_and_no_weight():
     """The projection is a function of the tool result, not of the patient.
 
     `patient_value` used to be copied into each factor as a cross-reference against the
-    admission's row. It is gone: the row is stated once, in `<admission_metadata>`, and
-    the projection carries the three fields the prose and the bars share — the name, the
-    direction, and the contribution the risk spoke requires the model to quote.
+    admission's row. It is gone: the row is stated once, in `<admission_metadata>`.
+
+    The `contribution` is gone too, and for a different reason: it is the model's own SHAP
+    weight, and a risk answer that quoted one read as a debug dump — "oncology history
+    (contribution 0.3246; value 1)" on every driver turn (2026-11-20). The direction is
+    what a clinician can act on. The widget still draws the bar from the recorded call.
     """
     projected = _presented_for_model("predict_readmission", dict(RISK))
     factor = next(f for f in projected["top_factors"]
                   if f["feature"].lower().startswith("recent ed"))
 
-    assert factor == {"feature": "recent ED visits", "direction": "increases",
-                      "contribution": 0.0861}
-    assert all(set(entry) <= {"feature", "direction", "contribution", "value"}
+    assert factor == {"feature": "recent ED visits", "direction": "increases"}
+    assert all(set(entry) <= {"feature", "direction", "value"}
                for entry in projected["top_factors"])
+    assert "contribution" not in json.dumps(projected)
 
 
 def test_the_projection_takes_no_manifest():
@@ -149,12 +154,20 @@ def test_a_live_turn_and_a_replayed_turn_print_the_same_header():
 
 # --- 3. the manifest states the row's digits ---------------------------------------
 
-def test_the_manifest_does_not_round_a_recorded_value():
-    """`24.6667` is the scored row; `24.7` is a different number."""
+def test_the_manifest_states_a_recorded_value_at_the_published_precision():
+    """`24.6667` is the scored row, and prior inpatient days is a count, so the block says 25.
+
+    Stating the row verbatim was the fix for `24.7` being scored a fidelity failure, and
+    it produced its own defect: the risk result publishes the same value at two decimals,
+    so one answer carried both forms (2026-11-20, 90000069). Two decimals is the precision
+    `prediction._clinical_value` chose. A count then went one step further: a fractional
+    number of days is a formatting fault rather than a measurement, so the block, the
+    projection, the guardrail and the prose all write it whole (2026-11-20, third polish).
+    """
     block = admission_context.render(90000101, {"prior_inpatient_days": "24.6667"})
 
-    assert "prior_inpatient_days: 24.6667" in block
-    assert "24.7 " not in block
+    assert "prior_inpatient_days: 25" in block
+    assert "24.6667" not in block
 
 
 def test_an_outpatient_block_still_drops_the_stay_fields():

@@ -230,13 +230,19 @@ def test_the_hub_forbids_a_mechanism_the_sources_do_not_state():
 
     Nothing in the passages said it. The rule that was there permitted it — "give the
     standard clinical context for those facts" — and that sentence is gone.
+
+    What is also gone, since 2026-11-20, is the sentence the rule used to REQUIRE: every
+    driver answer ended "the notes do not account for the mechanism", which is true of
+    every record and therefore tells a reader nothing about this one. The prohibition
+    stays; the mandatory disclaimer does not.
     """
     hub = " ".join(prompts.CORE_HUB_PROMPT.split())
 
     assert "NEVER SUPPLY A MECHANISM" in hub
     assert "differential etiology" in hub
     assert "not as general medicine" in hub
-    assert "the notes do not account for the mechanism" in hub
+    assert "never close with a sentence about what the notes do not explain" in hub
+    assert "the notes do not account for the mechanism" not in hub
     assert "standard clinical context" not in hub
     assert "General context is not a patient fact" not in hub
 
@@ -252,8 +258,11 @@ def test_the_risk_spoke_says_a_factor_value_takes_no_marker():
     """
     text = " ".join(prompts.RISK_SPOKE.split())
 
-    assert "take no `^[n]` marker" in text
+    assert "takes no `^[n]` marker" in text
     assert "no laboratory marker belongs on a sentence quoting one" in text
+    # The model's own weights are no longer in the payload at all, so the rule is stated
+    # on the one number that is: `value` (2026-11-20).
+    assert "contribution` take no" not in text
     # The rule is stated without a Dev-set record: the pair that produced it belongs to
     # `dev_t4_01` and shipped its own numbers into a prompt writing about another patient.
     assert "0.47" not in text

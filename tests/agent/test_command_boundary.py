@@ -388,16 +388,13 @@ def test_the_risk_numbers_reach_the_model_as_stated_strings_only():
     for withheld in ("probability", "threshold", "base_value"):
         assert withheld not in projected, f"{withheld} is quotable while it is present"
 
-    # The drivers survive as names, directions and their own contributions: the narrative
-    # has to explain them, the risk spoke requires the served contribution quoted, and the
-    # widget still has to draw them. The three floats withheld above are the SCORE's, and
-    # a contribution is not one of them — it is the factor's own magnitude, which no
-    # display string replaces.
+    # The drivers survive as names and directions. The weights do not: a `contribution`
+    # is a SHAP value in logit space, and a risk answer that quoted one read as a debug
+    # dump ("contribution 0.316788") beside a widget drawing a bar (2026-11-20). The
+    # recorded call below still holds them, which is what the bar and the guardrail read.
     assert projected["top_factors"] == [
-        {"feature": "red cell distribution width (RDW)", "direction": "increases",
-         "contribution": 0.316788},
-        {"feature": "lowest red blood cell count", "direction": "increases",
-         "contribution": 0.201144},
+        {"feature": "red cell distribution width (RDW)", "direction": "increases"},
+        {"feature": "lowest red blood cell count", "direction": "increases"},
     ]
 
     # And the payload handed in is untouched — the caller's copy is not this one.

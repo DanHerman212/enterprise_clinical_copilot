@@ -90,14 +90,26 @@ def test_a_present_value_is_unaffected():
     assert factors["monocytes_min"]["value"] == 0.21
 
 
-def test_the_prompt_states_what_a_null_driver_means():
-    # Flattened: the prompt is hard-wrapped, so a sentence spans source lines.
+def test_the_prompt_states_what_a_driver_without_a_value_means():
+    """A factor with no value is described by its direction, and the gap is not narrated.
+
+    The rule used to instruct the model to say "the value is null" and never substitute a
+    lab series. Both are gone with the null itself: the projection stopped carrying a
+    `value` key when there is nothing to state, so there is no null for the prose to name
+    and no substitute to reach for (2026-11-20).
+
+    It then said "a factor with no `value` was scored without one", and the model
+    paraphrased the rule into the answer: "admission type ... scored without a specific
+    feature value" (measured 2026-11-20, 90000015). A rule that describes the absence is a
+    rule that invites the sentence describing it, so the absence is now stated only as a
+    prohibition (third polish, 2026-11-20).
+    """
     text = " ".join(prompts.RISK_SPOKE.split())
 
-    assert "no recorded value in the structured feature set" in text
-    assert "say the value is null" in text
-    assert "never substitute a `get_lab_trends` reading" in text
-    assert "a series is a different measurement, not the model's input" in text
+    assert "A factor with no `value` gets its direction and nothing else" in text
+    assert "write no clause about a missing, absent or unspecified value" in text
+    assert "was scored without one" not in text
+    assert "are not yours to state" in text
 
 
 # --------------------------------------------------------------------- T2

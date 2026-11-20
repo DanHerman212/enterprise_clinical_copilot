@@ -618,28 +618,44 @@ def _rate_relation(patient_estimate: float | None, reported_rate: str,
     """Where this patient's estimate sits against one published rate, in one clause.
 
     Arithmetic over the numbers each side already publishes, and nothing else: no rounding
-    invented, no averaging, no difference the record does not state. A two-arm row and a
-    range are compared against their SPAN rather than against one of their figures, because
-    "higher than 2.6% vs. 0.4%" is not a statement about either arm.
+    invented, no averaging, no difference the record does not state.
+
+    A TWO-ARM ROW IS TWO RATES, not one span. The clause used to say the estimate was
+    "above the whole published span (4.6% in the simple hysterectomy group vs. 4.2% in the
+    radical hysterectomy group)", which is a sentence no clinician writes: a span is what a
+    range is, and two arms are two groups with a rate each. The estimate is compared with
+    both, and the clause says so — higher than both, lower than both, or between the two.
+    A true range keeps the range wording, because there the span is the record's own.
 
     Empty when the estimate or the rate is missing, which is the honest answer: a direction
     needs two figures, and a turn holding one of them has no comparison to state.
     """
     if patient_estimate is None:
         return ""
-    figures = [float(value) for value in _NUMBER.findall(str(reported_rate or ""))]
+    tokens = _NUMBER.findall(str(reported_rate or ""))
+    figures = [float(value) for value in tokens]
     if not figures:
         return ""
     estimate = patient_estimate * 100.0
     shown = f"{estimate:.1f}%"
     low, high = min(figures), max(figures)
-    if str(rate_kind_value or "") in ("range", "comparison") and len(figures) > 1:
+    kind = str(rate_kind_value or "")
+    if kind == "comparison" and len(tokens) >= 2:
+        # The record's own digits, not a re-format: "12.0%" is the number the study
+        # published, and writing "12%" beside it would change its precision mid-sentence.
+        arms = " and ".join(f"{token}%" for token in tokens[:2])
+        if estimate > high:
+            return f"patient estimate ({shown}) is above both published rates ({arms})"
+        if estimate < low:
+            return f"patient estimate ({shown}) is below both published rates ({arms})"
+        return f"patient estimate ({shown}) sits between the two published rates ({arms})"
+    if kind == "range" and len(figures) > 1:
         span = " ".join(str(reported_rate or "").split())
         if estimate > high:
-            return f"patient estimate ({shown}) is above the whole published span ({span})"
+            return f"patient estimate ({shown}) is above the published range ({span})"
         if estimate < low:
-            return f"patient estimate ({shown}) is below the whole published span ({span})"
-        return f"patient estimate ({shown}) is within the published span ({span})"
+            return f"patient estimate ({shown}) is below the published range ({span})"
+        return f"patient estimate ({shown}) is within the published range ({span})"
     rate = f"{low:g}%"
     if estimate > low:
         return f"patient estimate ({shown}) is higher than the published rate ({rate})"

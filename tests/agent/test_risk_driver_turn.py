@@ -63,7 +63,8 @@ def test_the_analyte_test_reads_both_vocabularies():
     assert not routing.asks_about_a_lab_analyte("why is oncology history a driver?")
 
 
-def test_a_copied_machine_float_is_written_as_a_whole_number():
+def test_a_copied_machine_float_is_written_at_the_published_precision():
+    """`16.0417` becomes `16`: prior inpatient days is a count, so it is written whole."""
     out, flags = normalise_factor_values("She had 16.0417 days as an inpatient.",
                                          _predict())
 
@@ -112,5 +113,5 @@ def test_the_driver_instructions_state_the_precision_rule():
     telling the model to round a machine float to a whole number, which contradicted it.
     Both are gone; the surviving rule is the one this asserts.
     """
-    assert "EXACTLY as the block or the tool payload gives them" in prompts.SYSTEM_PROMPT
+    assert "EXACTLY as the block or the tool payload writes them" in prompts.SYSTEM_PROMPT
     assert "not \"16.0417 days\"" not in prompts.SYSTEM_PROMPT

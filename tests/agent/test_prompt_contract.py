@@ -535,8 +535,15 @@ def test_a_comparative_lab_question_is_answered_in_the_first_sentence():
 
 
 def test_feature_values_are_stated_exactly_as_recorded():
-    assert "18.5833" in SYSTEM_PROMPT
-    assert "not 18.58" in SYSTEM_PROMPT
+    """The example is the precision the record now states, not the row's raw float.
+
+    It used to be `18.5833 … not 18.58`, which the manifest no longer says: every layer
+    writes the published two decimals, so the rule's own illustration has to match or it
+    asks the model to prefer a number nothing gives it (2026-11-20).
+    """
+    assert "`18.58` prior inpatient days" in SYSTEM_PROMPT
+    assert "not 18.6" in SYSTEM_PROMPT
+    assert "18.5833" not in SYSTEM_PROMPT
 
 
 def test_the_manifest_outranks_a_historical_facility():

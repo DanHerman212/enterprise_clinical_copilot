@@ -46,6 +46,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
 
+from services.agent.routing import admission_context
 from services.agent.routing import routing
 from services.agent.postprocess import citations
 
@@ -689,15 +690,27 @@ class SessionEvidenceState:
             for factor in factors:
                 if not isinstance(factor, Mapping):
                     continue
+                feature = str(factor.get("feature") or "")
                 parts = [f"feature={_escape(factor.get('feature'))}"]
-                for key in ("contribution", "direction", "value"):
+                # `direction` and `value` only. The model's `contribution` is a SHAP
+                # weight in logit space, and printing it here handed the prose a decimal
+                # it then quoted ("contribution 0.3246") on every risk answer
+                # (2026-11-20). The recorded call still holds it for the widget and for
+                # `guardrail`, which read the tool result rather than this block.
+                for key in ("direction", "value"):
                     if key in factor:
-                        # `null` rather than Python's `None`: the block is read by a model
-                        # as data, and "None" beside a number reads as a word rather than
-                        # as the absence of a value. The distinction matters most for a
-                        # scored feature whose row holds nothing, which the attribution
-                        # rules treat differently from a value that was never looked up.
+                        # A null value reaches here only from a record ingested before
+                        # the projection stopped carrying nulls; it is still printed as
+                        # `null` rather than Python's `None`, because this block is read
+                        # as data and "None" beside a number reads as a word.
                         value = factor[key]
+                        if key == "value" and isinstance(value, (int, float)) \
+                                and not isinstance(value, bool):
+                            # The record holds the tool's own row — 4.85 orders, 4.75
+                            # prior days — and this block is read on later turns as the
+                            # same evidence the prompt carried, so it states a count the
+                            # way the projection does: whole.
+                            value = admission_context.clinical_value(feature, float(value))
                         shown = "null" if value is None else _escape(value)
                         parts.append(f"{key}={shown}")
                 lines.append("  " + " | ".join(parts))

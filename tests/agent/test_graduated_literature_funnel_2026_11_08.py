@@ -229,7 +229,14 @@ def test_the_block_states_the_relation_for_a_one_figure_row():
         in block
 
 
-def test_a_lower_estimate_and_a_span_each_get_their_own_word():
+def test_a_lower_estimate_a_two_arm_row_and_a_range_each_get_their_own_word():
+    """Two arms are two rates, and only a real range is a span.
+
+    The two-arm clause used to read "above the whole published span (4.6% … vs. 4.2% …)",
+    which the briefing then repeated: a sentence with no clinical reading, because a span
+    is what a range is and two arms are two groups. The estimate is now compared with
+    both, and a range keeps the range wording (2026-11-20).
+    """
     lower = deterministic.comparator_block([_row("40000000")], patient_estimate=0.012)
     inside = deterministic.comparator_block(
         [dict(_row("40000000"), reported_rate="2.6% vs. 12.0%", rate_kind="comparison")],
@@ -239,8 +246,8 @@ def test_a_lower_estimate_and_a_span_each_get_their_own_word():
         patient_estimate=0.09)
 
     assert "is lower than the published rate (3.8%)" in lower
-    assert "is within the published span (2.6% vs. 12.0%)" in inside
-    assert "is above the whole published span (1.0% to 1.4%)" in above
+    assert "sits between the two published rates (2.6% and 12.0%)" in inside
+    assert "is above the published range (1.0% to 1.4%)" in above
 
 
 def test_no_estimate_means_no_relation_line():

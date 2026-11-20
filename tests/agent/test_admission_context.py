@@ -337,17 +337,26 @@ def test_a_declaration_without_a_replayed_score_still_retrieves():
     assert model.calls == 2
 
 
-def test_a_machine_float_is_stated_exactly_as_the_row_holds_it():
-    """The block is scored ground truth, so it may not shorten a number.
+def test_a_machine_float_is_stated_at_the_published_precision():
+    """The block states the row at the precision the risk result publishes: two decimals.
 
-    This used to round: `"16.0417"` rendered as "16", on the argument that four decimals
-    claim a precision neither the record nor the model has, after an answer was seen
-    saying "recorded as 16.0417 days" (`agent-00178-2zh`, 2026-10-24).
+    This used to round to one decimal: `"16.0417"` rendered as "16", on the argument that
+    four decimals claim a precision neither the record nor the model has, after an answer
+    was seen saying "recorded as 16.0417 days" (`agent-00178-2zh`, 2026-10-24).
 
-    That fixed the prose by changing the record. On Gate 3 (`00d`) `holdout_t5_02` was
-    scored a fidelity failure for printing `24.7` where the expected value is `24.6667` —
-    the manifest had already rounded it, and the answer repeated what it was shown. The
-    block now states what the row states; prose style is the prompt's business.
+    It then passed four decimals through exactly, because on Gate 3 (`00d`)
+    `holdout_t5_02` was scored a fidelity failure for printing `24.7` where the expected
+    value is `24.6667` — the manifest had already rounded it, and the answer repeated what
+    it was shown.
+
+    Both halves cost something, and the 2026-11-20 smoke showed the pair: 90000069's
+    briefing said "length of stay was 42.4583 days" from this block and "the recorded value
+    was 42.46" from the risk result, one number at two precisions in one answer. The
+    published precision is two decimals (`prediction._clinical_value`) and every layer now
+    writes it: the block, the risk projection, the guardrail and the prose.
+
+    A count is the exception and is written whole: "16.0417" prior inpatient days is
+    "16" (2026-11-20, third polish — a fraction of a day is not a number of days).
     """
     block = admission_context.render(
         90000078, {"prior_inpatient_days": "16.0417",
@@ -355,16 +364,16 @@ def test_a_machine_float_is_stated_exactly_as_the_row_holds_it():
                    "admission_type": "Emergency (EW EMER.)"},
     )
 
-    assert "prior_inpatient_days: 16.0417" in block
+    assert "prior_inpatient_days: 16" in block
     assert "prior_admissions: 4" in block
     # A non-numeric column is quoted as it stands.
     assert "admission_type: Emergency (EW EMER.)" in block
 
 
-def test_a_numeric_float_is_stated_exactly_too():
+def test_a_numeric_float_is_stated_at_the_same_precision():
     block = admission_context.render(90000078, {"prior_inpatient_days": 16.0417})
 
-    assert "prior_inpatient_days: 16.0417" in block
+    assert "prior_inpatient_days: 16" in block
 
 
 def test_a_genuinely_fractional_value_keeps_every_digit():

@@ -35,6 +35,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 from services.agent.routing.admission_context import PREFLIGHT_TOOLS
+from services.agent.routing import admission_context
 import logging
 import re
 
@@ -912,50 +913,89 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+#: "State nothing for this key" — distinct from a stated null, which the model can write.
+_OMIT = object()
+
+#: Encoded 1/0 columns whose name does not say so. The `_flag` suffix catches the rest
+#: (`oncology_flag`); `has_procedure` is a predicate the feature build spells
+#: `1 if has_procedure else 0`, so a suffix rule alone served it as the number `1`.
+_BINARY_FEATURES = frozenset({"has_procedure"})
+
+
+def _is_binary_feature(feature: str) -> bool:
+    """Whether a scored feature's number is an encoding rather than a quantity."""
+    name = str(feature or "")
+    return name.endswith("_flag") or name in _BINARY_FEATURES
+
+
+def _presented_value(feature: str, value: Any) -> Any:
+    """A scored feature's value in the form a clinician reads, or the marker for "omit".
+
+    Three cases, and each is a defect the projection used to hand to the prose:
+
+      * a NULL is not stated at all. A factor whose row holds nothing has no value to
+        report, and carrying `value: null` into the prompt produced sentences a clinician
+        cannot use — "admission type (component 0.1121; value null)" — about a column the
+        reader was never going to look up. The direction is still stated, which is the
+        part of the attribution that is about the model rather than about the patient.
+      * a BINARY column is stated as words. `oncology_flag` is served as `1` because the
+        row is one column of an encoding, and the model duly wrote "the recorded value for
+        oncology history in the risk model's structured feature set is 1" (measured
+        2026-11-20). `has_procedure` is the same encoding under a name that carries no
+        hint of it, so the `_flag` suffix rule alone left "procedure performed (value 1)"
+        in the prose. Both mean present or not present; the number is how the warehouse
+        spells it.
+      * everything else is the number the tool published, at the clinical precision it
+        chose (`prediction._clinical_value`). A measurement, a count or a duration is a
+        fact about the patient and is stated as served — except a COUNT, which is stated
+        whole: the row holds `medication_order_count` as 4.85 and `prior_inpatient_days`
+        as 4.75, and "4.85 orders" is a formatting fault rather than a tally a reader can
+        use (`admission_context.clinical_value`, measured 2026-11-20).
+    """
+    if value is None:
+        return _OMIT
+    if isinstance(value, bool):
+        return "present" if value else "not present"
+    if _is_number(value) and _is_binary_feature(feature):
+        return "present" if value else "not present"
+    if _is_number(value):
+        return admission_context.clinical_value(str(feature or ""), float(value))
+    return value
+
 
 def _presented_factor(factor: Any) -> Any:
-    """One risk driver: its name, its direction, its weight, and the patient's own value.
+    """One risk driver: its name, its direction, and the patient's own value.
 
     Rebuilt field by field rather than copied and edited, because a `{**factor}` spread
     would carry whatever the payload grows next into a prompt nobody reviewed.
 
-    The contribution is now carried, and the reason it was withheld is gone. It used to be
-    dropped as "not this turn's to state": the widget draws it as a bar length, and a raw
-    contribution is quotable. That held while no rule asked the model for one. The driver
-    rule does ask — an attribution without its size is a claim the reader cannot check —
-    and a model told to state a number it was never shown states something else instead:
-    asked what explained a `monocytes_min` driver, the answer said "the model does not
-    provide a specific numeric contribution for this factor" over a payload carrying
-    `0.0824` (dev_t2_05, 2026-11-10). `guardrail.verify_risk_numbers` already accepts a
-    served contribution, so stating it survives the guard as well as the prose.
+    The CONTRIBUTION is no longer here. It is the model's own arithmetic — a SHAP weight,
+    four decimals, measured in logit space — and the prose used to be told to quote it, so
+    every risk answer read "oncology history (contribution 0.3246; value 1)" (measured
+    2026-11-20). A reader deciding what to do for a patient cannot use a signed partial
+    weight, and stating one invites the answer to become a description of the classifier.
+    The direction is what a clinician can act on, and the direction stays. The widget still
+    draws the bar from the recorded call, which keeps the served float; the guardrail still
+    recognises it there, so a replayed answer that quotes one is not stripped as invented.
 
-    `value` is carried when the key is present, INCLUDING when it is null. An absent key
-    and a null value are different statements: a one-hot parent that contributes to the
-    score has no value of its own to report, while a scored feature whose row holds
-    nothing has a null — and a prompt that asks the answer to say the scored input is null
-    cannot be satisfied by a projection that hides the fact. Only a factor that does not
-    carry the key at all omits it here.
+    `value` is stated clinically — see `_presented_value` — and the key is OMITTED when
+    there is nothing to state. An absent key and a null value used to be different
+    statements, and the difference cost the reader sentences about `value null`.
 
     The value is passed through as it arrives rather than re-floated. The tool decides the
     precision (`prediction._clinical_value` — two decimals, integers as integers), and
-    re-floating it here would print a whole number as `42.0` and hand a re-derived form of
-    it to a prompt whose rule is to quote the served value exactly. What the model reads
-    and what the guardrail verifies against are then the same number.
+    re-floating it here would print a whole number as `42.0`. What the model reads and what
+    the guardrail verifies against are then the same number.
 
     The value used to be left out of here, on the argument that it was "already stated in
     the `<admission_metadata>` block". That was true of the eleven fields the manifest
     renders — age, admission type, prior utilisation — and false of every clinical input
-    the booster is scored on. `rdw_max`, the eight laboratory anchors, the procedure and
-    medication counts and `oncology_flag` are attributed by the model and stated by
-    nothing: not the manifest, not a note passage, and not this payload. Asked what in the
-    chart explained an RDW driver, the agent searched the notes for a feature name no
-    discharge summary writes, found nothing, and answered — correctly, of the three things
-    it had been given — that the chart did not document the value (reported 2026-11-02).
-
-    Stated rather than omitted, and stated as the record's number. `prior_inpatient_days`
-    arrives as 16.0417 because that is the encoded row; the prompt asks for it verbatim and
-    `guardrail.normalise_factor_values` rewrites it to the number a clinician would write,
-    which is the same rule the manifest's own values have always been under.
+    the booster is scored on. `rdw_max`, the eight laboratory anchors and the procedure
+    and medication counts are attributed by the model and stated by nothing: not the
+    manifest, not a note passage, and not this payload. Asked what in the chart explained
+    an RDW driver, the agent searched the notes for a feature name no discharge summary
+    writes, found nothing, and answered — correctly, of the three things it had been given
+    — that the chart did not document the value (reported 2026-11-02).
     """
     if not isinstance(factor, dict):
         return factor
@@ -964,12 +1004,10 @@ def _presented_factor(factor: Any) -> Any:
     }
     if isinstance(factor.get("direction"), str):
         presented["direction"] = factor["direction"]
-    if _is_number(factor.get("contribution")):
-        presented["contribution"] = factor["contribution"]
     if "value" in factor:
-        value = factor["value"]
-        if value is None or _is_number(value):
-            presented["value"] = value
+        shown = _presented_value(str(factor.get("feature", "")), factor["value"])
+        if shown is not _OMIT:
+            presented["value"] = shown
     return presented
 
 
@@ -1003,14 +1041,12 @@ def _presented_prediction(name: str, payload: Any) -> Any:
     model wrote "33.0%" beside a widget drawing 33.2%, which is why the rounding was
     removed in the first place. Given "33.2%" there is no digit to lose.
 
-    The drivers keep their names, their direction, this patient's own value for the
-    feature and the contribution the model scored for it. Withholding the contribution was
-    measured and was wrong: given a factor the payload scored at 0.0824 and no magnitude,
-    the answer said "the model does not provide a specific numeric contribution" — a
-    turn refused over a figure it had been given. The risk spoke requires the contribution
-    quoted as served, `guardrail._contributions` carries it into "measurements", and
-    `_RISK_DECIMAL` recognises it, so the figure survives the number check rather than
-    being stripped as an unrecognised float.
+    The drivers keep their names, their direction and this patient's own value for the
+    feature. The model's `contribution` is NOT among them: it is a SHAP weight in logit
+    space, the prose no longer asks for one, and a reader cannot use it (`_presented_factor`
+    carries the measurement). What the widget draws comes from the recorded call, which the
+    guardrail also reads, so no served number is lost from the system — it is only kept out
+    of a sentence.
 
     The value is stated here because for a clinical feature this is the only place that
     could state it: `direction` is measured against a population baseline, so it is not

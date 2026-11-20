@@ -205,21 +205,38 @@ def test_the_model_is_shown_the_value_beside_the_direction():
     assert presented["feature"] == "red cell distribution width (RDW)"
     assert presented["direction"] == "increases"
     assert presented["value"] == 15.5
-    # The contribution travels with the factor. The risk spoke asks the model to quote the
-    # served figure; withholding it made a payload carrying 0.2592 produce "the model does
-    # not provide a specific numeric contribution".
-    assert presented["contribution"] == 0.2592
+    # The weight does NOT travel. It is the model's own SHAP arithmetic, and the prose is
+    # no longer asked for it: every risk answer used to read "contribution 0.2592" beside
+    # a bar the reader could see (2026-11-20). The recorded call keeps it for the widget.
+    assert "contribution" not in presented
 
 
-def test_a_null_value_is_carried_because_the_model_has_to_say_it():
+def test_a_null_value_is_left_out_rather_than_named():
     presented = mcp_client._presented_factor(
         {"feature": "haemoglobin_min", "direction": "increases",
          "contribution": 0.0824, "value": None})
 
-    # The key is present and null: the scored feature has no recorded value, and the spoke
-    # requires the model to lead with that rather than reach for a lab series instead.
-    assert "value" in presented
-    assert presented["value"] is None
+    # A key that is not there cannot be written into prose. Carrying `value: null` made
+    # the model say "the scored input is null" about a column the reader will never look
+    # up; the direction is the part of the attribution that is about the model.
+    assert "value" not in presented
+
+
+def test_a_flag_is_stated_as_words_rather_than_as_the_encoding():
+    presented = mcp_client._presented_factor(
+        {"feature": "oncology_flag", "direction": "increases", "value": 1})
+
+    assert presented["value"] == "present"
+    absent = mcp_client._presented_factor(
+        {"feature": "oncology_flag", "direction": "decreases", "value": 0})
+    assert absent["value"] == "not present"
+
+
+def test_a_measurement_is_stated_as_the_tool_published_it():
+    presented = mcp_client._presented_factor(
+        {"feature": "prior_admission_count", "direction": "increases", "value": 2})
+
+    assert presented["value"] == 2
 
 
 def test_a_factor_with_no_value_given_omits_the_key():
@@ -282,16 +299,18 @@ def test_a_number_the_payload_never_stated_is_still_stripped():
     assert flags == ["risk_number_unsupported:18.4%"]
 
 
-def test_a_served_value_is_written_the_way_a_clinician_would_write_it():
-    """The precision rule now has a value to act on, which it never had before.
+def test_a_served_value_is_written_at_the_published_precision():
+    """The precision rule now has a value to act on, and it writes the payload's digits.
 
     `_factor_values` reads `top_factors[].value`; the predictor did not return one, so
-    this pass had been dead in production since it was written.
+    this pass had been dead in production since it was written. It rounds to the two
+    decimals the risk result publishes, not to one: a rewritten sentence has to agree
+    with the number beside it in the table.
     """
     out, flags = normalise_factor_values("She had 23.5417 prior inpatient days.",
                                          _calls(value=23.5417))
 
-    assert "23.5 prior inpatient days" in out
+    assert "23.54 prior inpatient days" in out
     assert flags == ["factor_value_rounded:23.5417"]
 
 
@@ -329,7 +348,7 @@ def test_the_prompt_states_the_payloads_value_as_the_factor_s_own_number():
     text = _prompt()
 
     assert "one `value` per `top_factors` entry" in text
-    assert "state a factor's `value` whenever it carries one" in text
+    assert "State a value EXACTLY as given, whenever it carries one" in text
 
 
 def test_the_prompt_stops_the_note_search_for_the_feature_name():
@@ -343,4 +362,7 @@ def test_the_prompt_stops_the_note_search_for_the_feature_name():
 
 
 def test_the_prompt_keeps_the_structured_value_and_the_note_apart():
-    assert "the value, its trend and its flag come from the structured record" in _prompt()
+    text = _prompt()
+
+    assert "Where the note documents nothing about the factor" in text
+    assert "say what it does document and stop" in text

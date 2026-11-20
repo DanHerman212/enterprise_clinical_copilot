@@ -44,6 +44,7 @@ import collections
 import copy
 import json
 import logging
+import math
 import time
 from typing import Any, Mapping
 
@@ -79,8 +80,8 @@ _FIELDS: tuple[tuple[str, str], ...] = (
 )
 
 
-def _display(value: Any) -> str:
-    """A number exactly as the row carries it, and everything else as it stands.
+def _display(value: Any, feature: str = "") -> str:
+    """A number at the clinical precision the rest of the turn uses, else as it stands.
 
     The feature store returns `prior_inpatient_days` as "24.6667" because that is the
     encoded row. This function used to round it to one decimal — 16.0417 became "16.0" —
@@ -88,36 +89,97 @@ def _display(value: Any) -> str:
     model has, after an answer was seen saying "recorded as 16.0417 days"
     (`agent-00177-qr5`, 2026-10-24).
 
-    That was the wrong layer to fix it. The manifest is verified ground truth that the
-    judge holds the answer against, so a manifest that states "24.7" for a row holding
-    24.6667 is a manifest that disagrees with the dataset — an answer repeating it is
-    then scored as a fidelity failure against the expected full figure.
-    Whispering the record is not the same as writing it well: the
-    prompt asks the model to reproduce these values character-for-character and to use
-    them descriptively, and it cannot do the first if this layer has already shortened
-    the number.
+    It then swung to passing four decimals through exactly, because the manifest is
+    verified ground truth that the judge holds the answer against, and a manifest stating
+    "24.7" for a row holding 24.6667 is a manifest that disagrees with the dataset.
 
-    So the value travels exactly. Prose style is the prompt's business; the digits are
-    the record's.
+    Both were half a rule. The risk result publishes the same row's value at TWO decimals
+    (`prediction._clinical_value`), so a briefing that read the manifest said "length of
+    stay was 42.4583 days" and then, three lines later, "the recorded value was 42.46" —
+    one number, two precisions, in one answer (measured 2026-11-20, 90000069). The
+    precision is now the published one, stated once: two decimals at most, trailing zeros
+    and a whole-number fraction dropped, so the manifest, the risk projection, the
+    guardrail and the prose all write the same digits. Anything that is not a number —
+    "Emergency (EMER)", "Home" — is returned untouched.
+
+    A feature named in `COUNT_FEATURES` is a whole number instead, whatever the row holds:
+    see `clinical_value`.
     """
     if isinstance(value, bool):
         return str(value)
     if isinstance(value, (int, float)):
-        return str(value)
-    # The profile arrives from BigQuery with every column as a string, so the value that
-    # needs care is usually `"24.6667"` rather than 24.6667. Anything that is not a
-    # number — "Emergency (EMER)", "Home" — is returned untouched.
-    return str(value).strip()
+        return _clinical_number(float(value), feature)
+    return _clinical_number_text(str(value).strip(), feature)
 
 
-def _clean(value: Any) -> str:
+#: Features whose row value counts discrete things rather than measuring one.
+#:
+#: `medication_order_count` was served as 4.85 and `prior_inpatient_days` as 4.75
+#: (measured 2026-11-20, 90000020 and 90000015): the columns hold an order rate and an
+#: averaged day count under names that promise a tally. Two decimals on a count reads as a
+#: formatting fault — "4.85 orders" is not a number of orders — and the fraction carries no
+#: clinical meaning, so the last digit is not information the reader is owed.
+#:
+#: Length of stay is deliberately absent. It is a duration the record measures, `42.46`
+#: days is the number the risk result publishes for it, and rounding it to 42 would
+#: disagree with the payload beside it (see `_display`).
+COUNT_FEATURES: frozenset[str] = frozenset({
+    "procedure_count",
+    "medication_count",
+    "medication_order_count",
+    "prior_admission_count",
+    "prior_inpatient_days",
+    "recent_ed_visits",
+})
+
+
+def clinical_value(feature: str, value: float) -> int | float:
+    """A feature's value at the precision a clinician would write it.
+
+    The one place the rule lives, because four layers state the same number and three of
+    them used to round it their own way: this module renders `<admission_metadata>`, the
+    risk projection fills `top_factors[].value`, the session record repeats it, and the
+    guardrail rewrites what the model wrote. A count rounds half UP rather than to even —
+    Python's `round(4.5)` is 4, and a tally of four and a half is five — and everything
+    else keeps two decimals, which is what `prediction._clinical_value` publishes.
+    """
+    if feature in COUNT_FEATURES:
+        return int(math.floor(float(value) + 0.5))
+    rounded = round(float(value), 2)
+    return int(rounded) if rounded == int(rounded) else rounded
+
+
+def _clinical_number(value: float, feature: str = "") -> str:
+    """A count whole, everything else two decimals at most."""
+    number = clinical_value(feature, value)
+    if isinstance(number, int):
+        return str(number)
+    return f"{number:.2f}".rstrip("0").rstrip(".")
+
+
+def _clinical_number_text(text: str, feature: str = "") -> str:
+    """The same rule for a value that arrived as a string, as this row's columns do.
+
+    A string that is not a finite number is not this function's business: a label, a
+    facility name and a "Not recorded" all pass through as they arrived.
+    """
+    try:
+        number = float(text)
+    except (TypeError, ValueError):
+        return text
+    if number != number or number in (float("inf"), float("-inf")):
+        return text
+    return _clinical_number(number, feature)
+
+
+def _clean(value: Any, feature: str = "") -> str:
     """One line, no markup. The values are ours, and this keeps them ours.
 
     They reach a prompt, so a newline or an angle bracket in one would let a
     data value change the shape of the instruction around it. Nothing upstream
     produces such a value today; the check costs nothing and removes the class.
     """
-    text = " ".join(_display(value).split())
+    text = " ".join(_display(value, feature).split())
     return text.replace("<", "(").replace(">", ")")
 
 
@@ -168,7 +230,7 @@ def render(hadm_id: int, profile: dict[str, Any]) -> str:
         value = profile.get(key)
         if value in (None, ""):
             continue
-        lines.append(f"- {label}: {_clean(value)}")
+        lines.append(f"- {label}: {_clean(value, key)}")
     lines.append("</admission_metadata>")
     # A block with no fields in it is noise that also implies a fact was found.
     return "\n".join(lines) if len(lines) > 2 else ""

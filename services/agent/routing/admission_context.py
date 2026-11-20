@@ -49,6 +49,7 @@ import time
 from typing import Any, Mapping
 
 from services.agent.routing import encounter
+from shared.labels import humanize
 
 _LOG = logging.getLogger(__name__)
 
@@ -193,6 +194,60 @@ def _clean(value: Any, feature: str = "") -> str:
 STAY_ONLY_FIELDS: frozenset[str] = frozenset({
     "admission_type", "discharge_location", "index_los_days",
 })
+
+#: The features a ranked risk driver can also be one of the block's fields.
+#:
+#: `gender` is here because the model's row carries it as 0/1 while the block carries the
+#: word. The four one-hot parents are here because `predict_readmission` has no single value
+#: to state for them (`prediction._scored_factor` omits the key) and the block already holds
+#: the decoded level. Nothing else is: every other manifest field also has a numeric value
+#: in the risk payload, and preferring the block's string for one of those would give one
+#: feature two written forms (2026-11-20).
+ADMINISTRATIVE_FEATURES: frozenset[str] = frozenset({
+    "gender", "admission_type", "discharge_location", "insurance", "race",
+})
+
+#: The decoder's word for a value the row does not hold (`features.profile.ABSENT`). It is
+#: not passed on as a factor's value: "Not recorded" states nothing, and the prose would
+#: read "(patient value: Not recorded)". The factor keeps its direction and no value, which
+#: is the honest form of the same fact.
+_NOT_RECORDED = "Not recorded"
+
+
+def administrative_values(block: str) -> dict[str, str]:
+    """The administrative values a rendered block states, keyed by FEATURE name.
+
+    The risk payload and the block name one feature two ways: the payload names the model's
+    parent feature, the block states the decoded level under a label that is usually the
+    same word. Two labels are not the feature name (`prior_admissions`,
+    `length_of_stay_days`), so the mapping is read back out of `_FIELDS` rather than
+    assumed.
+
+    Read from the text rather than from the profile dict because the block is what the
+    model was given: a value that reached the window through an escape is the value the
+    answer will be held to.
+
+    Keyed by the FEATURE name and by its humanized label. Both readers exist and neither
+    can do the other's lookup: the risk projection holds the raw key (`admission_type`),
+    and the session record holds the label it was projected into (`admission type`). Two
+    keys for one value is cheaper than a second vocabulary in either reader.
+    """
+    by_label = {label: key for key, label in _FIELDS}
+    values: dict[str, str] = {}
+    for line in str(block or "").splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("- ") or ": " not in stripped:
+            continue
+        label, _, stated = stripped[2:].partition(": ")
+        key = by_label.get(label.strip())
+        if key not in ADMINISTRATIVE_FEATURES:
+            continue
+        stated = stated.strip()
+        if not stated or stated == _NOT_RECORDED:
+            continue
+        values[key] = stated
+        values[humanize(key)] = stated
+    return values
 
 #: Said in place of the dropped fields, rather than leaving their absence to be inferred.
 #: A model handed a block with no length of stay will sometimes supply one from the note;

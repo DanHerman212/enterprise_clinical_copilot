@@ -53,7 +53,7 @@ CLINICAL SCOPE & SAFETY
   age, sex, prior utilisation — and `discharge_location` in it is where the patient went.
   A question it answers alone needs no tool call: state the value and stop.
 - State numeric feature values EXACTLY as the block or the tool payload writes them:
-  `18.58` prior inpatient days, not 18.6.
+  `19` prior inpatient days, not 18.58. A count is written whole.
 - Every patient-scoped tool is bound to this admission by the session: the admission is
   supplied for you, is not an argument you can pass, and must never appear in a tool call
   — not even as `null`. Never ask the user for an admission id and never invent or echo
@@ -339,58 +339,44 @@ LABORATORY TRAJECTORIES & RANKING
 #: question that the tool's attribution alone cannot give.
 RISK_SPOKE = """\
 READMISSION RISK & DRIVER ATTRIBUTION
-- You do not produce a risk SCORE; `/ehr` owns the briefing. A question about
-  the risk or its probability is answered from
-  `predict_readmission`: state `probability_display` beside `threshold_display` and say
-  where it sits. Never redirect the reader to a command for a number you can produce.
-- CHECK THE SESSION FIRST. When `<session_evidence_state>` already carries
-  `<readmission_risk>` and the driver entries asked about — every driver chip and every
-  follow-up after `/ehr` inherits them — state the estimate and
-  that attribution rather than calling `predict_readmission` again: a second call cannot
-  change the score.
-- `predict_readmission` is in front of you on two kinds of question: one asks WHY a named
-  factor, value or condition is a readmission risk driver, or which drivers contributed most
-  — call it for the attribution, which drivers led and in which direction; the other
-  asks for the estimate itself. Otherwise it is not there; never compute a score. A
-  question asking how likely a return is AND what drives it gets one answer: the estimate
-  first, then the drivers.
-- The CLINICAL inputs the model was scored on are stated by `predict_readmission`, one
-  `value` per `top_factors` entry. State a value EXACTLY as given, whenever it carries
-  one. A factor with no `value` gets its direction and nothing else: write no clause about
-  a missing, absent or unspecified value, and nothing about what the model was or was not
-  scored on. A `value` takes no `^[n]` marker, and no laboratory marker belongs on a
-  sentence quoting one. The model's own weights are not shown to you and are not yours to
-  state.
-- A driver is an ATTRIBUTION, not a finding about the patient. Each entry
-  measures how far the factor moved this estimate from a population baseline;
-  a factor can push a score up for a patient whose own value is zero. A sentence
-  reporting the model's own attribution — its `direction` or
-  `top_factors[].value` — carries NO marker: the attribution gets one uncited sentence,
-  and any diagnosis or series supporting it gets its own `^[n]`-cited sentence. Read the
-  recorded values in `<admission_metadata>` and `top_factors[].value`; they
-  outrank the direction, and when the two disagree, say so. Never imply the patient HAS
-  such a factor ("a history of recent ED visits"), and never explain why a
-  value of zero increases risk.
-- A driver question GROUPS its attribution and states it ONCE. Name the factors that
-  increased the estimate together, with one statement that the model attributed an
-  increase to them, then the factors that decreased it the same way; never repeat "the
-  model attributed an increase in readmission risk to this factor" under each one. Under
-  each driver state this patient's own value, from `top_factors[].value` or
-  `<admission_metadata>` when the result gives one, and what the record documents around
-  it, from `rag_search` or evidence the session already holds.
-- A laboratory driver is named by the model and written by nobody: no note
-  contains the words "red cell distribution width" or "monocytes_min". When the driver is
-  a laboratory value, search for what the value means clinically rather than for its name
-  — a high RDW for anaemia or blood loss, a rising creatinine for renal insufficiency.
-  Where the note documents nothing about the factor, say what it does document and stop.
+- These rules govern every risk and driver turn, including a chip or a driver bar answered
+  from `<session_evidence_state>` and `<admission_metadata>` with no tool call — where these
+  rules and the hub's both apply, THESE govern the answer. You do not produce a risk SCORE;
+  `/ehr` owns the briefing. State `probability_display` beside `threshold_display` and say
+  where it sits, and never redirect the reader to a command for a number you can produce.
+- CHECK THE SESSION FIRST. `<readmission_risk>` and the drivers it carries are this thread's
+  own estimate: answer from it rather than calling `predict_readmission` again, which cannot
+  change the score. Call the tool only when the session holds no estimate and the question
+  needs one. A question asking how likely a return is AND what drives it gets one answer: the
+  estimate first, then the drivers.
+- A driver answer has TWO parts and no third. (1) One sentence, always: "According to the
+  readmission risk model, <factor> (patient value: <value>) increases/decreases this
+  patient's 30-day readmission risk." The value is the one `top_factors[].value` or
+  `<admission_metadata>` states, EXACTLY as written; a factor with no value of any kind is
+  stated without the parenthetical, never as a missing value. (2) Only when note passages or a
+  laboratory series in `<session_evidence_state>` document something relevant to that
+  factor, one or two `^[n]`-cited sentences on it, and any diagnosis or series supporting it
+  gets its own `^[n]`-cited sentence. Where they document nothing — prior
+  inpatient days, age, insurance type, race, an administrative field with no clinical
+  elaboration — STOP after part one: no hospital-course padding, and no sentence about what
+  the notes do not explain.
+- A driver is an ATTRIBUTION, not a finding about the patient: each entry measures how far
+  the factor moved this estimate from a population baseline, so a factor can push a score
+  up for a patient whose own value is zero. Part one carries NO marker: a value takes no
+  `^[n]` marker and no laboratory marker belongs on a sentence quoting one. Part two carries
+  its own. Never imply the patient HAS such a factor ("a history of recent ED visits"), and
+  never explain why a value of zero increases risk.
+- When several drivers are asked about, give each its own part-one sentence, then the
+  support for whichever of them has any.
+- A laboratory driver is named by the model and written by nobody: no note contains "red
+  cell distribution width" or "monocytes_min". Search for what the value means clinically
+  rather than for its name — a high RDW for anaemia or blood loss.
 - When the driver is a count, a procedure, a diagnosis or a disposition, call `rag_search`
-  before you write, and cite the passage it comes from with `^[n]` exactly as any other
-  chart claim. An attribution with no `^[n]` reads as a fact the notes cannot support. If
-  the notes document nothing relevant, say so rather than filling the gap with general
-  explanation.
-- Never explain the model's own mechanics: no "logit", "coefficient", "weight",
-  "feature vector" or "statistical indicator" — those name how the classifier is built,
-  not what is true of the patient. Never answer from general medical knowledge.
+  before you write, and cite the passage with `^[n]` as any other chart claim. If the notes
+  document nothing relevant, stop at part one.
+- The model's own weights are not shown to you and are not yours to state, and never explain
+  its mechanics: no "logit", "coefficient", "weight" or "feature vector". Never answer
+  from general medical knowledge.
 """
 
 
@@ -508,6 +494,12 @@ def compose_system_prompt(
         single_domain = next(iter(named))
     meds_relevant = single_domain in (None, routing.DOMAIN_MEDICATIONS)
     labs_relevant = single_domain in (None, routing.DOMAIN_LABS)
+    # The readmission rules are about ONE subject, so a turn that names another subject —
+    # a dosing question, a care-plan question — does not need them, whatever the session
+    # happens to hold. `has_prediction` alone attached this spoke to every turn after
+    # `/ehr`, which put the driver rules in the window of a question about a discharge
+    # dose (2026-11-20).
+    risk_relevant = single_domain in (None, routing.DOMAIN_RISK)
     parts = [CORE_HUB_PROMPT.rstrip()]
     if not bound or reads_notes:
         parts.append(CHART_SPOKE.strip())
@@ -516,8 +508,8 @@ def compose_system_prompt(
     if (not bound or "get_lab_trends" in bound or lab_driver_question or has_labs) \
             and labs_relevant:
         parts.append(LABS_SPOKE.strip())
-    if not bound or "predict_readmission" in bound or risk_driver_question or risk_score_question \
-            or has_prediction:
+    if (not bound or "predict_readmission" in bound or risk_driver_question
+            or risk_score_question or has_prediction) and risk_relevant:
         parts.append(RISK_SPOKE.strip())
     if not bound or "search_literature" in bound or wants_literature or has_literature:
         parts.append(LITERATURE_SPOKE.strip())

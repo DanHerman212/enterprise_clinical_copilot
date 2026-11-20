@@ -69,10 +69,34 @@ def test_a_driver_carries_its_name_and_its_direction_and_no_weight():
     assert "contribution" not in json.dumps(projected)
 
 
-def test_the_projection_takes_no_manifest():
-    """A caller cannot pass one, which is the point: one fact, one place."""
-    with pytest.raises(TypeError):
-        _presented_for_model("predict_readmission", dict(RISK), MANIFEST)  # noqa: PLC2801
+def test_the_projection_takes_the_blocks_decoded_values_not_the_manifest():
+    """It takes `{feature: words}` — the block's own output — and nothing else.
+
+    It used to take nothing at all, so a one-hot parent (`admission_type`,
+    `discharge_location`, `insurance`, `race`) reached the model with its direction and no
+    value, the level sitting in another block, and `gender` reached it as `1`. What it takes
+    now is what `admission_context.administrative_values` returns from the rendered block —
+    the words the reader was shown (2026-11-20).
+
+    The manifest rows in this file are the DECODER's strings, not that mapping, so they
+    still state nothing: the shape is what is pinned here, not the caller's dictionary.
+    """
+    block = admission_context.render(
+        90000067, {"admission_type": "Emergency (EW EMER.)", "gender": "Female"})
+    values = admission_context.administrative_values(block)
+    payload = {"probability": 0.1, "threshold": 0.11, "top_factors": [
+        {"feature": "admission_type", "contribution": 0.2, "direction": "increases"},
+        {"feature": "gender", "contribution": 0.1, "direction": "decreases", "value": 0},
+    ]}
+
+    projected = _presented_for_model("predict_readmission", payload, values)
+    parent, sex = projected["top_factors"]
+
+    assert parent["value"] == "Emergency (EW EMER.)"
+    assert sex["value"] == "Female"
+    # The manifest's own keys are not that mapping, so nothing is invented from them.
+    plain = _presented_for_model("predict_readmission", payload, MANIFEST)
+    assert "value" not in plain["top_factors"][0]
 
 
 def test_the_projection_still_withholds_the_floats():

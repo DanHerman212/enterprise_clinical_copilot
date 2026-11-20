@@ -52,7 +52,7 @@ def test_the_upward_factor_is_offered_ahead_of_a_protective_one():
     chips = _chips(state)
 
     assert chips, "the row came back empty"
-    assert any("increase this patient's readmission risk" in chip for chip in chips), chips
+    assert chips[0] == "How do recent ED visits affect this patient's readmission risk?"
 
 
 def test_a_record_with_a_course_gets_a_question_about_it_even_with_no_chips():

@@ -347,22 +347,22 @@ def _prompt() -> str:
 def test_the_prompt_states_the_payloads_value_as_the_factor_s_own_number():
     text = _prompt()
 
-    assert "one `value` per `top_factors` entry" in text
-    assert "State a value EXACTLY as given, whenever it carries one" in text
+    assert "top_factors[].value" in text
+    assert "`<admission_metadata>` states, EXACTLY as written" in text
 
 
 def test_the_prompt_stops_the_note_search_for_the_feature_name():
     """A discharge summary does not write "red cell distribution width"."""
     text = _prompt()
 
-    assert "no note" in text
-    assert "contains the words" in text
-    assert "search for what the value means clinically" in text
+    assert "no note contains" in text
+    assert "red cell distribution width" in text
+    assert "Search for what the value means clinically" in text
     assert "is not the chart's account of the correlate" not in text
 
 
 def test_the_prompt_keeps_the_structured_value_and_the_note_apart():
     text = _prompt()
 
-    assert "Where the note documents nothing about the factor" in text
-    assert "say what it does document and stop" in text
+    assert "Where they document nothing" in text
+    assert "STOP after part one" in text

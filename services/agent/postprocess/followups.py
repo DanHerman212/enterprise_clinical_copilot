@@ -50,7 +50,7 @@ from typing import Any
 from services.agent.postprocess.citations import literature_calls
 from services.agent.routing import routing
 from shared import labels
-from shared.labels import humanize
+from shared.labels import driver_question, humanize
 
 logger = logging.getLogger(__name__)
 
@@ -361,12 +361,15 @@ _CARE_RED_FLAGS = ("What post-discharge activity restrictions, diet instructions
 _CARE_FOLLOW_UP = ("What outpatient follow-up appointments or clinic visits are "
                    "scheduled after discharge?")
 _MED_REGIMEN = "What are the discharge dosing instructions for {first} and {second}?"
-_RISK_DRIVER = "Why does {driver} increase this patient's readmission risk?"
 
-#: The same question about a PROTECTIVE factor, offered when the payload names no
-#: upward driver at all. It asks about the same model output from the direction that is
-#: true of this record.
-_RISK_PROTECTIVE = "Why does {driver} lower this patient's readmission risk?"
+#: The risk chip is not a template: the question is composed by `shared.labels`
+#: (`driver_question`) so that the chip under an answer and the bar inside the risk card ask
+#: the same thing of the same evidence. Two wordings produced two shapes of answer, and only
+#: one of them asked something the record can answer (2026-11-20).
+#:
+#: There is one question for both directions. The old pair named a direction, which the
+#: model has to assert about a factor it may only be able to describe; and the protective
+#: twin existed only because the increasing form claimed one.
 
 #: The last resort: questions anchored to what the record demonstrably contains, offered
 #: only when every template above produced nothing.
@@ -603,18 +606,13 @@ def _candidates(*, state: dict[str, Any], scope: str | None, question: str,
             if chip:
                 chips.append(chip)
 
-    # P6 — why the model's own ranking puts this patient where it does.
+    # P6 — why the model's own ranking puts this patient where it does. The upward driver
+    # is preferred; the protective one is offered when the payload names no upward driver
+    # at all, because the attribution is still true of this record.
     if risk:
-        chip = _filled(_RISK_DRIVER, driver=_increasing_driver(risk))
+        chip = driver_question(_increasing_driver(risk) or _decreasing_driver(risk))
         if chip:
             chips.append(chip)
-        else:
-            # No upward driver in the payload. The protective directions are still true of
-            # the record, so the same surface asks about one of those rather than falling
-            # silent.
-            chip = _filled(_RISK_PROTECTIVE, driver=_decreasing_driver(risk))
-            if chip:
-                chips.append(chip)
 
     # P7 / P8 — the abnormal discharge value, or the normal panel it belongs to.
     abnormal = _rank_abnormal(labs)

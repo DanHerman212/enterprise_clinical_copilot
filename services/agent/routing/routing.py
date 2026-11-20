@@ -424,7 +424,12 @@ def is_command(wire: str | None) -> bool:
 #: driver" as a request for a feature field, because the answer lives in the model's
 #: attribution and in the notes.
 _AFFORDANCE_TEMPLATES: tuple[tuple[str, ...], ...] = (
-    # `driverQuestion(label)` in the renderer's RiskInfluencers widget.
+    # `driverQuestion(label)` in the renderer's RiskInfluencers widget, as it is written
+    # today: "How does {label} affect this patient's readmission risk?" Punctuation becomes
+    # a space before this test, so "patient's" is the two tokens below.
+    ("this", "patient", "s", "readmission", "risk"),
+    # The wording that control used before 2026-11-20, kept so a stored thread — whose
+    # question is replayed rather than re-composed — is classified the same way it was.
     ("as", "a", "readmission", "risk", "driver"),
 )
 
@@ -532,14 +537,17 @@ _RISK_DRIVER_WORDS = frozenset({"driver", "drivers", "drives", "drive", "driving
 
 #: The verbs a driver question is written with when it does not use the word "driver".
 #:
-#: The console's own P6 chip is `"Why does {driver} increase this patient's readmission
-#: risk?"` (and its protective twin, `"… lower this patient's readmission risk?"`), and it
-#: carries no token this predicate matched. The chip therefore arrived as an ordinary chart
-#: question with no attribution available, which is the same failure the predicate was
-#: first written for — a question about the model's reasoning answered from the values.
+#: The console's own P6 chip and the risk card's driver bar ask ONE question:
+#: `"How does {label} affect this patient's readmission risk?"` (plural labels take "do").
+#: `shared.labels.driver_question` composes it for both surfaces, and "affect" is the verb
+#: it uses, so the vocabulary has to know that verb or the product's own wording would
+#: arrive as an ordinary chart question with no attribution available — the failure this
+#: predicate was first written for. Measured 2026-11-20: the two surfaces used to ask
+#: different things, and only the bar's wording was answerable from the record.
+#:
 #: A direction verb beside a readmission term IS the driver question in the register a
-#: clinician reads, so the vocabulary says so instead of leaving the product's own wording
-#: unmatched. Measured 2026-11-20 (eval set v7, problem 1).
+#: clinician reads, so the older vocabulary stays: a stored thread and a typed question both
+#: still say "why does X increase her risk", and that phrasing must keep routing here.
 _RISK_DRIVER_VERBS = frozenset({
     "increase", "increases", "increased", "increasing",
     "decrease", "decreases", "decreased", "decreasing",
@@ -547,6 +555,7 @@ _RISK_DRIVER_VERBS = frozenset({
     "lower", "lowers", "lowered", "lowering",
     "reduce", "reduces", "reduced", "reducing",
     "contribute", "contributes", "contributed", "contributing",
+    "affect", "affects", "affected", "affecting",
 })
 #: The words that ask for a reason. `what` and `which` are here because a driver question
 #: is written that way as often as it is written with "why" — "what's driving that?",
@@ -557,16 +566,17 @@ _RISK_DRIVER_VERBS = frozenset({
 _WHY_WORDS = frozenset({"why", "explain", "explains", "explained", "explaining",
                         "reason", "because", "contributes", "contribute",
                         "contributed", "contributing", "contribution",
-                        "contributions", "what", "whats", "which"})
+                        "contributions", "what", "whats", "which", "how"})
 
 
 def asks_why_risk_driver(question: str) -> bool:
     """Whether this question asks for the model's reasoning about a risk driver.
 
     A readmission term, a word asking for a reason, and either the noun "driver" or a verb
-    that names a direction. The third term is what the console's own chip grammar needs:
-    `"Why does oncology history increase this patient's readmission risk?"` says everything
-    a driver question says and uses none of the words this test began with.
+    that names a direction. The third term is what the console's controls need: the driver
+    question both of them ask today — `"How does {label} affect this patient's readmission
+    risk?"` — says everything a driver question says and uses none of the words this test
+    began with.
     """
     tokens = (question or "").lower().translate(_PUNCTUATION).split()
     if not mentions_readmission(question):

@@ -21,7 +21,7 @@ import re
 FEATURE_LABELS: dict[str, str] = {
     "age": "age",
     "gender": "sex",
-    "has_procedure": "procedure performed",
+    "has_procedure": "having a procedure",
     "procedure_count": "procedures",
     "oncology_flag": "oncology history",
     "medication_count": "medication count",
@@ -65,6 +65,47 @@ def humanize(feature: str) -> str:
     spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", feature)
     words = [word for word in re.split(r"[\s_\-]+", spaced) if word]
     return " ".join(word.capitalize() for word in words) if words else feature
+
+
+# --- The question both driver affordances ask ------------------------------
+#
+# A ranked driver can be asked about from two controls: the follow-up chip under an
+# answer, and a bar inside the risk card. They used to ask different things — the chip
+# "Why does X increase this patient's readmission risk?", the bar "What in this patient's
+# chart explains X as a readmission risk driver?" — and the same evidence produced two
+# different shapes of answer, because the chip asked for the model's reasoning, which the
+# prompt forbids explaining, and the bar asked for the chart's support, which the record
+# can supply (measured 2026-11-20).
+#
+# One question now, and one that a record can answer: what does the factor DO to the
+# estimate, and what stands behind it.
+#
+# The verb agrees with the label, which is why the labels matter here as words rather
+# than as keys: `humanize` renders four features as plurals, and "How does prior inpatient
+# days affect" is not a sentence anyone wrote. The set is listed rather than derived from
+# a trailing "s", because a rule that guessed would be a rule the next label could
+# falsify — and `static/js/a2ui/risk_influencers.js` reads the same four strings, since
+# the widget is given the label and never the feature key.
+PLURAL_LABELS: frozenset[str] = frozenset({
+    "procedures",
+    "prior inpatient days",
+    "prior admissions",
+    "recent ED visits",
+})
+
+
+def label_is_plural(label: str) -> bool:
+    """Whether a rendered feature label names several things."""
+    return str(label or "").strip() in PLURAL_LABELS
+
+
+def driver_question(label: str) -> str:
+    """The question a driver chip and a driver bar both ask, or "" without a label."""
+    text = str(label or "").strip()
+    if not text:
+        return ""
+    verb = "do" if label_is_plural(text) else "does"
+    return f"How {verb} {text} affect this patient's readmission risk?"
 
 
 # --- The analyte vocabulary ------------------------------------------------

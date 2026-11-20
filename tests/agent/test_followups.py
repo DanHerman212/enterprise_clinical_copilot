@@ -23,6 +23,7 @@ import pytest
 
 from services.agent.postprocess import followups
 from services.agent.routing import routing
+from shared.labels import driver_question
 
 ANSWER = "Discharged home in stable condition."
 
@@ -254,20 +255,17 @@ def test_p5_is_suppressed_when_the_taper_and_anticoagulant_chips_both_ran():
 # ------------------------------------------------------------------------- P6 driver
 
 
-def test_p6_asks_why_the_top_increasing_driver_raises_the_risk():
+def test_p6_asks_the_one_question_the_driver_bar_asks():
     state = _risk_state()
     chips = _chips(state)
 
     # The label is the curated feature label, not the raw column name: a chip that says
     # "oncology_flag" is a developer string in a clinician's row.
-    assert chips[0] == ("Why does oncology history increase this patient's readmission "
-                        "risk?")
-    # The sentence is a question a clinician can read. It used to end "…readmission risk
-    # driver?", where "driver" belonged to the slot rather than to the sentence, and the
-    # only thing holding that word in place was `routing.asks_why_risk_driver` — a cue
-    # test whose whole job is to bind `predict_readmission`. The chip does not need the
-    # predictor: the prediction it asks about is in the transcript by the time the chip
-    # is clicked, and a declared follow-up binds nothing it can replay.
+    assert chips[0] == "How does oncology history affect this patient's readmission risk?"
+    # One question for both driver affordances, and the bar composes the same words from
+    # the same helper (`shared.labels.driver_question`). They used to ask different things
+    # and the same evidence produced two shapes of answer (2026-11-20).
+    assert chips[0] == driver_question("oncology history")
     assert routing.asks_for_literature(chips[0]) is False
 
 
@@ -281,16 +279,18 @@ def test_p6_never_claims_an_increase_the_record_does_not_show():
     """With every factor protective, the chip asks about one of THOSE.
 
     It used to emit nothing at all, and `holdout_t2_01` then had no chip to click at all
-    (`00d1`, unscored). The question is answerable from the same model output either way;
-    what may not happen is a chip asserting that something increases this patient's risk
-    when the only upward factor is one they do not have.
+    (`00d1`, unscored). Since the question is direction-neutral — it asks what the factor
+    does to the estimate rather than asserting that it raises it — the protective driver is
+    named in the same words, and nothing in the chip claims a direction the payload does not
+    carry (2026-11-20).
     """
     state = _risk_state(factors=[{"feature": "monocytes_min", "contribution": -0.5,
                                   "direction": "decreases", "value": 0.2}])
     chips = _chips(state)
 
     assert not any("increase" in chip for chip in chips), chips
-    assert any("lower this patient's readmission risk" in chip for chip in chips), chips
+    assert any("affect this patient's readmission risk" in chip for chip in chips), chips
+    assert any("lowest monocyte count" in chip for chip in chips), chips
 
 
 # --------------------------------------------------------------------------- P7/P8
@@ -415,7 +415,6 @@ def test_no_template_carries_a_literature_cue():
         followups._MED_ANTICOAG_MONITORED: {"drug": "Coumadin"},
         followups._MED_ANTICOAG: {"drug": "Coumadin"},
         followups._MED_REGIMEN: {"first": "Celebrex", "second": "Colace"},
-        followups._RISK_DRIVER: {"driver": "oncology history"},
         followups._LAB_ABNORMAL: {"label": "Potassium", "value": "6.0",
                                  "unit": "mmol/L"},
         followups._LAB_NORMAL: {"first": "Sodium", "second": "Potassium"},
@@ -424,6 +423,8 @@ def test_no_template_carries_a_literature_cue():
         chip = followups._filled(template, **slots)
         assert chip, template
         assert not routing.asks_for_literature(chip), chip
+    # The risk chip is composed rather than formatted, so it is checked the same way.
+    assert not routing.asks_for_literature(driver_question("oncology history"))
 
 
 def test_the_fixed_templates_are_routable():

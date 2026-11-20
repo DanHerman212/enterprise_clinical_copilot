@@ -106,8 +106,8 @@ def test_the_prompt_states_what_a_driver_without_a_value_means():
     """
     text = " ".join(prompts.RISK_SPOKE.split())
 
-    assert "A factor with no `value` gets its direction and nothing else" in text
-    assert "write no clause about a missing, absent or unspecified value" in text
+    assert "a factor with no value of any kind is" in text
+    assert "stated without the parenthetical" in text
     assert "was scored without one" not in text
     assert "are not yours to state" in text
 

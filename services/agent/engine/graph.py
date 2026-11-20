@@ -31,7 +31,7 @@ import logging
 import operator
 import re
 from dataclasses import dataclass
-from typing import Annotated, Any, Callable, TypedDict
+from typing import Annotated, Any, Callable, Mapping, TypedDict
 
 from langchain_core.messages import (
     AIMessage,
@@ -107,7 +107,7 @@ from services.agent.engine import prompts
 from services.agent.telemetry import observability
 from services.agent.routing import routing
 from services.agent.routing import encounter
-from services.agent.routing.admission_context import cached_read
+from services.agent.routing.admission_context import administrative_values, cached_read
 from services.agent.telemetry import stages
 # The feature vocabulary, from the shared leaf. Read by `_unqueried_analytes` to decide
 # whether an analyte a question names is already explained by the estimate's own drivers
@@ -830,7 +830,11 @@ def _working_memory(state: AgentState, allowed: frozenset[str]) -> str:
     parts: list[str] = []
     record = state.get("evidence_state")
     if record is not None and _record_has_content(record):
-        parts.append(record.render_for_prompt())
+        # The manifest's own values travel with the record: a driver whose value exists only
+        # in the block is stated in `<readmission_risk>` rather than left for the model to
+        # cross-reference between two blocks.
+        parts.append(record.render_for_prompt(
+            administrative_values(state.get("admission_context") or "")))
     unread = _unqueried_analytes(state)
     if unread:
         # Said in the round's own overlay rather than left to the prompt's prose: the
@@ -982,6 +986,7 @@ def build_graph(
     risk_score_question: bool = False,
     question: str = "",
     domains: frozenset[str] | None = None,
+    administrative: Mapping[str, str] | None = None,
 ):
     """Compile the graph. `on_event` receives progress stages; None disables them.
 
@@ -1134,7 +1139,10 @@ def build_graph(
 
         messages, recorded = await _execute_tool_calls(
             toolbox, calls, on_event, guard=guard,
-            project=_presented_for_model,
+            # The administrative values the block states, so a one-hot parent driver and
+            # `gender` carry the words the reader was shown rather than a key or a digit.
+            project=lambda name, payload: _presented_for_model(
+                name, payload, administrative),
             # Everything this turn has already spent, so the budget is a budget for the
             # turn rather than for one iteration of the loop around it.
             already_called=list(state.get("tool_calls") or []),
@@ -1612,7 +1620,8 @@ async def ask(
             # replays to an empty record and changes nothing: a turn 1 is unaffected.
             replay_state: dict = {}
             _, replayed_calls, _thread_published = await replay_messages(
-                toolbox, turns, hadm_id=hadm_id, record_sink=replay_state)
+                toolbox, turns, hadm_id=hadm_id, record_sink=replay_state,
+                administrative=administrative_values(admission_context))
             command_state = await run_command(
                 toolbox,
                 routing.command_for(question_kind),
@@ -1730,7 +1739,8 @@ async def ask(
     # record with no patient would be one whose positions could be fed from any chart.
     replay_state: dict = {}
     replayed, replayed_calls, thread_literature = await replay_messages(
-        toolbox, turns, hadm_id=hadm_id, record_sink=replay_state)
+        toolbox, turns, hadm_id=hadm_id, record_sink=replay_state,
+        administrative=administrative_values(admission_context))
     session = replay_state.get("record") if hadm_id is not None else None
     replayed_positions = (
         session.position_count() if session is not None
@@ -1791,6 +1801,9 @@ async def ask(
         # the trace were given rather than re-deriving it from the flags alone.
         question=question,
         domains=question_domains,
+        # The block's decoded administrative values, so a driver's `value` on the model's
+        # copy is the words the reader was shown rather than a one-hot key or a 0/1.
+        administrative=administrative_values(admission_context),
     )
 
     config: dict = {"recursion_limit": RECURSION_LIMIT}
@@ -2097,6 +2110,7 @@ async def replay_messages(
     hadm_id: int | None = None,
     *,
     record_sink: dict | None = None,
+    administrative: Mapping[str, str] | None = None,
 ) -> tuple[list[BaseMessage], list[RecordedToolCall], list[dict]]:
     """The earlier conversation, as the messages the model would have seen.
 
@@ -2259,7 +2273,7 @@ async def replay_messages(
                     str(call.get("name") or ""),
                     call_args,
                     _record_text(_presented_for_model(
-                        str(call.get("name") or ""), payload)),
+                        str(call.get("name") or ""), payload, administrative)),
                 )
             else:
                 offset += _passage_total(payload)

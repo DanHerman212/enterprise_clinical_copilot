@@ -96,14 +96,14 @@ def test_an_answer_with_no_served_float_is_untouched():
 
 
 def test_the_driver_instructions_require_a_chart_citation():
-    assert "cite the passage it comes from with `^[n]`" in prompts.SYSTEM_PROMPT
-    assert "an attribution with no `^[n]`" in prompts.SYSTEM_PROMPT.lower()
+    assert "cite the passage with `^[n]`" in prompts.SYSTEM_PROMPT
+    assert "Part two carries" in prompts.SYSTEM_PROMPT
 
 
 def test_the_driver_instructions_forbid_the_model_s_own_mechanics():
-    for word in ("logit", "coefficient", "statistical indicator"):
+    for word in ("logit", "coefficient", "feature vector"):
         assert word in prompts.SYSTEM_PROMPT
-    assert "Never explain the model's own mechanics" in prompts.SYSTEM_PROMPT
+    assert "never explain" in prompts.SYSTEM_PROMPT
 
 
 def test_the_driver_instructions_state_the_precision_rule():

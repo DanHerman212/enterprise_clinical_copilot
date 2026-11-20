@@ -77,7 +77,8 @@ def _patch_observability(monkeypatch, turn_root):
     return spy, stamped
 
 
-async def _empty_replay(toolbox, turns, *, hadm_id=None, record_sink=None):
+async def _empty_replay(toolbox, turns, *, hadm_id=None, record_sink=None,
+                        administrative=None):
     return [], [], []
 
 

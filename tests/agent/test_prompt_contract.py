@@ -107,7 +107,7 @@ def test_the_prompt_names_the_tools_the_reasoning_loop_can_call():
     # (`routing.asks_for_risk_score`). Naming it without those conditions would be the
     # invitation the rule below forbids, so they are asserted with the name.
     assert "`predict_readmission`" in SYSTEM_PROMPT
-    assert "two kinds of question" in SYSTEM_PROMPT
+    assert "Call the tool only when the session holds no estimate" in SYSTEM_PROMPT
 
     # `search_literature` is the second conditional one: a command's tool that is bound
     # only when the question asks for published evidence (`routing.asks_for_literature`).
@@ -403,20 +403,23 @@ def test_a_risk_driver_question_is_answered_with_the_models_attribution():
     The chart says what the value did; only the model says why it counts. The estimate
     is a second, separate reason the same tool is bound — a question asking for the score
     is answered with the score, not redirected to a command — and the prompt states both.
+
+    Since 2026-11-20 the attribution is read from the SESSION first, because every driver
+    chip and every driver bar arrives on a thread that already holds the estimate: binding
+    the tool again cannot change the score and only costs the answer.
     """
-    assert "`predict_readmission` is in front of you on two kinds of question" \
-        in SYSTEM_PROMPT
-    # Wrapped across lines in the prompt, so the halves are asserted rather than the
-    # whitespace between them — the rule is that the drivers and their direction are
-    # both named, not that they are named in one line.
-    assert "drivers contributed most" in SYSTEM_PROMPT
-    assert "which drivers led" in SYSTEM_PROMPT
+    assert "CHECK THE SESSION FIRST" in SYSTEM_PROMPT
+    assert "answer from it rather than calling `predict_readmission` again" in SYSTEM_PROMPT
+    assert "Call the tool only when the session holds no estimate" in SYSTEM_PROMPT
     assert "direction" in SYSTEM_PROMPT
-    # The second condition: a question about the estimate is answered from the tool.
+    # The estimate itself is still answered in words the widget prints.
     assert "probability_display" in SYSTEM_PROMPT
-    assert "Never redirect the reader to a command" in SYSTEM_PROMPT
+    assert "never redirect the reader to a command" in SYSTEM_PROMPT
     # Never a float: the projection gives the model the display strings and no number.
     assert "threshold_display" in SYSTEM_PROMPT
+    # And the one sentence every driver answer opens with.
+    assert "According to the" in SYSTEM_PROMPT
+    assert "readmission risk model" in SYSTEM_PROMPT
 
 
 def test_the_prompt_rules_that_gate_two_showed_were_missing():
@@ -535,14 +538,15 @@ def test_a_comparative_lab_question_is_answered_in_the_first_sentence():
 
 
 def test_feature_values_are_stated_exactly_as_recorded():
-    """The example is the precision the record now states, not the row's raw float.
+    """The example is the precision every layer now states.
 
-    It used to be `18.5833 … not 18.58`, which the manifest no longer says: every layer
-    writes the published two decimals, so the rule's own illustration has to match or it
-    asks the model to prefer a number nothing gives it (2026-11-20).
+    It has been `18.5833 … not 18.58`, then `18.58 … not 18.6`, and since the count rule it
+    is `19`: the block rounds a count to a whole number and the risk projection does the
+    same, so the illustration has to agree with them or it asks the model for a number
+    nothing gives it (2026-11-20).
     """
-    assert "`18.58` prior inpatient days" in SYSTEM_PROMPT
-    assert "not 18.6" in SYSTEM_PROMPT
+    assert "`19` prior inpatient days" in SYSTEM_PROMPT
+    assert "not 18.58" in SYSTEM_PROMPT
     assert "18.5833" not in SYSTEM_PROMPT
 
 

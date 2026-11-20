@@ -209,7 +209,7 @@ CASES: tuple[_Case, ...] = (
     ),
     _Case(
         id="P6-risk-driver",
-        chip="Why does oncology history increase this patient's readmission risk?",
+        chip="How does oncology history affect this patient's readmission risk?",
         question="/risk",
         state=_risk_state(),
         crossing="predict_readmission",

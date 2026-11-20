@@ -76,7 +76,7 @@ def test_a_predicate_column_without_a_flag_suffix_reaches_the_model_as_words():
     none_done = _presented_factor(
         {"feature": "has_procedure", "direction": "decreases", "value": 0})
 
-    assert performed["feature"] == "procedure performed"
+    assert performed["feature"] == "having a procedure"
     assert performed["value"] == "present"
     assert none_done["value"] == "not present"
 
@@ -162,11 +162,11 @@ def test_the_risk_spoke_no_longer_asks_for_a_contribution():
 
     assert "contribution" not in spoke
     assert "are not yours to state" in spoke
-    # The direction is still required, but once per group rather than once per driver:
-    # the answer that stated it under all five bullets repeated the same clause five times
-    # (measured 2026-11-20, 90000020).
-    assert "GROUPS its attribution and states it ONCE" in spoke
-    assert "never repeat" in spoke
+    # The direction is still part of the answer, and it is stated in a fixed sentence
+    # rather than composed afresh per driver: the answer that repeated the same clause
+    # under five bullets (measured 2026-11-20, 90000020) is what the template replaces.
+    assert "TWO parts and no third" in spoke
+    assert "According to the" in spoke
 
 
 def test_the_ehr_risk_section_no_longer_asks_for_a_contribution():
@@ -404,6 +404,6 @@ def test_the_risk_spoke_forbids_narrating_an_absent_value():
     """
     spoke = _flat(prompts.RISK_SPOKE)
 
-    assert "gets its direction and nothing else" in spoke
-    assert "write no clause about a missing, absent or unspecified value" in spoke
+    assert "stated without the parenthetical" in spoke
+    assert "never as a missing value" in spoke
     assert "was scored without one" not in spoke

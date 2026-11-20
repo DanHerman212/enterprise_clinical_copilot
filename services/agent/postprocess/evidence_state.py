@@ -602,7 +602,7 @@ class SessionEvidenceState:
 
     # -- rendering ---------------------------------------------------------------
 
-    def render_for_prompt(self) -> str:
+    def render_for_prompt(self, administrative: Mapping[str, str] | None = None) -> str:
         """The state as the model reads it. Deterministic for a given state.
 
         Every interpolated value passes through `_escape`: this is the one place the
@@ -643,7 +643,7 @@ class SessionEvidenceState:
                 lines.append(f"{_escape(analyte)}: {_escape(self.checked_labs[analyte])}")
             lines.append("</lab_inventory>")
 
-        risk = self._render_prediction()
+        risk = self._render_prediction(administrative)
         if risk:
             lines.append(risk)
         literature = self._render_literature()
@@ -676,7 +676,7 @@ class SessionEvidenceState:
             parts.append("synthetic=true")
         return " | ".join(parts) + "]"
 
-    def _render_prediction(self) -> str:
+    def _render_prediction(self, administrative: Mapping[str, str] | None = None) -> str:
         if not self.prediction:
             return ""
         lines = ["<readmission_risk>"]
@@ -713,6 +713,13 @@ class SessionEvidenceState:
                             value = admission_context.clinical_value(feature, float(value))
                         shown = "null" if value is None else _escape(value)
                         parts.append(f"{key}={shown}")
+                # A one-hot parent has no value of its own: the payload carries none, and
+                # the decoded level lives in `<admission_metadata>`. Stating it here is
+                # what lets a driver answer open with the value the reader was shown,
+                # rather than sending the model to another block for it (2026-11-20).
+                if "value" not in factor and administrative \
+                        and administrative.get(feature):
+                    parts.append(f"value={_escape(administrative[feature])}")
                 lines.append("  " + " | ".join(parts))
         lines.append("</readmission_risk>")
         return "\n".join(lines)

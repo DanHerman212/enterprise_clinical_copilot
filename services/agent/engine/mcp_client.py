@@ -49,7 +49,7 @@ from shared.labels import humanize
 from services.agent.telemetry import observability, stages
 from services.agent.telemetry.stages import emit as _emit
 from shared.errors import AgentResponseError
-from typing import Any, Callable, Sequence, TypedDict
+from typing import Any, Callable, Mapping, Sequence, TypedDict
 
 logger = logging.getLogger(__name__)
 
@@ -921,6 +921,12 @@ _OMIT = object()
 #: `1 if has_procedure else 0`, so a suffix rule alone served it as the number `1`.
 _BINARY_FEATURES = frozenset({"has_procedure"})
 
+#: `gender` is `CAST(gender = 'M' AS INT64)` in the mart
+#: (`dependencies/features/profile.py`, which decodes the same column for the manifest),
+#: so 1 is male and 0 is female. Stated here as the words the block states, because a driver
+#: answer that named sex and then wrote `1` was the last encoding left in the prose.
+_GENDER_WORDS: dict[int, str] = {1: "Male", 0: "Female"}
+
 
 def _is_binary_feature(feature: str) -> bool:
     """Whether a scored feature's number is an encoding rather than a quantity."""
@@ -928,7 +934,7 @@ def _is_binary_feature(feature: str) -> bool:
     return name.endswith("_flag") or name in _BINARY_FEATURES
 
 
-def _presented_value(feature: str, value: Any) -> Any:
+def _presented_value(feature: str, value: Any, administrative: Mapping[str, str] | None = None) -> Any:
     """A scored feature's value in the form a clinician reads, or the marker for "omit".
 
     Three cases, and each is a defect the projection used to hand to the prose:
@@ -944,7 +950,8 @@ def _presented_value(feature: str, value: Any) -> Any:
         2026-11-20). `has_procedure` is the same encoding under a name that carries no
         hint of it, so the `_flag` suffix rule alone left "procedure performed (value 1)"
         in the prose. Both mean present or not present; the number is how the warehouse
-        spells it.
+        spells it. `gender` is the third: the block says "Male" and the payload said `1`,
+        so the block's word wins whenever the turn has one.
       * everything else is the number the tool published, at the clinical precision it
         chose (`prediction._clinical_value`). A measurement, a count or a duration is a
         fact about the patient and is stated as served — except a COUNT, which is stated
@@ -958,12 +965,17 @@ def _presented_value(feature: str, value: Any) -> Any:
         return "present" if value else "not present"
     if _is_number(value) and _is_binary_feature(feature):
         return "present" if value else "not present"
+    if feature == "gender" and _is_number(value):
+        stated = (administrative or {}).get("gender")
+        if stated:
+            return stated
+        return _GENDER_WORDS.get(int(value), value)
     if _is_number(value):
         return admission_context.clinical_value(str(feature or ""), float(value))
     return value
 
 
-def _presented_factor(factor: Any) -> Any:
+def _presented_factor(factor: Any, administrative: Mapping[str, str] | None = None) -> Any:
     """One risk driver: its name, its direction, and the patient's own value.
 
     Rebuilt field by field rather than copied and edited, because a `{**factor}` spread
@@ -999,19 +1011,29 @@ def _presented_factor(factor: Any) -> Any:
     """
     if not isinstance(factor, dict):
         return factor
+    feature = str(factor.get("feature") or "")
     presented: dict[str, Any] = {
-        "feature": humanize(str(factor.get("feature", ""))),
+        "feature": humanize(feature),
     }
     if isinstance(factor.get("direction"), str):
         presented["direction"] = factor["direction"]
     if "value" in factor:
-        shown = _presented_value(str(factor.get("feature", "")), factor["value"])
+        shown = _presented_value(feature, factor["value"], administrative)
         if shown is not _OMIT:
             presented["value"] = shown
+    elif administrative and administrative.get(feature):
+        # A one-hot parent (`admission_type`, `discharge_location`, `insurance`, `race`)
+        # has no single column to read, so `predict_readmission` has no value to state for
+        # it — and the block the model is already holding does: the decoded level. Without
+        # this, the record said "feature=admission type | direction=increases" and the
+        # level sat in another block, which is a number the answer has to go and find
+        # before it can say the one sentence the reader asked for (2026-11-20).
+        presented["value"] = administrative[feature]
     return presented
 
 
-def _presented_prediction(name: str, payload: Any) -> Any:
+def _presented_prediction(name: str, payload: Any,
+                          administrative: Mapping[str, str] | None = None) -> Any:
     """The prediction result as the interface shows it, for the model to read.
 
     The model has never seen a feature key, and the keys are not words a clinician reads:
@@ -1082,13 +1104,15 @@ def _presented_prediction(name: str, payload: Any) -> Any:
 
     factors = payload.get("top_factors")
     if isinstance(factors, list):
-        projected["top_factors"] = [_presented_factor(factor) for factor in factors]
+        projected["top_factors"] = [
+            _presented_factor(factor, administrative) for factor in factors]
     return projected
 
 
 
 
-def _presented_for_model(name: str, payload: Any) -> Any:
+def _presented_for_model(name: str, payload: Any,
+                         administrative: Mapping[str, str] | None = None) -> Any:
     """The tool result in the form the MODEL reads. Never the form the caller records.
 
     One tool needs a translation the model must not perform itself: the estimate, whose
@@ -1103,12 +1127,18 @@ def _presented_for_model(name: str, payload: Any) -> Any:
     interval. That is gone: the panel reaches the model as the tool wrote it, and the
     prompt asks for the comparison in prose. Nothing is cross-referenced against the
     patient either, so the same call renders the same way whichever route asked for it.
+
+    `administrative` is the block's own values, keyed by feature name
+    (`admission_context.administrative_values`). It is how a one-hot parent gets a value
+    and how `gender` gets a word, and it is empty on a turn whose block is empty — which
+    is why the parameter is optional rather than required.
     """
-    return _presented_prediction(name, payload)
+    return _presented_prediction(name, payload, administrative)
 
 
 
-def _presented_call(call: dict) -> dict:
+def _presented_call(call: dict,
+                    administrative: Mapping[str, str] | None = None) -> dict:
     """The call as the model was shown it, for building a session record.
 
     The record renderer prints what it holds into the model's window, so it must hold
@@ -1125,7 +1155,8 @@ def _presented_call(call: dict) -> dict:
     return {
         **call,
         "response": _record_text(
-            _presented_for_model(str(call.get("name") or ""), call.get("response"))),
+            _presented_for_model(str(call.get("name") or ""), call.get("response"),
+                                 administrative)),
     }
 
 

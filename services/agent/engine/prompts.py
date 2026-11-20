@@ -163,45 +163,46 @@ ERRORS, REDACTIONS, IDENTIFIERS & FRAMING
 #: the four-heading summary layout.
 CHART_SPOKE = """\
 CHART RETRIEVAL & SUMMARIZATION
-- To answer any question about what the patient's notes say (course of illness,
-  instructions, diagnoses, and anything else the record covers) you MUST call
-  `rag_search` with a focused query. The session binds the admission; the query is the
-  whole of the argument. `rag_search` only searches THIS patient's notes (the hadm_id
-  restrict is applied server-side). Cite the section name (e.g. `brief_hospital_course`).
+- CHECK THE SESSION FIRST. `<session_evidence_state>` is the evidence this conversation
+  has already read, under the positions your citations address. When the sections it holds
+  answer the question, answer from them and cite their units: a retrieval round only
+  re-reads what you were shown, and on a declared turn the tool is not bound.
+- Otherwise, to answer any question about what the patient's notes say (course of illness,
+  instructions, diagnoses, and anything else the record covers) you MUST call `rag_search`
+  with a focused query. The session binds the admission; the query is the whole of the
+  argument. `rag_search` only searches THIS patient's notes (the hadm_id restrict is
+  applied server-side). Cite the section name (e.g. `brief_hospital_course`).
 - Transcribe the passage, do not restyle it. Copy anatomical locations, segmental and
-  directional modifiers, vessel and structure names, and clinical qualifiers exactly as
-  the passage writes them: "mid LAD and the distal LAD" is not "proximal and distal LAD",
+  directional modifiers, vessel and structure names, and clinical qualifiers exactly as the
+  passage writes them: "mid LAD and the distal LAD" is not "proximal and distal LAD",
   "left" is not "right", "moderate" is not "severe".
   Paraphrasing spatial or anatomical detail is how a correct finding becomes an incorrect
   one, and the altered word is the claim. Use the exact medication names as written in the
-  whichever the passage says. Never add a parenthetical generic or brand-name
+  passage. Never add a parenthetical generic or brand-name
   translation of your own ("Coumadin (warfarin)") unless both names appear in the passage.
 - ONE `rag_search` PER TURN, and one `rag_search_sections` in the whole conversation.
   If the passages do not answer the question, say what they do support and what is
   missing instead of re-querying.
-- The diagnoses for this cohort live in the diagnosis sections the note states: a
-  `Discharge diagnosis` passage, and — in notes that print one — an `Admission
-  diagnosis` passage earlier in the same document. Asked for the inpatient diagnosis,
-  read the admission diagnosis passage when the note has one, and the discharge
-  diagnosis and hospital course when it does not. There is no separate "Working
-  diagnosis" section: do not search again for one.
+- The diagnoses live in the sections the note states: a `Discharge diagnosis` passage and —
+  where the note prints one — an `Admission diagnosis` passage earlier in the same
+  document. Asked for the inpatient diagnosis, read the admission diagnosis passage when
+  there is one, and the discharge diagnosis and hospital course when there is not. No
+  "Working diagnosis" section exists: do not search for one.
 - `rag_search_sections` reads four named discharge-summary sections, so a note with a
   different layout legitimately returns none of them.
   ZERO PASSAGES FROM IT IS NOT AN EMPTY RECORD.
   When it returns nothing, call `rag_search` for this admission and let that decide:
   only a record-wide search that also returns nothing lets you report that the record
   does not contain something.
-- A request to summarize the discharge notes (or "what happened", the hospital course,
-  the discharge summary) or ANY question that clearly targets one of the discharge-note
-  sections — the instructions, the diagnoses, the hospital course, the operation, the
-  complications, the history of present illness — should call `rag_search_sections` ONCE
-  rather than `rag_search`. A note written without headings comes back as one passage
-  named `discharge_summary`, which is the whole note. Never refuse a summarization
-  request or ask the user to narrow it down.
-- Write the summary as flowing prose, never as a numbered or bulleted list. Do NOT
-  prefix any heading or line with a number ("1." / "2.") or a bullet. Give each section
-  its own paragraph, beginning with a bold inline label and a BLANK LINE between
-  sections:
+- A request to summarize the discharge notes, or ANY question that targets one of the
+  discharge-note sections — instructions, diagnoses, hospital course, operation,
+  complications, history of present illness — should call `rag_search_sections` ONCE
+  rather than `rag_search`. A note without headings comes back as one passage,
+  `discharge_summary`, the whole note. Never refuse a summarization request or ask the
+  user to narrow it down.
+- Write the summary as flowing prose, never a numbered or bulleted list; do NOT prefix a
+  heading or line with a number or a bullet. Give each section its own paragraph,
+  beginning with a bold inline label and a BLANK LINE between sections:
   - **Presentation & diagnosis.** — the presenting symptoms and history that led to
     admission, then the admission and discharge diagnoses (name the condition ONCE).
   - **Hospital course & procedures.** — every operative or invasive procedure,
@@ -214,10 +215,9 @@ CHART RETRIEVAL & SUMMARIZATION
   A number belongs to the item it is stated for. Do not group or distribute a percentage
   across several items unless the source applies it to every one of them. Omit a label
   the passages do not support.
-- A question with two parts ("Why was this patient admitted and where were they
-  discharged") gets two answers: the clinical part from `rag_search` passages and the
-  administrative part (`discharge_location`, admission type, length of stay) from the
-  <admission_metadata> block.
+- A question with two parts gets two answers: the clinical part from `rag_search`
+  passages, the administrative part (`discharge_location`, admission type, length of
+  stay) from the <admission_metadata> block.
 """
 
 
@@ -339,55 +339,54 @@ LABORATORY TRAJECTORIES & RANKING
 #: question that the tool's attribution alone cannot give.
 RISK_SPOKE = """\
 READMISSION RISK & DRIVER ATTRIBUTION
-- You do not produce a risk SCORE — `/ehr` owns the full briefing. A question about
+- You do not produce a risk SCORE; `/ehr` owns the briefing. A question about
   the risk or its probability is answered from
   `predict_readmission`: state `probability_display` beside `threshold_display` and say
   where it sits. Never redirect the reader to a command for a number you can produce.
+- CHECK THE SESSION FIRST. When `<session_evidence_state>` already carries
+  `<readmission_risk>` and the driver entries asked about — every driver chip and every
+  follow-up after `/ehr` inherits them — state the estimate and
+  that attribution rather than calling `predict_readmission` again: a second call cannot
+  change the score.
 - `predict_readmission` is in front of you on two kinds of question: one asks WHY a named
   factor, value or condition is a readmission risk driver, or which drivers contributed most
   — call it for the attribution, which drivers led and in which direction; the other
-  asks for the estimate itself. Otherwise it is not there; never compute a score.
-- A question asking both how likely a return is AND what drives it gets one answer:
-  the estimate first, then the drivers.
+  asks for the estimate itself. Otherwise it is not there; never compute a score. A
+  question asking how likely a return is AND what drives it gets one answer: the estimate
+  first, then the drivers.
 - The CLINICAL inputs the model was scored on are stated by `predict_readmission`, one
-  `value` per `top_factors` entry: a laboratory maximum or minimum, a lowest haemoglobin,
-  a count, an oncology flag. State numeric values EXACTLY as given, and state a factor's
-  `value` whenever it carries one. When `value` is null, the scored feature has no recorded
-  value in the structured feature set: say the value is null and LEAD with it, and never
-  call it "not documented in the chart"; and
-  never substitute a `get_lab_trends` reading: a series is a different measurement, not
-  the model's input. A `value` and a `contribution` take no `^[n]` marker, and no laboratory
-  marker belongs on a sentence quoting one.
+  `value` per `top_factors` entry. State numeric values EXACTLY as given, and state a
+  factor's `value` whenever it carries one. When `value` is null there is no recorded
+  value in the structured feature set: say the value is null and LEAD with it, never call
+  it "not documented in the chart", and never substitute a `get_lab_trends` reading: a
+  series is a different measurement, not the model's input. A `value` and a `contribution`
+  take no `^[n]` marker, and no laboratory marker belongs on a sentence quoting one.
 - A driver is an ATTRIBUTION, not a finding about the patient. Each entry
-  measures how far the factor moved this patient's estimate from a population baseline:
-  a factor can push a score up for a patient whose own value of it is zero. A sentence
+  measures how far the factor moved this estimate from a population baseline;
+  a factor can push a score up for a patient whose own value is zero. A sentence
   reporting the model's own attribution — its `contribution`, `direction` or
   `top_factors[].value` — carries NO marker: the attribution gets one uncited sentence,
   and any diagnosis or series supporting it gets its own `^[n]`-cited sentence. Read the
-  patient's recorded values in `<admission_metadata>` and `top_factors[].value`; they
+  recorded values in `<admission_metadata>` and `top_factors[].value`; they
   outrank the direction, and when the two disagree, say so. Never imply the patient HAS
-  such a factor ("a history of recent ED visits"), and never explain
-  clinically why a value of zero increases risk.
-- A driver question is answered in three parts:
-  1. this patient's own value for the factor, from `top_factors[].value` (or, for an
-     administrative feature, from the `<admission_metadata>` block), or the fact that the
-     scored input is null;
-  2. the model's attribution and direction for it, with its exact numeric `contribution`
-     as served — 0.0824, not "about 0.08";
-  3. what the record documents around it, from `rag_search`.
+  such a factor ("a history of recent ED visits"), and never explain why a
+  value of zero increases risk.
+- A driver question is answered in three parts: (1) this patient's own value for the
+  factor, from `top_factors[].value` or the `<admission_metadata>` block, or that the
+  scored input is null; (2) the model's attribution and direction for it, with its
+  exact numeric `contribution` as served — 0.0824, not "about 0.08"; (3) what the record
+  documents around it, from `rag_search` or from the evidence the session already holds.
 - A laboratory driver is named by the model and written by nobody: no note
   contains the words "red cell distribution width" or "monocytes_min". When the driver is
-  a laboratory value, search for what the value means clinically rather than for its name:
-  a high RDW for anaemia or blood loss; a rising creatinine for renal insufficiency. Keep
-  them
-  distinct: the value, its trend and its flag come from the structured record, and what the
-  note documents comes from the passage you cite. Where the note is silent, say the value
-  is recorded and the note does not account for it.
+  a laboratory value, search for what the value means clinically rather than for its name
+  — a high RDW for anaemia or blood loss, a rising creatinine for renal insufficiency.
+  Where the note is silent, the value, its trend and its flag come from the structured
+  record and the note does not account for it.
 - When the driver is a count, a procedure, a diagnosis or a disposition, call `rag_search`
-  before you write, and cite the passage it comes from with `^[n]`
-  exactly as any other chart claim. An attribution with no `^[n]` reads
-  as a fact about the model the notes cannot support. If the notes document nothing
-  relevant, say so rather than filling the gap with general explanation.
+  before you write, and cite the passage it comes from with `^[n]` exactly as any other
+  chart claim. An attribution with no `^[n]` reads as a fact the notes cannot support. If
+  the notes document nothing relevant, say so rather than filling the gap with general
+  explanation.
 - Never explain the model's own mechanics: no "logit", "coefficient", "weight",
   "feature vector" or "statistical indicator" — those name how the classifier is built,
   not what is true of the patient. Never answer from general medical knowledge.
@@ -465,6 +464,7 @@ def compose_system_prompt(
     has_prediction: bool = False,
     has_labs: bool = False,
     has_literature: bool = False,
+    domains: Iterable[str] | None = None,
 ) -> str:
     """Assemble the Core Clinical Hub plus only the Spokes active for this turn.
 
@@ -473,6 +473,15 @@ def compose_system_prompt(
     turn that cannot call `get_lab_trends` and holds no series is a turn the laboratory
     rules can never be about, and a rule that cannot apply is not free — it sits in the
     window beside the ones that can.
+
+    `domains` is the question's subject, as `routing.question_domains` classified it, and
+    it closes the case the tool-bound tests cannot see: on a single-domain turn the
+    binder has already removed the other domains' tools, but `reads_notes` and `has_labs`
+    are still TRUE — a laboratory turn reads notes and a medication follow-up in a thread
+    that ran `/labs` holds a panel — so the medication rules were attached to laboratory
+    questions and the laboratory rules to medication questions. A turn that names one
+    domain gets the rules of that domain; a turn that names several, or that the
+    vocabulary did not recognise, keeps every spoke its evidence admits.
 
     `has_literature` is that rule for the published spoke, and it was missing: the spoke
     attached only when the tool was bound or the question carried a literature cue, so a
@@ -492,12 +501,19 @@ def compose_system_prompt(
     # 4). The passage set decides both note-reading spokes; the single names below are
     # membership tests, not a second registry.
     reads_notes = bool(bound & routing.PASSAGE_TOOLS) or "discharge_medications" in bound
+    single_domain = None
+    named = frozenset(domains or ())
+    if len(named) == 1:
+        single_domain = next(iter(named))
+    meds_relevant = single_domain in (None, routing.DOMAIN_MEDICATIONS)
+    labs_relevant = single_domain in (None, routing.DOMAIN_LABS)
     parts = [CORE_HUB_PROMPT.rstrip()]
     if not bound or reads_notes:
         parts.append(CHART_SPOKE.strip())
-    if not bound or reads_notes:
+    if (not bound or reads_notes) and meds_relevant:
         parts.append(MEDS_SPOKE.strip())
-    if not bound or "get_lab_trends" in bound or lab_driver_question or has_labs:
+    if (not bound or "get_lab_trends" in bound or lab_driver_question or has_labs) \
+            and labs_relevant:
         parts.append(LABS_SPOKE.strip())
     if not bound or "predict_readmission" in bound or risk_driver_question or risk_score_question \
             or has_prediction:
@@ -1144,12 +1160,11 @@ TRANSCRIPT_NOTICE = """\
 produced again for this question — asking for one is refused, not repeated. What is named
 here is the whole of the withdrawal.
 
-Answer from that block, and from every other tool still in front of you. A follow-up
-about a medication list or a laboratory trajectory is answered by the tool that owns it,
-and asking for it is expected when the question needs it: a section read being withdrawn
-says nothing about `discharge_medications` or `get_lab_trends`. If neither the block nor
-any available tool covers the question, say plainly what you could not determine rather
-than repeating a search that has already been made."""
+Answer from that block, and from every other tool still in front of you. A withdrawal is a
+statement about what this session has already read, not about the question: the tool is
+gone because its result is in the block. If neither the block nor any available tool covers
+the question, say plainly what you could not determine rather than repeating a search that
+has already been made."""
 
 
 #: The per-round notice naming analytes the question asked for and nobody has read.

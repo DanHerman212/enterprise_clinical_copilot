@@ -131,7 +131,7 @@ def _run(*tools, replayed=None, wants=("rag_search_sections", "rag_search")):
     async def replay(toolbox, turns, **_kwargs):
         return [], list(replayed or []), []
 
-    with patch.object(model_gateway, "build_llm", lambda name: model), \
+    with patch.object(model_gateway, "build_llm", lambda name, **_kw: model), \
             patch.object(graph, "replay_messages", replay):
         state = asyncio.run(graph.ask(
             box, "what was the inpatient diagnosis?", hadm_id=HADM_ID, model="test",

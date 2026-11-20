@@ -81,7 +81,7 @@ def _box():
 
 
 def _run(model, question=THE_CHIP, **kwargs):
-    with patch.object(model_gateway, "build_llm", lambda name: model):
+    with patch.object(model_gateway, "build_llm", lambda name, **_kw: model):
         return asyncio.run(
             graph.ask(_box(), question, hadm_id=90000015, model="test", **kwargs)
         )

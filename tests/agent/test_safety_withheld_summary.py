@@ -107,7 +107,7 @@ class _SilentModel:
 def _run(model, toolbox=None):
     encounter.set_current(encounter.INPATIENT)
     box = toolbox if toolbox is not None else _SearchToolbox()
-    with patch.object(model_gateway, "build_llm", lambda name: model):
+    with patch.object(model_gateway, "build_llm", lambda name, **_kw: model):
         state = asyncio.run(run_command(
             box, PUBMED, 90000059, question="/pubmed Hypothermia", model="test-model",
             topic="Hypothermia",

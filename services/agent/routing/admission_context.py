@@ -26,12 +26,26 @@ consequences, each of them the reason for this shape:
 Failure is silence, not a broken turn: a profile that cannot be read leaves the
 prompt exactly as it was. An answer that says the note does not document something
 is worse than one that knows — but far better than a turn that fails.
+
+The read cache
+--------------
+Two of the calls a turn makes before it asks the model anything are deterministic reads of
+this admission: the profile above, and the passage re-resolution `graph.replay_messages`
+performs for a stored turn whose payload was not kept. Both returned the same payload on
+every turn of a conversation, and a six-turn thread therefore paid for the same reads six
+times before the model saw a word. `cached_read` holds one answer for a few minutes, keyed
+strictly by `(hadm_id, tool, arguments)`, so no answer can cross between patients and no
+two different calls can share an entry.
 """
 
 from __future__ import annotations
 
+import collections
+import copy
+import json
 import logging
-from typing import Any
+import time
+from typing import Any, Mapping
 
 from services.agent.routing import encounter
 
@@ -173,7 +187,8 @@ async def hydrate(box: Any, hadm_id: int | None) -> str:
     if not hadm_id or box is None:
         return ""
     try:
-        payload = await box.call(PROFILE_TOOL, {"hadm_id": int(hadm_id)})
+        payload = await cached_read(
+            box, PROFILE_TOOL, {"hadm_id": int(hadm_id)}, hadm_id=hadm_id)
     except Exception:  # noqa: BLE001 — a missing profile may not fail the turn
         _LOG.warning("admission profile pre-flight failed for hadm %s", hadm_id,
                      exc_info=True)
@@ -189,3 +204,108 @@ async def hydrate(box: Any, hadm_id: int | None) -> str:
     profile = payload.get("profile") or {}
     encounter.set_current(encounter.classify(profile))
     return render(hadm_id, profile)
+
+
+# ---------------------------------------------------------------------------
+# The short-lived read cache.
+# ---------------------------------------------------------------------------
+
+#: How long one answer is reused. Minutes, not hours: a deployment's reads are
+#: deterministic within a revision, and a revision that lands mid-conversation should not
+#: be invisible to the next turn for longer than it takes somebody to notice.
+READ_CACHE_TTL_SECONDS = 300.0
+
+#: How many answers are held at once. A bound is a requirement rather than a courtesy: the
+#: service is long-lived and the key carries an admission id, so an unbounded table keyed
+#: on request-shaped data is a leak with a friendly name. 128 entries is a few
+#: conversations' worth of pre-flight and replay reads on a warm instance.
+READ_CACHE_MAX_ENTRIES = 128
+
+#: The reads this cache may answer: deterministic reads of ONE admission's record, and
+#: nothing else. `search_literature` is deliberately absent — it asks a third party, and a
+#: five-minute-old cohort is a different answer rather than a cheaper one.
+CACHEABLE_READS: frozenset[str] = frozenset({
+    PROFILE_TOOL, "rag_search", "rag_search_sections", "discharge_medications",
+    "get_lab_trends", "predict_readmission",
+})
+
+_CACHE_KEY = tuple  # (tool, hadm_id, canonical arguments)
+
+_READ_CACHE: "collections.OrderedDict[tuple, tuple[float, Any]]" = collections.OrderedDict()
+
+#: The clock, as a module attribute so a test can move it without sleeping through a TTL.
+_clock = time.monotonic
+
+
+def _canonical(arguments: Mapping[str, Any] | None) -> str:
+    """One spelling per argument set, so two identical calls share one entry.
+
+    `sort_keys` is the whole of it: `{"hadm_id": 1, "query": "x"}` and the same pair in
+    the other order are one call. `default=str` because a stored turn may carry an id as
+    an integer where a live call carries it as a string — both are the same call, and
+    neither may raise here.
+    """
+    return json.dumps(dict(arguments or {}), sort_keys=True, default=str)
+
+
+def clear_read_cache() -> None:
+    """Forget every cached answer. Called between tests, and by nothing in the service."""
+    _READ_CACHE.clear()
+
+
+def read_cache_size() -> int:
+    """How many answers are currently held — for a test, and for a log line."""
+    return len(_READ_CACHE)
+
+
+def _served(box: Any) -> bool:
+    """Whether this toolbox talks to a served MCP endpoint rather than standing in for one.
+
+    The cache must never make two tests share an answer, and a test's toolbox is a stub by
+    construction: it either replaces the class entirely or carries a `call` of its own on
+    the instance. A served toolbox holds a `ClientSession` and resolves `call` from its
+    class, so those two facts are the test. An offline seam therefore gets every call
+    straight through, with nothing written and nothing read.
+    """
+    if getattr(box, "session", None) is None:
+        return False
+    return "call" not in getattr(box, "__dict__", {})
+
+
+async def cached_read(box: Any, name: str, arguments: Mapping[str, Any],
+                      *, hadm_id: int | None) -> Any:
+    """One deterministic read of one admission, answered from the cache when possible.
+
+    The key is `(tool, hadm_id, canonical arguments)`, and the admission is an explicit part
+    of it rather than something inferred from the arguments: a call whose arguments happen
+    to omit `hadm_id` must still never share an entry with another patient's read.
+
+    Three things invalidate: the TTL, the entry count, and a payload that reports an error.
+    An error is not cached at all — a transport failure pinned for five minutes would
+    outlive the outage that caused it — and an expired entry is dropped rather than served.
+
+    A miss is invisible. The caller makes exactly the call it always made, the answer it
+    gets back is the tool's own object, and the table keeps a snapshot: a caller that
+    projects or prunes a payload (as the replay does) must not be able to change what the
+    next read of that tool returns.
+    """
+    if name not in CACHEABLE_READS or not _served(box):
+        return await box.call(name, dict(arguments or {}))
+    key = (str(name), None if hadm_id is None else int(hadm_id), _canonical(arguments))
+    now = _clock()
+    held = _READ_CACHE.get(key)
+    if held is not None:
+        expiry, snapshot = held
+        if now < expiry:
+            _READ_CACHE.move_to_end(key)
+            _LOG.debug("read cache hit: %s for hadm %s (%d held)",
+                       name, hadm_id, len(_READ_CACHE))
+            return copy.deepcopy(snapshot)
+        _READ_CACHE.pop(key, None)
+    payload = await box.call(name, dict(arguments or {}))
+    if isinstance(payload, dict) and payload.get("error"):
+        return payload
+    _READ_CACHE[key] = (now + READ_CACHE_TTL_SECONDS, copy.deepcopy(payload))
+    while len(_READ_CACHE) > READ_CACHE_MAX_ENTRIES:
+        _READ_CACHE.popitem(last=False)
+    return payload

@@ -642,19 +642,24 @@ def bind(model: Any, request: Mapping[str, Any]) -> Any:
 #
 # Stated here, in one table, so that no call site has to know what a provider calls a
 # level, and so that a reader can see every call in the pipeline that is NOT running on
-# the default allowance. Today that is `/ehr` (both its helpers and its briefing), `/meds`
-# and `/labs`: `/pubmed` and every free-text turn run `default`, which sets nothing at all
-# and leaves the deployment's own settings in place.
+# the default allowance. Everything the pipeline does names `low`: `/ehr`'s two helpers,
+# `/ehr`'s briefing, `/meds`'s extraction, `/labs`'s description, `/pubmed`'s synthesis,
+# and every model turn of the free-text reasoning loop.
 # ---------------------------------------------------------------------------
 
 CALL_PROFILE_DEFAULT = "default"
-CALL_PROFILE_FAST_HELPER = "fast_helper"
-CALL_PROFILE_EHR_SYNTHESIS = "ehr_synthesis"
+CALL_PROFILE_LOW = "low"
 
-#: The two levels the Gemini 3 family is asked for, in its own vocabulary. Stated as
-#: constants because three modules read them back — this table, the trace, and the tests
-#: that assert a client was built without the deprecated budget beside them.
-THINKING_MINIMAL = "minimal"
+#: The level the low profile asks for, in the Gemini family's own vocabulary.
+#:
+#: `minimal` is deliberately not a value here. `gemini-3.8-flash` and `gemini-3.1-pro`
+#: reject `THINKING_LEVEL_MINIMAL` with `400 INVALID_ARGUMENT`, so a profile that named it
+#: bought a refused call through `_BudgetFallback` and then the same answer at `low` — one
+#: wasted round trip per helper step, per command, on every turn (measured 2026-11-15
+#: against the live endpoint). `low` is the floor these models accept, and it is the level
+#: at which a Gemini 3 model may still plan before writing, which a JSON row list and a
+#: four-section briefing both have to do: at `minimal` the medication reply came back as
+#: JSON that did not parse (measured 2026-11-15 on revision `8b01115`).
 THINKING_LOW = "low"
 
 
@@ -666,8 +671,9 @@ class CallProfile:
     takes a count: `langchain-google-genai` marks `thinking_budget` deprecated for Gemini 3
     and, on every request that carries both knobs, warns and keeps the level. So a budget
     sent beside a level was a setting that never applied, dressed as a control, and the
-    warning it produced sat in the live logs on every budgeted turn. `minimal` means the
-    model may not plan; `low` means it may still plan a comparison before writing.
+    warning it produced sat in the live logs on every budgeted turn. `low` means the model
+    may still plan a comparison before writing, and it is the lowest level either pinned
+    model accepts.
 
     `thinking_budget` is retained for a family that publishes a token budget and no level.
     No profile sets one today: every profile names a level or nothing at all.
@@ -694,22 +700,16 @@ class CallProfile:
 
 CALL_PROFILES: dict[str, CallProfile] = {
     # Nothing set: the deployment's own settings, exactly as before this table existed.
-    # Every served answer, every free-text turn and `/pubmed`.
+    # A caller that names no profile gets it, and so does a name this table does not know.
+    # No served route reaches it any more: the free-text loop and every command name `low`.
     CALL_PROFILE_DEFAULT: CallProfile(name=CALL_PROFILE_DEFAULT),
-    # The two `/ehr` PubMed helper steps and the `/labs` formatting turn. Each returns a
-    # short answer over material already in front of it — a query and a few anchor
-    # phrases, a rate and the sentence stating it, a description of a panel. `minimal` is
-    # the lowest level Gemini 3 accepts: the model may not plan, which is the whole of the
-    # saving, and it still writes whole sentences because no ceiling bounds it.
-    CALL_PROFILE_FAST_HELPER: CallProfile(
-        name=CALL_PROFILE_FAST_HELPER, thinking_level=THINKING_MINIMAL,
-    ),
-    # The `/ehr` briefing and the `/meds` extraction. Both have to hold a structure in mind
-    # before writing it: four named sections, or a JSON row list that has to parse. `low` is
-    # the level at which a Gemini 3 model may still plan; at `minimal` the medication reply
-    # came back as JSON that did not parse (measured 2026-11-15 on revision `8b01115`).
-    CALL_PROFILE_EHR_SYNTHESIS: CallProfile(
-        name=CALL_PROFILE_EHR_SYNTHESIS, thinking_level=THINKING_LOW,
+    # One level for every model call the pipeline makes: the two `/ehr` PubMed helpers,
+    # the `/ehr` briefing, `/meds`'s extraction, `/labs`'s description, `/pubmed`'s
+    # synthesis and every turn of the reasoning loop. `low` is the floor the pinned models
+    # accept, so this is the least thinking a turn can buy — and asking for less was not
+    # cheaper, it was a refused request followed by this same level.
+    CALL_PROFILE_LOW: CallProfile(
+        name=CALL_PROFILE_LOW, thinking_level=THINKING_LOW,
     ),
 }
 
@@ -720,11 +720,33 @@ def call_profile(name: str | None) -> CallProfile:
     An unknown name is the default rather than an error: the profiles are a performance
     control, and a typo in one must not be able to stop an answer. What it can do is make
     a run slower than intended, so the name a call actually used is written to the trace
-    (`graph._trace_metadata`) and a run that meant `fast_helper` is visible as one that
-    did not get it.
+    (`graph._trace_metadata`) and a run that meant `low` is visible as one that did not
+    get it.
     """
     return (CALL_PROFILES.get(str(name or CALL_PROFILE_DEFAULT))
             or CALL_PROFILES[CALL_PROFILE_DEFAULT])
+
+
+def resolved_thinking_level(name: str | None) -> str | None:
+    """The thinking tier a call profile actually runs at, in words a trace can show.
+
+    A profile that names a level states it. The default names nothing and leaves the
+    deployment's own construction setting in place, so that setting is the answer — read
+    here rather than left out, because `None` on every trace was indistinguishable from
+    "no thinking at all", which is exactly what the field this replaces said on every
+    turn (`thinking_budget: None`, on a pipeline whose calls all thought at some level).
+
+    Returned as a WORD (`low`, or the deployment's own `medium`) rather than as a budget:
+    the models in the registry have deprecated the token budget in favour of a level, so
+    a number would be a measurement of a knob that no longer applies.
+    """
+    chosen = call_profile(name)
+    if chosen.thinking_level:
+        return chosen.thinking_level
+    from services.mcp import config
+
+    effort = str(config.GEMINI_REASONING_EFFORT or "").strip()
+    return effort or None
 
 
 def _is_gemini_3(profile_: ModelProfile) -> bool:
@@ -765,15 +787,28 @@ def call_profile_parameters(profile_: ModelProfile, call_profile_: CallProfile, 
     if fallback:
         out.update(construction_parameters(profile_, call_profile_.fallback_effort))
         return out
+    level = call_profile_.thinking_level
     if profile_.family == GOOGLE:
-        if call_profile_.thinking_level is not None and _is_gemini_3(profile_):
-            out["thinking_level"] = call_profile_.thinking_level
+        if level is not None and _is_gemini_3(profile_):
+            out["thinking_level"] = level
         elif call_profile_.thinking_budget is not None:
             out["thinking_budget"] = call_profile_.thinking_budget
-    elif profile_.family == ANTHROPIC and call_profile_.thinking_budget:
-        out["thinking"] = {
-            "type": "enabled", "budget_tokens": call_profile_.thinking_budget,
-        }
+    elif profile_.family == META and level is not None:
+        # The GCP OpenAI-compatible Responses surface publishes reasoning EFFORT as an
+        # object, which is the same knob under a third spelling. Sending a token budget
+        # here would be a parameter nobody has measured.
+        out["reasoning"] = {"effort": level}
+    elif profile_.family == ANTHROPIC and level is not None:
+        # Anthropic states thinking as a MODE rather than as a level, and the profile's
+        # extraction mode is the lowest-thinking mode this table declares. A call profile
+        # that asks for less thinking is therefore expressed with that mode rather than
+        # with an invented one; `budget_tokens` is what the profile would carry if it
+        # published a budget instead, and nothing does today.
+        out.update(construction_parameters(profile_, EFFORT_EXTRACTION))
+        if call_profile_.thinking_budget:
+            out["thinking"] = {
+                "type": "enabled", "budget_tokens": call_profile_.thinking_budget,
+            }
     return out
 
 
@@ -788,7 +823,7 @@ def budget_refused(exc: BaseException) -> bool:
     if classify_error(exc) != CONTENT:
         return False
     text = f"{type(exc).__name__} {exc}".lower()
-    return "thinking" in text or "budget" in text
+    return "thinking" in text or "budget" in text or "reasoning" in text
 
 
 class _BudgetFallback:
@@ -1176,6 +1211,15 @@ def _meta_client(profile_: ModelProfile, *, effort: str,
         "api_key": BearerToken(),
         "use_responses_api": True,
         "stream_usage": True,
+        # Parity with the served Gemini client, for the reason the bounds exist at all:
+        # an evaluation whose arms differ in temperature, answer ceiling, timeout or retry
+        # budget is comparing two contracts rather than two models. `max_tokens` is this
+        # client's spelling of the ceiling and reaches the Responses API as
+        # `max_output_tokens`; `request_timeout` is its spelling of the per-call bound.
+        "temperature": 0,
+        "max_tokens": config.GEMINI_MAX_OUTPUT_TOKENS,
+        "request_timeout": MODEL_TIMEOUT_SECONDS,
+        "max_retries": MODEL_MAX_RETRIES,
     }
     kwargs.update(construction_parameters(profile_, effort))
     kwargs.update(extra or {})
@@ -1303,7 +1347,7 @@ def chat_model(model_id: str | None, *, safety_profile: str = SAFETY_SERVED,
             f"no client is registered for the {profile_.family!r} family")
 
     primary = build()
-    if not ({"thinking_budget", "thinking", "thinking_level"}
+    if not ({"thinking_budget", "thinking", "thinking_level", "reasoning"}
             & set(call_profile_parameters(profile_, wanted))):
         # Nothing this family accepts was named, so there is nothing to fall back from.
         return _attach(primary, profile_)

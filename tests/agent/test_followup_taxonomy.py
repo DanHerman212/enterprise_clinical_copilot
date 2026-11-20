@@ -17,12 +17,16 @@ So each family is driven twice here, from the same table:
 
 The third question is about what the model is *offered*. `route` tests the model's own
 tool calls before any exemption, so a declaration can stop the forced round and cannot
-stop a voluntary one. For `P6` and `_LITERATURE` the tool whose result the chip was
-generated from used to be bound on the click — `predict_readmission` by the wording
-`satisfies routing.asks_why_risk_driver`, `search_literature` by the words "published
-literature" that also make the chip routable — so a model that took the offer re-entered
-the loop. Those two are now withheld on a declaration, and the last two tests are the
-pair: absent when declared, still bound when a person types the same sentence.
+stop a voluntary one. For `P6` the tool whose result the chip was generated from used to
+be bound on the click — `predict_readmission` matched `routing.asks_why_risk_driver` — so
+a model that took the offer re-entered the loop. It is withheld on a declaration by
+`graph._still_bound`, which reads the record rather than the wording: the prediction is in
+the replay, so there is nothing for a second call to return.
+
+The one exception is `_LITERATURE`, and it is a difference in what the chip ASKS rather
+than in how it arrived: "What else does the published literature report on {topic}?" wants
+MORE records than the thread holds, so a declared literature follow-up keeps
+`search_literature` bound. Every other crossing stays absent on a click.
 """
 
 from __future__ import annotations
@@ -209,13 +213,10 @@ CASES: tuple[_Case, ...] = (
         question="/risk",
         state=_risk_state(),
         crossing="predict_readmission",
-        # The sentence lost the word "driver", and "driver" was the token
-        # `routing.asks_why_risk_driver` needed to bind the predictor on wording alone.
-        # That is the accepted cost of the grammar fix: a clinician who TYPES this
-        # sentence is answered from the record without the model's attribution, and a
-        # clinician who CLICKS it is answered from the prediction the transcript already
-        # holds. See `test_the_risk_chip_sentence_typed_reaches_the_record_not_the_model`.
-        typed_reaches=False,
+        # The sentence names a direction ("increase") beside a readmission term, which is
+        # the grammar `routing.asks_why_risk_driver` was taught on 2026-11-20. A person who
+        # types it therefore reaches the attribution, and a click still does not: the
+        # prediction is already in the replay, so `_still_bound` withdraws the tool.
     ),
     _Case(
         id="P7-lab-abnormal",
@@ -246,7 +247,9 @@ CASES: tuple[_Case, ...] = (
         question="/pubmed anticoagulation",
         state=_literature_state(),
         scope="literature",
-        crossing="search_literature",
+        # No `crossing`: the chip asks for records the thread does NOT hold, so a declared
+        # click keeps the search. `test_a_declared_literature_chip_keeps_its_search` is the
+        # positive half of what the other cases assert as an absence.
         answer="Anticoagulation reduces stroke risk in atrial fibrillation ^[PMID: 1000].",
     ),
 )
@@ -324,7 +327,7 @@ def _replay(case: _Case) -> list[dict[str, Any]]:
 
 
 def _run(case: _Case, model: _Model, **kwargs) -> dict:
-    with patch.object(model_gateway, "build_llm", lambda name: model):
+    with patch.object(model_gateway, "build_llm", lambda name, **_kw: model):
         return asyncio.run(graph.ask(_box(), case.chip, hadm_id=90000015,
                                      model="test", **kwargs))
 
@@ -382,8 +385,7 @@ def test_a_declared_chip_is_not_offered_the_tool_it_was_generated_from(case: _Ca
 def test_the_same_sentence_typed_still_reaches_the_tool(case: _Case):
     """The control, and the reason the withholding is keyed on the declaration rather
     than on the wording: a person who TYPES this question has no transcript behind it, so
-    the tool is the only way the question can be answered at all. The literature chip's
-    wording is unchanged, so this pairs with the test above."""
+    the tool is the only way the question can be answered at all."""
     model = _Model()
 
     _run(case, model, turns=[])
@@ -391,27 +393,42 @@ def test_the_same_sentence_typed_still_reaches_the_tool(case: _Case):
     assert case.crossing in model.bound[0]
 
 
-def test_the_risk_chip_sentence_typed_reaches_the_record_not_the_model():
-    """The cost of the grammar fix, asserted rather than left to be discovered.
+def test_a_declared_literature_chip_keeps_its_search():
+    """The one crossing a declaration does not withdraw, and why it is different.
 
-    `_RISK_DRIVER` used to end "…readmission risk driver?", and "driver" was doing two
-    jobs: it was part of the sentence and it was the token `routing.asks_why_risk_driver`
-    matched. Dropping it for grammar unbound `predict_readmission` from the wording, which
-    is right for the chip — its evidence is the replayed prediction — and a loss for
-    anyone who types the same sentence, because nothing in it asks for the model's own
-    attribution any more.
+    Every other chip asks about evidence the thread already holds, so a retrieval on the
+    click can only re-read it. "What else does the published literature report on {topic}?"
+    asks for records the thread does NOT hold: withholding the search left the chip
+    answerable only from the records it was generated from, which is the opposite of what
+    it asks. The tool stays bound, and it is the only one the literature branch adds.
+    """
+    literature_case = next(case for case in CASES if case.id == "literature")
+    model = _Model()
 
-    Pinned as expected behaviour so it can be a decision rather than a surprise. If typed
-    access to the attribution matters more than this wording, the sentence to use is
-    "Why does {driver} drive this patient's readmission risk?" — grammatical, and it
-    keeps the cue.
+    _run(literature_case, model, turns=_replay(literature_case), intent="follow_up")
+
+    assert "search_literature" in model.bound[0]
+    assert model.choices == [None], "the chip still answered in one pass"
+
+
+def test_the_risk_chip_sentence_typed_now_reaches_the_attribution():
+    """The console's own driver wording is a driver question, and that is a repair.
+
+    `_RISK_DRIVER` reads "Why does {driver} increase this patient's readmission risk?" and
+    contains none of the words the predicate began with, so the sentence typed by a
+    clinician bound nothing and was answered from the record without the model's
+    attribution — the defect `routing.asks_why_risk_driver` exists to prevent. A direction
+    verb beside a readmission term is now recognised, so the typed sentence reaches the
+    tool. A CLICK still does not: the prediction is in the replay, and `_still_bound`
+    withdraws a retrieval whose result the record already holds.
     """
     risk_case = next(case for case in CASES if case.id == "P6-risk-driver")
     model = _Model()
 
     _run(risk_case, model, turns=[])
 
-    assert "predict_readmission" not in model.bound[0]
-    # What it does reach: the standing record tools, which is what an answer without the
-    # model's attribution is composed from.
-    assert "rag_search" in model.bound[0]
+    assert "predict_readmission" in model.bound[0]
+    # And the click, which has the prediction already, does not go back for it.
+    clicked = _Model()
+    _run(risk_case, clicked, turns=_replay(risk_case), intent="follow_up")
+    assert "predict_readmission" not in clicked.bound[0]

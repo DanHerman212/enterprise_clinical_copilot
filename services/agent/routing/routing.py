@@ -529,6 +529,25 @@ def asks_for_administrative_detail(question: str) -> bool:
 #: negative returns the answer that failed. Both words are required — "risk" alone is a
 #: score question, which /risk owns and this must not answer.
 _RISK_DRIVER_WORDS = frozenset({"driver", "drivers", "drives", "drive", "driving"})
+
+#: The verbs a driver question is written with when it does not use the word "driver".
+#:
+#: The console's own P6 chip is `"Why does {driver} increase this patient's readmission
+#: risk?"` (and its protective twin, `"… lower this patient's readmission risk?"`), and it
+#: carries no token this predicate matched. The chip therefore arrived as an ordinary chart
+#: question with no attribution available, which is the same failure the predicate was
+#: first written for — a question about the model's reasoning answered from the values.
+#: A direction verb beside a readmission term IS the driver question in the register a
+#: clinician reads, so the vocabulary says so instead of leaving the product's own wording
+#: unmatched. Measured 2026-11-20 (eval set v7, problem 1).
+_RISK_DRIVER_VERBS = frozenset({
+    "increase", "increases", "increased", "increasing",
+    "decrease", "decreases", "decreased", "decreasing",
+    "raise", "raises", "raised", "raising",
+    "lower", "lowers", "lowered", "lowering",
+    "reduce", "reduces", "reduced", "reducing",
+    "contribute", "contributes", "contributed", "contributing",
+})
 #: The words that ask for a reason. `what` and `which` are here because a driver question
 #: is written that way as often as it is written with "why" — "what's driving that?",
 #: "what drives her risk?", "which factors drive it?" — and the interrogative is doing the
@@ -542,12 +561,19 @@ _WHY_WORDS = frozenset({"why", "explain", "explains", "explained", "explaining",
 
 
 def asks_why_risk_driver(question: str) -> bool:
-    """Whether this question asks for the model's reasoning about a risk driver."""
+    """Whether this question asks for the model's reasoning about a risk driver.
+
+    A readmission term, a word asking for a reason, and either the noun "driver" or a verb
+    that names a direction. The third term is what the console's own chip grammar needs:
+    `"Why does oncology history increase this patient's readmission risk?"` says everything
+    a driver question says and uses none of the words this test began with.
+    """
     tokens = (question or "").lower().translate(_PUNCTUATION).split()
     if not mentions_readmission(question):
         return False
-    return (any(token in _RISK_DRIVER_WORDS for token in tokens)
-            and any(token in _WHY_WORDS for token in tokens))
+    names_a_driver = (any(token in _RISK_DRIVER_WORDS for token in tokens)
+                      or any(token in _RISK_DRIVER_VERBS for token in tokens))
+    return names_a_driver and any(token in _WHY_WORDS for token in tokens)
 
 
 #: The nouns that turn a number into a REFERENCE to a record. A bare six-to-nine-digit
@@ -1095,6 +1121,14 @@ PASSAGE_TOOLS: frozenset[str] = frozenset(
     {"rag_search", "rag_search_sections", "discharge_medications"}
 )
 
+#: The two tools that SEARCH the notes for a passage, as opposed to reading a structured
+#: extraction out of them. Declared here because two layers ask "does the session already
+#: hold a note passage" — `graph._redundant_on_declared_turn` when it withdraws a search
+#: whose result the record carries, and `routing.DOMAIN_TOOLS` when it says what a note
+#: question can call — and a second spelling of the pair is a place a tool rename has to
+#: be found.
+NOTE_SEARCH_TOOLS: frozenset[str] = frozenset({"rag_search", "rag_search_sections"})
+
 #: The toolset a free-text question about PUBLISHED EVIDENCE may use.
 #:
 #: Literature plus the record retrieval the question is asked against, and nothing
@@ -1109,6 +1143,144 @@ PASSAGE_TOOLS: frozenset[str] = frozenset(
 LITERATURE_QUESTION_TOOLS: frozenset[str] = frozenset(
     set(LITERATURE_TOOLS) | set(PASSAGE_TOOLS)
 ) - {"discharge_medications"}
+
+
+# ===========================================================================
+# Question domains.
+#
+# Which KIND of question a turn is, so a single-domain question binds only the tools and
+# the prompt rules it can use. The failure this closes is over-binding rather than
+# over-answering: a medication chip was offered `get_lab_trends`, and a lab chip was
+# offered `discharge_medications`, so a model with four tools and one question had three
+# ways to spend a call that could not improve its answer — and the laboratory rules it was
+# given described a panel nothing in the question asked about.
+#
+# Deliberately a vocabulary of the words that appear in the questions this product
+# generates and in the register its readers type. A question the vocabulary does not
+# recognise is classified as NO domain, and no domain means no narrowing: the standing set
+# is bound exactly as before. That direction matters — a wrong narrowing withholds a tool
+# the answer needed, while no narrowing only costs what the turn cost before this existed.
+# ===========================================================================
+
+DOMAIN_MEDICATIONS = "medications"
+DOMAIN_CARE_PLAN = "care_plan"
+DOMAIN_RISK = "risk"
+DOMAIN_LABS = "labs"
+DOMAIN_CHART = "chart"
+DOMAIN_LITERATURE = "literature"
+
+_MEDICATION_DOMAIN_CUES = frozenset({
+    "medication", "medications", "med", "meds", "medicine", "medicines",
+    "drug", "drugs", "dose", "doses", "dosing", "dosage", "dosages",
+    "regimen", "regimens", "taper", "tapers", "tapering", "wean", "weaning",
+    "prescription", "prescriptions", "prescribed", "refill", "refills",
+    "anticoagulant", "anticoagulants", "anticoagulation", "statin", "statins",
+})
+_MEDICATION_DOMAIN_PHRASES = (
+    "blood thinner", "blood thinners", "medication list", "medication plan",
+    "discharge prescription", "discharge prescriptions",
+)
+
+_CARE_PLAN_DOMAIN_CUES = frozenset({
+    "restriction", "restrictions", "precaution", "precautions", "diet",
+    "appointment", "appointments", "outpatient", "clinic", "clinics",
+})
+_CARE_PLAN_DOMAIN_PHRASES = (
+    "follow up", "followup", "warning sign", "warning signs", "red flag", "red flags",
+    "clinic visit", "clinic visits", "activity restriction", "activity restrictions",
+    "diet instruction", "diet instructions", "when to return", "return precautions",
+)
+
+_LAB_DOMAIN_CUES = frozenset({
+    "lab", "labs", "laboratory", "laboratories", "panel", "panels", "analyte",
+    "analytes", "trend", "trends", "trajectory", "trajectories", "abnormal",
+})
+_LAB_DOMAIN_PHRASES = ("reference range", "reference ranges", "within range")
+
+_CHART_DOMAIN_CUES = frozenset({
+    "diagnosis", "diagnoses", "note", "notes", "course", "summary", "summarize",
+    "summarise", "summarizing", "summarising", "admitted", "admission", "admissions",
+    "hospitalization", "hospitalisation", "chart", "stay",
+})
+
+#: The tools a question in ONE domain can use. Applied as an intersection, so a domain can
+#: only ever take tools away from the standing set — never add one that
+#: `_freetext_allowed`'s own conditions did not admit.
+DOMAIN_TOOLS: dict[str, frozenset[str]] = {
+    DOMAIN_MEDICATIONS: frozenset({
+        "discharge_medications", "rag_search", "rag_search_sections"}),
+    DOMAIN_CARE_PLAN: frozenset({"rag_search", "rag_search_sections"}),
+    DOMAIN_RISK: frozenset({
+        "predict_readmission", "rag_search", "rag_search_sections"}),
+    DOMAIN_LABS: frozenset({"get_lab_trends", "rag_search"}),
+    DOMAIN_CHART: frozenset({"rag_search", "rag_search_sections"}),
+    DOMAIN_LITERATURE: LITERATURE_QUESTION_TOOLS,
+}
+
+
+def _domain_text(question: str) -> str:
+    """The question lower-cased to word runs, without the composed admission sentence.
+
+    `compose_question` appends `For admission <hadm_id>.` to every question asked with a
+    patient in scope, and "admission" is a chart cue. Classifying the composed text would
+    therefore tag every question in the product as a chart question, which unions with
+    whatever else it names and narrows nothing at all.
+    """
+    text = " " + re.sub(r"[^a-z0-9]+", " ", words_of(question).lower()) + " "
+    return text
+
+
+def _names(text: str, tokens: frozenset[str], phrases: tuple[str, ...]) -> bool:
+    return (any(f" {token} " in text for token in tokens)
+            or any(phrase in text for phrase in phrases))
+
+
+def question_domains(question: str, intent: str | None = None) -> frozenset[str]:
+    """Every subject this question names, as domain names.
+
+    Empty when nothing in the vocabulary matches, and empty means "bind the standing set":
+    see the section comment for why that is the safe direction. A question that names two
+    subjects returns both, and two domains are answered with the union of their tools — a
+    question about the medication plan and the creatinine trend needs both tools, and
+    answering it with either one alone is the failure that produced this rule.
+    """
+    text = _domain_text(question)
+    domains: set[str] = set()
+    if not text.strip():
+        return frozenset()
+    if _names(text, _MEDICATION_DOMAIN_CUES, _MEDICATION_DOMAIN_PHRASES):
+        domains.add(DOMAIN_MEDICATIONS)
+    if _names(text, _CARE_PLAN_DOMAIN_CUES, _CARE_PLAN_DOMAIN_PHRASES):
+        domains.add(DOMAIN_CARE_PLAN)
+    if (names_an_analyte(question)
+            or _names(text, _LAB_DOMAIN_CUES, _LAB_DOMAIN_PHRASES)):
+        domains.add(DOMAIN_LABS)
+    if mentions_readmission(question) or intent in {"risk", "risk_driver"}:
+        domains.add(DOMAIN_RISK)
+    if asks_for_literature(question) or intent == "literature":
+        domains.add(DOMAIN_LITERATURE)
+    if _names(text, _CHART_DOMAIN_CUES, ()):
+        domains.add(DOMAIN_CHART)
+    return frozenset(domains)
+
+
+def narrow_to_domains(allowed: frozenset[str],
+                      domains: frozenset[str]) -> frozenset[str]:
+    """`allowed` reduced to the tools one domain can use, when the question names one.
+
+    Two domains, no domains, or a domain this table does not describe: `allowed` comes back
+    unchanged. An intersection that would leave nothing is also discarded rather than
+    returned, because an empty tool set is not a narrowing — it is a turn with no way to
+    answer, and a vocabulary mistake must not be able to produce one.
+    """
+    if len(domains) != 1:
+        return allowed
+    preferred = DOMAIN_TOOLS.get(next(iter(domains)))
+    if not preferred:
+        return allowed
+    narrowed = allowed & preferred
+    return narrowed or allowed
+
 
 #: Results a caller must keep if it wants to replay a turn cheaply, because the tool
 #: cannot be re-run to the same value (an estimate) or is not reproducible offline.

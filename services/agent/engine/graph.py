@@ -107,6 +107,7 @@ from services.agent.engine import prompts
 from services.agent.telemetry import observability
 from services.agent.routing import routing
 from services.agent.routing import encounter
+from services.agent.routing.admission_context import cached_read
 from services.agent.telemetry import stages
 # The feature vocabulary, from the shared leaf. Read by `_unqueried_analytes` to decide
 # whether an analyte a question names is already explained by the estimate's own drivers
@@ -169,6 +170,14 @@ class AgentState(TypedDict):
     #: Read by `_unqueried_analytes` so the overlay never names an analyzer the model cannot
     #: fetch — an instruction it cannot obey is worse than silence.
     allowed_tools: frozenset[str]
+    #: Whether the console DECLARED this turn as a follow-up chip, and whether it declared
+    #: it as a risk-driver drill-down. Facts about where the question came from rather than
+    #: about its wording, and `_still_bound` reads them to withdraw a retrieval whose
+    #: result the session record already holds: a chip exists only because that result is
+    #: in the conversation, so a call for it again can only re-read what the model was
+    #: already shown.
+    follow_up_declared: bool
+    risk_driver_question: bool
     #: The admission this turn is about, carried on the state because the evidence record
     #: is scoped to it. It arrives as an `ask` parameter and is needed downstream by
     #: anything that has to decide what "this patient" means. `None` for a turn with no
@@ -463,7 +472,11 @@ def _freetext_allowed(risk_driver_question: bool,
                       wants_literature: bool,
                       lab_driver_question: bool = False,
                       declared_follow_up: bool = False,
-                      risk_score_question: bool = False) -> frozenset[str]:
+                      risk_score_question: bool = False,
+                      *,
+                      question: str = "",
+                      intent: str | None = None,
+                      domains: frozenset[str] | None = None) -> frozenset[str]:
     """The tools the reasoning loop may call on this turn.
 
     `routing.FREETEXT_TOOLS` is the standing boundary: a command's tool is absent rather
@@ -496,6 +509,13 @@ def _freetext_allowed(risk_driver_question: bool,
     `route` tests the model's own tool calls before every exemption. Absent rather than
     refused, for the same reason the command tools are absent.
 
+    `search_literature` is the one exception, and it is a difference in what the question
+    asks rather than in how it arrived: `followups._LITERATURE` reads
+    "What else does the published literature report on {topic}?" — a request for MORE
+    records than the thread holds. Withholding the search there meant the chip could never
+    be answered from anything but the records it was generated from, so a declared
+    literature follow-up keeps the tool while every other crossing stays absent.
+
     A driver question also NARROWS the standing set, declared or not. `get_lab_trends` is
     admitted to free text for the lab drill-down, and a driver question kept it
     unconditionally: asked why prior inpatient days drive the score, the loop read a lab
@@ -503,6 +523,14 @@ def _freetext_allowed(risk_driver_question: bool,
     a utilization answer (measured in the production UI, `agent-00176-ngw`, 2026-10-24).
     The series documents nothing such a question asked, so it is withheld unless the
     driver IS an analyte (`routing.asks_about_a_lab_analyte`).
+
+    The last narrowing is by DOMAIN, and it is the same argument one level up: a question
+    about medications has no use for a laboratory panel, a laboratory question has no use
+    for the discharge medication extraction, and a note question needs neither. `routing`
+    owns the vocabulary (`routing.question_domains` and `routing.narrow_to_domains`); a
+    question that names one subject is answered with the tools of that subject, a question
+    that names two keeps the union, and a question the vocabulary does not recognise keeps
+    the standing set unchanged.
 
     What is NOT relaxed: the model never sees a raw float. The projection in
     `mcp_client._presented_for_model` shows the score and the threshold as the display
@@ -517,12 +545,20 @@ def _freetext_allowed(risk_driver_question: bool,
         # those are; the reason it is a narrowing rather than a widening is in
         # `LITERATURE_QUESTION_TOOLS`'s own comment (Phase 4; audit §2.1).
         allowed = set(routing.LITERATURE_QUESTION_TOOLS)
+    elif wants_literature:
+        # A declared follow-up that asks for published records: the search is the answer
+        # to "what ELSE", so it stays bound (see the docstring), and it is the only tool
+        # a literature question adds.
+        allowed.add("search_literature")
     if (risk_driver_question or risk_score_question) and not declared_follow_up:
         allowed.add("predict_readmission")
     if risk_driver_question:
         if not lab_driver_question:
             allowed.discard("get_lab_trends")
-    return frozenset(allowed)
+    if domains is None:
+        domains = (routing.question_domains(question, intent=intent)
+                   if question else frozenset())
+    return routing.narrow_to_domains(frozenset(allowed), domains)
 
 
 def names_a_command(answer: str) -> bool:
@@ -590,6 +626,57 @@ def _fulfilled_by_replay(name: str, replayed: list[dict]) -> bool:
     return any(not (call.get("args") or {}).get("analyte") for call in made)
 
 
+def _record_holds(record: Any, *source_tools: str) -> bool:
+    """Whether the session record already holds a passage one of these tools returned."""
+    wanted = set(source_tools)
+    return any(
+        str(getattr(item, "source_tool", "")) in wanted
+        for item in (getattr(record, "items", {}) or {}).values()
+    )
+
+
+#: The tools whose result a follow-up is answering FROM when the session already holds it.
+#:
+#: A chip is generated from a tool result in the conversation that offered it, and a
+#: driver bar is drawn from the prediction the same turn scored. By the time either is
+#: clicked, the result is in the session record — which is what
+#: `_redundant_on_declared_turn` turns into "there is nothing left for that tool to
+#: return".
+def _redundant_on_declared_turn(name: str, state: AgentState) -> bool:
+    """Whether the record already answers what a call to `name` would go and fetch.
+
+    The second line of the declared-turn rule, and it exists because binding nothing is
+    the only bound that holds. `followups` only offers a chip whose backing result is in
+    the turn that offered it, so on the click the evidence is already in
+    `<session_evidence_state>` and a retrieval round can only re-read it. Measured
+    2026-10-26: the `_RISK_DRIVER` and `_NOTE_OVERVIEW` chips each started a second model
+    round that fetched a section already in front of the model.
+
+    Narrow on purpose. Each entry asks the record what it HOLDS rather than assuming from
+    the question's shape: a medication chip on a thread whose `/meds` extraction is in the
+    replay withholds `discharge_medications`; a laboratory chip on a thread that has read
+    the panel withholds `get_lab_trends`; a note chip on a thread that has read a note
+    withholds both note searches. A chip clicked on a thread that does NOT hold the
+    evidence keeps its tools — an empty record withholds nothing, which is what keeps a
+    first turn from being answered out of nothing.
+    """
+    record = state.get("evidence_state")
+    if record is None:
+        return False
+    if name == "discharge_medications":
+        return _record_holds(record, "discharge_medications")
+    if name == "get_lab_trends":
+        return _record_holds(record, "get_lab_trends") or bool(
+            getattr(record, "checked_labs", {}) or {})
+    if name == "predict_readmission":
+        return getattr(record, "prediction", None) is not None
+    if name == "search_literature":
+        return bool(getattr(record, "literature", {}) or {})
+    if name in routing.NOTE_SEARCH_TOOLS:
+        return _record_holds(record, *routing.NOTE_SEARCH_TOOLS)
+    return False
+
+
 def _still_bound(allowed: frozenset[str], state: AgentState) -> frozenset[str]:
     """The tools still worth binding, given what this turn and its replay have run.
 
@@ -597,6 +684,13 @@ def _still_bound(allowed: frozenset[str], state: AgentState) -> frozenset[str]:
     when it is called: a refusal is something the model can ignore and retry, which is the
     loop `MAX_TOOL_CALLS_PER_TURN` exists to end, and the absence of anything to call is
     the only bound that holds (see `ONCE_PER_TURN`).
+
+    A DECLARED turn — a chip the console sent, or a driver bar — is also a turn whose
+    evidence is already in the record, so a retrieval tool whose result the record holds is
+    removed for the same reason: what it would return is the passage the model is already
+    reading. The two members are `state["follow_up_declared"]` and
+    `state["risk_driver_question"]`, written by `ask` from the same declarations that chose
+    the bound set, so this is one decision rather than a second opinion about the question.
     """
     spent = {
         str(call.get("name"))
@@ -611,10 +705,12 @@ def _still_bound(allowed: frozenset[str], state: AgentState) -> frozenset[str]:
     replayed = [
         call for call in state.get("replayed_tool_calls") or [] if isinstance(call, dict)
     ]
+    declared = bool(state.get("follow_up_declared") or state.get("risk_driver_question"))
     return frozenset(
         name for name in allowed
         if not (name in ONCE_PER_TURN and name in spent)
         and not (name in ONCE_PER_TRANSCRIPT and _fulfilled_by_replay(name, replayed))
+        and not (declared and _redundant_on_declared_turn(name, state))
     )
 
 
@@ -884,6 +980,8 @@ def build_graph(
     lab_driver_question: bool = False,
     follow_up_declared: bool = False,
     risk_score_question: bool = False,
+    question: str = "",
+    domains: frozenset[str] | None = None,
 ):
     """Compile the graph. `on_event` receives progress stages; None disables them.
 
@@ -896,6 +994,11 @@ def build_graph(
     unasked-for stream is the one thing this must not do: a client that renders
     stages and does not understand `answer_delta` would print the answer as progress
     rows.
+
+    `question` and `domains` are the turn's subject, passed in rather than derived here
+    so that the bound set, the prompt's spokes and the trace all read ONE classification
+    of one question (`routing.question_domains`). Without them the bound set is the
+    standing one, which is what every caller outside `ask` gets.
     """
     # Free text is the one path where the model chooses the tool, and the choice is
     # bounded by `FREETEXT_TOOLS`. Bounded is not the same as guaranteed: left on
@@ -919,9 +1022,14 @@ def build_graph(
     # force anything on the questions that need it most.
     allowed = _freetext_allowed(risk_driver_question, wants_literature,
                                lab_driver_question, follow_up_declared,
-                               risk_score_question)
+                               risk_score_question, question=question, domains=domains)
     freetext_tools = _tools(toolbox, allowed=allowed)
-    chat_model = model_gateway.build_llm(model)
+    # The reasoning loop runs at the pipeline's low thinking level: the floor the pinned
+    # models accept, and the least a retrieval turn can buy. The deployment's own level was
+    # the measured cost — fifteen to thirty seconds of deliberation before a first token on
+    # a turn whose tools had already returned the evidence (eval set v7, problem 1).
+    chat_model = model_gateway.build_llm(
+        model, call_profile=model_gateway.CALL_PROFILE_LOW)
     llm = chat_model.bind_tools(freetext_tools)
     llm_retrieving = chat_model.bind_tools(freetext_tools, tool_choice="any")
 
@@ -1154,16 +1262,25 @@ def build_graph(
 def _call_profile_for(question_kind: str | None) -> str:
     """Which call profile a turn's model work runs on, from its route alone.
 
-    Read from `model.FORMATTING_PROFILES`, the same table `deterministic` builds the
-    formatting turn from, so the trace cannot claim a different allowance from the one the
-    client was given. `/ehr` keeps a thinking budget under a smaller ceiling; `/meds` and
-    `/labs` run at no thinking with a 512-token answer; `/pubmed` and every free-text turn
-    keep the served allowance, because their model work reasons over prose a reader will
-    read.
+    Two readers, and they must agree. For a command the answer comes from
+    `model.FORMATTING_PROFILES`, the same table `deterministic` builds the formatting turn
+    from, so the trace cannot claim a different allowance from the one the client was
+    given. Every command in that table names the low profile: the level the pinned models
+    accept as their floor, and the level at which they may still plan before writing a
+    sectioned briefing, a JSON row list, a panel description or a comparison over
+    published records.
 
-    A turn that is not a command returns the default, which is also what a free-text turn
-    does — nothing in that path names a profile at all.
+    For anything else — every free-text turn — the answer is the profile the reasoning loop
+    itself builds its client with (`build_graph` passes `CALL_PROFILE_LOW`), stated here
+    rather than read from a table keyed by command. It used to fall through to the default,
+    which was correct when the loop named no profile and became a mislabel the moment it
+    did: `turn.py` opens the turn span and writes this answer as the trace's metadata
+    before `ask` runs, so every free-text trace said `llm_profile: default`,
+    `thinking_level: medium` over a client that ran at `low` — measured on the 2026-11-20
+    warm smoke, where the free-text turns finished in 2.8–5.2 s at that supposed level.
     """
+    if not routing.is_command(question_kind):
+        return model_gateway.CALL_PROFILE_LOW
     return model_gateway.formatting_profile(question_kind)
 
 
@@ -1210,11 +1327,14 @@ def _trace_metadata(
 
     Four facts about the turn's model work ride along as metadata (Remediation 1.2):
 
-    * `llm_profile` and `thinking_budget`, which name the call profile the turn's client
-      was built from and the thinking allowance it carries. A turn meant to run on a
+    * `llm_profile` and `thinking_level`, which name the call profile the turn's client
+      was built from and the thinking tier it actually runs at. A turn meant to run on a
       budgeted profile and built without one is otherwise invisible: it reads as a slow
       model rather than as a wiring mistake, and the difference is the whole point of
-      having profiles.
+      having profiles. The level is the RESOLVED one — a profile that names no level
+      leaves the deployment's own setting in place, and that setting is what the trace
+      reports — because the field this replaces said `None` on every turn, which is
+      indistinguishable from a model that never thought at all.
     * `allowed_tools`, the bound set the reasoning loop was given — the answer to "could
       this turn have called that tool", which a trace could previously only imply by
       whether a tool span appeared.
@@ -1265,7 +1385,7 @@ def _trace_metadata(
             meta["langfuse_session_id"] = f"{run_tag}:hadm_{hadm_id}"
     profile_name = call_profile or _call_profile_for(question_kind)
     meta["llm_profile"] = profile_name
-    meta["thinking_budget"] = model_gateway.call_profile(profile_name).thinking_budget
+    meta["thinking_level"] = model_gateway.resolved_thinking_level(profile_name)
     # Sorted so two turns of one route compare equal in a trace export, and empty for a
     # command: a command's model turn binds nothing and its tool is fixed by the route, so
     # `[]` is the truth there rather than a missing measurement.
@@ -1350,7 +1470,8 @@ async def _correct_invalid_decline(
         conversation = _with_overlay(conversation, overlay)
     conversation.append(HumanMessage(content=INVALID_DECLINE_CORRECTION))
     _emit(on_event, stages.reviewing_event())
-    response = await model_gateway.build_llm(model).ainvoke(conversation)
+    response = await model_gateway.build_llm(
+        model, call_profile=model_gateway.CALL_PROFILE_LOW).ainvoke(conversation)
     answer = read_evidence_reply(text_of(getattr(response, "content", "")).strip())
     if answer.declined or not answer.text:
         return None
@@ -1624,6 +1745,11 @@ async def ask(
     risk_score_question = routing.asks_for_risk_score(question)
     lab_driver_question = routing.asks_about_a_lab_analyte(question)
     follow_up_declared = intent == "follow_up"
+    # And the question's SUBJECT, for the same reason: a question that names one domain is
+    # answered with that domain's tools and that domain's prompt rules, and the binder, the
+    # composer and the trace must agree about which domain it named. Empty means the
+    # vocabulary did not recognise the question, and empty binds the standing set.
+    question_domains = routing.question_domains(question, intent=intent)
 
     graph = build_graph(
         toolbox, model=model, on_event=on_event, question_kind=question_kind,
@@ -1661,6 +1787,10 @@ async def ask(
         # disposition is not documented by a lab series, so asking for one put a panel in
         # the turn's evidence and a lab chip under an answer about utilization.
         lab_driver_question=lab_driver_question,
+        # The question and its subject, so the binder computes the same set the prompt and
+        # the trace were given rather than re-deriving it from the flags alone.
+        question=question,
+        domains=question_domains,
     )
 
     config: dict = {"recursion_limit": RECURSION_LIMIT}
@@ -1681,6 +1811,8 @@ async def ask(
         lab_driver_question,
         follow_up_declared,
         risk_score_question,
+        question=question,
+        domains=question_domains,
     )
     trace_meta = _trace_metadata(
         hadm_id, question_kind, run_tag, turns, intent,
@@ -1697,7 +1829,9 @@ async def ask(
             "follow_up_declared": follow_up_declared,
             "risk_score": risk_score_question,
         },
-        call_profile=model_gateway.CALL_PROFILE_DEFAULT,
+        # The reasoning loop names its profile explicitly, so the trace reads it from the
+        # turn rather than from a command table that has no entry for free text.
+        call_profile=model_gateway.CALL_PROFILE_LOW,
     )
     if trace_meta:
         # Langfuse reads `langfuse_tags` from run metadata; the other keys ride along
@@ -1757,6 +1891,9 @@ async def ask(
                 and any(item.source_tool == "get_lab_trends"
                         for item in session.items.values())
             ),
+            # The subject, so the medication and laboratory rules are attached only to the
+            # turns they can apply to (see `prompts.compose_system_prompt`).
+            domains=question_domains,
         )
         state = await graph.ainvoke(
             {
@@ -1821,6 +1958,12 @@ async def ask(
                 # something to say to the next round, and saying it needs the question.
                 "question": question,
                 "allowed_tools": allowed_for_prompt,
+                # The two declarations `_still_bound` reads to withdraw a retrieval whose
+                # result the record already holds. They are the same facts that chose the
+                # bound set, carried on the state because the bound set is recomputed
+                # between rounds and the declaration does not change mid-turn.
+                "follow_up_declared": follow_up_declared,
+                "risk_driver_question": risk_driver_question,
             },
             config=config,
         )
@@ -2040,8 +2183,12 @@ async def replay_messages(
                 call.get("name"), turn_index,
             )
         payloads = await asyncio.gather(*(
-            toolbox.call(str(call.get("name") or ""),
-                         dict(call.get("args") or {}))
+            # Answered from the short-lived read cache when the same admission was read
+            # minutes ago: these calls are deterministic reads of one record, and a
+            # conversation that re-resolves the same passage on every turn paid for it
+            # every turn, before the model had been asked anything.
+            cached_read(toolbox, str(call.get("name") or ""),
+                        dict(call.get("args") or {}), hadm_id=hadm_id)
             for _key, call in pending
         ))
         for (key, _call), payload in zip(pending, payloads):

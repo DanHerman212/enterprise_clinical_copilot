@@ -216,7 +216,7 @@ def _ask(model, question, manifest, **kwargs):
         return {"hadm_id": arguments["hadm_id"], "passages": []}
 
     box.call = call
-    with patch.object(model_gateway, "build_llm", lambda name: model):
+    with patch.object(model_gateway, "build_llm", lambda name, **_kw: model):
         return asyncio.run(graph.ask(
             box, question, hadm_id=90000058, model="test",
             admission_context=manifest, **kwargs,

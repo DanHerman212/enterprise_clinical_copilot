@@ -119,7 +119,7 @@ def _client():
 
 def _with(model, **patches):
     """Patch the model and the toolbox, and whatever else a test needs."""
-    stack = [patch.object(model_gateway, "build_llm", lambda name: model),
+    stack = [patch.object(model_gateway, "build_llm", lambda name, **_kw: model),
              patch.object(srv, "toolbox", _fake_toolbox)]
     stack += [patch.object(srv, name, value) for name, value in patches.items()]
     return stack

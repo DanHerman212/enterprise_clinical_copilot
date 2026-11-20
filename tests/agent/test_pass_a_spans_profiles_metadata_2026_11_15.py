@@ -9,8 +9,8 @@ have been:
   already under the turn span — so it was a payload-free row above every turn. Skipped
   now, not renamed;
 * `/ehr` ran its query generator, its abstract selector and its four-section synthesis on
-  the served thinking level. The two helper steps now run at `minimal`, the synthesis at
-  `low`, and no profile caps a reply;
+  the served thinking level. Every model call the pipeline makes now runs at `low` — the
+  floor the pinned models accept — and no profile caps a reply;
 * a trace recorded the tools a turn RAN and never the tools it COULD run, so a mis-bound
   turn and a correctly bound turn that chose nothing looked identical.
 """
@@ -167,27 +167,38 @@ def test_the_free_text_path_still_opens_its_own_span_with_no_turn(monkeypatch):
 
 
 # --------------------------------------------------------------------------------------
-# 2. Call profiles: stated once, wired to `/ehr`, `/meds` and `/labs` and nowhere else.
+# 2. Call profiles: two levels, and the low one is every model call the pipeline makes.
 # --------------------------------------------------------------------------------------
 
 
-def test_the_three_profiles_are_the_two_levels_and_the_baseline():
-    helper = gateway.call_profile(gateway.CALL_PROFILE_FAST_HELPER)
-    synthesis = gateway.call_profile(gateway.CALL_PROFILE_EHR_SYNTHESIS)
+def test_the_two_profiles_are_the_low_level_and_the_baseline():
+    low = gateway.call_profile(gateway.CALL_PROFILE_LOW)
     default = gateway.call_profile(gateway.CALL_PROFILE_DEFAULT)
 
     # Levels, not token budgets: Gemini 3 deprecated the budget and keeps the level when
     # both arrive, so a budget beside a level was a control that never applied.
-    assert (helper.thinking_level, helper.thinking_budget) == ("minimal", None)
-    assert (synthesis.thinking_level, synthesis.thinking_budget) == ("low", None)
-    # The default sets NOTHING, which is what keeps every other route on the baseline.
+    assert (low.thinking_level, low.thinking_budget) == ("low", None)
+    # The default sets NOTHING, which is what leaves the deployment's own setting in place
+    # for a caller that names no profile.
     assert (default.thinking_level, default.thinking_budget) == (None, None)
 
     # And no profile caps a reply. A capped reply is not a shorter reply: it is one that
     # stops mid-sentence, and a medication list cut off there does not parse.
-    for name in (gateway.CALL_PROFILE_DEFAULT, gateway.CALL_PROFILE_FAST_HELPER,
-                 gateway.CALL_PROFILE_EHR_SYNTHESIS):
+    for name in (gateway.CALL_PROFILE_DEFAULT, gateway.CALL_PROFILE_LOW):
         assert gateway.call_profile(name).max_output_tokens is None
+
+
+def test_minimal_is_not_a_level_this_table_can_ask_for():
+    """`gemini-3.8-flash` and `gemini-3.1-pro` reject it with an HTTP 400.
+
+    A profile that named `minimal` bought a refused call through `_BudgetFallback` and then
+    the same answer at `low`, so the level is gone rather than merely unused: the wasted
+    round trip was the cheapest thing it ever cost.
+    """
+    levels = {profile.thinking_level for profile in gateway.CALL_PROFILES.values()}
+
+    assert "minimal" not in levels
+    assert levels == {None, "low"}
 
 
 def test_an_unknown_profile_name_is_the_default_rather_than_an_error():
@@ -200,15 +211,30 @@ def test_the_profiles_are_spelled_for_the_family_that_serves_them():
     profile = gateway.profile(PIN)
 
     assert gateway.call_profile_parameters(
-        profile, gateway.call_profile(gateway.CALL_PROFILE_FAST_HELPER),
-    ) == {"thinking_level": "minimal"}
-    assert gateway.call_profile_parameters(
-        profile, gateway.call_profile(gateway.CALL_PROFILE_EHR_SYNTHESIS),
+        profile, gateway.call_profile(gateway.CALL_PROFILE_LOW),
     ) == {"thinking_level": "low"}
     # The default adds no parameter at all, so it cannot move a baseline.
     assert gateway.call_profile_parameters(
         profile, gateway.call_profile(gateway.CALL_PROFILE_DEFAULT),
     ) == {}
+
+
+def test_the_low_level_is_spelled_for_every_family_the_registry_serves():
+    """One level, three spellings, and each one is the family's own.
+
+    The level is stated ONCE (`gateway.THINKING_LOW`) and each profile table turns it into
+    what its provider accepts; a mapping that existed for one family and not the others
+    would leave a model running at the deployment's default while the trace said `low`.
+    """
+    low = gateway.call_profile(gateway.CALL_PROFILE_LOW)
+
+    assert gateway.call_profile_parameters(gateway.profile(PIN), low) == {
+        "thinking_level": "low"}
+    assert gateway.call_profile_parameters(
+        gateway.profile("muse-spark-1.3"), low) == {"reasoning": {"effort": "low"}}
+    assert gateway.call_profile_parameters(
+        gateway.profile("claude-sonnet-5-5"), low) == {
+            "thinking": {"type": "between_tools"}}
 
 
 def test_a_profile_never_names_both_thinking_knobs_for_gemini():
@@ -221,23 +247,21 @@ def test_a_profile_never_names_both_thinking_knobs_for_gemini():
     """
     profile = gateway.profile("gemini-3.8-flash")
 
-    for name in (gateway.CALL_PROFILE_FAST_HELPER, gateway.CALL_PROFILE_EHR_SYNTHESIS):
-        parameters = gateway.call_profile_parameters(
-            profile, gateway.call_profile(name))
-        assert "thinking_budget" not in parameters
-        assert parameters["thinking_level"] in ("minimal", "low")
+    parameters = gateway.call_profile_parameters(
+        profile, gateway.call_profile(gateway.CALL_PROFILE_LOW))
+    assert "thinking_budget" not in parameters
+    assert parameters["thinking_level"] == "low"
 
 
 def test_a_refused_level_falls_back_to_the_level_the_profile_accepts():
     """The second attempt drops the level and uses the family's lowest one."""
     profile = gateway.profile(PIN)
 
-    for name in (gateway.CALL_PROFILE_FAST_HELPER, gateway.CALL_PROFILE_EHR_SYNTHESIS):
-        parameters = gateway.call_profile_parameters(
-            profile, gateway.call_profile(name), fallback=True)
-        assert "thinking_budget" not in parameters
-        assert "thinking_level" not in parameters
-        assert parameters["reasoning_effort"] == "low"
+    parameters = gateway.call_profile_parameters(
+        profile, gateway.call_profile(gateway.CALL_PROFILE_LOW), fallback=True)
+    assert "thinking_budget" not in parameters
+    assert "thinking_level" not in parameters
+    assert parameters["reasoning_effort"] == "low"
 
 
 def test_the_default_client_carries_no_level_and_the_served_ceiling():
@@ -249,9 +273,8 @@ def test_the_default_client_carries_no_level_and_the_served_ceiling():
     assert llm.max_output_tokens == config.GEMINI_MAX_OUTPUT_TOKENS
 
 
-def test_the_ehr_synthesis_client_runs_at_the_low_level():
-    llm = model_gateway.build_llm(
-        PIN, call_profile=model_gateway.CALL_PROFILE_EHR_SYNTHESIS)
+def test_the_low_client_runs_at_the_low_level():
+    llm = model_gateway.build_llm(PIN, call_profile=model_gateway.CALL_PROFILE_LOW)
 
     assert llm.reasoning_effort == "low"
     # And no budget beside it, which is what the request builder warns about.
@@ -260,17 +283,22 @@ def test_the_ehr_synthesis_client_runs_at_the_low_level():
     assert llm.max_output_tokens == config.GEMINI_MAX_OUTPUT_TOKENS
 
 
-def test_the_ehr_helper_client_runs_at_the_minimal_level():
-    llm = model_gateway.build_extraction_llm(
-        PIN, call_profile=model_gateway.CALL_PROFILE_FAST_HELPER)
+def test_the_ehr_helper_client_runs_at_the_low_level_too():
+    """Both `/ehr` helpers ask for the same level the briefing does.
 
-    assert llm.reasoning_effort == "minimal"
+    They used to ask for `minimal`, which this model refuses; the difference between the
+    two profiles was a refused request, not a cheaper answer.
+    """
+    llm = model_gateway.build_extraction_llm(
+        PIN, call_profile=model_gateway.CALL_PROFILE_LOW)
+
+    assert llm.reasoning_effort == "low"
     assert llm.thinking_budget is None
     assert llm.max_output_tokens == config.GEMINI_MAX_OUTPUT_TOKENS
 
 
 def test_building_a_gemini_3_client_warns_at_no_profile():
-    """Construction is silent at all three profiles.
+    """Construction is silent at both profiles.
 
     The warning this replaces fired on every request that carried a budget beside a level,
     so a build that emits a `UserWarning` is the first sign the two knobs are being sent
@@ -281,8 +309,7 @@ def test_building_a_gemini_3_client_warns_at_no_profile():
 
     profile = gateway.profile("gemini-3.8-flash")
 
-    for name in (gateway.CALL_PROFILE_DEFAULT, gateway.CALL_PROFILE_FAST_HELPER,
-                 gateway.CALL_PROFILE_EHR_SYNTHESIS):
+    for name in (gateway.CALL_PROFILE_DEFAULT, gateway.CALL_PROFILE_LOW):
         extra = gateway.call_profile_parameters(
             profile, gateway.call_profile(name))
         with warnings.catch_warnings():
@@ -296,19 +323,37 @@ def test_building_a_gemini_3_client_warns_at_no_profile():
 
 
 def test_the_route_decides_the_profile_and_the_trace_records_the_same_one():
-    """`/ehr` and `/meds` plan before writing, `/labs` does not, `/pubmed` keeps served.
+    """Every command, and the reasoning loop, name the same low profile.
 
-    Both readers of `model.FORMATTING_PROFILES` are asserted here against the route alone,
-    which is how the trace and the client construction are kept from disagreeing.
+    Both readers of the profile table are asserted here against the route alone, which is
+    how the trace and the client construction are kept from disagreeing. `/pubmed` is in
+    the table because its synthesis reasons over four cohorts having just read them; a
+    free-text turn names no command, and the loop builds its client on the low profile, so
+    the route-level answer is the low profile too. Falling through to the default is what
+    put `llm_profile: default, thinking_level: medium` on every free-text trace in the
+    2026-11-20 warm smoke while the client ran at `low` (see
+    `test_a_free_text_turn_names_the_low_profile_before_it_runs`).
     """
-    assert graph._call_profile_for("summarize") == gateway.CALL_PROFILE_EHR_SYNTHESIS
-    assert graph._call_profile_for("meds") == gateway.CALL_PROFILE_EHR_SYNTHESIS
-    assert graph._call_profile_for("labs") == gateway.CALL_PROFILE_FAST_HELPER
-    for kind in ("literature", None):
-        assert graph._call_profile_for(kind) == gateway.CALL_PROFILE_DEFAULT
+    for kind in ("summarize", "meds", "labs", "literature"):
+        assert graph._call_profile_for(kind) == gateway.CALL_PROFILE_LOW
+    assert graph._call_profile_for(None) == gateway.CALL_PROFILE_LOW
 
 
-def test_the_ehr_helper_steps_are_built_on_the_fast_helper_profile(monkeypatch):
+def test_a_free_text_turn_names_the_low_profile_before_it_runs():
+    """The trace is written from the route, before `ask` knows anything about the question.
+
+    `turn.py` opens the turn span and stamps this metadata, and the metadata written there
+    is what Langfuse shows — the copy `ask` computes afterwards reaches only the LangGraph
+    run config. So the route-level answer has to be the truth on its own, without waiting
+    for the engine: a free-text turn is a low-profile turn.
+    """
+    _, meta = graph.turn_scope(None, 90000001)
+
+    assert meta["llm_profile"] == gateway.CALL_PROFILE_LOW
+    assert meta["thinking_level"] == "low"
+
+
+def test_the_ehr_helper_steps_are_built_on_the_low_profile(monkeypatch):
     """Both `/ehr` helper calls ask for the profile at the call site.
 
     The suite's offline seam is put back to the module default for this test, so the
@@ -329,7 +374,7 @@ def test_the_ehr_helper_steps_are_built_on_the_fast_helper_profile(monkeypatch):
 
     assert seen == {
         "model": "test-model",
-        "call_profile": gateway.CALL_PROFILE_FAST_HELPER,
+        "call_profile": gateway.CALL_PROFILE_LOW,
     }
 
 
@@ -347,22 +392,19 @@ def test_a_replaced_extraction_seam_still_decides_the_helper_client(monkeypatch)
 
 @pytest.mark.parametrize(
     "wire, expected",
-    [("summarize", gateway.CALL_PROFILE_EHR_SYNTHESIS),
-     ("labs", gateway.CALL_PROFILE_FAST_HELPER),
-     ("meds", gateway.CALL_PROFILE_EHR_SYNTHESIS),
-     ("literature", None)],
+    [("summarize", gateway.CALL_PROFILE_LOW),
+     ("labs", gateway.CALL_PROFILE_LOW),
+     ("meds", gateway.CALL_PROFILE_LOW),
+     ("literature", gateway.CALL_PROFILE_LOW)],
 )
 def test_the_formatting_turn_names_the_profile_of_its_own_command(
         wire, expected, monkeypatch):
-    """Every command's formatting turn, at the profile its job wants.
+    """Every command's formatting turn runs at the low level.
 
-    `/ehr` writes the briefing and `/meds` returns a JSON row list, so both are allowed to
-    plan; `/labs` describes a panel that is drawn beside it, so it is not. `/pubmed` is
-    absent from the table on purpose: its reply is the answer a reader is given.
-
-    `None` is the assertion that matters as much as the profiles: a command with no entry
-    calls the factory with no keyword at all, so nothing added to this table can move
-    `/pubmed`.
+    `/ehr` writes a four-section briefing, `/meds` a JSON row list that has to parse,
+    `/labs` a description of a panel and `/pubmed` a comparison over published cohorts.
+    Each has a structure to hold before the first word, and the level below this one is
+    one the pinned models refuse.
     """
     seen: dict = {}
 
@@ -402,17 +444,31 @@ def test_the_medication_and_laboratory_turns_keep_their_own_answers(monkeypatch)
     assert labs["messages"][-1].content
 
 
-def test_a_free_text_turn_runs_no_profile_at_all():
-    """Free text and `/pubmed` reason over prose, so they keep the served allowance.
+def test_the_reasoning_loop_is_built_on_the_low_profile(monkeypatch):
+    """The free-text loop names the low profile at its own call site.
 
-    Nothing in the free-text path names a profile, which is why this reads the client the
-    engine would build rather than a call record: the absence is the assertion.
+    It used to name none, which left every free-text turn on the deployment's thinking
+    level — the measured cost of a turn whose tools had already returned the evidence:
+    fifteen to thirty seconds of deliberation before the first token. Read from the
+    constructor's keyword rather than from the trace, because the trace is asserted
+    separately and a client built without the profile would make both of them agree and
+    both of them wrong.
     """
-    llm = graph._build_llm(PIN)
+    seen: dict = {}
 
-    assert gateway.profile_for(llm).name == PIN
-    assert llm.thinking_budget is None
-    assert llm.max_output_tokens == config.GEMINI_MAX_OUTPUT_TOKENS
+    class _Model:
+        def bind_tools(self, *args, **kwargs):
+            return self
+
+    class _Box:
+        _tools: dict = {}
+
+    monkeypatch.setattr(model_gateway, "build_llm",
+                        lambda model, **kwargs: seen.update(kwargs) or _Model())
+
+    graph.build_graph(_Box(), model="test-model")
+
+    assert seen.get("call_profile") == gateway.CALL_PROFILE_LOW
 
 
 class _Toolbox:
@@ -530,7 +586,7 @@ def test_a_stream_that_has_already_announced_is_not_retried():
 # --------------------------------------------------------------------------------------
 
 
-def test_the_metadata_carries_the_profile_the_budget_and_the_bound_set():
+def test_the_metadata_carries_the_profile_the_level_and_the_bound_set():
     meta = graph._trace_metadata(
         90000001, None, "run-x", None, None,
         allowed_tools=frozenset({"rag_search", "get_lab_trends"}),
@@ -545,7 +601,10 @@ def test_the_metadata_carries_the_profile_the_budget_and_the_bound_set():
     )
 
     assert meta["llm_profile"] == "default"
-    assert meta["thinking_budget"] is None
+    # The RESOLVED level, not a budget that no profile sets: a default profile leaves the
+    # deployment's own setting in place, and that setting is what the trace reports.
+    assert meta["thinking_level"] == config.GEMINI_REASONING_EFFORT
+    assert "thinking_budget" not in meta
     # Sorted, so two turns of one route compare equal in an export.
     assert meta["allowed_tools"] == ["get_lab_trends", "rag_search"]
     assert meta["risk_driver"] is False
@@ -558,13 +617,14 @@ def test_the_metadata_carries_the_profile_the_budget_and_the_bound_set():
 def test_the_route_level_metadata_names_the_profile_from_the_route_alone():
     """`turn.py` calls `turn_scope` before any question shape is known."""
     _, command_meta = graph.turn_scope("summarize", 90000001)
-    assert command_meta["llm_profile"] == "ehr_synthesis"
-    assert command_meta["thinking_budget"] is None
+    assert command_meta["llm_profile"] == "low"
+    assert command_meta["thinking_level"] == "low"
     assert command_meta["allowed_tools"] == []
     # `/pubmed` declares its subject, so the one predicate that is a fact about the
     # route is answered here rather than left absent.
     _, literature_meta = graph.turn_scope("literature", 90000001)
-    assert literature_meta["llm_profile"] == "default"
+    assert literature_meta["llm_profile"] == "low"
+    assert literature_meta["thinking_level"] == "low"
     assert literature_meta["wants_literature"] is True
 
 
@@ -594,8 +654,8 @@ def test_the_free_text_run_config_carries_the_metadata(monkeypatch):
 
     asyncio.run(graph.ask(object(), "what changed overnight?"))
 
-    assert _GraphConfig.last["llm_profile"] == "default"
-    assert _GraphConfig.last["thinking_budget"] is None
+    assert _GraphConfig.last["llm_profile"] == "low"
+    assert _GraphConfig.last["thinking_level"] == "low"
     assert _GraphConfig.last["allowed_tools"] == sorted(routing.FREETEXT_TOOLS)
     assert _GraphConfig.last["risk_driver"] is False
     assert _GraphConfig.last["wants_literature"] is False

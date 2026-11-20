@@ -51,6 +51,24 @@ def _project_id_from_repo_env() -> str | None:
 os.environ.setdefault("PROJECT_ID", _project_id_from_repo_env() or "unit-test-project")
 
 
+@pytest.fixture(autouse=True)
+def _forget_cached_reads():
+    """The read cache is process-level, so one test's answer must not reach the next.
+
+    `admission_context.cached_read` holds a deterministic read of one admission for a few
+    minutes, and it only ever holds one made through a SERVED toolbox — a stub bypasses it
+    (`admission_context._served`). A test that builds a live-shaped toolbox is therefore
+    the case this exists for: without it, two tests naming one admission and one call
+    would share whichever answer ran first, and the second would pass on the first one's
+    data.
+    """
+    from services.agent.routing import admission_context
+
+    admission_context.clear_read_cache()
+    yield
+    admission_context.clear_read_cache()
+
+
 @pytest.fixture(scope="session")
 def require_served():
     """A served tool response, or a skip that says why there is none.

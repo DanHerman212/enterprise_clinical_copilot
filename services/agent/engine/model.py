@@ -56,12 +56,12 @@ MODEL_MAX_RETRIES = gateway.MODEL_MAX_RETRIES
 
 #: The call profiles, re-exported for the same reason as the two bounds above: the call
 #: sites that name one live in `deterministic.py` and `graph.py`, and neither should have
-#: to import the adapter to say "this is a helper step".
+#: to import the adapter to say "this is the least thinking a turn can buy".
 CALL_PROFILE_DEFAULT = gateway.CALL_PROFILE_DEFAULT
-CALL_PROFILE_FAST_HELPER = gateway.CALL_PROFILE_FAST_HELPER
-CALL_PROFILE_EHR_SYNTHESIS = gateway.CALL_PROFILE_EHR_SYNTHESIS
+CALL_PROFILE_LOW = gateway.CALL_PROFILE_LOW
 CALL_PROFILES = gateway.CALL_PROFILES
 call_profile = gateway.call_profile
+resolved_thinking_level = gateway.resolved_thinking_level
 
 #: Which call profile each command's model work runs on, by wire name.
 #:
@@ -71,17 +71,17 @@ call_profile = gateway.call_profile
 #: level on a turn that ran at another reads as a slow model rather than as a wiring
 #: mistake.
 #:
-#: `/ehr` writes the briefing and `/meds` returns a JSON row list, so both run at `low`: a
-#: model that has to hold four sections, or a record list that must parse, in mind before
-#: writing it needs to be allowed to plan. At the lowest level the medication reply came
-#: back as JSON that did not parse (measured 2026-11-15 on revision `8b01115`).
-#: `/labs` describes a panel that is drawn beside it, so it runs at `minimal`. `/pubmed`
-#: and every free-text turn are absent: they reason over prose and are the answer a reader
-#: is given, so they keep the served level.
+#: Every command runs at `low`: the level the pinned models accept as their floor, and the
+#: level at which they may still plan before writing. `/ehr` writes a four-section briefing,
+#: `/meds` a JSON row list that has to parse, `/labs` a description of a panel drawn beside
+#: it, and `/pubmed` a comparison over published records — each has a structure to hold
+#: before the first word, and asking for less thinking bought a refused request rather than
+#: a faster answer. A command absent from this table is built exactly as it always was.
 FORMATTING_PROFILES: dict[str, str] = {
-    "summarize": CALL_PROFILE_EHR_SYNTHESIS,
-    "meds": CALL_PROFILE_EHR_SYNTHESIS,
-    "labs": CALL_PROFILE_FAST_HELPER,
+    "summarize": CALL_PROFILE_LOW,
+    "meds": CALL_PROFILE_LOW,
+    "labs": CALL_PROFILE_LOW,
+    "literature": CALL_PROFILE_LOW,
 }
 
 
@@ -100,7 +100,8 @@ def build_llm(model: str, *, call_profile: str = CALL_PROFILE_DEFAULT):
     `call_profile` names the JOB, not a parameter: how much model this call is allowed to
     spend. The default passes nothing extra, so every caller that does not name one gets
     exactly the client this service has always built. The callers that do are `/ehr`,
-    `/meds` and `/labs` — see `deterministic.run_command` and `gateway.CALL_PROFILES`.
+    `/meds`, `/labs`, `/pubmed` and the reasoning loop — see `deterministic.run_command`,
+    `graph.build_graph` and `gateway.CALL_PROFILES`.
     """
     return gateway.chat_model(
         model, safety_profile=gateway.SAFETY_SERVED, effort=gateway.EFFORT_SERVED,
@@ -160,8 +161,9 @@ def build_extraction_llm(model: str, *, call_profile: str = CALL_PROFILE_DEFAULT
     provider's spelling belongs in the one place that knows the provider.
 
     `call_profile` is the third difference and the only one a caller states: `/ehr`'s two
-    helper steps run on `fast_helper`, which asks for the lowest level and no ceiling,
-    because both return a small JSON object read out of text already in front of them.
+    helper steps run on the low profile, which asks for the least thinking these models
+    accept and no ceiling, because both return a small JSON object read out of text already
+    in front of them.
     """
     return gateway.chat_model(
         model, safety_profile=gateway.SAFETY_EXTRACTION,

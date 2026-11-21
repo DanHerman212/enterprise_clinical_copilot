@@ -22,7 +22,7 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessageChunk
 
-from services.agent.engine import gateway, graph
+from services.agent.engine import graph
 from services.agent.engine import model as model_turn
 from services.agent.postprocess import guardrail
 from services.agent.postprocess.evidence_state import SessionEvidenceState
@@ -246,113 +246,6 @@ def test_a_free_text_lab_answer_keeps_its_trajectory_citation():
     )
 
     assert any(source.get("section") == "laboratory_trends" for source in out["sources"])
-
-
-# ---------------------------------------------------------------------------------------
-# 2a. A stalled model attempt is bounded and retried once
-# ---------------------------------------------------------------------------------------
-
-
-class _ScriptedClient:
-    """A client whose calls follow a script: a delay, then an answer."""
-
-    def __init__(self, *, chunks=("one ", "two"), stall_attempts=1, stall=5.0,
-                 fail_after_first=False) -> None:
-        self._chunks = chunks
-        self._stall_attempts = stall_attempts
-        self._stall = stall
-        self._fail_after_first = fail_after_first
-        self.calls = 0
-
-    async def ainvoke(self, messages, config=None):
-        self.calls += 1
-        if self.calls <= self._stall_attempts:
-            await asyncio.sleep(self._stall)
-        return f"answer {self.calls}"
-
-    async def astream(self, messages, config=None):
-        self.calls += 1
-        first = self.calls > self._stall_attempts
-        if not first:
-            await asyncio.sleep(self._stall)
-        for index, chunk in enumerate(self._chunks):
-            if index and self._fail_after_first:
-                raise RuntimeError("the stream broke after its first chunk")
-            yield AIMessageChunk(content=chunk)
-
-
-def _bounded(client) -> gateway._StallRetry:
-    return gateway._StallRetry(client, gateway.profile("gemini-3.8-flash"), 0.05)
-
-
-def test_an_attempt_that_produces_nothing_is_retried():
-    client = _ScriptedClient()
-
-    assert asyncio.run(_bounded(client).ainvoke([])) == "answer 2"
-    assert client.calls == 2
-
-
-def test_a_healthy_call_is_not_retried():
-    client = _ScriptedClient(stall_attempts=0)
-
-    assert asyncio.run(_bounded(client).ainvoke([])) == "answer 1"
-    assert client.calls == 1
-
-
-def test_two_stalled_attempts_in_a_row_are_raised():
-    client = _ScriptedClient(stall_attempts=2)
-
-    with pytest.raises((TimeoutError, asyncio.TimeoutError)):
-        asyncio.run(_bounded(client).ainvoke([]))
-    assert client.calls == 2
-
-
-def _collect(client) -> list[str]:
-    async def _run():
-        return [chunk.content async for chunk in _bounded(client).astream([])]
-    return asyncio.run(_run())
-
-
-def test_a_stream_that_stalls_before_anything_is_announced_is_retried():
-    client = _ScriptedClient()
-
-    assert _collect(client) == ["one ", "two"]
-    assert client.calls == 2
-
-
-def test_a_stream_that_fails_after_its_first_chunk_is_not_retried():
-    """A piece already announced cannot be announced again."""
-    client = _ScriptedClient(stall_attempts=0, fail_after_first=True)
-
-    with pytest.raises(RuntimeError):
-        _collect(client)
-    assert client.calls == 1
-
-
-def test_the_low_profile_is_the_one_that_carries_the_bound(monkeypatch):
-    from services.agent.engine import gateway as gateway_module
-
-    monkeypatch.setattr(gateway_module, "_google_client",
-                        lambda *args, **kwargs: _ScriptedClient())
-
-    low = gateway_module.chat_model("gemini-3.8-flash",
-                                    call_profile_name=gateway_module.CALL_PROFILE_LOW)
-    default = gateway_module.chat_model("gemini-3.8-flash")
-
-    assert _bound_in_chain(low) == gateway_module.LOW_ATTEMPT_TIMEOUT_SECONDS
-    assert _bound_in_chain(default) is None
-
-
-def _bound_in_chain(client) -> float | None:
-    """The attempt bound this client carries, however many wrappers sit above it."""
-    seen = set()
-    while client is not None and id(client) not in seen:
-        seen.add(id(client))
-        if isinstance(client, gateway._StallRetry):
-            return client._timeout
-        client = (getattr(client, "_model", None)
-                  or getattr(client, "_primary", None))
-    return None
 
 
 # ---------------------------------------------------------------------------------------

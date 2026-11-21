@@ -35,9 +35,11 @@ def _datasets() -> tuple[str, ...]:
         DATASETS as DEFAULTS,
         DEV_SUITE_DATASET,
         HOLDOUT_SUITE_DATASET,
+        SELECTION_SLICE_DATASET,
     )
 
-    return (*DEFAULTS, DEV_SUITE_DATASET, HOLDOUT_SUITE_DATASET)
+    return (*DEFAULTS, DEV_SUITE_DATASET, HOLDOUT_SUITE_DATASET,
+            SELECTION_SLICE_DATASET)
 
 
 def _run_item_trace_ids(run) -> list[str]:

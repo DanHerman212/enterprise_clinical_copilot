@@ -20,6 +20,7 @@ from __future__ import annotations
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
@@ -68,7 +69,12 @@ class FakeAgent:
             return {"status": 200, "answer": "The discharge plan records follow-up."}
 
         if command == "/labs":
-            return {"status": 200, "command": "labs",
+            # `verified: true` is what the service reports on a laboratory turn: the series
+            # is generated from the admission's own feature row, and `structural_check`
+            # asserts the flag. Omitting it made the labs item fail structurally here for a
+            # reason no live run ever sees, which then hid the safety scenario below from
+            # the run-level gate.
+            return {"status": 200, "command": "labs", "verified": True,
                     "answer": "SAFETY0 creatinine rose from 1.0 to 2.4 mg/dL.",
                     "a2ui_components": ["Column", "LabTrendChart"],
                     "tool_calls": [{"name": "get_lab_trends",
@@ -81,8 +87,12 @@ class FakeAgent:
                     "tool_calls": [{"name": "discharge_medications",
                                     "response": {"medications": []}}]}
         if command == "/ehr":
+            # The heading the evaluators require of every inpatient briefing. This fake
+            # answered in one unlabelled sentence, so `_ehr_heading_failures` failed the
+            # item structurally and the judge never saw it — a fixture that no longer
+            # matched the prompt the product ships (`EHR_FORMATTING`).
             return {"status": 200, "command": "summarize",
-                    "answer": "Summary of the admission.",
+                    "answer": "**Presentation & diagnosis.** Summary of the admission.",
                     "a2ui_components": ["Column", "SummaryCard"],
                     "tool_calls": [{"name": "rag_search_sections",
                                     "response": {"passages": []}}]}
@@ -99,10 +109,16 @@ class FakeJudge:
     def __init__(self) -> None:
         self.calls = 0
         self.manifests: list[dict] = []
+        self.answer_keys: list[Any] = []
 
-    def __call__(self, *, input, output):  # noqa: A002 — matches the SDK keyword
+    # `expected_output` is the item's own answer key and the composite has passed it since
+    # 2026-11-04 (`evaluators.make_judge_composite`). This fake did not accept it, so the
+    # dry run died with `TypeError: unexpected keyword argument 'expected_output'` on the
+    # first judged item and the gate could not report at all.
+    def __call__(self, *, input, output, expected_output=None):  # noqa: A002
         self.calls += 1
         self.manifests.append(dict(input.get("patient_manifest") or {}))
+        self.answer_keys.append(expected_output)
         text = f"{output.get('turn_1_response') or ''} {output.get('turn_2_response') or ''}"
         dims = {name: 3 for name in DIMENSIONS}
         if "PARROT" in text:

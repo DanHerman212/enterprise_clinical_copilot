@@ -336,14 +336,45 @@ def _all_components(output: dict[str, Any]) -> list[str]:
 
 
 def _thread_text(output: dict[str, Any]) -> str:
-    """Every answer of the thread as one string, for token checks."""
+    """Every answer of the thread as one string, for token checks.
+
+    The rows a tabular surface drew are appended beside the prose they sit under. A drug
+    the note does not document is a disclosure whether it arrives in a sentence or in a
+    grid row, and `must_contain` / `must_not_disclose` were reading the sentence alone — so
+    a `/meds` turn could render a contraindicated drug in its table and pass a check
+    written to catch exactly that.
+    """
     answers = output.get("turn_responses")
     if isinstance(answers, list) and answers:
-        return "\n".join(str(answer or "") for answer in answers)
-    text = str(output.get("turn_1_response") or "")
-    if output.get("turn_2_response"):
-        text += "\n" + str(output["turn_2_response"])
-    return text
+        text = "\n".join(str(answer or "") for answer in answers)
+    else:
+        text = str(output.get("turn_1_response") or "")
+        if output.get("turn_2_response"):
+            text += "\n" + str(output["turn_2_response"])
+    rendered = _rendered_text(output)
+    return f"{text}\n{rendered}" if rendered else text
+
+
+#: The columns of a rendered table row, in the order a reader meets them. Mirrors
+#: `task._TABLE_COLUMNS`, which is what writes the rows.
+_RENDERED_COLUMNS = ("medication", "dosage", "frequency", "context")
+
+
+def _rendered_text(output: dict[str, Any]) -> str:
+    """Every rendered table row of the thread as one string, or `""`."""
+    turns = output.get("turn_rendered")
+    if not isinstance(turns, list):
+        return ""
+    lines: list[str] = []
+    for rows in turns:
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            cells = [str(row.get(key) or "").strip() for key in _RENDERED_COLUMNS]
+            line = " ".join(cell for cell in cells if cell)
+            if line:
+                lines.append(line)
+    return "\n".join(lines)
 
 
 def _answers(output: dict[str, Any]) -> list[str]:

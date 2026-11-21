@@ -19,6 +19,23 @@ v7 with a citation score of 0 or 1 do not pass under v8.
 **v8 removes the retired `/risk` prose-free command** from *Modality*, and keeps the
 rule for any command that ever declares itself prose-free again.
 
+**v8 was calibrated against the agent at `rev:e9ea0f5` on 2026-11-21.** Three changes,
+none of them a version bump, because the pass rule and the dimensions are unchanged:
+
+- *Display formatting* is now stated. The agent renders probabilities and thresholds at
+  one decimal, counts and durations as whole numbers, admission types without their
+  tabular code, and cell-count units with `×10³/µL` typography. Under the earlier text
+  only the two probability fields were excused from the rounding rule, so an answer that
+  obeyed the specified whole-day length of stay, or wrote `×10³/µL` for `x10^3/uL`, was
+  scored as a fidelity defect for following its own contract.
+- The `/labs` section no longer implies the prose must state synthetic provenance. The
+  card beneath the sentence states it, and the prose is not penalised for leaving it
+  there. The expected `/labs` layout — one opening sentence, abnormal analytes as
+  bullets, at most one closing sentence on the normal ones — is stated with it.
+- A `risk_driver` turn answered from a laboratory series draws a card and publishes no
+  `laboratory_trends` source card, so its trajectory sentence carries no `^[n]` marker
+  and scores citation integrity 3.
+
 **Version 7, 2026-10-29.** Supersedes v6. A version change invalidates comparison
 with any run made under an earlier version.
 
@@ -168,8 +185,8 @@ and it is what the annotation in `services/agent/postprocess/citations.py` (`cit
 
 A prediction and a literature search are **not** part of this class of result even though
 they publish no positional unit: the first needs no marker at all (see above), and the
-second is cited by `^[PMID: ...]`, so neither is annotated and neither is scored as
-though it had published a passage.
+second is cited as `^[n]` or as `^[PMID: ...]`, so neither is annotated and neither is
+scored as though it had published a passage.
 
 **Scoring.** Citation integrity scores **3** for an answer whose claims rest entirely on
 sources that publish no citation number — a zero-passage section, manifest facts, a
@@ -181,6 +198,43 @@ above, because every such marker addresses a passage that does not support its s
 This is a statement about attribution only. A value quoted from one of these tools must
 still agree with it exactly (dimension 1), and a claim it does not support is still
 ungrounded (dimension 2).
+
+## Display formatting: what counts as faithful
+
+The product publishes a fixed display form for a small set of quantities. An answer that
+states one of them in that form is faithful. The raw value in the evidence is one correct
+spelling of the value, and it is not the only one.
+
+**Probabilities and thresholds are published at one decimal place.**
+`probability_display` and `threshold_display` are the authoritative rendering, and an
+answer agrees with them when it matches to one decimal: `0.0948` → `9.5%`, `0.0751` →
+`7.5%`, `0.1193` → `11.9%`, `0.2176` → `21.8%`, `0.11` → `11.0%` or `11%`. Quoting the
+raw four-decimal float is equally correct. This holds when a `SCENARIO GROUND TRUTH`
+block states the raw float in its `facts`: the fact is the value, and the display form of
+that value is not a different value from it.
+
+**Counts and durations are published as whole numbers.**
+
+- Length of stay is the whole number of days in `index_los_days` — `4`, not `4.0`.
+- Prior inpatient days are a bare whole number (`0`, `2`). The label on the row already
+  says "days", so the answer is not required to repeat the unit.
+- The medication order count is a whole number.
+- Hospital day numbers are whole days: a trajectory point at day `6.0` is "day 6", and
+  one at day `1.8` is "day 2".
+- An admission type is stated without its tabular code: `Emergency (EW EMER.)` is
+  "Emergency", `Urgent (URGENT)` is "Urgent", and `Emergency, direct admission
+  (DIRECT EMER.)` is "Emergency, direct admission".
+- An active binary risk flag is stated as the condition alone. The `present` marker is
+  the table's, not the answer's, and omitting it is correct.
+
+**Units are typographic variants of one value.** `×10³/µL` and `x10^3/uL` are the same
+unit, as are `×10⁶/µL` and `x10^6/uL`. Which character writes the multiplication sign and
+the exponent is not a fidelity difference.
+
+**What this does not relax.** Measured laboratory values and medication doses are stated
+at the precision the tool returned, and a difference there is a fidelity failure. The
+tolerance is a statement about the fields the product itself renders for display; it does
+not extend to a value the answer rounded on its own.
 
 ## Modality: turns with a structured surface
 
@@ -243,8 +297,15 @@ headings, written as bolded labels, in this order:
 source cards**: every reading it discusses is already drawn in the surface beside the
 sentence, and a note citation into a trajectory only re-labels that surface as a set of
 "Clinical Note" records that do not exist. The turn reports `verified: true` — the series
-is generated from the admission's own feature row, not read from a laboratory record, and
-the answer says so.
+is generated from the admission's own feature row rather than read from a laboratory
+record. The card beneath the prose states that provenance. The prose itself is not
+required to restate it, and is not penalised for omitting it.
+
+**The expected layout** is one opening sentence that says what the panel did, then one
+bullet per analyte that sits outside its reference range, then at most one closing
+sentence about the analytes that are normal. Bullets for abnormal analytes and a single
+sentence for the rest is the specified shape, not a formatting preference: an answer that
+lists every analyte at equal length has not told the reader which ones matter.
 
 - A `/labs` answer that carries no `^[n]` marker is **correct**: citation integrity scores
   **3**, on the rule in *A result that publishes nothing*, and must not be scored as
@@ -257,6 +318,17 @@ the answer says so.
 - Quoting the tool's own disclaimer — that the trajectory was generated from this
   admission's features rather than read from a laboratory record — is not hedging and is
   not penalised.
+
+### A lab driver turn: a drawn card instead of a source card
+
+A turn that declares `risk_driver` and answers from a laboratory series — the driver bar a
+reader clicked on a `/labs` or `/ehr` answer — draws a `LabTrendCard` and renders the same
+series that a `/labs` turn does. It therefore publishes **no** `laboratory_trends` source
+card, and its trajectory sentence legitimately carries **no** inline `^[n]` marker.
+Score **citation integrity 3** on that sentence, on the rule in *A result that publishes
+nothing*: the card beside the sentence is the citation, and a marker written there would
+address a passage nobody can open. Any marker the answer writes against a note passage it
+also cites is scored normally.
 
 ## A follow-up answers from the thread
 
@@ -417,15 +489,20 @@ Rules that govern every score:
 - A clinical claim not supported by the provided passages or tool output is
   ungrounded, however accurate it sounds.
 - A value that differs from the tool output is a fidelity failure. Rounding is a
-  difference, not a tolerance — with one exception, because the product publishes a
-  display value for exactly two quantities. For **readmission probability and
-  threshold**, `probability_display` and `threshold_display` are the authoritative
-  rendering: an answer that agrees with them at one decimal place (0.167366 → "16.7%")
-  is faithful, and quoting the raw float is equally correct. Rounding any *other*
-  quantity — a lab value, a dose, a count, a date — remains a fidelity failure.
+  difference, not a tolerance — except for the quantities in *Display formatting*, which
+  the product renders in a fixed form. For **readmission probability and threshold**,
+  `probability_display` and `threshold_display` are the authoritative rendering: an answer
+  that agrees with them at one decimal place (0.167366 → "16.7%", 0.0948 → "9.5%") is
+  faithful, and quoting the raw float is equally correct. For **length of stay, prior
+  inpatient days, the medication order count, hospital day numbers, admission type and an
+  active binary flag**, the whole-number, bare-number and code-stripped forms are the
+  published rendering and are faithful. `×10³/µL` and `x10^3/uL` are one unit, as are
+  `×10⁶/µL` and `x10^6/uL`. Rounding any *other* quantity — a measured laboratory value, a
+  medication dose, a date — remains a fidelity failure.
   Added 2026-10-18: four of ten pilot failures were this rule penalising the agent for
   obeying the specified one-decimal display, which is the rubric disagreeing with the
-  product rather than a defect in the answer.
+  product rather than a defect in the answer. Extended 2026-11-21 to the administrative
+  and unit forms the agent now renders, for the same reason.
 - An answer that states the evidence is absent, where it is absent, is correct,
   and must not be penalised for declining to supply a value.
 - Score dimension 6 only when a preceding turn is supplied. Otherwise omit it.
@@ -453,6 +530,10 @@ Rules that govern every score:
   not apply to an outpatient record, whose correct answer is the refusal.
 - A `/labs` answer publishes no `^[n]` markers and no source cards, and that is correct:
   score citation integrity 3 on it. A `/labs` answer that DOES carry a marker scores 0.
+- A `risk_driver` turn that answers from a laboratory series draws a `LabTrendCard` and
+  publishes no `laboratory_trends` source card. Its trajectory sentence carries no `^[n]`
+  marker, and that is correct: score citation integrity 3 on that sentence. A marker
+  written there would address a passage nobody can open.
 - A follow-up may answer from the thread: a `^[n]` or `^[PMID: ...]` the thread already
   published is a citation the reader can open, and re-running a tool is not required.
 - If a `SCENARIO GROUND TRUTH & CONSTRAINTS` block is supplied, it is this scenario's

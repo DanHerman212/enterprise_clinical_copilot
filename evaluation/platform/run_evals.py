@@ -55,6 +55,15 @@ DEV_SUITE_DATASET = "ecc-tier2-dev-suite"
 #: `evaluation/platform/sync_holdout_suite.py`; reached the same way, by naming it.
 HOLDOUT_SUITE_DATASET = "ecc-tier2-holdout-suite"
 
+#: The multi-model selection slice, v2. Sixteen scenarios and 32 turns over seven records
+#: that neither Tier 2 suite uses, seeded by `sync_selection_slice.py` — which owns the
+#: name, and this constant only repeats it so the runner will accept it.
+#:
+#: It is a NAMED target and not a default, for the same reason the two gated suites are:
+#: a model-comparison run is a deliberate act with its own budget, and a bare `run_evals`
+#: must keep measuring the suites it has always measured.
+SELECTION_SLICE_DATASET = "ecc-model-selection-slice-v2"
+
 #: Gate 1's three canary scenarios, and nothing else (Phase 04 §4.2).
 CANARY_SCENARIOS = ("dev_t1_01", "dev_t2_03", "dev_t7_01")
 
@@ -323,7 +332,11 @@ def run(datasets: tuple[str, ...], *, run_name: str,
             evaluators=[assertions],
             composite=composite,
             max_concurrency=MAX_CONCURRENCY,
-            description=f"Phase 04 Tier 2 dev suite, rubric {rubric}",
+            # Named from the dataset being run rather than from the suite this file was
+            # written for: the description is what a reader sees on the Langfuse run, and
+            # it said "Phase 04 Tier 2 dev suite" over every holdout and selection-slice
+            # run the same function produced.
+            description=f"{dataset_name}, rubric {rubric}",
             metadata={"rubric_version": rubric, "run_tag": run_name,
                       "agent_url": os.environ.get("API_URL", ""),
                       "code_revision": code_revision or "unknown"},
@@ -597,10 +610,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--scenarios", default="",
                     help="comma-separated scenario ids to run from the dev suite; "
                          "an unknown id is refused")
+    ap.add_argument("--run-name", default=None,
+                    help=("label for this run; default is a UTC timestamp. The name is the "
+                          "Langfuse run name and the `run:<name>` tag on every trace, so "
+                          "it is what a later comparison and a purge address."))
     args = ap.parse_args(argv)
 
     targets = tuple(args.datasets) if args.datasets else DATASETS
-    allowed = (*DATASETS, DEV_SUITE_DATASET, HOLDOUT_SUITE_DATASET)
+    allowed = (*DATASETS, DEV_SUITE_DATASET, HOLDOUT_SUITE_DATASET,
+               SELECTION_SLICE_DATASET)
     if args.allow_full_census:
         allowed = (*allowed, FULL_CENSUS_DATASET)
     refused = [name for name in targets if name not in allowed]
@@ -638,8 +656,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    run_name = (f"phase04-gate1-canary-{stamp}" if scenarios
-                and tuple(scenarios) == CANARY_SCENARIOS else f"pilot-verify-{stamp}")
+    generated = (f"phase04-gate1-canary-{stamp}" if scenarios
+                 and tuple(scenarios) == CANARY_SCENARIOS else f"pilot-verify-{stamp}")
+    # A caller-supplied name is for a run that has to be findable later — "baseline" and
+    # "muse" are what a comparison is read by, and a timestamp cannot say which arm it
+    # was. Whitespace becomes a dash because the name is also a trace TAG, and a tag with
+    # a space in it cannot be filtered on.
+    run_name = re.sub(r"\s+", "-", (args.run_name or "").strip()) or generated
     print(f"agent:   {env['API_URL']}\n"
           f"serving: {code_revision or 'unknown'}\n"
           f"run:     {run_name}\ndatasets: {list(targets)}")

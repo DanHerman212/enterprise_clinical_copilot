@@ -237,6 +237,11 @@ class TaskOutput(BaseModel):
     #: spans, so without this the numbering the model was shown for that turn exists only
     #: in the harness's memory and a post-mortem cannot say what `^[2]` pointed at.
     turn_tool_calls: list[list[dict[str, Any]]] = Field(default_factory=list)
+    #: The rows a tabular surface drew, per turn. A `/meds` answer is one sentence saying
+    #: where the rows came from; the rows are the answer. `diagnostics` already read this
+    #: field, so it was being written as absent on every item and a report could not state
+    #: what the reader was looking at.
+    turn_rendered: list[list[dict[str, Any]]] = Field(default_factory=list)
     tool_evidence: list[dict[str, Any]] = Field(default_factory=list)
 
     #: Tracing / diagnosis. Additive to the spec: the evaluators need the envelope

@@ -146,6 +146,13 @@ MANIFEST_RULES = (
     "  * `admission_type` is a raw tabular ML feature — a one-hot input to the risk "
     "model, not clinical evidence that an admission occurred. Never use it to "
     "contradict `encounter`, and never treat it as proof of an inpatient stay.\n"
+    "  * The values in this block are raw, and the assistant renders them in their "
+    "published display form. Check the QUANTITY, not its spelling: a length of stay of "
+    "`4.0` is correctly stated as `4` days, prior inpatient days of `0.0` as `0`, a "
+    "`medication_order_count` of `7.0` as `7`, and `admission_type` `Emergency "
+    "(EW EMER.)` as `Emergency`. A whole-number or code-stripped rendering of a field "
+    "in this block is faithful and is not a fidelity defect. Measured laboratory values "
+    "and medication doses are the exception, and are checked at the precision given.\n"
 )
 
 
@@ -169,6 +176,14 @@ GROUND_TRUTH_RULES = (
     "  * `behaviour` — the expected behaviour for this scenario. Use it to decide what "
     "correct looks like here, and report a deviation under `responsiveness` when the "
     "answer does something else.\n"
+    "  * A `facts` entry written at full precision may be restated in the display form "
+    "the product publishes, and that is faithful: a `probability` of `0.0948` stated as "
+    "`9.5%`, a fractional `length_of_stay_days` stated as a whole number of days, a "
+    "count stated as a whole number, a trajectory day of `6.0` stated as `day 6`, and a "
+    "cell count written `×10³/µL` where the fact writes `x10^3/uL`. Compare the "
+    "quantity, not the spelling. Measured laboratory values and medication doses are the "
+    "exception: those are checked at the precision the fact states, and a difference "
+    "there is a fidelity failure.\n"
     "An empty or absent block means the scenario carries no answer key, and nothing is "
     "added to or removed from the rules above.\n"
 )
@@ -195,7 +210,11 @@ def _scenario_constraints(input_doc: dict[str, Any],
     if not expected:
         return ""
     block: dict[str, Any] = {}
-    for key in ("facts", "forbidden_claims", "behaviour", "turn_2"):
+    # `turn_2` was the only later-turn key here, which silently dropped the answer key of
+    # every three-turn scenario: the judge graded a thread against the facts of its
+    # opening turn alone, and `turn_3`'s scope and facts never reached it.
+    for key in ("facts", "forbidden_claims", "behaviour", "turn_2", "turn_3",
+                "turn_4"):
         value = expected.get(key)
         if value in (None, "", [], {}):
             continue
@@ -276,6 +295,14 @@ def build_user_prompt(input_doc: dict[str, Any], output: dict[str, Any],
         # a preceding turn is supplied — and a three- or four-turn thread used to reach
         # the judge as turns 1 and 2 with the rest silently dropped.
         parts.append(f"TURN {index + 1} — QUESTION:\n{question}\n\nANSWER:\n{answer}\n")
+        table = _rendered_table(output, index)
+        if table:
+            parts.append(
+                f"TURN {index + 1} — RENDERED MEDICATION TABLE. These are the rows the "
+                "surface drew beneath that answer, and they are part of what the reader "
+                "saw: a drug, a dose or a frequency that appears here is a claim the "
+                "answer makes, and one the note does not carry is a fidelity failure.\n"
+                + table + "\n")
         cited = _cited_sources(output, index)
         if cited:
             # The numbering the reader clicks, and the ONLY numbering a marker in this
@@ -314,6 +341,35 @@ def build_user_prompt(input_doc: dict[str, Any], output: dict[str, Any],
     return "\n".join(parts)
 
 
+def _rendered_table(output: dict[str, Any], turn_index: int) -> str:
+    """The rows a structured surface drew for this turn, as a table, or `""`.
+
+    A `/meds` answer is one sentence about where the rows came from. The rows are the
+    answer, and until this existed the judge was given the sentence and never the table —
+    so a drug that is not in the note, or a dose the note does not state, had no evidence
+    beside it to be checked against and passed on the sentence alone.
+
+    Empty for every turn that draws no such surface, which is most of them.
+    """
+    turns = output.get("turn_rendered")
+    if not isinstance(turns, list) or turn_index >= len(turns):
+        return ""
+    rows = turns[turn_index]
+    if not isinstance(rows, list):
+        return ""
+    lines: list[str] = []
+    keys = ("medication", "dosage", "frequency", "context")
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        cells = [" ".join(str(row.get(key) or "").split()) for key in keys]
+        lines.append("  | " + " | ".join(cells) + " |")
+    if not lines:
+        return ""
+    return "\n".join(["  | medication | dosage | frequency | route or context |",
+                      "  |---|---|---|---|", *lines])
+
+
 def _cited_sources(output: dict[str, Any], turn_index: int) -> str:
     """The turn's published sources, rendered as `[k] section: text`.
 
@@ -331,7 +387,6 @@ def _cited_sources(output: dict[str, Any], turn_index: int) -> str:
         if not isinstance(entry, dict):
             continue
         cite = entry.get("cite")
-        section = str(entry.get("section") or "note passage")
         # The whole passage, with no character cap. This was `[:400]` until 2026-11-04,
         # and that slice decided three scenarios: the Lovenox discontinuation sentence
         # sits at character 1,576 of a 2,472-character `brief_hospital_course` passage,
@@ -342,6 +397,20 @@ def _cited_sources(output: dict[str, Any], turn_index: int) -> str:
         # sources a turn publishes are bounded by what the note contains, and the judge's
         # context holds five of them many times over.
         text = " ".join(str(entry.get("text") or "").split())
+        # A published record names itself by PMID and title. That is the identifier a
+        # `^[PMID: ...]` marker addresses and the title that tells two records apart;
+        # rendered as "Literature: <abstract>" the judge had neither, and a numbered
+        # `/pubmed` marker could only be checked for being in range.
+        pmid = str(entry.get("pmid") or "").strip()
+        title = " ".join(str(entry.get("title") or entry.get("cite_title") or "").split())
+        if pmid:
+            heading = f"PubMed PMID {pmid}" + (f" ({title})" if title else "")
+            lines.append(f"  [{cite}] {heading}: {text}")
+            continue
+        # A passage that names itself wins over a section key — a laboratory trajectory has
+        # an analyte rather than a heading — and the section is the fallback for the note
+        # passages that make up most of this list.
+        section = str(entry.get("section") or entry.get("cite_title") or "note passage")
         lines.append(f"  [{cite}] {section}: {text}")
     return "\n".join(lines)
 

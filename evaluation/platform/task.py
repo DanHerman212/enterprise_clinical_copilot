@@ -111,6 +111,57 @@ def _components(response: dict) -> list[str]:
             or list(response.get("a2ui_components") or []))
 
 
+#: The components whose payload is a TABLE of rows rather than a drawing. One name today;
+#: a tuple so a second tabular surface is one entry here rather than a second walk.
+_TABLE_COMPONENTS = ("MedicationGrid",)
+
+#: The columns a table row is read from, in the order a reader meets them.
+_TABLE_COLUMNS = ("medication", "dosage", "frequency", "context")
+
+
+def _surface_nodes(node: Any):
+    """Every component object in one A2UI payload, in surface order.
+
+    The surface is a list of protocol messages, and the component tree lives under
+    `updateComponents.components`. Walking generically means a card gaining a wrapper does
+    not silently report no rows, which is the failure `shared.a2ui.components` exists to
+    prevent one level up.
+    """
+    if isinstance(node, dict):
+        if isinstance(node.get("component"), str):
+            yield node
+        for value in node.values():
+            yield from _surface_nodes(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _surface_nodes(item)
+
+
+def _rendered(response: dict) -> list[dict[str, Any]]:
+    """The rows a tabular surface drew, flattened in surface order.
+
+    A `/meds` turn publishes a grid of drugs, doses and frequencies and one sentence about
+    where they came from. The rows are the answer: keeping them on the item is what lets
+    `must_contain` / `must_not_disclose` be checked against the table as well as the
+    sentence, and what puts the table in front of the judge.
+
+    Empty for every turn that draws no such surface, which is most of them.
+    """
+    out: list[dict[str, Any]] = []
+    for component in _surface_nodes(response.get("a2ui")):
+        if component.get("component") not in _TABLE_COMPONENTS:
+            continue
+        rows = component.get("medications")
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            out.append({key: str(row.get(key) or "")
+                        for key in _TABLE_COLUMNS})
+    return out
+
+
 def _verified(response: dict) -> bool | None:
     """The service's `verified` flag, or None when it did not send one.
 
@@ -142,12 +193,15 @@ def _tool_calls(response: dict) -> list[dict[str, Any]]:
 def _sources(response: dict) -> list[dict[str, Any]]:
     """The sources the reader can click for this turn, in the numbering they use.
 
-    Kept as `{cite, section, text}`, plus `pmid` when the source carries one: the judge
-    needs to know which passage a marker resolves to, and the passage's text is what it
-    checks the sentence against — while a literature marker resolves to a record whose
-    `pmid` is the identifier the reader opens. `evaluators.structural_check` reads that
-    field for the `PMID` citation-marker assertion, so dropping it here left a correctly
-    formatted `/pubmed` answer with nothing to resolve against (`dev_t1_06`).
+    Kept as `{cite, section, text}`, plus the identifying fields the entry carries: `pmid`
+    and `title` for a published record, and `cite_title` / `cite_source` / `kind` for a
+    passage that names itself. The judge needs to know which passage a marker resolves to,
+    and the passage's text is what it checks the sentence against — while a literature
+    marker resolves to a record whose `pmid` is the identifier the reader opens.
+    `evaluators.structural_check` reads `pmid` for the `PMID` citation-marker assertion, so
+    dropping it here left a correctly formatted `/pubmed` answer with nothing to resolve
+    against (`dev_t1_06`). A record's `title` travels for the same reason: with the PMID
+    alone the judge can tell two records apart only by their abstracts.
     """
     out: list[dict[str, Any]] = []
     for entry in response.get("sources") or []:
@@ -156,8 +210,13 @@ def _sources(response: dict) -> list[dict[str, Any]]:
         kept = {"cite": entry.get("cite"),
                 "section": entry.get("section"),
                 "text": entry.get("text")}
-        if entry.get("pmid") is not None:
-            kept["pmid"] = entry.get("pmid")
+        for key in ("pmid", "title", "cite_title", "cite_source", "kind"):
+            value = entry.get(key)
+            # Absent stays absent. A note passage carries no PMID, and writing a null one
+            # would make "no identifier" and "an identifier we did not read" the same
+            # value to the check that resolves markers.
+            if value is not None and str(value).strip():
+                kept[key] = value
         out.append(kept)
     return out
 
@@ -345,6 +404,7 @@ def make_task(ask: Ask, *, run_tag: str,
         components = [_components(response) for response in responses]
         verified = [_verified(response) for response in responses]
         sources = [_sources(response) for response in responses]
+        rendered = [_rendered(response) for response in responses]
         tool_calls_per_turn = [_tool_calls(response) for response in responses]
         # The thread's tool results in the order they ran, with no numbering: the
         # per-turn `sources` list is the only place a marker's number is stated.
@@ -363,6 +423,7 @@ def make_task(ask: Ask, *, run_tag: str,
             turn_verified=verified,
             turn_sources=sources,
             turn_tool_calls=tool_calls_per_turn,
+            turn_rendered=rendered,
             turn_1_verified=verified[0],
             tool_evidence=tool_evidence,
             session_id=session_id,

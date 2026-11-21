@@ -39,8 +39,11 @@ AGENT_URL = "https://agent-jamycsjjzq-ue.a.run.app"
 #: The two Tier 2 suites are here because they are `run_evals.DATASETS` — the default
 #: targets of the newer runner beside this one — and a scope check that refused a suite
 #: the platform grades every run would fail the moment anything reached it through here.
+#: The selection slice is here for the same reason: `run_evals` accepts it by name, and a
+#: runner that refused the suite its sibling grades would be a second, stale scope.
 ALLOWED_DATASETS = ("clinical-census-pilot-v2", "suite2-adversarial-v1",
-                    "ecc-tier2-dev-suite", "ecc-tier2-holdout-suite")
+                    "ecc-tier2-dev-suite", "ecc-tier2-holdout-suite",
+                    "ecc-model-selection-slice-v2")
 
 
 class ScopeError(RuntimeError):

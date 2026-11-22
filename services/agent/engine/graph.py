@@ -583,14 +583,15 @@ def _open_driver_question(intent: str | None, question: str) -> bool:
     return not routing.names_one_driver(question)
 
 
-def names_a_command(answer: str) -> bool:
-    """Whether this reply is naming the command that owns the question.
-
-    The redirect form the prompt asks for: "say plainly which command answers it, and stop".
-    Read off the command table rather than from a list written here, so a command added
-    later is recognised without a second place to keep in step.
-    """
-    return any(f"/{wire}" in (answer or "") for wire in routing.BY_WIRE)
+#: The router no longer treats a reply that names a slash command as a finished answer.
+#:
+#: Until 2026-11-22 `route()` ended the turn when `names_a_command(answer)` was true, because
+#: the prompt asked the model to name the command that owned a risk score or a medication
+#: list and stop. That redirect is retired — the loop is bound to both tools and answers
+#: them itself — and the bypass it left behind was worse than redundant: a model that wrote
+#: "/meds" anywhere in a Turn 1 answer skipped its retrieval round entirely, so the turn
+#: settled on prose nothing had looked up. A command NAME is not evidence, and only
+#: evidence ends a turn early (`state["tool_calls"]`, `retrieval_demanded`, the manifest).
 
 
 def _spent(state: AgentState) -> int:
@@ -1306,10 +1307,9 @@ def build_graph(
                 return END
             return "tools"
         # No tool call, so the turn is finished — unless it is an answer about the chart
-        # written without reading the chart. Five ways that is not the case: something
-        # was already retrieved this turn, the demand has already been made once, the
-        # reply is the redirect the prompt asks for (a complete answer that calls no tool
-        # by design), there is no reply at all, or the manifest is the evidence.
+        # written without reading the chart. Four ways that is not the case: something
+        # was already retrieved this turn, the demand has already been made once, there is
+        # no reply at all, or the manifest is the evidence.
         if state["tool_calls"] or state["retrieval_demanded"]:
             return END
         answer = text_of(getattr(last, "content", ""))
@@ -1318,8 +1318,6 @@ def build_graph(
             # safety filter, or empty for a provider reason — and it is reported as one.
             # Demanding a retrieval here would re-prompt a model that has just produced
             # nothing and would surface the second failure in place of the first.
-            return END
-        if names_a_command(answer):
             return END
         if manifest_answers_question:
             # The manifest is the evidence for this question. Forcing a note search

@@ -494,12 +494,20 @@ def test_the_labs_rules_say_a_whole_panel_is_scannable_and_complete():
     assert 'Write "day 6", never "day 6.0"' in text
 
 
-def test_the_labs_rules_still_answer_only_what_was_asked():
-    """The named-analyte rule is the one this must not weaken: two names out of ten."""
+def test_the_labs_rules_answer_the_whole_panel_because_that_is_the_command():
+    """The named-analyte rule went on 2026-11-22, not the narrowing it protected.
+
+    The prompt used to tell the model to answer only the analytes the question named, two
+    out of ten. No `/labs` turn can name any: `contracts.py` refuses trailing text as
+    `ambiguous_intent`, so the paragraph described a request the service rejects. The rule
+    that survives is the one that mattered — the answer describes the panel it was given,
+    with no analyte singled out as the one asked about.
+    """
     text = _flatten(prompts.LABS_FORMATTING)
 
-    assert "those analytes are the answer" in text
-    assert "say nothing about the rest of the panel" in text
+    assert "those analytes are the answer" not in text
+    assert "say nothing about the rest of the panel" not in text
+    assert "It never names an analyte" in text
 
 
 def test_the_ehr_rules_refuse_an_arrival_list_as_a_discharge_regimen():

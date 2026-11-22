@@ -453,12 +453,19 @@ def test_the_summary_prompt_makes_sections_conditional_on_the_evidence():
     """
     formatting = prompts.formatting_for("summarize")
 
-    # The inpatient heading, and the outpatient counterpart that replaces it.
+    # The inpatient headings.
     assert "Presentation & diagnosis" in formatting
-    assert "Clinical course" in formatting
-    # Both inventable sections are named as conditional, and omission is sanctioned.
     assert "Hospital course & procedures" in formatting
     assert "Discharge plan & medications" in formatting
+    # The outpatient counterpart is NOT here (2026-11-22). `/ehr` on a visit is answered
+    # by the encounter notice in `deterministic.py`, before any model call, so a
+    # `**Clinical course.**` instruction in this prompt describes a turn that never
+    # reaches it — and the rubric calls it a responsiveness defect for a command's answer
+    # shape to be renegotiated by the model. It lives in `CHART_SPOKE` instead, where the
+    # free-text summary of a visit is genuinely written.
+    assert "Clinical course" not in formatting
+    assert "Clinical course" in prompts.CHART_SPOKE
+    # Both inventable sections are named as conditional, and omission is sanctioned.
     assert "omit" in formatting.lower()
     # The risk section still has to be asked for.
     assert "Readmission risk & trajectory" in formatting
@@ -919,12 +926,25 @@ def test_the_formatter_is_told_the_question_that_was_asked():
     assert _formatter_input([], False, "   ") == ""
 
 
-def test_the_requested_analytes_are_what_the_labs_prompt_is_about():
-    """Passing the question in is only half the fix: the prompt has to use it."""
+def test_the_labs_prompt_describes_the_panel_rather_than_a_named_analyte():
+    """The formatter stopped branching on the question on 2026-11-22.
+
+    It used to open "Read the question at the top of this input. Where it names specific
+    analytes … those analytes are the answer", so that a `/labs` turn carrying a question
+    could narrow to two of them. No such turn exists: `contracts.py` refuses `/labs` with
+    trailing text as `ambiguous_intent`, because a command that answers the whole panel
+    cannot also answer a question about two of its analytes. The paragraph described a
+    request the service rejects, and it invited the model to withhold the rest of a panel
+    nobody had narrowed.
+
+    What the prompt has to say instead is which question it is answering, so the model does
+    not go looking for an analyte it was never given.
+    """
     from services.agent.engine.prompts import LABS_FORMATTING
 
-    assert "Read the question at the top of this input" in LABS_FORMATTING
-    assert "those analytes are the answer" in LABS_FORMATTING
+    assert "those analytes are the answer" not in LABS_FORMATTING
+    assert "Read the question at the top of this input" not in LABS_FORMATTING
+    assert "It never names an analyte" in LABS_FORMATTING
     assert "nadir" in LABS_FORMATTING
     # The sentence that hid an abnormal reading has to be forbidden by name.
     assert "remained within reference range" in LABS_FORMATTING

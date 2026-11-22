@@ -188,3 +188,90 @@ def test_the_item_input_sent_to_langfuse_validates_as_a_dataset_item():
     # the run hands the evaluators alongside the input.
     assert payloads[0]["expected_output"]["facts"]
     assert payloads[0]["expected_output"]["behaviour"]
+
+
+# --------------------------------------------------- per-turn expectations (2026-11-22)
+#
+# Every key above describes turn 1 or the thread as a whole. A three- or five-turn item
+# whose SECOND turn must draw a table, or whose THIRD must report `verified: false`, had no
+# way to say so — and an item carrying no per-turn expectation produced no failures, so the
+# gap was invisible. `turn_expectations` names a turn and asserts three facts about it.
+
+
+def _thread(**overrides) -> dict:
+    output = {
+        "turn_1_response": "a",
+        "turn_responses": ["a", "b", "c"],
+        "turn_verified": [True, False, True],
+        "turn_components": [["Column"], ["Column", "LabTrendCard"], ["Column"]],
+    }
+    output.update(overrides)
+    return output
+
+
+def test_a_named_turn_must_report_the_verified_flag_it_declares():
+    ok, _ = _check({"turn_expectations": {"2": {"verified": False}}}, _thread())
+    assert ok
+
+    ok, failures = _check({"turn_expectations": {"2": {"verified": True}}}, _thread())
+    assert not ok
+    assert failures == ["turn 2 verified: expected True, got False"]
+
+
+def test_a_named_turn_must_draw_the_component_it_declares():
+    ok, _ = _check({"turn_expectations": {"2": {"components": ["LabTrendCard"]}}},
+                   _thread())
+    assert ok
+
+    ok, failures = _check({"turn_expectations": {"2": {"components": ["MedicationGrid"]}}},
+                          _thread())
+    assert not ok
+    assert ("turn 2 components: MedicationGrid missing from "
+            "['Column', 'LabTrendCard']") in failures
+
+
+def test_a_named_turn_must_not_draw_a_component_it_forbids():
+    ok, failures = _check(
+        {"turn_expectations": {"2": {"forbidden_components": ["LabTrendCard"]}}},
+        _thread())
+
+    assert not ok
+    assert "turn 2 forbidden component rendered: LabTrendCard" in failures[0]
+
+
+def test_the_list_form_names_its_turn_either_by_index_or_by_position():
+    ok, failures = _check({"turn_expectations": [{"turn_index": 3, "verified": False}]},
+                          _thread())
+    assert not ok
+    assert "turn 3 verified: expected False, got True" in failures
+
+    ok, _ = _check({"turn_expectations": [{"verified": True}, {"verified": False}]},
+                   _thread())
+    assert ok
+
+
+def test_a_turn_the_thread_never_ran_fails_rather_than_passing():
+    """A four-turn expectation on a two-turn thread must not read as satisfied."""
+    ok, failures = _check(
+        {"turn_expectations": {"4": {"verified": True}}},
+        {"turn_1_response": "a", "turn_responses": ["a"], "turn_verified": [True]})
+
+    assert not ok
+    assert "turn 4 verified: expected True, got nothing" in failures
+
+
+def test_an_unknown_per_turn_key_is_reported_rather_than_ignored():
+    """A typo in an answer key must not become a silently absent assertion."""
+    ok, failures = _check({"turn_expectations": {"2": {"component": ["Column"]}}},
+                          _thread())
+
+    assert not ok
+    assert "unknown expectation key" in failures[0]
+
+
+def test_an_item_with_no_per_turn_expectations_is_unchanged():
+    ok, failures = _check({}, _thread())
+    assert ok and failures == []
+
+    ok, failures = _check({"turn_expectations": {}}, _thread())
+    assert ok and failures == []

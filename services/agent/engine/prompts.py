@@ -224,9 +224,13 @@ CHART RETRIEVAL & SUMMARIZATION
 #: how a regimen mentioned in prose differs from the reconciliation the command produces.
 MEDS_SPOKE = """\
 MEDICATIONS SCOPE & PROVENANCE
-- A bare request for the full LIST of discharge medications is answered by /meds: an
-  enumerated list with doses and frequencies is /meds' answer to give. Do not
-  assemble one out of note prose.
+- ANY free-text question about medications is yours to answer — including a bare or
+  shorthand request for the discharge list ("dc meds?", "what medications was she
+  discharged on?"), a class filter, a dosing question, and a taper question. Answer it
+  from `discharge_medications` — the output in `<session_evidence_state>`, or by calling it
+  — together with `discharge_instructions` and `brief_hospital_course`. NEVER tell the
+  reader to run `/meds`, and never say the list is another surface's to produce: a reader
+  who asked in their own words is owed the answer in their own words.
 - Any question that ASKS about medications rather than for the list is yours to answer —
   whether a drug is an anticoagulant, whether any are high-risk, what a taper is doing. Use the `discharge_medications` output you
   were given (this turn's or a replayed one) or call it. Repeating a count when the reader
@@ -247,9 +251,12 @@ MEDICATIONS SCOPE & PROVENANCE
   for a stop, a hold or a completed course before discharge. A drug the instructions do not
   continue, or the course discontinues, is reported as NOT continued — never as
   prescribed at discharge.
-- Answer a request for the list by enumerating the regimen `discharge_instructions` gives,
-  one drug per line, with a citation on the list; read the other section only to withhold a
-  drug not continued, never to add one.
+- When the reader asks for the discharge regimen, enumerate it in prose from
+  `discharge_medications` and `discharge_instructions`, one drug per line, citing the
+  passage that states each — and read `brief_hospital_course` and any arrival or transfer
+  header to withhold a drug that was given inpatient or not continued, never to add one.
+  A drug that appears only there is reported as not continued, not as a discharge
+  prescription.
 - When a passage gives a number AND a rule for changing it — "the patient is taking
   Coumadin 7 mg daily ... the dose will be adjusted according to the INRs" — state BOTH.
 - A TAPER is a scheduled step-down across defined intervals. A dose adjusted by laboratory
@@ -314,6 +321,11 @@ LABORATORY TRAJECTORIES & RANKING
   its value and `flag`, or says all were inside range. A `critical_low` or `critical_high`
   flag outranks distance: name a critical reading ahead of any merely low or high one,
   ranking by distance only when none is critical.
+  Where the abnormal readings left are merely low or high and sit in DIFFERENT units, no
+  unitless comparison is meaningful and none may be invented: name the single analyte that
+  is clearly furthest outside its own interval when one dominates, and otherwise state each
+  abnormal analyte with its value, its `reference_low`-`reference_high` interval and its
+  `flag`, and let the reader compare them against their own bounds.
   A list of abnormal values is not an answer to "which".
 - A sentence naming two or three specific analytes cites each analyte's series
   (`^[1], ^[2]`).
@@ -678,12 +690,12 @@ Return only the JSON object, with no prose before or after it."""
 LABS_FORMATTING = """Describe the laboratory trajectories you were given, for a clinician who
 asked what these measurements did during this admission.
 
-Read the question at the top of this input. Where it names specific analytes — "her
-hemoglobin and sodium", "the creatinine" — those analytes are the answer, and the prose is
-about them alone: say nothing about the rest of the panel, because a list of ten
-trajectories where two were asked for buries the answer.
+The question is `/labs`: the whole panel, by command. It never names an analyte — a
+command with trailing text is refused before this prompt is reached — so every panel
+member is described by the shape below, and no analyte is singled out as the one asked
+about.
 
-Where the question names no analyte, write this shape and no other.
+Write this shape and no other.
 
 - ONE opening sentence saying whether any analyte crossed a reference limit, and which one.
   Where none did, that sentence is the answer: at most one more may name the largest
@@ -766,10 +778,9 @@ Write flowing prose with these section labels, in this order:
   `brief_hospital_course`, or an unsectioned `discharge_summary` — take the presentation from
   the one passage that states those symptoms, carrying that passage's marker, and never from
   the diagnosis passage. Name the condition ONCE, where the diagnoses are stated, and let the
-  narrative sentence describe the presentation instead of naming it in advance. Where the
-  record is an outpatient encounter — the caveat in the tool result says when it is — there
-  was no admission, so write **Clinical course.** instead and omit the other three sections.
-  Never write a presentation and diagnosis section for a record that was not a stay.
+  narrative sentence describe the presentation instead of naming it in advance. Every /ehr
+  turn reaches this prompt on an inpatient stay: an outpatient record is answered by the
+  encounter notice in code, before any model call, so no other heading is written here.
 
   KEEP THE PASSAGE'S OWN TENSE. A sentence you write in the past tense asserts that the
   event happened. Where a passage states what was PLANNED — the patient "was to be
@@ -875,8 +886,8 @@ to a rehabilitation facility" beside a block saying the patient went home — is
 paragraph exists to prevent: the reader has no way to tell which one to act on.
 
 Open each section with its label in bold, followed by a period, at the START of its own
-paragraph — exactly `**Presentation & diagnosis.**`, `**Clinical course.**` for an outpatient
-record, and so on — then the prose of that section on the same line. The interface sets the bold
+paragraph — exactly `**Presentation & diagnosis.**`, `**Hospital course & procedures.**` and
+so on — then the prose of that section on the same line. The interface sets the bold
 run as the section's heading, which is why it must be the first thing in the paragraph and must
 end with the period: a label buried mid-sentence cannot be found, and markdown heading syntax
 (`##`) is not used anywhere in this answer — it reaches the reader as literal characters while
@@ -1147,13 +1158,15 @@ as usual."""
 # which would turn a redirect into a summary read out of the notes — the boundary this
 # path already refuses to cross.
 RETRIEVAL_DEMAND = """\
-You answered without calling a tool. If this question is about what the patient's notes
-say, then you do not have the answer: call `rag_search` with a focused query now, and
-answer from the passages it returns.
+You answered without calling a tool. If this question is about this patient's chart —
+what the notes say, the medications, the laboratory values, the readmission risk — or
+about the published literature, then you do not have the answer: call the tool that
+answers it now, and answer from what it returns. Never answer such a question by naming
+a slash command instead.
 
-If instead this is a question whose answer belongs to a command — a readmission risk
-score, or a discharge medication list — then answer it exactly as you just did, by naming
-the command that produces it and stopping."""
+If instead the question asks for a clinical order or a recommendation, or asks about a
+different patient from the one this encounter is bound to, then this is not a question
+to look up: state that refusal plainly, call no tool, and state no clinical fact."""
 
 
 #: What the session already holds, said once when the turn's bound set is short.

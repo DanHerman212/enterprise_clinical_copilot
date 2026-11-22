@@ -640,6 +640,96 @@ def _dev_suite_failures(expectations: dict[str, Any],
     if marker:
         failures.extend(_citation_marker_failures(str(marker), output))
 
+    failures.extend(_turn_expectation_failures(expectations, output))
+
+    return failures
+
+
+#: The per-turn keys `turn_expectations` may assert. Each is checked against that turn's
+#: own entry in `turn_verified` / `turn_components`; nothing here is decided from the
+#: thread as a whole, which is the point of the block.
+_TURN_EXPECTATION_KEYS = ("verified", "components", "forbidden_components")
+
+
+def _turn_expectation_failures(expectations: dict[str, Any],
+                               output: dict[str, Any]) -> list[str]:
+    """Assertions about a NAMED turn of a thread, not about turn 1 or the whole thread.
+
+    A three- or five-turn item whose second turn must render a table, or whose third must
+    report `verified: false`, had no way to say so: `components` and `verified` are
+    top-level keys, and every one of them describes turn 1. The suite's answer keys
+    therefore either over-asserted (a component the thread drew anywhere counted) or could
+    not assert at all, and the omission was invisible — an item with no per-turn
+    expectation produces no failures.
+
+    The shape, both forms accepted because a fixture author reaches for either:
+
+        "turn_expectations": {"2": {"components": ["LabTrendCard"]},
+                              "3": {"verified": False}}
+
+        "turn_expectations": [{"turn_index": 2, "forbidden_components": ["MedicationGrid"]}]
+
+    Turn numbers are 1-based, the way a reader counts them. A list entry without a
+    `turn_index` takes its position, so the first entry is turn 1.
+
+    What is deliberately NOT here: `status`, `command` and `error`. Those describe the
+    response envelope, which the harness records once per turn but which no product
+    surface labels per turn — asserting them here would be inventing a contract. The three
+    that are here are the three the payload already publishes per turn.
+    """
+    raw = expectations.get("turn_expectations")
+    if not raw or not isinstance(raw, (dict, list)):
+        return []
+
+    pairs: list[tuple[Any, Any]] = []
+    if isinstance(raw, dict):
+        pairs.extend(raw.items())
+    else:
+        pairs.extend((index + 1, spec) for index, spec in enumerate(raw))
+
+    verified = output.get("turn_verified")
+    verified = verified if isinstance(verified, list) else []
+    components = output.get("turn_components")
+    components = components if isinstance(components, list) else []
+
+    failures: list[str] = []
+    for position, spec in pairs:
+        if not isinstance(spec, dict):
+            continue
+        raw_index = spec.get("turn_index", position)
+        try:
+            turn = int(raw_index)
+        except (TypeError, ValueError):
+            failures.append(f"turn_expectations: {raw_index!r} is not a turn number")
+            continue
+        if turn < 1:
+            failures.append(f"turn_expectations: turn {turn} is not a turn")
+            continue
+        offset = turn - 1
+        drawn = [str(name) for name in (components[offset] if offset < len(components)
+                                        else []) or []]
+        unknown = sorted(set(spec) - set(_TURN_EXPECTATION_KEYS) - {"turn_index"})
+        if unknown:
+            failures.append(
+                f"turn {turn}: unknown expectation key(s) {unknown}; "
+                f"supported: {list(_TURN_EXPECTATION_KEYS)}")
+
+        if "verified" in spec and spec["verified"] is not None:
+            want = bool(spec["verified"])
+            got = verified[offset] if offset < len(verified) else None
+            if got is None:
+                failures.append(f"turn {turn} verified: expected {want}, got nothing")
+            elif bool(got) != want:
+                failures.append(f"turn {turn} verified: expected {want}, got {got}")
+
+        for name in spec.get("components") or []:
+            if str(name) not in drawn:
+                failures.append(
+                    f"turn {turn} components: {name} missing from {drawn}")
+        for name in spec.get("forbidden_components") or []:
+            if str(name) in drawn:
+                failures.append(
+                    f"turn {turn} forbidden component rendered: {name} in {drawn}")
     return failures
 
 

@@ -136,9 +136,14 @@ def test_the_medications_spoke_says_which_section_to_enumerate():
     assert "`brief_hospital_course` for a stop" in text
     assert "NOT continued" in text
 
-    assert "enumerating the regimen `discharge_instructions` gives" in text, (
-        "the medications spoke no longer says which section to enumerate, and a rule "
-        "that only says what to check leaves the model deciding what to write"
+    assert "enumerate it in prose from" in text, (
+        "the medications spoke no longer says what to write down, and a rule that only "
+        "says what to check leaves the model deciding what to write"
+    )
+    assert "`discharge_medications` and `discharge_instructions`" in text, (
+        "the enumeration rule lost one of its two sources on 2026-11-22, when the list "
+        "stopped belonging to /meds and started being written from the extraction output "
+        "as well as the instruction section"
     )
     assert "never to add one" in text, (
         "the second section may withhold a drug from the list; if it can also add one, "

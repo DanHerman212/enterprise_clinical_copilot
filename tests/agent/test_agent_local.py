@@ -1,17 +1,16 @@
 """Tier 2: does the agent use the tool, and does it stay out of a command's way?
 
 Tier 1 (test_mcp_stdio.py) proves the tool returns the right number. These tests
-prove the agent does not quietly replace it — and, since UX Phase 1B, that it does
-not reach for a tool that a command owns.
+prove the agent does not quietly replace it — and that a free-text question reaches a
+tool rather than a slash command.
 
-The boundary moved, so these tests moved with it. A risk score and a discharge
+The boundary moved twice, and these tests moved with it. A risk score and a discharge
 medication list used to be the reasoning loop's work: the model chose the tool and
-reported the number, and the failure being guarded against was a confident,
-plausible answer with no tool call at all. Both answers are now produced by a
-command that calls its tool once, deterministically, and both tools are absent from
-the loop. So the free-text path is checked for the redirect it owes, and the
-tool-call assertions are made on the command path that owns them. The failure they
-guard against is unchanged: a number nobody asked the service for.
+reported the number. Then both were produced by a command, both tools were absent from
+the loop, and the free-text path was checked for the redirect it owed. Since 2026-11-22
+both tools are bound for the questions that need them and the redirect is retired, so the
+free-text assertions are back to the tool calls: a number nobody asked the service for is
+still the failure these tests guard against.
 
 Runs against either transport, so the same assertions cover the deployed
 service:
@@ -25,7 +24,6 @@ and every test reads from one of the runs below.
 
 import asyncio
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -123,28 +121,26 @@ def test_a_free_text_risk_question_enters_the_reasoning_loop(free_text_risk):
     static caption — which ignores `turns`, so the same question asked as a follow-up
     got Turn 1's answer back. Now the loop receives it and decides for itself.
 
-    What it must not do is answer from memory, and since 2026-10-22 there are two ways
-    it can honour that, because the model changed which one it picks when the literature
-    tool stopped being bound on every turn: it retrieves, or it names the command that
-    owns the score and stops. Both are correct — `predict_readmission` is deliberately
-    outside the loop, so a redirect is the honest answer to "what is her risk" — and the
-    failure this guards is unchanged: a risk FIGURE with nothing behind it. So a
-    redirect is accepted only when it carries no number.
+    What it must not do is answer from memory. Until 2026-11-22 there were two ways it
+    could honour that — retrieve, or name the command that owns the score and stop — and
+    the redirect is gone: the prompt no longer asks for it, `predict_readmission` is bound
+    on a question that asks for the estimate, and the router no longer ends a turn because
+    a reply mentioned a slash command. So the assertion is now the strict one: the loop
+    calls the predictor and the answer carries a figure computed from nothing else.
     """
+    assert "command" not in free_text_risk, "free text must not become a command"
     assert final_text(free_text_risk).strip(), (
         "a free-text risk question must be answered. A turn with no text is served to the "
         "reader as a refused question, which is not what a question the service handled "
         "looks like (2026-11-10: the medication twin of this test passed on a blank "
         "answer because it only asserted the tool call)"
     )
-    assert "command" not in free_text_risk, "free text must not become a command"
-    if free_text_risk["tool_calls"]:
-        assert final_text(free_text_risk).strip()
-        return
+    assert any(call["name"] == "predict_readmission"
+               for call in free_text_risk["tool_calls"]), free_text_risk["tool_calls"]
     text = final_text(free_text_risk)
-    assert "/ehr" in text, "the loop neither looked anything up nor named /ehr"
-    assert not re.search(r"\d", text), (
-        "a redirect must not carry a figure: the score belongs to the /ehr turn"
+    assert "/ehr" not in text, (
+        "the answer told the reader to run a command. The redirect is retired: the loop "
+        "is bound to the predictor and answers the question itself"
     )
 
 

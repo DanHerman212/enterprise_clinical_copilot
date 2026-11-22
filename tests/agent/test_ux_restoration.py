@@ -203,32 +203,44 @@ def test_the_meds_markers_resolve_to_both_sections_the_rows_came_from():
 
 
 # --- Defect 8: no markdown headings in /ehr -----------------------------------
-
 def test_the_ehr_instruction_no_longer_asks_for_markdown_headings():
     """`##` streamed to the reader as literal characters until the answer settled.
 
-    The four labels changed on 2026-11-03 with the retrieval rewrite: the tool now returns
+    The labels changed on 2026-11-03 with the retrieval rewrite: the tool now returns
     the whole note, so the summary names the presentation and the operation instead of the
     two discharge blocks it used to be limited to.
+
+    `**Clinical course.**` left this prompt on 2026-11-22. `/ehr` on an outpatient record
+    is answered by the encounter notice in `deterministic.py` before the model is called,
+    so the outpatient label in this prompt instructed a turn that never reached it — and a
+    command whose answer shape the model may renegotiate is what the rubric calls a
+    responsiveness defect. The label still exists for the free-text path, in `CHART_SPOKE`.
     """
     assert "## " not in prompts.EHR_FORMATTING
-    for label in ("**Presentation & diagnosis.**", "**Clinical course.**",
+    for label in ("**Presentation & diagnosis.**",
                   "**Hospital course & procedures.**", "**Discharge plan & medications.**"):
         assert label in prompts.EHR_FORMATTING
+    assert "**Clinical course.**" not in prompts.EHR_FORMATTING
+    assert "**Clinical course.**" in prompts.CHART_SPOKE
 
 
 def test_the_ehr_instruction_matches_the_summary_style():
-    """One style for a section label, whether the summary came from /ehr or /pubmed.
+    """One style for a section label across every surface that writes one.
 
-    Asserted as a set rather than a sample (2026-11-03): the free-text prompt and the
-    briefing now name the same sections, so a label added to one of them without the
-    other is the regression, not the presence of any single one.
+    Asserted as a set rather than a sample (2026-11-03): a label added to one prompt
+    without the other is the regression, not the presence of any single one. Since
+    2026-11-22 the set is split by surface — the three stay headings in `EHR_FORMATTING`,
+    the four free-text headings in `CHART_SPOKE` — because `/ehr` never sees an outpatient
+    record. `SYSTEM_PROMPT` is composed of the hub and every spoke, so it still holds all
+    of them, which is what keeps a reader moving between the two surfaces in one style.
     """
-    for label in ("**Presentation & diagnosis.**", "**Clinical course.**",
+    for label in ("**Presentation & diagnosis.**",
                   "**Hospital course & procedures.**", "**Discharge plan & medications.**",
                   "**Readmission risk & trajectory.**"):
         assert label in prompts.EHR_FORMATTING, label
         assert label in SYSTEM_PROMPT, label
+    assert "**Clinical course.**" in prompts.CHART_SPOKE
+    assert "**Clinical course.**" in SYSTEM_PROMPT
 
 
 # --- Defect 7: verified ------------------------------------------------------

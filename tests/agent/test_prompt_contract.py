@@ -391,21 +391,32 @@ def test_the_summary_headings_are_conditional_on_an_inpatient_stay():
 
 
 def test_the_medication_authority_separates_reading_from_listing():
-    """/meds owns the reconciliation; it does not own reading a regimen the note records.
+    """/meds is a surface, not a gate: the loop reads AND enumerates a regimen.
 
     The rule this replaces forbade both, and the cost was live on 2026-10-21 (`d7e4a1cb`):
     "is the literature behind this specific combination effective?" came back refused as a
     medications question, on the false premise that the agent was not permitted to read a
-    regimen its retrieved passage named. Both halves are load-bearing — a rule that permits
-    reading but forgets the reconciliation invites an invented list, and a rule that forbids
-    reading refuses a question the record can answer.
+    regimen its retrieved passage named.
+
+    The remaining half of the old rule — that the LIST belongs to /meds and a free-text
+    request should be redirected to it — went on 2026-11-22. A reader who asked "dc meds?"
+    in their own words is owed the list in their own words, and the loop is bound to the
+    tool that produces it. What must still hold is the reconciliation: the list is drawn
+    from `discharge_medications` and `discharge_instructions` and checked against the
+    course, so an inpatient-only or discontinued drug is never presented as a discharge
+    prescription.
     """
     assert "READING IS NOT LISTING" in SYSTEM_PROMPT
 
-    # The reconciliation is still the command's, and the prohibition names the shape it
-    # takes: an enumerated list with doses and frequencies.
-    assert "enumerated list" in SYSTEM_PROMPT
-    assert "/meds' answer to give" in SYSTEM_PROMPT
+    # The redirect is retired, stated as an absence so it cannot come back.
+    assert "answered by /meds" not in SYSTEM_PROMPT
+    assert "/meds' answer to give" not in SYSTEM_PROMPT
+    assert "NEVER tell the\n  reader to run `/meds`" in SYSTEM_PROMPT \
+        or "NEVER tell the reader to run `/meds`" in " ".join(SYSTEM_PROMPT.split())
+
+    # The reconciliation survives, named by the two sections it draws on.
+    assert "`discharge_medications` and `discharge_instructions`" in \
+        " ".join(SYSTEM_PROMPT.split())
 
     # The false premise is refused in the prompt itself, not merely left unstated.
     assert "not permitted" in SYSTEM_PROMPT

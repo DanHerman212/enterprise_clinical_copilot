@@ -34,10 +34,31 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from evaluation.platform import dev_suite  # noqa: E402
 from evaluation.platform import selection_slice  # noqa: E402
 
 SLICE = selection_slice.SELECTION_SLICE_PATH
 AUDIT_PATH = REPO / "evaluation" / "audits" / "selection_slice.audit.json"
+
+#: The Dev suite's own attestation and artefacts. Separate files, never shared with the
+#: selection slice: two datasets locked by one attestation is how a stale hash passes for
+#: a fresh one.
+DEV_AUDIT_PATH = REPO / "evaluation" / "audits" / "dev_suite.audit.json"
+DEV_FACT_SHEET = REPO / "evaluation" / "dev_cohort_fact_sheet.md"
+DEV_MATRIX_DOC = REPO / "evaluation" / "dev_followup_matrix.md"
+
+#: A contribution magnitude as the raw estimate returns it. The projection withholds it
+#: from the model and from the reader, so an expectation that quotes one is asserting a
+#: number no answer may contain.
+RAW_CONTRIBUTION = re.compile(r"[+-\u2212]?\s?0\.\d{4}\b")
+
+#: The suite name to its attestation and its dataset file. One table, so a guard reads the
+#: pair that belongs to the suite it was asked about.
+AUDIT_PATHS: dict[str, Path] = {"selection": AUDIT_PATH, "dev": DEV_AUDIT_PATH}
+AUDIT_SOURCES: dict[str, Path] = {
+    "selection": SLICE,
+    "dev": dev_suite.DEV_SUITE_PATH,
+}
 
 #: The allocation the Architect approved: 5 / 4 / 3 / 4. Written here rather than derived
 #: from the file, so an audit that is handed a different shape fails instead of agreeing
@@ -201,6 +222,212 @@ def deterministic_defects(rows: list[dict[str, Any]],
     if matrix:
         found["__matrix__"] = matrix
     return found
+
+
+def _hadm_sections(text: str) -> dict[str, str]:
+    """A generated markdown artefact, split by the record heading it belongs to.
+
+    Both Dev artefacts are keyed by `## <hadm_id>`, and every per-record check is
+    meaningless across the boundary: a token that appears under another patient's heading
+    is not evidence for this one.
+    """
+    sections: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in text.splitlines():
+        heading = re.match(r"^##\s+(\d{8})", line)
+        if heading:
+            current = heading.group(1)
+            sections[current] = []
+            continue
+        if line.startswith("## "):
+            current = None
+            continue
+        if current is not None:
+            sections[current].append(line)
+    return {key: "\n".join(lines) for key, lines in sections.items()}
+
+
+def _matrix_chips(text: str) -> dict[str, dict[str, list[str]]]:
+    """record → command → the chip slots the matrix proves are filled.
+
+    Read from the generated table rather than re-running the selector: the matrix is the
+    artefact an author copies from, so it is the artefact the audit holds the file to.
+    """
+    out: dict[str, dict[str, list[str]]] = {}
+    current: str | None = None
+    for line in text.splitlines():
+        heading = re.match(r"^##\s+(\d{8})", line)
+        if heading:
+            current = heading.group(1)
+            out.setdefault(current, {})
+            continue
+        if line.startswith("## "):
+            current = None
+            continue
+        if current is None:
+            continue
+        row = re.match(r"^\|\s*`(/[a-z]+)`\s*\|\s*(.*?)\s*\|\s*(\d+)\s*\|$", line)
+        if not row:
+            continue
+        command = row.group(1)
+        cells = [part.strip() for part in row.group(2).split(" | ")]
+        out[current][command] = [cell for cell in cells if cell not in ("\u2014", "-")]
+    return out
+
+
+def _matrix_driver_chips(text: str) -> dict[str, list[str]]:
+    """record → the exact driver question of every ranked factor the matrix lists."""
+    out: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in text.splitlines():
+        heading = re.match(r"^##\s+(\d{8})", line)
+        if heading:
+            current = heading.group(1)
+            continue
+        if line.startswith("## "):
+            current = None
+            continue
+        if current is None:
+            continue
+        row = re.match(r"^\|\s*\d+\s*\|\s*`[^`]+`\s*\|.*\|\s*(How does .+\?)\s*\|$",
+                       line)
+        if row:
+            out.setdefault(current, []).append(row.group(1).strip())
+    return out
+
+
+def dev_deterministic_defects(rows: list[dict[str, Any]], *,
+                              fact_sheet: Path | None = None,
+                              matrix_doc: Path | None = None
+                              ) -> dict[str, list[str]]:
+    """Every Dev defect this module can prove without a model.
+
+    Three kinds, and the third is the one that was missing: a check against the record's
+    own section of the fact sheet, so a copied value is verified against the record it
+    claims, and two checks against the generated affordance matrix, so a declared risk
+    chip or a chip slot is one the product actually offers.
+    """
+    found: dict[str, list[str]] = {}
+
+    def add(item: str, problem: str) -> None:
+        found.setdefault(item, []).append(problem)
+
+    facts_path = Path(fact_sheet) if fact_sheet else DEV_FACT_SHEET
+    matrix_path = Path(matrix_doc) if matrix_doc else DEV_MATRIX_DOC
+    if not facts_path.exists():
+        add("__matrix__", f"no fact sheet at {facts_path}; must_contain cannot be "
+                          "verified")
+        sections: dict[str, str] = {}
+    else:
+        sections = _hadm_sections(facts_path.read_text(encoding="utf-8"))
+    if not matrix_path.exists():
+        add("__matrix__", f"no affordance matrix at {matrix_path}; chip assertions "
+                          "cannot be verified")
+        chips: dict[str, dict[str, list[str]]] = {}
+        drivers: dict[str, list[str]] = {}
+    else:
+        matrix_text = matrix_path.read_text(encoding="utf-8")
+        chips = _matrix_chips(matrix_text)
+        drivers = _matrix_driver_chips(matrix_text)
+
+    for row in rows:
+        item = str(row.get("id") or "?")
+        hadm = str(row.get("hadm_id") or "")
+        turns = list(row.get("turns") or [])
+        expected = row.get("expected_output") or {}
+        behaviour = str(expected.get("behaviour") or "")
+        must_contain = [str(token) for token in expected.get("must_contain") or []]
+        must_not = [str(word) for word in expected.get("must_not_disclose") or []]
+        claims = [str(claim) for claim in expected.get("forbidden_claims") or []]
+        prompts = "\n".join([dev_suite._turn_text(turn) for turn in turns])
+
+        haystack = "\n".join([prompts, behaviour, *must_contain]).lower()
+        for word in must_not:
+            if word.lower() in haystack:
+                add(item, f"must_not_disclose {word!r} appears in the prompt, "
+                          "behaviour or must_contain — a correct answer cannot avoid it")
+        for span in _backticked(claims):
+            if span.lower() in haystack:
+                add(item, f"forbidden_claims quotes {span!r} in backticks and the "
+                          "question contains it — the literal check would fail a "
+                          "correct answer")
+
+        section = sections.get(hadm, "")
+        for token in must_contain:
+            if section and token.lower() not in section.lower():
+                add(item, f"must_contain {token!r} is not in the fact sheet section "
+                          f"for {hadm}")
+
+        lowered = behaviour.lower()
+        for phrase in (*COMPONENT_PHRASES, "widget"):
+            if phrase in lowered:
+                add(item, f"behaviour grades a UI component ({phrase!r}); the judge "
+                          "sees only answer text, cited passages and tool evidence")
+
+        if RAW_CONTRIBUTION.search(behaviour):
+            add(item, "behaviour quotes a raw contribution float; the projection "
+                      "withholds it from the model and the reader")
+
+        for turn in turns:
+            text = dev_suite._turn_text(turn)
+            if isinstance(turn, dict) and str(turn.get("intent")) == "risk_driver":
+                listed = drivers.get(hadm, [])
+                if text.strip() not in listed:
+                    add(item, f"risk_driver prompt is not a driver chip the matrix "
+                              f"lists for {hadm}: {text.strip()!r}")
+            for number, slot in dev_suite.followup_slots(turn):
+                index = number - 1
+                source = turns[index] if 0 <= index < len(turns) else None
+                command = ""
+                if isinstance(source, str) and source.strip().startswith("/"):
+                    command = source.strip().split()[0].lower()
+                if not command:
+                    continue
+                if command == "/meds":
+                    add(item, "a follow-up placeholder reads /meds chips; the live "
+                              "extracted rows shift the slots, so the matrix cannot "
+                              "guarantee them")
+                    continue
+                available = chips.get(hadm, {}).get(command, [])
+                if slot >= len(available):
+                    add(item, f"{command} offers {len(available)} chip(s) for {hadm}, "
+                              f"and the placeholder indexes slot {slot}")
+    return found
+
+
+def audit_guard(suite: str = "selection") -> None:
+    """Refuse to publish a dataset whose audit attestation does not match the file.
+
+    The same contract `sync_selection_slice.audit_guard` enforces for the selection slice,
+    generalised over the suite so a second dataset cannot inherit the first one's lock. A
+    missing attestation, a hash that no longer matches the file, a recorded defect, or a
+    reviewer that did not pass an item it recorded all stop the upload.
+    """
+    if suite not in AUDIT_PATHS:
+        raise SystemExit(f"unknown suite {suite!r}; expected one of "
+                         f"{sorted(AUDIT_PATHS)}")
+    audit_path = AUDIT_PATHS[suite]
+    source = AUDIT_SOURCES[suite]
+    if not audit_path.exists():
+        raise SystemExit(
+            f"no audit attestation at {audit_path}; run `python -m "
+            f"evaluation.platform.dataset_audit --suite {suite} --write-audit` first")
+    recorded = json.loads(audit_path.read_text(encoding="utf-8"))
+    actual = sha256(source)
+    if recorded.get("dataset_sha256") != actual:
+        raise SystemExit(
+            f"{suite} audit attestation is stale: it covers "
+            f"{recorded.get('dataset_sha256')}, the file is {actual}. Re-run the audit "
+            "before syncing.")
+    defects = recorded.get("defects") or {}
+    if defects:
+        raise SystemExit(f"{suite} audit reports defects, refusing to publish: "
+                         f"{sorted(defects)}")
+    failed = [item for item, result in (recorded.get("items") or {}).items()
+              if str(result.get("status")) != "PASS"]
+    if failed:
+        raise SystemExit(f"{suite} reviewer did not pass every recorded item, refusing "
+                         f"to publish: {failed}")
 
 
 CRITIC_SYSTEM = """You audit evaluation items for a clinical decision-support agent.
@@ -387,8 +614,53 @@ def run_critic(rows: list[dict[str, Any]], *, pace_seconds: float = 3.0) -> dict
     return {"items": results, "rounds": 1}
 
 
+def audit_dev(args: argparse.Namespace) -> int:
+    """The Dev gate: the row contract, then the matrix, then the artefact checks.
+
+    Three passes and no model. The row contract is what the sync script would refuse
+    anyway; the matrix is whether the set is the one that was designed; the artefact
+    checks are whether each claim traces to the record it names and each chip to a slot
+    the product fills.
+    """
+    rows = dev_suite.read_rows()
+    defects: dict[str, list[str]] = {}
+    try:
+        dev_suite.validate_rows(rows)
+    except dev_suite.DevSuiteError as exc:
+        defects.setdefault("__matrix__", []).append(str(exc))
+    for item, problems in dev_suite.validate_dev_matrix(rows).items():
+        defects.setdefault(item, []).extend(problems)
+    for item, problems in dev_deterministic_defects(rows).items():
+        defects.setdefault(item, []).extend(problems)
+
+    print(f"deterministic: {len(defects)} item(s)/set check(s) with defects")
+    for item, problems in sorted(defects.items()):
+        for problem in problems:
+            print(f"  {item}: {problem}")
+
+    if args.write_audit:
+        if defects:
+            print("refusing to write the attestation: the deterministic checks found "
+                  f"{len(defects)} defect(s); fix them and re-run")
+        else:
+            DEV_AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
+            DEV_AUDIT_PATH.write_text(json.dumps({
+                "dataset_sha256": sha256(dev_suite.DEV_SUITE_PATH),
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "critic_rounds": 0,
+                "defects": defects,
+                "items": {},
+            }, indent=1), encoding="utf-8")
+            print(f"wrote {DEV_AUDIT_PATH.relative_to(REPO)}")
+    return 1 if defects else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--suite", choices=tuple(sorted(AUDIT_PATHS)),
+                    default="selection",
+                    help="which dataset to audit; the selection slice is the default so "
+                         "this CLI and its attestation are unchanged")
     ap.add_argument("--critic", action="store_true", help="also run the grok reviewer")
     ap.add_argument("--items", default="",
                     help="comma-separated item ids to review; the rest are carried "
@@ -396,6 +668,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--write-audit", action="store_true",
                     help="record the attestation in evaluation/audits/")
     args = ap.parse_args(argv)
+
+    if args.suite == "dev":
+        return audit_dev(args)
 
     rows = read_rows()
     selection_slice.validate_rows(rows)

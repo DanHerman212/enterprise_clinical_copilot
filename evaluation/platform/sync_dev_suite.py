@@ -148,6 +148,15 @@ def main(argv: list[str] | None = None) -> int:
               f"(rubric {RUBRIC_VERSION}) — pass --commit to write")
         return 0
 
+    # The audit is what stands between an unreviewed item and a paid run. It reads the
+    # attestation `dataset_audit --suite dev --write-audit` produced and refuses a missing
+    # one, a hash that no longer matches the file, or any recorded defect. Wired onto
+    # `--commit` only: the dry run above is how a file gets read before there is anything
+    # to attest.
+    from evaluation.platform.dataset_audit import audit_guard  # noqa: PLC0415
+
+    audit_guard("dev")
+
     from langfuse import Langfuse  # noqa: PLC0415
 
     client = Langfuse()

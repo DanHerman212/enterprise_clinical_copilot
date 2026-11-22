@@ -110,7 +110,6 @@ def test_the_risk_spoke_leads_with_the_score_when_the_thread_has_not():
     text = _flat(prompts.RISK_SPOKE)
 
     assert "LEAD WITH THE SCORE WHEN THE THREAD HAS NOT STATED IT" in text
-    assert len(prompts.RISK_SPOKE.split()) <= 650
 
 
 # --- the rubric agrees with the harness -----------------------------------------------

@@ -117,7 +117,8 @@ def test_a_discharge_instructions_section_is_never_called_absent():
 def test_the_medication_spoke_fits_its_budget_and_names_the_provenance():
     text = " ".join(prompts.MEDS_SPOKE.split())
 
-    assert len(prompts.MEDS_SPOKE.split()) <= 650
+    # The word ceiling lives in `test_prompt_contract.PROMPT_WORD_BUDGETS`, which is the
+    # single owner of those numbers; this test keeps the rule assertions only.
     assert "medication_source=narrative" in text
     assert "medication_source=dedicated" in text
     # The Sprint 2 rule is untouched.

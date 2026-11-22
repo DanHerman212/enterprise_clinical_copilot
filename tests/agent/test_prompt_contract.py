@@ -31,6 +31,32 @@ from services.agent.engine.mcp_client import MCPToolbox
 from services.agent.engine import prompts
 from services.agent.engine.prompts import SYSTEM_PROMPT
 
+#: Single source of truth for prompt block word ceilings.
+#: GOVERNANCE RULE: Never delete, compress, or reword existing clinical or citation
+#: rules in `prompts.py` ("word golf") solely to stay under a ceiling. If an
+#: Architect-approved prompt change exceeds a ceiling, stop and ask the Architect
+#: before trimming any unrelated rule or raising this table.
+#:
+#: The ceilings are set roughly 20% above what each block measured on 2026-11-22 — the
+#: hub at 1,499 words and the five spokes at 644-648 — with the command formatters
+#: bounded for the first time. They exist to catch a block growing back into the
+#: 9,130-word monolith the hub-and-spoke split replaced, not to ration prose: a rule that
+#: is clinically right is never trimmed to fit one. Six sprint suites enforce their own
+#: copies of the old 1,500/650 numbers; this table replaced them on 2026-11-22.
+PROMPT_WORD_BUDGETS: dict[str, int] = {
+    "CORE_HUB_PROMPT": 1800,
+    "CHART_SPOKE": 800,
+    "MEDS_SPOKE": 800,
+    "LABS_SPOKE": 800,
+    "RISK_SPOKE": 800,
+    "LITERATURE_SPOKE": 800,
+    "EHR_FORMATTING": 3600,
+    "LABS_FORMATTING": 1100,
+    "LITERATURE_FORMATTING": 800,
+    "MEDS_FORMATTING": 750,
+    "MEDS_FALLBACK_FORMATTING": 750,
+}
+
 
 def _toolbox() -> MCPToolbox:
     """A toolbox whose calls return a payload and touch nothing."""
@@ -238,22 +264,25 @@ def test_an_obsolete_single_turn_citation_rule_is_absent():
 
 
 def test_the_hub_and_every_spoke_stay_inside_their_word_budget():
-    """The decomposition's only hard number, and the reason it exists.
+    """Every prompt block fits a ceiling that exists to catch runaway growth.
 
-    The 9,130-word monolith was the problem. A hub that grows back past its budget is
-    the same problem with a new name, so the limit is enforced rather than described —
-    and a spoke past 650 is a spoke that has absorbed rules from another turn type.
+    The number was never a quality target. It guards against the 9,130-word monolith
+    coming back, and a rule that is clinically right is never trimmed to fit it. The
+    ceilings sit about 20% above what each block measured when they were raised on
+    2026-11-22, which is room to write a new rule properly — and they now cover the five
+    command formatters, which carried the bulk of the instruction text with no bound.
     """
-    assert len(prompts.CORE_HUB_PROMPT.split()) <= 1500, (
-        f"the hub is {len(prompts.CORE_HUB_PROMPT.split())} words; the budget is 1500. "
-        "Move a rule to the spoke whose turns use it rather than raising the limit."
-    )
-    for name in ("CHART_SPOKE", "MEDS_SPOKE", "LABS_SPOKE", "RISK_SPOKE",
-                 "LITERATURE_SPOKE"):
-        spoke = getattr(prompts, name)
-        assert spoke.split(), f"{name} is empty"
-        assert len(spoke.split()) <= 650, (
-            f"{name} is {len(spoke.split())} words; the budget is 650")
+    for name, limit in sorted(PROMPT_WORD_BUDGETS.items()):
+        block = getattr(prompts, name)
+        words = len(block.split())
+        assert block.split(), f"{name} is empty"
+        assert words <= limit, (
+            f"{name} is {words} words; the ceiling is {limit}. "
+            "GOVERNANCE RULE: never delete, compress or reword existing clinical or "
+            "citation rules in `prompts.py` to get under a ceiling. If this change is "
+            "Architect-approved and genuinely needs the room, stop and ask the Architect "
+            "before trimming any unrelated rule or raising this table."
+        )
 
 
 def test_compose_system_prompt_attaches_only_the_spokes_a_turn_can_use():

@@ -202,7 +202,3 @@ def test_the_prompt_no_longer_asks_the_model_to_judge_a_numeric_id():
 
     assert "a question naming a different one is one this session does not answer" not in text
     assert "An admission the session did not bind is one you cannot reach" not in text
-
-
-def test_the_hub_still_fits_its_cap():
-    assert len(prompts.CORE_HUB_PROMPT.split()) <= 1500

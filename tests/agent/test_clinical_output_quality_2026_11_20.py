@@ -389,23 +389,12 @@ def test_the_guardrail_rewrites_a_served_count_to_its_whole_number():
 
 
 # ---------------------------------------------------------------------------------------
-# 9. The polish fits the prompt budgets, and the absent value is only a prohibition
+# 9. The polish keeps the absent value a prohibition only
 # ---------------------------------------------------------------------------------------
-
-#: The caps the prompt contract enforces, asserted beside the change that spends them.
-_WORD_CAPS = {
-    "CORE_HUB_PROMPT": 1500,
-    "CHART_SPOKE": 650,
-    "MEDS_SPOKE": 650,
-    "LABS_SPOKE": 650,
-    "RISK_SPOKE": 650,
-    "LITERATURE_SPOKE": 650,
-}
-
-
-@pytest.mark.parametrize("name, cap", sorted(_WORD_CAPS.items()))
-def test_the_prompt_stays_within_its_word_cap(name, cap):
-    assert len(getattr(prompts, name).split()) <= cap, name
+#
+# The word caps this section used to assert are owned by
+# `test_prompt_contract.PROMPT_WORD_BUDGETS`, the single table for those numbers. A
+# second copy here drifted the moment one of them moved.
 
 
 def test_the_risk_spoke_forbids_narrating_an_absent_value():

@@ -206,16 +206,6 @@ class TestPercentagePrecision:
         assert "(15.0% and 15%)" in text
 
 
-# ----------------------------------------------------------------- prompt budgets
-
-
-def test_the_prompt_budgets_hold():
-    assert len(prompts.CORE_HUB_PROMPT.split()) <= 1500
-    for name in ("CHART_SPOKE", "MEDS_SPOKE", "LABS_SPOKE", "RISK_SPOKE",
-                 "LITERATURE_SPOKE"):
-        assert len(getattr(prompts, name).split()) <= 650, name
-
-
 # --------------------------------------------------------- the anti-leakage guard
 
 

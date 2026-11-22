@@ -12,8 +12,6 @@ from __future__ import annotations
 import asyncio
 import json
 
-import pytest
-
 from services.agent.engine import deterministic
 from services.agent.engine import mcp_client
 from services.agent.engine import prompts
@@ -418,12 +416,3 @@ def test_the_medication_spoke_states_the_fallback_provenance():
     assert "medication_source=narrative" in prompts.MEDS_SPOKE
     assert "medication_source=dedicated" in prompts.MEDS_SPOKE
     assert "never attribute a drug you read there to `brief_hospital_course`" in prompts.MEDS_SPOKE
-
-
-@pytest.mark.parametrize("budget,text", [
-    (1500, prompts.CORE_HUB_PROMPT),
-    (650, prompts.LABS_SPOKE),
-    (650, prompts.MEDS_SPOKE),
-])
-def test_the_new_rules_did_not_grow_a_prompt_past_its_budget(budget, text):
-    assert len(text.split()) <= budget

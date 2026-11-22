@@ -235,13 +235,6 @@ def test_a_taper_is_a_schedule_and_not_a_lab_guided_adjustment():
     assert "state BOTH" in text
 
 
-def test_the_spoke_budgets_hold():
-    assert len(prompts.CORE_HUB_PROMPT.split()) <= 1500
-    for name in ("CHART_SPOKE", "MEDS_SPOKE", "LABS_SPOKE", "RISK_SPOKE",
-                 "LITERATURE_SPOKE"):
-        assert len(getattr(prompts, name).split()) <= 650, name
-
-
 def test_no_prompt_names_a_dev_set_literal():
     """Stage 6F's hygiene rule, re-asserted beside the literals this stage could reintroduce."""
     for name in ("CORE_HUB_PROMPT", "CHART_SPOKE", "MEDS_SPOKE", "LABS_SPOKE",

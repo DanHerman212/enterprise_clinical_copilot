@@ -354,13 +354,6 @@ def test_the_equipment_classifier_never_catches_a_drug(name):
 # ---------------------------------------------------------------- the prompt contract
 
 
-def test_the_prompt_budgets_hold():
-    assert len(prompts.CORE_HUB_PROMPT.split()) <= 1500
-    for name in ("CHART_SPOKE", "MEDS_SPOKE", "LABS_SPOKE", "RISK_SPOKE",
-                 "LITERATURE_SPOKE"):
-        assert len(getattr(prompts, name).split()) <= 650, name
-
-
 def test_the_hub_forbids_a_marker_on_the_models_own_numbers():
     text = " ".join(prompts.CORE_HUB_PROMPT.split())
     assert "including one restating an estimate the thread established" not in text

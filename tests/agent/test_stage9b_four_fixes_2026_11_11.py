@@ -266,13 +266,6 @@ def test_the_ehr_prompt_keeps_a_planned_event_prospective():
             'procedure"') in text
 
 
-def test_the_prompts_stay_inside_their_word_budgets():
-    assert len(prompts.CORE_HUB_PROMPT.split()) <= 1500
-    for name in ("CHART_SPOKE", "MEDS_SPOKE", "LABS_SPOKE", "RISK_SPOKE",
-                 "LITERATURE_SPOKE"):
-        assert len(getattr(prompts, name).split()) <= 650, name
-
-
 def test_the_new_prompt_text_carries_no_dev_set_literal():
     """The rule this stage added, stated without the record that taught it."""
     from tests.agent.test_stage6f_citation_and_hygiene import DEV_SET_LITERALS

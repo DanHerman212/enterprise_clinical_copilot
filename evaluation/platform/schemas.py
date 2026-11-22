@@ -242,6 +242,14 @@ class TaskOutput(BaseModel):
     #: field, so it was being written as absent on every item and a report could not state
     #: what the reader was looking at.
     turn_rendered: list[list[dict[str, Any]]] = Field(default_factory=list)
+    #: The safety flags each turn's settled answer carried, in turn order. The response has
+    #: always published them; the harness dropped them, so a run of sixteen answers could
+    #: not say whether any of them had been corrected before the reader saw it.
+    turn_guardrail_flags: list[list[str]] = Field(default_factory=list)
+    #: The rows a medication grid withheld per turn because verification could not stand
+    #: behind them. Extracted and not shown, which is the right behaviour and was
+    #: invisible: the grid counts them for the reader and nothing counted them for a run.
+    turn_meds_dropped: list[int] = Field(default_factory=list)
     tool_evidence: list[dict[str, Any]] = Field(default_factory=list)
 
     #: Tracing / diagnosis. Additive to the spec: the evaluators need the envelope

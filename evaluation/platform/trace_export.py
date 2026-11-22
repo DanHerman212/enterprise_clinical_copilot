@@ -229,6 +229,34 @@ def _totals(generations: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+SIGNAL_KEYS = ("guardrail_flags", "comparator_outcome", "meds_dropped_count")
+
+
+def signal_metadata(trace: Any) -> dict[str, Any]:
+    """What the safety nets and the extraction did, as the turn recorded it.
+
+    The service writes these three onto the turn's root span, because the trace is where
+    a reviewer triages an answer and a corrected answer that does not say it was corrected
+    is the whole reason this exists. The harness reads the same place rather than
+    re-deriving them: the point is to report what the deployed service recorded, and a
+    second derivation here would agree with itself and with nothing else.
+
+    Every observation is scanned and the FIRST stated value wins, because only one span
+    carries them and its position in the tree is the SDK's business rather than this
+    module's. A trace that does not carry them — an older revision, or a turn that failed
+    before composition — reports an empty dict, which is different from zero flags.
+    """
+    found: dict[str, Any] = {}
+    for observation in getattr(trace, "observations", None) or []:
+        block = getattr(observation, "metadata", None)
+        if not isinstance(block, dict):
+            continue
+        for key in SIGNAL_KEYS:
+            if key in block and key not in found:
+                found[key] = block[key]
+    return found
+
+
 def _latency_ms(trace: Any) -> float | None:
     """The trace's own duration in milliseconds, or None when it does not report one.
 
@@ -281,6 +309,9 @@ def turn_usage(client: Any, trace_id: str, *, turn: int,
                     **summary,
                     "unattributed": summary["cost_usd"] is None,
                     "latency_ms": _latency_ms(trace),
+                    # What the turn's safety nets did, read from the same trace the
+                    # price came from: one fetch, two facts.
+                    "signals": signal_metadata(trace),
                     "reason": (f"unpriced model(s): {summary['unpriced_models']}"
                                if summary["cost_usd"] is None else None),
                     "error": None,
@@ -325,6 +356,12 @@ def scenario_usage(client: Any, output: dict[str, Any], **kwargs: Any) -> dict[s
         "latencies_ms": [turn.get("latency_ms") for turn in turns
                          if isinstance(turn.get("latency_ms"), (int, float))],
         "models": sorted({model for turn in turns for model in turn.get("models") or []}),
+        # The per-turn safety signals, kept per turn: "which turn was corrected" and
+        # "was anything corrected" are different questions and the run has to answer the
+        # first one. Read from the traces because the two wire-borne facts (the flags and
+        # the withheld-row count) say nothing about how the comparison pass ended, and the
+        # answer to that lives only on the trace.
+        "signals": [turn.get("signals") or {} for turn in turns],
         "unattributed": not priced,
         "reason": ("; ".join(dict.fromkeys(reasons)) if reasons else None),
     }

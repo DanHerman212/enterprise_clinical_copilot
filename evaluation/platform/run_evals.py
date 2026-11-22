@@ -380,6 +380,8 @@ def run(datasets: tuple[str, ...], *, run_name: str,
 
         summary[dataset_name] = {
             "items": len(items), **stats, "cost": costs,
+            "signals": _signal_totals(experiment.item_results,
+                                      costs.get("trace_signals")),
             "dataset_run_id": experiment.dataset_run_id,
             "gate_pass": gate_verdict(stats),
         }
@@ -471,6 +473,9 @@ def _record_costs(client: Any, outcomes: list[Any], *,
     generations = 0
     unattributed = 0
     turn_latencies: list[float] = []
+    # What each turn's root span said the safety nets did, in item order. Collected here
+    # because these traces are already being fetched for the price: one read, two facts.
+    trace_signals: list[Any] = []
 
     print(f"\n--- cost: {dataset_name} ---", flush=True)
     for outcome in outcomes:
@@ -504,6 +509,7 @@ def _record_costs(client: Any, outcomes: list[Any], *,
         generations += int(usage.get("generations") or 0)
 
         diagnostics.record_cost(outcome.item_id, agent=usage, judge=judge)
+        trace_signals.append(usage.get("signals") or [])
         reason = f" — {usage['reason']}" if usage.get("reason") else ""
         print(f"  {outcome.item_id[:8]} agent={agent_phrase} judge={judge_phrase} "
               f"turns={usage.get('turn_count')} "
@@ -531,6 +537,10 @@ def _record_costs(client: Any, outcomes: list[Any], *,
         "turn_latency_p50_ms": _percentile(turn_latencies, 50),
         "turn_latency_p95_ms": _percentile(turn_latencies, 95),
         "turn_latency_max_ms": (max(turn_latencies) if turn_latencies else None),
+        # Per item, per turn: which guardrails fired, how the comparison pass ended, how
+        # many medication rows were withheld. Read from the traces rather than from the
+        # answers, because the comparison pass's own verdict is not on the wire at all.
+        "trace_signals": trace_signals,
         **tokens,
     }
     # The two totals are computed here and reported by this function's return value, the
@@ -539,6 +549,60 @@ def _record_costs(client: Any, outcomes: list[Any], *,
     # in it sorts runs by money in the same column a reader checks for quality. The native
     # trace cost is where a reader who wants money looks.
     return totals
+
+
+def _signal_totals(outcomes: list[Any],
+                   trace_signals: list[Any] | None = None) -> dict[str, Any]:
+    """How many turns were corrected, how many rows withheld, how many passes cut short.
+
+    The first two are counted from the settled response, because that is where the answer
+    the reader got is defined: the flags it carried and the rows its grid said were
+    missing. The third comes from `trace_signals` — each turn's trace metadata — because
+    how the comparison pass ended is recorded there and nowhere on the wire.
+
+    `flag_names` is the distinct set rather than a total, because "one flag on fourteen
+    turns" and "four different flags on one turn" are different findings and a single
+    count reports them the same way.
+    """
+    rescued_turns = 0
+    flag_names: set[str] = set()
+    flags_total = 0
+    meds_dropped = 0
+    for outcome in outcomes:
+        output = outcome.output or {}
+        per_turn = output.get("turn_guardrail_flags") or []
+        if isinstance(per_turn, list):
+            for flags in per_turn:
+                if isinstance(flags, list) and flags:
+                    rescued_turns += 1
+                    flags_total += len(flags)
+                    flag_names.update(str(flag) for flag in flags)
+        dropped = output.get("turn_meds_dropped") or []
+        if isinstance(dropped, list):
+            meds_dropped += sum(int(value) for value in dropped
+                                if isinstance(value, int) and not isinstance(value, bool))
+    degraded = 0
+    traced_turns = 0
+    for item_signals in trace_signals or []:
+        if not isinstance(item_signals, list):
+            continue
+        for turn in item_signals:
+            if not isinstance(turn, dict) or not turn:
+                continue
+            traced_turns += 1
+            if turn.get("comparator_outcome") == "extraction_degraded":
+                degraded += 1
+    return {
+        "guardrail_rescued_turns": rescued_turns,
+        "guardrail_flags": flags_total,
+        "guardrail_flag_names": sorted(flag_names),
+        "meds_dropped_rows": meds_dropped,
+        "comparisons_degraded": degraded,
+        # How many turns the traces could speak for at all. A zero here with a zero above
+        # is a run whose traces said nothing, which is not the same finding as a clean
+        # run and must not be reported as one.
+        "turns_with_trace_signals": traced_turns,
+    }
 
 
 def _print_item_report(outcomes: list[Any], *, dataset_name: str, run_name: str,
@@ -578,6 +642,14 @@ def _print_item_report(outcomes: list[Any], *, dataset_name: str, run_name: str,
               f"{output.get('turn_verified') or []}", flush=True)
         print("    components per turn: "
               f"{output.get('turn_components') or []}", flush=True)
+        # What the safety nets and the extraction did. Printed even when every value is
+        # clean, because the absence of a line is not evidence of an absence of a flag:
+        # the run that produced the first baseline reported nothing here and could not
+        # have reported anything, whatever the answers had done.
+        print("    guardrail flags per turn: "
+              f"{output.get('turn_guardrail_flags') or []}", flush=True)
+        print("    medication rows withheld per turn: "
+              f"{output.get('turn_meds_dropped') or []}", flush=True)
         if structural is not None:
             print(f"    structural: {structural.value:g} — "
                   f"{structural.comment or 'ok'}", flush=True)
@@ -675,6 +747,19 @@ def main(argv: list[str] | None = None) -> int:
     print("\n=== STEP 8 SUMMARY ===")
     for name, stats in summary.items():
         print(f"  {name}: {stats}")
+        signals = stats.get("signals") or {}
+        if signals:
+            # Reported above the price because it is the first thing a reader checks on
+            # a baseline: whether every answer in it is the answer the model wrote.
+            print(
+                f"    safety: {signals.get('guardrail_rescued_turns', 0)} turn(s) "
+                f"corrected, {signals.get('guardrail_flags', 0)} flag(s) "
+                f"{signals.get('guardrail_flag_names') or []}, "
+                f"{signals.get('meds_dropped_rows', 0)} medication row(s) withheld, "
+                f"{signals.get('comparisons_degraded', 0)} degraded comparison(s), "
+                f"{signals.get('turns_with_trace_signals', 0)} turn(s) verified from "
+                "their trace",
+                flush=True)
         cost = stats.get("cost") or {}
         if cost:
             print(

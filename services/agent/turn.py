@@ -159,6 +159,11 @@ def _response_fields(state: dict) -> dict:
     that is wrong exactly where it is most interesting. The same is true of a
     filtered response: it has to be visible on the runs that were refused, not only
     on the ones that were not. A failed tool call is the third case.
+
+    `comparator_outcome` and `meds_dropped_count` join them for the same reason: the
+    comparison pass's own verdict and the number of extracted medication rows the grid
+    withheld are properties of the turn, not of the route, and a run that cannot count
+    them from its records has to read 32 traces by hand.
     """
     message = final_message(state)
     return {
@@ -166,6 +171,9 @@ def _response_fields(state: dict) -> dict:
         "served_model": model_turn.served_model(message),
         "filtered": model_turn.filtered_categories(message),
         "tool_errors": _tool_error_codes(state),
+        "comparator_outcome": state.get("comparator_outcome"),
+        "meds_dropped_count": len(
+            (state.get("command_payload") or {}).get("dropped") or []),
     }
 
 
@@ -189,6 +197,48 @@ def _turn_start(state: dict) -> int:
     if isinstance(stamped, int) and not isinstance(stamped, bool):
         return stamped
     return citations.citation_bound([], state.get("replayed_tool_calls") or [])
+
+
+def _turn_signals(state: dict, guarded: dict, presentation: dict) -> dict:
+    """The three safety and extraction facts about this turn, computed once.
+
+    Assembled here rather than inline because three readers now need the same answer —
+    the trace, the execution record and the response payload — and a second expression of
+    "which flags fired" is how the payload and the log came to disagree once already.
+
+    `flags` is the guardrails' own verdict plus the settlement pass's, deduplicated, plus
+    the one only this layer can see: a chart turn whose scope was withheld because no
+    note citation resolved.
+    """
+    flags = list(guarded["flags"])
+    # `answer.sanitize_answer_markers` runs before this function — it is what settles the
+    # text these guardrails then read — so its deletions were the one judgement on a
+    # citation that reached no telemetry. Merged rather than concatenated blindly: the
+    # same marker can be reported by both passes, and the payload should name each fact
+    # once.
+    for flag in state.get("guardrail_flags") or []:
+        if flag not in flags:
+            flags.append(flag)
+    if presentation.get("scope_suppressed"):
+        flags.append("chart_synthesis_without_citations")
+    return {
+        "flags": flags,
+        "comparator_outcome": state.get("comparator_outcome"),
+        "meds_dropped_count": len(
+            (state.get("command_payload") or {}).get("dropped") or []),
+    }
+
+
+def _signal_tags(signals: dict) -> list[str]:
+    """The trace markers a non-clean turn carries, and nothing for a clean one."""
+    tags: list[str] = []
+    if signals["flags"]:
+        tags.append("guardrail:rescued")
+    if signals["comparator_outcome"] == routing.OUTCOME_EXTRACTION_DEGRADED:
+        tags.append("comparator:degraded")
+    if signals["meds_dropped_count"] > 0:
+        tags.append("meds:dropped")
+    return tags
 
 
 async def compose_success(
@@ -429,6 +479,13 @@ async def compose_success(
     # the served prose on the trace row itself — the output is `presentation["answer"]`
     # rather than the guarded text, so a trace can no longer disagree with the surface it
     # is meant to explain (Charter 13 Law 5; Stage Gate 2).
+    #
+    # The safety signals are computed BEFORE these writes and not at the payload below,
+    # because the span is closed by the time the payload is assembled: an observation
+    # write outside an active span is dropped by this SDK (measured 2026-10-23), which is
+    # why `follow_ups` rides on the execution record instead. A flag that reaches the
+    # payload and not the trace is the state this repair exists to end.
+    signals = _turn_signals(state, guarded, presentation)
     observability.set_trace_io(
         question,
         (presentation["answer"] or "").strip() or command_trace_output(state),
@@ -442,6 +499,16 @@ async def compose_success(
     # and with what in it" — a turn can retrieve a cohort pool and draw nothing — which is
     # the question every stage-gate report has had to answer from a live run by hand.
     observability.record_presentation(presentation)
+    # And what the safety nets did: which guardrails fired, how the comparison pass ended,
+    # how many medication rows were withheld. A reader triaging a trace asked "was this
+    # answer corrected before I read it" and the trace could not say.
+    observability.record_turn_signals(
+        guardrail_flags=signals["flags"],
+        comparator_outcome=signals["comparator_outcome"],
+        meds_dropped_count=signals["meds_dropped_count"],
+    )
+    observability.stamp_trace_tags(
+        observability.current_turn_span(), _signal_tags(signals))
 
     # Chosen from the record this turn already holds, not proposed by a model: a chip
     # is a control, and a control that asks something the chart cannot answer is worse
@@ -479,22 +546,10 @@ async def compose_success(
         # to the run.
         state["follow_ups"] = list(follow_ups)
 
-    # The guardrails' own flags, plus the one only this layer can see: a chart turn
-    # whose scope was withheld because no note citation resolved. Telemetry first —
-    # evals read it off the stored turn — and it also classifies such a turn's prose
-    # swap as visible rather than silent, which is the honest reading of a settled
-    # answer that no longer claims the chart.
-    flags = list(guarded["flags"])
-    # And the settlement pass's own verdicts. `answer.sanitize_answer_markers` runs before
-    # this function — it is what settles the text these guardrails then read — so its
-    # deletions were the one judgement on a citation that reached no telemetry. Merged
-    # here rather than concatenated blindly: the same marker can be reported by both
-    # passes, and the payload should name each fact once.
-    for flag in state.get("guardrail_flags") or []:
-        if flag not in flags:
-            flags.append(flag)
-    if presentation.get("scope_suppressed"):
-        flags.append("chart_synthesis_without_citations")
+    # The guardrails' own flags, plus the one only this layer can see, are assembled at
+    # `_turn_signals` above the trace writes: the trace needs them before the span closes,
+    # and the payload below is the same list rather than a second opinion.
+    flags = signals["flags"]
 
     # The numbering a later turn needs in order to replay THIS answer's markers.
     #

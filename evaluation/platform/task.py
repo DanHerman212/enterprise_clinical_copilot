@@ -162,6 +162,37 @@ def _rendered(response: dict) -> list[dict[str, Any]]:
     return out
 
 
+def _guardrail_flags(response: dict) -> list[str]:
+    """The safety flags this turn's answer carries, as the service published them.
+
+    Read rather than recomputed: a flag is the product's own statement that it changed or
+    withheld something before the reader saw it, and a harness that re-derived it from the
+    answer would be asserting its own reading of the guardrails rather than the guardrails.
+    """
+    flags = response.get("guardrail_flags")
+    if not isinstance(flags, list):
+        return []
+    return [str(flag) for flag in flags if str(flag or "").strip()]
+
+
+def _meds_dropped(response: dict) -> int:
+    """The medication rows the grid withheld on this turn.
+
+    The count travels on the grid itself (`dropped_count`), composed from the rows the
+    extraction extracted and verification refused. Nothing else in the envelope knows how
+    many rows are missing from the list, and a list with a hole in it reads as complete
+    unless something says otherwise.
+    """
+    total = 0
+    for component in _surface_nodes(response.get("a2ui")):
+        if component.get("component") not in _TABLE_COMPONENTS:
+            continue
+        count = component.get("dropped_count")
+        if isinstance(count, int) and not isinstance(count, bool):
+            total += count
+    return total
+
+
 def _verified(response: dict) -> bool | None:
     """The service's `verified` flag, or None when it did not send one.
 
@@ -406,6 +437,11 @@ def make_task(ask: Ask, *, run_tag: str,
         sources = [_sources(response) for response in responses]
         rendered = [_rendered(response) for response in responses]
         tool_calls_per_turn = [_tool_calls(response) for response in responses]
+        # What the safety nets and the extraction did, per turn. Kept beside the answer
+        # rather than folded into a run total, because the question a report has to answer
+        # is "which turn was corrected", not "was anything corrected anywhere".
+        guardrail_flags = [_guardrail_flags(response) for response in responses]
+        meds_dropped = [_meds_dropped(response) for response in responses]
         # The thread's tool results in the order they ran, with no numbering: the
         # per-turn `sources` list is the only place a marker's number is stated.
         tool_evidence: list[dict[str, Any]] = []
@@ -424,6 +460,8 @@ def make_task(ask: Ask, *, run_tag: str,
             turn_sources=sources,
             turn_tool_calls=tool_calls_per_turn,
             turn_rendered=rendered,
+            turn_guardrail_flags=guardrail_flags,
+            turn_meds_dropped=meds_dropped,
             turn_1_verified=verified[0],
             tool_evidence=tool_evidence,
             session_id=session_id,

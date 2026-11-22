@@ -90,6 +90,17 @@ def _turns(input_doc: dict[str, Any], output: dict[str, Any]) -> list[dict[str, 
     rendered = output.get("turn_rendered")
     if not isinstance(rendered, list):
         rendered = []
+    # What the safety nets did on this turn. Two separate facts, so two keys rather than
+    # one summary: "a guardrail fired" and "rows were withheld" are different answers to
+    # different questions, and a reader triaging a wrong answer needs to know which
+    # applied (2026-11-22). How the comparison pass ended is not on the payload; the run
+    # reads it from the turn's trace, where the service records all three.
+    guardrail_flags = output.get("turn_guardrail_flags")
+    if not isinstance(guardrail_flags, list):
+        guardrail_flags = []
+    meds_dropped = output.get("turn_meds_dropped")
+    if not isinstance(meds_dropped, list):
+        meds_dropped = []
     out: list[dict[str, Any]] = []
     for index in range(max(len(questions), len(answers))):
         out.append({
@@ -104,6 +115,12 @@ def _turns(input_doc: dict[str, Any], output: dict[str, Any]) -> list[dict[str, 
             # not say what the reader was looking at — which is the first thing a
             # post-mortem of a wrong medication row asks.
             "rendered": rendered[index] if index < len(rendered) else [],
+            # The answer the reader got was not necessarily the answer the model wrote.
+            # These three say how it differed, and each was published on the response or
+            # drawn on the surface and then dropped by this record.
+            "guardrail_flags": (guardrail_flags[index]
+                                if index < len(guardrail_flags) else []),
+            "meds_dropped": meds_dropped[index] if index < len(meds_dropped) else 0,
         })
     return out
 

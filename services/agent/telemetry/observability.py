@@ -37,6 +37,8 @@ import contextlib
 import contextvars
 import logging
 import os
+from collections.abc import Sequence
+from typing import Any
 
 from typing import Any
 
@@ -210,12 +212,63 @@ def stamp_trace_tags(span, tags: list[str]) -> None:
     if span is None:
         return
     try:
+        metadata: dict[str, Any] = {}
         counts = [t for t in tags if t.startswith("tools:")]
         if counts:
-            span.update(metadata={"tools": counts[-1].split(":", 1)[1]})
+            metadata["tools"] = counts[-1].split(":", 1)[1]
+        # Every other tag is an outcome marker — `guardrail:rescued`,
+        # `comparator:degraded`, `meds:dropped` — and the trace-level tag list cannot be
+        # appended to after creation. Written to the same place, so a reader filtering
+        # the trace drawer for a rescued turn finds it, and a run can count them without
+        # opening 32 traces.
+        markers = [t for t in tags if not t.startswith("tools:")]
+        if markers:
+            metadata["tags"] = markers
+        if metadata:
+            span.update(metadata=metadata)
     except Exception:  # noqa: BLE001 — rule 1
         logger.warning("could not append turn outcome to the langfuse span",
                        exc_info=True)
+
+
+def record_turn_signals(
+    *,
+    guardrail_flags: Sequence[str] = (),
+    comparator_outcome: str | None = None,
+    meds_dropped_count: int = 0,
+    span=None,
+) -> None:
+    """Record what the SAFETY nets and the extraction did, on the root span's metadata.
+
+    `guardrail_flags` is the one field that says whether the answer the reader saw was
+    the answer the model wrote, and it existed only on the execution log line and in the
+    response payload. A trace therefore showed a corrected answer with no sign that a
+    correction had happened: on 2026-11-22 all 32 traces of a clean baseline carried no
+    flag anywhere, and the only way to know a guard had fired was to join the log by
+    trace id.
+
+    `comparator_outcome` is the engine's own word for how the comparison pass ended —
+    `verified`, `verified_empty`, `extraction_degraded`, or None when no pass ran. The
+    composer translates it into a boolean that chooses which sentence the table prints,
+    so the trace kept the composed table and lost the reason it looked the way it did.
+
+    `meds_dropped_count` is the rows the /meds extraction could not stand behind. They
+    are withheld from the grid rather than shown, which is right, and until now nothing
+    said how many were withheld.
+
+    Best-effort like everything here (rule 1). Never raises.
+    """
+    span = span or current_turn_span()
+    if span is None:
+        return
+    try:
+        span.update(metadata={
+            "guardrail_flags": sorted(str(flag) for flag in guardrail_flags),
+            "comparator_outcome": comparator_outcome,
+            "meds_dropped_count": int(meds_dropped_count or 0),
+        })
+    except Exception:  # noqa: BLE001 — rule 1
+        logger.warning("could not record the turn's safety signals", exc_info=True)
 
 
 def record_turn_tools(tool_calls: list[dict] | None, *, replayed: int = 0,
@@ -618,6 +671,11 @@ RECORD_FIELDS = (
     "tool_calls",
     "tool_errors",
     "guardrail_flags",
+    # What the comparison pass came to. The composer turns this into the table's sentence,
+    # and the trace keeps the composed table without the reason it looks as it does.
+    "comparator_outcome",
+    # The /meds rows the extraction withheld. Zero on every other command.
+    "meds_dropped_count",
     "langfuse_trace_id",
     # The chips the turn offered. Added with the deterministic selector (Phase 05 §2):
     # the list is chosen after the turn's span has closed, so this line is the only
@@ -645,6 +703,8 @@ def record_execution(
     tool_calls=(),
     tool_errors=(),
     guardrail_flags: Iterable[str] = (),
+    comparator_outcome: str | None = None,
+    meds_dropped_count: int = 0,
     langfuse_trace_id: str = "",
     follow_ups: Sequence[str] = (),
     intent: str | None = None,
@@ -712,6 +772,10 @@ def record_execution(
         "tool_calls": [name for name in tool_calls],
         "tool_errors": list(tool_errors),
         "guardrail_flags": sorted(guardrail_flags),
+        # Which the comparison pass came to, and how many extracted rows the medication
+        # grid withheld. Both were invisible outside the response payload.
+        "comparator_outcome": comparator_outcome,
+        "meds_dropped_count": int(meds_dropped_count or 0),
         # Empty when tracing is off, which is a supported state: the field is
         # always present so "no trace" reads as no trace rather than as a
         # missing key, and so a log line can be joined to a trace when there is

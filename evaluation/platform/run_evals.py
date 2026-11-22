@@ -43,12 +43,12 @@ from services.mcp.config import JUDGE_MODEL  # noqa: E402
 #: items assert an envelope and nothing else, and the judge was never shown an answer key.
 #: A bare `run_evals` would then have reported a pass rate over the suites that measure the
 #: least, while the suites that measure the product sat behind a flag.
-DATASETS = ("ecc-tier2-dev-suite", "ecc-tier2-holdout-suite")
+DATASETS = ("ecc-tier2-dev-suite_v2", "ecc-tier2-holdout-suite")
 
 #: The Tier 2 dev suite (Phase 04). A gated target rather than a routine one: its
 #: canary is named, and the full 26 run needs the Architect's sign-off, so it is
-#: reached by `--datasets ecc-tier2-dev-suite` and not by the default.
-DEV_SUITE_DATASET = "ecc-tier2-dev-suite"
+#: reached by `--datasets ecc-tier2-dev-suite_v2` and not by the default.
+DEV_SUITE_DATASET = "ecc-tier2-dev-suite_v2"
 
 #: The Tier 2 blind holdout suite (Phase 05). Same gate, opposite cohort: 15 scenarios
 #: over four records the dev suite never names (`dev_suite.HOLDOUT_HADM_IDS`). Seeded by

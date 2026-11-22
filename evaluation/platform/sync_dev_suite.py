@@ -36,7 +36,7 @@ from evaluation.platform.dev_suite import (  # noqa: E402
     validate_rows,
 )
 
-DATASET = "ecc-tier2-dev-suite"
+DATASET = "ecc-tier2-dev-suite_v2"
 DESCRIPTION = ("Tier 2 stratified behavioral dev suite: 40 scenarios, 12 dev records, "
                "5x5 depth-by-modality matrix")
 RUBRIC_VERSION = "v8"

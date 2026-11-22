@@ -42,7 +42,8 @@ AGENT_URL = "https://agent-jamycsjjzq-ue.a.run.app"
 #: The selection slice is here for the same reason: `run_evals` accepts it by name, and a
 #: runner that refused the suite its sibling grades would be a second, stale scope.
 ALLOWED_DATASETS = ("clinical-census-pilot-v2", "suite2-adversarial-v1",
-                    "ecc-tier2-dev-suite", "ecc-tier2-holdout-suite",
+                    "ecc-tier2-dev-suite", "ecc-tier2-dev-suite_v2",
+                    "ecc-tier2-holdout-suite",
                     "ecc-model-selection-slice-v2")
 
 

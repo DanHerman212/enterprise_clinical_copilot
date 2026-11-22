@@ -237,7 +237,7 @@ def test_runner_targets_the_tier2_suites_and_never_the_full_census():
     """
     from evaluation.platform import run_evals
 
-    assert set(run_evals.DATASETS) == {"ecc-tier2-dev-suite",
+    assert set(run_evals.DATASETS) == {"ecc-tier2-dev-suite_v2",
                                        "ecc-tier2-holdout-suite"}
     assert "clinical-census-full-v1" not in run_evals.DATASETS
     assert run_evals.FULL_CENSUS_DATASET == "clinical-census-full-v1"

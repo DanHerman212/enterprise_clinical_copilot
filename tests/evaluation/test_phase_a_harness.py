@@ -318,15 +318,15 @@ def _dev_item(scenario: str) -> tuple[dict, dict]:
 
 def test_the_judge_prompt_carries_the_ground_truth_block():
     """The block is built from the `expected_output` argument, not from `input`."""
-    item_input, expected = _dev_item("dev_t1_01")
+    item_input, expected = _dev_item("dev_d1_slash_01")
     assert "expected_output" not in item_input, "the key is a sibling of input, not a child"
 
     prompt = build_user_prompt(item_input, {"turn_responses": ["briefing"],
                                             "turn_prompts": ["/ehr"]},
                                expected_output=expected)
     assert "SCENARIO GROUND TRUTH & CONSTRAINTS" in prompt
-    assert "0.090459" in prompt, "the scenario's own probability must be in the block"
-    assert "All four discharge-summary sections are present" in prompt
+    assert "0.175919" in prompt, "the scenario's own probability must be in the block"
+    assert "pancreatic mass" in prompt
     assert "claim CLASSES, not literal strings" in prompt
 
 
@@ -334,7 +334,7 @@ def test_the_composite_forwards_the_answer_key_to_the_judge():
     """End to end through the evaluator, which is where the key was being dropped."""
     from evaluation.platform.evaluators import make_judge_composite
 
-    item_input, expected = _dev_item("dev_t1_01")
+    item_input, expected = _dev_item("dev_d1_slash_01")
     seen: list[dict] = []
 
     def fake_judge(*, input, output, expected_output=None, **_kwargs):
@@ -348,7 +348,7 @@ def test_the_composite_forwards_the_answer_key_to_the_judge():
               expected_output=expected, evaluations=[_score_ok()])
     assert seen, "the judge was not called"
     assert "SCENARIO GROUND TRUTH & CONSTRAINTS" in seen[0]
-    assert "0.090459" in seen[0]
+    assert "0.175919" in seen[0]
 
 
 def _score_ok():

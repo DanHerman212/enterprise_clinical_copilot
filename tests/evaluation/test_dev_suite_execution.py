@@ -120,20 +120,21 @@ class _Item:
 
 
 def test_the_canary_selects_its_three_scenarios_in_the_order_named():
-    items = [_Item("a", "dev_t1_01"), _Item("b", "dev_t2_03"), _Item("c", "dev_t7_01"),
-             _Item("d", "dev_t3_01")]
+    items = [_Item("a", "dev_d1_slash_01"), _Item("b", "dev_d3_fup_01"),
+             _Item("c", "dev_d2_adv_01"), _Item("d", "dev_d3_slash_01")]
     chosen = run_evals._select_scenarios(items, run_evals.CANARY_SCENARIOS)
     assert [item.id for item in chosen] == ["a", "b", "c"]
 
 
 def test_a_canary_missing_one_of_its_scenarios_is_refused():
-    items = [_Item("a", "dev_t1_01"), _Item("b", "dev_t2_03")]
+    items = [_Item("a", "dev_d1_slash_01"), _Item("b", "dev_d3_fup_01")]
     with pytest.raises(RuntimeError, match="not in the dataset"):
         run_evals._select_scenarios(items, run_evals.CANARY_SCENARIOS)
 
 
 def test_the_canary_is_the_three_scenarios_the_phase_document_names():
-    assert run_evals.CANARY_SCENARIOS == ("dev_t1_01", "dev_t2_03", "dev_t7_01")
+    assert run_evals.CANARY_SCENARIOS == ("dev_d1_slash_01", "dev_d3_fup_01",
+                                          "dev_d2_adv_01")
 
 
 def test_an_item_without_a_scenario_id_falls_back_to_its_dataset_id():
@@ -179,10 +180,11 @@ def test_the_item_input_sent_to_langfuse_validates_as_a_dataset_item():
 
     payloads = build_items(manifests={
         hadm: {"encounter": "inpatient"} for hadm in
-        (90000015, 90000108, 90000106, 90000105, 90000023, 90000051, 90000073)})
+        (90000015, 90000108, 90000106, 90000105, 90000023, 90000051, 90000073,
+         90000045, 90000046, 90000103, 90000065, 90000035)})
     validated = [DatasetItemInput.model_validate(p["input"]) for p in payloads]
-    assert len(validated) == 27
-    assert validated[0].patient_id == "90000015"
+    assert len(validated) == 40
+    assert validated[0].patient_id == "90000108"
     assert validated[0].turns == ["/ehr"]
     # The ground truth rides on the item's own `expected_output` field, which is what
     # the run hands the evaluators alongside the input.

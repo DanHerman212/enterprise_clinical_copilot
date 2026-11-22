@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from evaluation.platform import dataset_audit, dev_suite
+from evaluation.platform import dataset_audit, dev_suite, evaluators
 
 FACT_SHEET = """## 90000015
 
@@ -242,3 +242,41 @@ def test_audit_guard_refuses_a_recorded_defect(tmp_path, monkeypatch):
     with pytest.raises(SystemExit) as caught:
         dataset_audit.audit_guard("dev")
     assert "refusing to publish" in str(caught.value)
+
+
+# ------------------------------------------------- citation numbers are per turn
+
+
+def _thread(second_sources, second_answer="Covered in ^[1] and ^[2]."):
+    """A two-turn thread: chart passages under [1], [2], then a literature turn."""
+    return {
+        "turn_responses": ["Findings are in ^[1] and ^[2].", second_answer],
+        "turn_sources": [
+            [{"cite": 1, "label": "brief_hospital_course"},
+             {"cite": 2, "label": "discharge_instructions"}],
+            second_sources,
+        ],
+    }
+
+
+def test_a_literature_turn_resolves_its_own_numbers_not_the_earlier_ones():
+    """Each turn numbers its own sources from one.
+
+    Turn 1 publishes two chart passages as [1] and [2]; the `/pubmed` turn publishes two
+    abstracts as [1] and [2] of its own. Resolving with `setdefault` kept the chart
+    passages in those slots, so the literature turn's markers pointed at note passages
+    with no identifier and a correctly cited answer failed.
+    """
+    output = _thread([
+        {"cite": 1, "pmid": "24108298", "label": "PMID: 24108298"},
+        {"cite": 2, "pmid": "24108299", "label": "PMID: 24108299"},
+    ])
+    assert evaluators._citation_marker_failures("PMID", output) == []
+
+
+def test_a_marker_that_addresses_nothing_still_fails():
+    """The fallback must stay strict: a number no turn published is unresolvable."""
+    output = _thread([{"cite": 1, "pmid": "24108298"}],
+                     second_answer="See ^[1] and ^[9].")
+    failures = evaluators._citation_marker_failures("PMID", output)
+    assert failures and "turn 2" in failures[0]

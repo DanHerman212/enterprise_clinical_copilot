@@ -51,16 +51,14 @@ def _chip(turn) -> str | None:
 
 
 def test_the_scenario_counts_and_ids_are_the_ones_the_directive_pins():
-    assert len(DEV) == 27
+    assert len(DEV) == 40
     assert len(HOLDOUT) == 15
-    assert [row["id"] for row in DEV] == [f"dev_{traj}" for traj in
-                                         ("t1_01", "t1_02", "t1_03", "t1_04", "t1_05",
-                                          "t1_06", "t2_01", "t2_02", "t2_03", "t2_04",
-                                          "t2_05", "t3_01", "t3_02", "t3_03", "t3_04",
-                                          "t4_01",
-                                          "t4_02", "t4_03", "t5_01", "t5_02", "t5_03",
-                                          "t6_01", "t6_02", "t6_03", "t7_01", "t7_02",
-                                          "t7_03")]
+    assert len({row["id"] for row in DEV}) == 40
+    # The Dev file is the matrix, so its ids name the depth and the surface rather than a
+    # trajectory, and every id agrees with the depth its turns actually have.
+    for row in DEV:
+        assert row["id"].startswith("dev_d"), row["id"]
+        assert row["metadata"]["depth_tier"] == f"{len(row['turns'])}_turn", row["id"]
     assert [row["id"] for row in HOLDOUT] == [
         "holdout_t1_01", "holdout_t1_02", "holdout_t1_03", "holdout_t2_01",
         "holdout_t2_02", "holdout_t3_01", "holdout_t3_02", "holdout_t3_03",
@@ -76,7 +74,7 @@ def test_the_seven_trajectories_keep_their_stratification(rows):
         "t3_analytical_drilldown", "t4_cross_domain_synthesis",
         "t5_freetext_cold_start", "t6_adversarial_false_premise",
         "t7_adversarial_boundaries"}
-    assert counts["t4_cross_domain_synthesis"] == (3 if rows is DEV else 2)
+    assert counts["t4_cross_domain_synthesis"] == (11 if rows is DEV else 2)
 
 
 @pytest.mark.parametrize("rows", [DEV, HOLDOUT], ids=["dev", "holdout"])
@@ -88,7 +86,7 @@ def test_the_turn_depth_distribution_is_what_the_phase_deepened_to():
     def depths(rows):
         return dict(sorted(Counter(len(row["turns"]) for row in rows).items()))
 
-    assert depths(DEV) == {1: 6, 2: 12, 3: 8, 4: 1}
+    assert depths(DEV) == {1: 8, 2: 8, 3: 8, 4: 8, 5: 8}
     assert depths(HOLDOUT) == {1: 3, 2: 6, 3: 6}
 
 
@@ -98,7 +96,8 @@ def test_a_three_or_four_turn_row_is_declared_multi_turn(rows):
         if len(row["turns"]) > 2:
             assert row["workflow_type"] == "multi_turn", row["id"]
         elif len(row["turns"]) == 2:
-            assert row["workflow_type"] == "command_plus_followup", row["id"]
+            assert row["workflow_type"] in {"command_plus_followup", "multi_turn"}, \
+                row["id"]
 
 
 # ------------------------------------------------ (a) declared risk_driver chips
@@ -109,34 +108,34 @@ def _driver_rows(rows) -> set[str]:
             if any(_intent(turn) == "risk_driver" for turn in row["turns"])}
 
 
-def test_two_dev_and_one_holdout_scenario_declare_a_risk_driver_click():
-    assert _driver_rows(DEV) == {"dev_t2_01", "dev_t2_02", "dev_t2_05"}
+def test_seven_dev_and_one_holdout_scenario_declare_a_risk_driver_click():
+    assert _driver_rows(DEV) == {
+        "dev_d2_risk_01", "dev_d2_risk_02", "dev_d3_risk_01", "dev_d4_risk_01",
+        "dev_d4_risk_02", "dev_d5_risk_01", "dev_d5_risk_02"}
     assert _driver_rows(HOLDOUT) == {"holdout_t3_03"}
 
 
-@pytest.mark.parametrize("scenario", ["dev_t2_01", "dev_t2_02"])
+@pytest.mark.parametrize("scenario", ["dev_d2_risk_01", "dev_d2_risk_02"])
 def test_a_driver_click_is_the_wire_the_console_sends(scenario):
-    """A driver bar sends its own QUESTION plus `intent`, and no chip.
+    """A driver bar sends the question `shared.labels` composes, plus its intent.
 
-    `static/js/a2ui/risk_influencers.js` composes "What in this patient's chart explains
-    <label> as a readmission risk driver?" and dispatches it with the declaration. The
-    chip vocabulary is four command names, so a feature name sent as a chip is refused
-    with `unknown_chip` before routing — the declaration, not the chip, is what carries
-    the affordance.
+    The chip under an answer and the bar inside the risk card ask the same thing of the
+    same evidence, and that sentence is composed once, in `shared.labels.driver_question`.
+    The chip vocabulary is four command names, so a feature name sent as a chip is refused
+    with `unknown_chip` before routing — the declaration, not the chip, carries the
+    affordance.
     """
     row = BY_ID[scenario]
     drivers = [turn for turn in row["turns"] if _intent(turn) == "risk_driver"]
     assert drivers, scenario
     for turn in drivers:
         assert _chip(turn) is None
-        assert "as a readmission risk driver?" in _prompt(turn)
-        assert turn["intent"] == "risk_driver"
-    # The directive's three-turn recipe: /ehr, the declared click, then a typed question
-    # that builds on that driver.
+        prompt = _prompt(turn)
+        assert prompt.startswith("How does "), prompt
+        assert prompt.endswith("affect this patient's readmission risk?"), prompt
+    # The command first, then the declared click it offered.
     assert _prompt(row["turns"][0]) == "/ehr"
     assert _intent(row["turns"][1]) == "risk_driver"
-    assert isinstance(row["turns"][2], str)
-    assert len(row["turns"]) == 3
 
 
 def test_the_holdout_driver_click_sits_in_a_thread_that_starts_with_ehr():
@@ -161,17 +160,26 @@ def _loop_back_rows(rows) -> set[str]:
             if any("{{turn_1.follow_ups[" in _prompt(turn) for turn in row["turns"])}
 
 
-def test_every_loop_back_scenario_now_carries_a_typed_third_turn():
-    assert _loop_back_rows(DEV) == {"dev_t2_03", "dev_t2_04"}
+def test_every_loop_back_scenario_carries_a_chip_turn_and_a_typed_turn():
+    assert _loop_back_rows(DEV) == {
+        "dev_d2_fup_01", "dev_d2_fup_02", "dev_d3_fup_01", "dev_d3_fup_02",
+        "dev_d4_fup_01", "dev_d5_fup_01", "dev_d5_fup_02", "dev_d5_risk_01"}
     assert _loop_back_rows(HOLDOUT) == {"holdout_t2_01", "holdout_t2_02"}
     for scenario in _loop_back_rows(DEV) | _loop_back_rows(HOLDOUT):
         row = BY_ID[scenario]
-        assert len(row["turns"]) == 3, scenario
-        assert "{{turn_1.follow_ups[0]}}" in _prompt(row["turns"][1])
-        assert isinstance(row["turns"][2], str), "turn 3 must be typed, not a chip"
-        # The chip turn declares nothing itself: the harness derives `follow_up` from the
-        # placeholder (Phase A), which is the intent the console sends on a chip click.
-        assert _intent(row["turns"][1]) is None
+        chip_turns = [index for index, turn in enumerate(row["turns"])
+                      if "{{turn_1.follow_ups[" in _prompt(turn)]
+        assert chip_turns, scenario
+        for index in chip_turns:
+            # The chip turn declares nothing itself: the harness derives `follow_up` from
+            # the placeholder, which is the intent the console sends on a chip click.
+            assert _intent(row["turns"][index]) is None, scenario
+        assert any(isinstance(turn, str) and not turn.startswith("/")
+                   for turn in row["turns"]), "the thread carries a typed turn"
+        assert row["metadata"]["turn1_follow_ups"] is True, scenario
+        # Only a command with a deterministic payload may be indexed: `/meds` slots move
+        # with the live extracted rows.
+        assert row["turns"][0] in {"/ehr", "/labs"}, scenario
 
 
 # ------------------------------------------------------ (c) comparator continuity
@@ -188,30 +196,33 @@ def _comparator_rows(rows) -> set[str]:
 def test_both_suites_ask_about_the_published_comparator_from_the_thread():
     """The 2026-11-04 defect: a follow-up with a comparator in the thread answered that
     the notes documented none, because the replay had dropped it. Nothing measured it."""
-    assert _comparator_rows(DEV) == {"dev_t2_03"}
+    assert _comparator_rows(DEV) == {"dev_d3_fup_01"}
     assert _comparator_rows(HOLDOUT) == {"holdout_t2_01"}
-    for scenario in ("dev_t2_03", "holdout_t2_01"):
+    for scenario in ("dev_d3_fup_01", "holdout_t2_01"):
         claims = " ".join(BY_ID[scenario]["expected_output"]["forbidden_claims"])
-        assert "no peer-reviewed research" in claims
-        assert "cites a PMID that no turn of the thread retrieved" in claims
+        assert ("no published evidence" in claims
+                or "no peer-reviewed research" in claims), scenario
+        assert ("cites a PMID that no turn of the thread retrieved" in claims
+                or "cites an identifier no turn of the thread retrieved" in claims)
 
 
 # ------------------------------------------------------------ (d) /labs continuity
 
 
 def test_both_suites_carry_a_labs_thread_that_leaves_the_laboratory():
-    for scenario in ("dev_t3_03", "holdout_t3_02"):
+    for scenario in ("dev_d3_adv_01", "holdout_t3_02"):
         row = BY_ID[scenario]
         assert _prompt(row["turns"][0]) == "/labs"
         assert len(row["turns"]) == 3
         assert "labs" == row["command"]
-    assert "stent" in _prompt(BY_ID["dev_t3_03"]["turns"][2])
+    assert "leak" in _prompt(BY_ID["dev_d3_adv_01"]["turns"][2]).lower()
     assert "chemotherapy" in _prompt(BY_ID["holdout_t3_02"]["turns"][2])
 
 
 # --------------------------------------------------- (e) pronoun / ellipsis traps
 
-ELLIPSIS = ("dev_t2_01", "dev_t2_03", "holdout_t2_02", "holdout_t3_02")
+ELLIPSIS = ("dev_d3_fup_01", "dev_d4_risk_01", "dev_d5_risk_02",
+            "holdout_t2_02", "holdout_t3_02")
 
 
 @pytest.mark.parametrize("scenario", ELLIPSIS)
@@ -231,52 +242,56 @@ def test_the_third_turn_resolves_its_referent_from_the_thread(scenario):
 
 
 def test_the_timeframe_scenarios_record_both_ends_of_the_series():
-    hb = BY_ID["dev_t3_03"]["expected_output"]["facts"]["hemoglobin"]
-    assert hb == {"admission": 11.2, "discharge": 10.0, "nadir": 6.1,
-                  "nadir_day": 1.8, "reference": "12.0-15.5"}
+    facts = BY_ID["dev_d3_free_02"]["expected_output"]["turn_2"]["facts"]
+    assert "11.2 g/dL" in facts["arrival"]
+    assert "6.1 g/dL" in facts["nadir"]
+    assert "10.0 g/dL" in facts["discharge"]
+    assert "10.8" in facts["discharge"], "the note's own prose value is named too"
     other = BY_ID["holdout_t2_02"]["expected_output"]["facts"]
     assert other["hemoglobin_admission"] == 11.9
     assert other["hemoglobin_nadir"] == 7.2
     assert other["hemoglobin_discharge"] == 11.2
-    # The conflation each of them exists to catch.
+    # The conflation the holdout row exists to catch.
     assert any("nadir" in claim and "discharge" in claim
-               for claim in BY_ID["dev_t3_03"]["expected_output"]["forbidden_claims"])
-    assert any("nadir" in claim and "discharge" in claim
-               for claim in BY_ID["holdout_t2_02"]["expected_output"]["forbidden_claims"])
+               for claim in BY_ID["holdout_t2_02"]["expected_output"][
+                   "forbidden_claims"])
 
 
 # -------------------------------------------------- (g) unrecorded complication premise
 
 
 def test_a_scenario_asserts_a_complication_the_chart_does_not_contain():
-    row = BY_ID["dev_t6_01"]
-    facts = row["expected_output"]["facts"]
-    assert facts["complication_documented"] is False
-    assert facts["reoperation_documented"] is False
-    assert facts["abnormal_count"] == 0
+    row = BY_ID["dev_d3_adv_01"]
+    facts = row["expected_output"]["turn_3"]["facts"]
+    assert "no leak is documented" in facts["leak"]
+    assert "no re-exploration occurred" in facts["leak"]
     assert len(row["turns"]) == 3
     assert "anastomotic leak" in _prompt(row["turns"][2]).lower()
     claims = " ".join(row["expected_output"]["forbidden_claims"])
-    assert "re-exploration" in claims
+    assert "reoperation" in claims
 
 
 # ----------------------------------------------------------- (h) outpatient boundary
 
 
-@pytest.mark.parametrize("rows,expected", [(DEV, "dev_t7_01"),
-                                           (HOLDOUT, "holdout_t7_01")],
+@pytest.mark.parametrize("rows,expected",
+                         [(DEV, {"dev_d1_adv_01", "dev_d1_free_02", "dev_d2_adv_01",
+                                  "dev_d3_free_01"}),
+                          (HOLDOUT, {"holdout_t7_01"})],
                          ids=["dev", "holdout"])
 def test_both_suites_exercise_the_outpatient_boundary(rows, expected):
     outpatients = {row["id"] for row in rows
                    if int(row["hadm_id"]) in OUTPATIENT_HADM_IDS}
-    assert outpatients == {expected}
-    facts = BY_ID[expected]["expected_output"]["facts"]
-    assert facts["encounter"] == "outpatient"
+    assert outpatients == expected
+    for scenario in sorted(outpatients):
+        facts = BY_ID[scenario]["expected_output"]["facts"]
+        assert facts["encounter"] == "outpatient"
     # A grounded refusal, not an unverified one: the note returns a citable passage and
     # the manifest states the encounter, so the answer is checked against the record.
-    # The boundary is enforced by the widget prohibition below, not by the flag.
-    assert BY_ID[expected]["expected_output"]["verified"] is True
-    assert "RiskInfluencers" in BY_ID[expected]["expected_output"]["forbidden_components"]
+    # The boundary is enforced by the widget prohibition, not by the flag.
+    command = BY_ID["dev_d1_adv_01"]["expected_output"]
+    assert command["verified"] is True
+    assert "RiskInfluencers" in command["forbidden_components"]
 
 
 def test_the_holdout_outpatient_keeps_its_hold_the_discharge_directive():

@@ -48,7 +48,7 @@ SECTIONED_FETCH = {
     90000023: {"tool": "discharge_medications", "sections": ["discharge_instructions"]},
 }
 
-QUALIFIED_SCENARIOS = ("dev_t3_01", "dev_t4_03", "dev_t5_01")
+QUALIFIED_SCENARIOS = ("dev_d1_slash_02",)
 
 #: Every scenario written against admission 90000015. The suite holds nine, and the rule
 #: below is about all of them rather than about the ones that mention Lovenox by name: a
@@ -64,6 +64,9 @@ _ABSENCE_PHRASES = (
     "report that absence",
     "does not contain a dedicated",
     "no dedicated discharge medications",
+    "no dedicated section",
+    "no dedicated medication section",
+    "no claim that a separate list",
 )
 
 
@@ -123,7 +126,7 @@ def test_no_90000015_scenario_claims_lovenox_is_a_discharge_medication():
     drug is the claim outright; an `anticoagulant_status` entry is the framing, and it is
     only honest if it carries the date the record discontinued it.
     """
-    assert len(FIFTEEN) == 9, f"expected the nine 90000015 scenarios, found {FIFTEEN}"
+    assert len(FIFTEEN) == 5, f"expected the five 90000015 scenarios, found {FIFTEEN}"
 
     failures: list[str] = []
     for scenario in FIFTEEN:
@@ -157,7 +160,8 @@ def test_missing_med_section_fallback_pins():
     `discharge_medications` call fell back to a narrative section.
     """
     failures: list[str] = []
-    for scenario, hadm in (("dev_t1_04", 90000106), ("dev_t4_02", 90000023)):
+    for scenario, hadm in (("dev_d3_slash_01", 90000106),
+                           ("dev_d4_slash_01", 90000023)):
         fetch = SECTIONED_FETCH[hadm]
         if "discharge_medications" in fetch["sections"]:
             failures.append(
@@ -175,5 +179,5 @@ def test_missing_med_section_fallback_pins():
 def test_the_fixture_covers_the_admissions_the_pins_name():
     """Guard against the fixtures drifting away from the scenarios they justify."""
     assert set(SECTIONED_FETCH) == {90000106, 90000023}
-    for scenario in ("dev_t1_04", "dev_t4_02"):
+    for scenario in ("dev_d3_slash_01", "dev_d4_slash_01"):
         assert int(BY_ID[scenario]["hadm_id"]) in SECTIONED_FETCH

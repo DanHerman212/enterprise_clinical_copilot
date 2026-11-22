@@ -887,30 +887,50 @@ def _citation_marker_failures(marker: str, output: dict[str, Any]) -> list[str]:
     correctly cited answer. It also called `int()` on every marker body, so the first
     `^[PMID: 24108298]` in a thread raised `ValueError` and took the item down instead of
     reporting anything.
+
+    Each turn numbers its OWN sources from one, so a thread can publish `[1]` twice
+    meaning two different things: Turn 1's first chart passage, then a `/pubmed` turn's
+    first abstract. Accumulating with `setdefault` kept the chart passage under `[1]` for
+    the rest of the thread, so a literature turn's `^[1]` resolved to a note passage with
+    no identifier and the item failed a citation the reader could open. A turn's own
+    entries therefore take precedence for the numbers it published, and the earlier ones
+    remain addressable for a marker that points back at them.
     """
     if f"{marker}:" in _thread_text(output):
         return []
 
-    per_turn_sources = output.get("turn_sources") or []
-    #: number -> the source the thread published under it, accumulating turn by turn so a
-    #: marker is resolved against everything the reader has been shown so far.
+    per_turn_sources = output.get("turn_sources")
+    #: number -> the source the thread published under it, accumulated turn by turn so a
+    #: marker is resolved against everything the reader has been shown so far. A later
+    #: turn's entry for the same number replaces the earlier one, because that is the unit
+    #: the reader is looking at when the marker appears.
     published: dict[int, dict[str, Any]] = {}
     resolved_any = False
 
     for index, answer in enumerate(_answers(output)):
-        entries = per_turn_sources[index] if index < len(per_turn_sources) else []
+        entries = (per_turn_sources[index]
+                   if isinstance(per_turn_sources, list) and index < len(per_turn_sources)
+                   else [])
+        this_turn: dict[int, dict[str, Any]] = {}
         for position, entry in enumerate(entries if isinstance(entries, list) else []):
             if isinstance(entry, dict):
-                published.setdefault(_published_number(entry, position), entry)
+                number = _published_number(entry, position)
+                this_turn[number] = entry
+                published[number] = entry
+
+        def _resolve(number: int) -> dict[str, Any] | None:
+            """This turn's unit for the number, else whatever an earlier turn published."""
+            return this_turn.get(number) or published.get(number)
 
         for body in _INLINE_MARKER.findall(answer):
             numbers = _numeric_markers(body)
             if numbers is not None:
-                if any(number not in published for number in numbers):
+                if any(_resolve(number) is None for number in numbers):
                     return [f"citation_marker: {marker} marker addresses no source on "
                             f"turn {index + 1}"]
                 for number in numbers:
-                    if _names_the_marker(published[number], marker):
+                    entry = _resolve(number)
+                    if entry is not None and _names_the_marker(entry, marker):
                         resolved_any = True
                 continue
             for identifier in _pmid_digits(body):

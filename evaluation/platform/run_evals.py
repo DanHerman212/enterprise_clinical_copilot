@@ -65,7 +65,11 @@ HOLDOUT_SUITE_DATASET = "ecc-tier2-holdout-suite"
 SELECTION_SLICE_DATASET = "ecc-model-selection-slice-v2"
 
 #: Gate 1's three canary scenarios, and nothing else (Phase 04 §4.2).
-CANARY_SCENARIOS = ("dev_t1_01", "dev_t2_03", "dev_t7_01")
+#:
+#: Renamed with the 40-scenario matrix: the canaries are the three cells that would fail
+#: first if the matrix itself were wrong — a command briefing, a chip loop-back in a
+#: five-turn thread, and the outpatient trap.
+CANARY_SCENARIOS = ("dev_d1_slash_01", "dev_d3_fup_01", "dev_d2_adv_01")
 
 #: The Step 9 census: 82 patients x 4 prompts = 328 items, ~2.9 h at concurrency 2.
 #:

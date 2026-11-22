@@ -69,6 +69,11 @@ def audit_guard(path: Path | None = None) -> None:
     attestation, a hash that no longer matches the file, or any recorded defect all stop
     the upload.
 
+    The reviewer pass is optional and the attestation records whether it ran
+    (`critic_rounds`). A deterministic-only lock is a complete lock: `items` is then `{}`,
+    and the only item-level condition is that an item which IS recorded passed. Requiring
+    a paid reviewer here would make the lock depend on a quota window.
+
     `evaluation/platform/dataset_audit.py` writes the attestation; this reads it and
     nothing else.
     """
@@ -79,7 +84,7 @@ def audit_guard(path: Path | None = None) -> None:
     if not audit_path.exists():
         raise SystemExit(
             f"no audit attestation at {audit_path}; run `python -m "
-            "evaluation.platform.dataset_audit --critic --write-audit` first")
+            "evaluation.platform.dataset_audit --write-audit` first")
     recorded = json.loads(audit_path.read_text(encoding="utf-8"))
     actual = dataset_audit.sha256(source)
     if recorded.get("dataset_sha256") != actual:
@@ -92,7 +97,8 @@ def audit_guard(path: Path | None = None) -> None:
     failed = [item for item, result in (recorded.get("items") or {}).items()
               if str(result.get("status")) != "PASS"]
     if failed:
-        raise SystemExit(f"critic did not pass every item, refusing to publish: {failed}")
+        raise SystemExit(f"reviewer did not pass every recorded item, refusing to "
+                         f"publish: {failed}")
 
 
 def build_items(*, manifests: dict[int, dict]) -> list[dict]:

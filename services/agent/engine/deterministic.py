@@ -1480,7 +1480,17 @@ async def run_command(
                 # What the thread held before this command ran, so a follow-up command
                 # can answer from evidence an earlier turn retrieved instead of reporting
                 # the record as undocumented.
-                session_block=prior_session_block,
+                #
+                # Never for a literature turn. `/pubmed` binds no chart tool
+                # (`Command(wire="literature")`), and the block is the only route by which
+                # this thread's risk estimate and note passages reach that formatting
+                # call. Given them, a literature summary compared this patient against the
+                # cohorts it had just retrieved, read the previous turn's drivers back as
+                # its own, and addressed a male patient as "her" (`v2_d3_slash_01`,
+                # 2026-11-21). A literature turn answers from the records it retrieved and
+                # from nothing else.
+                session_block=(prior_session_block
+                               if command.wire != "literature" else ""),
                 # The model's own estimate for this admission, so the comparison's
                 # DIRECTION is computed here rather than inferred by the prose. A section
                 # that states two figures and the wrong word between them is the defect

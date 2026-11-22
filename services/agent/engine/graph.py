@@ -552,13 +552,35 @@ def _freetext_allowed(risk_driver_question: bool,
         allowed.add("search_literature")
     if (risk_driver_question or risk_score_question) and not declared_follow_up:
         allowed.add("predict_readmission")
-    if risk_driver_question:
-        if not lab_driver_question:
+    if risk_driver_question and not lab_driver_question:
+        # The series is withheld on a driver turn that NAMES its factor, and only there.
+        # Asked why prior inpatient days drive the score, the loop read a panel and then
+        # answered from the model's mechanics (`agent-00176-ngw`, 2026-10-24) — a
+        # utilisation field is not a laboratory question. The open form is the opposite
+        # case: "what is driving this patient's readmission risk" names no factor, so the
+        # turn cannot know which drivers exist until the estimate comes back, and the two
+        # commonest in this cohort are laboratory values. Withholding the series there is
+        # what left `v2_d1_free_01` unable to show chart support for the sodium or RDW
+        # drivers it had just named (2026-11-21).
+        if not _open_driver_question(intent, question):
             allowed.discard("get_lab_trends")
     if domains is None:
         domains = (routing.question_domains(question, intent=intent)
                    if question else frozenset())
     return routing.narrow_to_domains(frozenset(allowed), domains)
+
+
+def _open_driver_question(intent: str | None, question: str) -> bool:
+    """Whether this driver turn asks what drives the risk without naming one factor.
+
+    Defaults to False — the tighter set — for any caller that supplies no question, so a
+    positional call reads exactly as it did before the distinction existed.
+    """
+    if intent == "risk_driver":
+        return False          # a clicked bar names the factor it was drawn for
+    if not (question or "").strip():
+        return False          # nothing to classify, so nothing is relaxed
+    return not routing.names_one_driver(question)
 
 
 def names_a_command(answer: str) -> bool:
@@ -1055,6 +1077,7 @@ def build_graph(
     question: str = "",
     domains: frozenset[str] | None = None,
     administrative: Mapping[str, str] | None = None,
+    intent: str | None = None,
 ):
     """Compile the graph. `on_event` receives progress stages; None disables them.
 
@@ -1072,6 +1095,11 @@ def build_graph(
     so that the bound set, the prompt's spokes and the trace all read ONE classification
     of one question (`routing.question_domains`). Without them the bound set is the
     standing one, which is what every caller outside `ask` gets.
+
+    `intent` is the surface's OWN declaration of what the reader clicked, passed for one
+    decision: a declared `risk_driver` turn names its factor, so a laboratory series
+    documents nothing about it and is withheld (`_freetext_allowed`). It is a fact about
+    where the question came from, and the wording cannot supply it.
     """
     # Free text is the one path where the model chooses the tool, and the choice is
     # bounded by `FREETEXT_TOOLS`. Bounded is not the same as guaranteed: left on
@@ -1853,6 +1881,9 @@ async def ask(
         # score, and is it above threshold". The same tool, a different reason, and the
         # one that stops a cold-start thread being told to go and type a command.
         risk_score_question=risk_score_question,
+        # The surface's own declaration, for the ONE decision the wording cannot make:
+        # a clicked driver bar names its factor, so the laboratory series is withheld.
+        intent=intent,
         # The same shape for the product's own questions. A chip is generated from a
         # tool result in this conversation, so when it is clicked the evidence is already
         # in the transcript and a forced retrieval can only cost the answer. Declared by
@@ -1899,6 +1930,7 @@ async def ask(
         follow_up_declared,
         risk_score_question,
         question=question,
+        intent=intent,
         domains=question_domains,
     )
     trace_meta = _trace_metadata(

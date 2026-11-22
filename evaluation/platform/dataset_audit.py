@@ -212,9 +212,11 @@ satisfiability   - could an accurate, chart-grounded agent answer pass BOTH the
                    forbidden_claims) AND expected_output.behaviour, without contradiction?
 discrimination   - would a hallucinated, ungrounded, or non-refuting answer properly fail?
 product_fidelity - does expected_output match how the agent actually behaves: slash commands
-                   render a structured component plus short cited prose, granular drill-downs
-                   belong to follow-up chips, /labs publishes no citations, and the judge only
-                   sees answer text, cited passages and raw tool evidence?
+                   render a structured component plus short cited prose, /meds lists its
+                   extracted drugs in a deterministic sentence and puts doses and
+                   frequencies in rendered rows, granular drill-downs belong to follow-up
+                   chips, /labs publishes no citations, and the judge sees answer text, the
+                   rendered medication rows, cited passages and raw tool evidence?
 matrix_authenticity - does the item genuinely exercise its stated depth_tier,
                    modality_axis and perturbation_type?
 
@@ -238,13 +240,30 @@ def critic_prompt(row: dict[str, Any], rules: str) -> str:
 
 RULES = """PRODUCT RULES (verified against the runtime):
 - Four slash commands exist: /ehr, /meds, /labs, /pubmed. Nothing else.
-- /ehr renders four bold sections and reports the readmission probability; /meds renders a
-  MedicationGrid of drug, dose and frequency; /labs renders a panel table and publishes NO
-  citation markers; /pubmed answers from retrieved abstracts with PMID markers.
+- /ehr renders the headings its evidence supports and reports the readmission probability.
+  *Presentation & diagnosis* is required on every inpatient briefing; *Hospital course &
+  procedures*, *Discharge plan & medications* and *Readmission risk & trajectory* are
+  required only when their supporting evidence was retrieved. Discharge details that appear
+  only inside `brief_hospital_course` are reported under *Hospital course & procedures*, and
+  omitting *Discharge plan & medications* there is correct.
+- /meds emits one deterministic provenance sentence as the answer, plus the extracted
+  medication rows published under it (the `RENDERED MEDICATION TABLE` the judge is shown).
+  The sentence names the extracted drugs, and `must_contain` is checked across both the
+  sentence and the rows. A dose or a frequency the note does not state is left as an empty
+  cell rather than invented or transposed, so the prose is not required to say in words
+  that a dose or a frequency is undocumented. Equipment and supplies (compression
+  stockings, home oxygen) are classified separately from drugs by the answer writer.
+- /labs renders a panel table and publishes NO citation markers; /pubmed answers from
+  retrieved abstracts with PMID markers.
+- Probability and threshold are published at one decimal (`7.5%`, `11.0%`), and stating the
+  raw float as well (`0.0751`) is equally correct. Counts, days and laboratory values are
+  stated at the precision the tool returns, with hospital days and administrative counts as
+  whole numbers.
 - Granular drill-downs, such as a multi-step taper, belong to the follow-up chips the turn
   proposes, not to the overview prose.
-- The judge sees: each turn's question and answer, the cited passages with their numbers,
-  and raw tool evidence. It does not see components, follow-up chips or the verified flag.
+- The judge sees: each turn's question and answer, the rendered medication rows, the cited
+  passages with their numbers, and raw tool evidence. It does not see components, follow-up
+  chips or the verified flag.
 - must_not_disclose is a substring check over the whole conversation. Use it only for a word
   no correct answer would ever contain. A word the question itself names, and which a
   refutation must repeat, belongs in forbidden_claims as a claim, never in must_not_disclose.
@@ -309,6 +328,12 @@ def _critic(client: Any, row: dict[str, Any]) -> dict[str, Any]:
             lambda: client.chat.completions.create(
                 model="xai/grok-4.7",
                 temperature=0,
+                # Low effort: this reviewer decides four yes/no questions about one item,
+                # and the questions it has to reason through are satisfiability and
+                # discrimination. The high setting spent its budget on prose about items
+                # it had already judged, and a reviewer that never answers in time is an
+                # unreviewed item.
+                reasoning_effort="low",
                 messages=[{"role": "system", "content": CRITIC_SYSTEM},
                           {"role": "user", "content": critic_prompt(row, RULES)}],
                 response_format={"type": "json_schema", "json_schema": {
@@ -403,15 +428,23 @@ def main(argv: list[str] | None = None) -> int:
         critic = {"items": {}, "rounds": 0}
 
     if args.write_audit:
-        AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        AUDIT_PATH.write_text(json.dumps({
-            "dataset_sha256": sha256(SLICE),
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-            "critic_rounds": critic.get("rounds", 0),
-            "defects": defects,
-            "items": critic.get("items", {}),
-        }, indent=1), encoding="utf-8")
-        print(f"wrote {AUDIT_PATH.relative_to(REPO)}")
+        if defects:
+            # An attestation is a statement that every item passed. Writing one over a
+            # round that found defects would make the lock say the opposite of what this
+            # run measured, and `sync_selection_slice.audit_guard` reads this file and no
+            # other evidence to decide whether the dataset may be published.
+            print("refusing to write the attestation: the deterministic checks found "
+                  f"{len(defects)} defect(s); fix them and re-run")
+        else:
+            AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
+            AUDIT_PATH.write_text(json.dumps({
+                "dataset_sha256": sha256(SLICE),
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "critic_rounds": critic.get("rounds", 0),
+                "defects": defects,
+                "items": critic.get("items", {}),
+            }, indent=1), encoding="utf-8")
+            print(f"wrote {AUDIT_PATH.relative_to(REPO)}")
     return 1 if defects else 0
 
 

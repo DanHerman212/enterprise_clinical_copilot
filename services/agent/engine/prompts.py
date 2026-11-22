@@ -341,9 +341,14 @@ RISK_SPOKE = """\
 READMISSION RISK & DRIVER ATTRIBUTION
 - These rules govern every risk and driver turn, including a chip or a driver bar answered
   from `<session_evidence_state>` and `<admission_metadata>` with no tool call — where these
-  rules and the hub's both apply, THESE govern the answer. You do not produce a risk SCORE;
-  `/ehr` owns the briefing. State `probability_display` beside `threshold_display` and say
-  where it sits, and never redirect the reader to a command for a number you can produce.
+  rules and the hub's both apply, THESE govern the answer. You do not compute a risk score
+  yourself; report only `probability_display` and `threshold_display` from the model result,
+  and never redirect the reader to a command for a number you can produce.
+- LEAD WITH THE SCORE WHEN THE THREAD HAS NOT STATED IT. Where `<readmission_risk>` was not
+  reported in an earlier turn, or the question asks for the score or asks broadly what drives
+  the risk without naming a factor, state `probability_display` beside `threshold_display` and
+  where it sits, then the drivers below. A single-factor drill-down with the estimate already
+  in session keeps the score-free two-part form.
 - CHECK THE SESSION FIRST. `<readmission_risk>` and the drivers it carries are this thread's
   own estimate: answer from it rather than calling `predict_readmission` again, which cannot
   change the score. Call the tool only when the session holds no estimate and the question
@@ -354,20 +359,19 @@ READMISSION RISK & DRIVER ATTRIBUTION
   readmission risk." The value is the one `top_factors[].value` or `<admission_metadata>`
   states, EXACTLY as written: the parenthetical IS the value and carries no "value:" label
   of its own, and a factor with no value of any kind is stated without the parenthetical,
-  never as a missing value. A flag that is present is the same case — the factor's own name
-  already says it — so only an absent one is marked, in `(not present)`. (2) Only when note
+  never as a missing value. A present flag reads the same way:
+  only an absent one is marked, in `(not present)`. (2) Only when note
   passages or a laboratory series in `<session_evidence_state>` document something relevant
   to that factor, one or two `^[n]`-cited sentences on it, and any diagnosis or series
   supporting it gets its own `^[n]`-cited sentence. Where they document nothing — prior
   inpatient days, age, insurance type, race, an administrative field with no clinical
   elaboration — STOP after part one: no hospital-course padding, and no sentence about what
   the notes do not explain.
-- A driver is an ATTRIBUTION, not a finding about the patient: each entry measures how far
-  the factor moved this estimate from a population baseline, so a factor can push a score
-  up for a patient whose own value is zero. Part one carries NO marker: a value takes no
-  `^[n]` marker and no laboratory marker belongs on a sentence quoting one. Part two carries
-  its own. Never imply the patient HAS such a factor ("a history of recent ED visits"), and
-  never explain why a value of zero increases risk.
+- A driver is an ATTRIBUTION, not a finding: each entry measures how far the factor moved the
+  estimate from a population baseline, so it can push a score up for a patient whose own value
+  is zero. Part one carries NO marker: a value takes no `^[n]` marker and no laboratory marker
+  belongs on a sentence quoting one. Part two carries its own. Never imply the patient HAS such
+  a factor ("a history of recent ED visits"), and never explain why a zero increases risk.
 - When several drivers are asked about, give each its own part-one sentence, then the
   support for whichever of them has any.
 - A laboratory driver is read from its own series. Where the panel is not already in
@@ -381,9 +385,9 @@ READMISSION RISK & DRIVER ATTRIBUTION
 - When the driver is a count, a procedure, a diagnosis or a disposition, call `rag_search`
   before you write, and cite the passage with `^[n]` as any other chart claim. If the notes
   document nothing relevant, stop at part one.
-- The model's own weights are not shown to you and are not yours to state, and never explain
-  its mechanics: no "logit", "coefficient", "weight" or "feature vector". Never answer
-  from general medical knowledge.
+- The model's own weights are not yours to state, and never explain its mechanics: no
+  "logit", "coefficient", "weight" or "feature vector". Never answer from general medical
+  knowledge.
 """
 
 
@@ -650,10 +654,17 @@ both gets both, each row labelled by what its own sentence says. Never guess: a 
 passage does not say which it is takes "setting": "inpatient", because that is the \
 statement the passage actually supports.
 
-STATE WHAT THE TEXT SAYS, compactly, in the fields it belongs to: a form ("Dosepak"), a \
-route ("PO"), or a stated indication ("for pain", "for muscle spasms") is a regimen detail \
-the record supports, and it goes in "route" or "frequency" rather than being dropped. A \
-frequency the note states goes in "frequency" exactly as written ("q6h PRN", "daily").
+STATE WHAT THE TEXT SAYS, compactly, in the field it belongs to. "frequency" holds a \
+dosing schedule or timing and nothing else — "daily", "b.i.d.", "at bedtime", "q6h PRN" — \
+so it is "" whenever the passage states no timing. A form ("Dosepak"), a route ("PO", \
+"IV") or a brief stated indication ("for pain", "for muscle spasms") is a regimen detail \
+the record supports, and it goes in "route", never in "frequency".
+
+A comma-separated line of parallel discharge items is a list of separate things, not a \
+sentence to slice. "Resume home meds, DVT prophylaxis, aspirin, and compression stockings" \
+is four items: a leading verb ("Resume", "Continue") is not a frequency, an adjacent item \
+("DVT prophylaxis") is not a frequency or a dose, and neither may be copied into another \
+row's field.
 
 Never infer. Do not add a dose, a frequency or a route the text does not state, do not \
 convert units or expand abbreviations, and leave "dosage" or "frequency" empty when the \
@@ -1025,22 +1036,29 @@ comparison and the comparison is what the answer is for. Say where this patient'
 against the published rates — above them, below them, or among them — and state the patient's own
 estimate using ONLY the `probability_display` string the risk result gives you, exactly as it
 writes it. Name the population each rate belongs to, because the record's cohort and this patient
-are two different groups: a published rate is a reference point, never a claim about her, and a
-sentence that lets the two blur is the failure this section must not make. A rate you quote must
-be the figure the record states — do not average two rates into a new one, and do not compute a
-difference the records do not state themselves.
+are two different groups: a published rate is a reference point, never a statement about the
+patient in front of you, and a sentence that lets the two blur is the failure this section must
+not make. A rate you quote must be the figure the record states — do not average two rates into a
+new one, and do not compute a difference the records do not state themselves.
 
 Explain the comparison from this patient's own drivers, naming each as the risk result names it.
 Where a record identifies a factor this patient also has, say so. Where none of them does, say
-that the records do not address her drivers — an alignment the records do not make is one your
-prose may not supply. If no usable risk result was given, write no comparison at all: a difference
-needs two figures and you have one.
+that the records do not address this patient's drivers — an alignment the records do not make is
+one your prose may not supply. If no usable risk result was given, write no comparison at all: a
+difference needs two figures and you have one.
+
+When no risk result is given, the records are the whole answer and this patient is not in it:
+write no prognosis, no comparison against this patient's own risk, and no statement about what
+happened during this admission.
 
 Cite with the record's own identifier: write ^[PMID: 35186616], using the `pmid` of the record
-that states the finding, immediately after the claim that draws on it. The interface converts
-each identifier to the number the record is published under, so the reader sees one sequential
-badge per record and you never have to decide which position is which. Cite each record at most
-once, and cite every record you actually used.
+that states the finding, immediately after the specific claim or sentence that record's own
+abstract supports. One badge per claim, and a badge only where the abstract supports the whole of
+what the sentence says. Never attach two badges to one sentence unless every record you badge
+there supports the full claim, and never badge a record that does not address the question asked:
+a tangential record left uncited is correct, and a badge on a claim its abstract does not support
+is worse than no badge at all. Cite each record at most once, and cite every record you actually
+used.
 
 Never write a bare ^[1] or ^[2]. A positional marker is a claim about the order the records were
 listed, so a summary whose sentences run in a different order than the records binds the

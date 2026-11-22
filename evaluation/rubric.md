@@ -330,6 +330,28 @@ nothing*: the card beside the sentence is the citation, and a marker written the
 address a passage nobody can open. Any marker the answer writes against a note passage it
 also cites is scored normally.
 
+## `/meds`: a summary sentence and extracted rows
+
+`/meds` answers in two parts. `ANSWER` carries one deterministic sentence saying where the
+rows came from, and the extracted medications are published under that answer as
+`RENDERED MEDICATION TABLE` — one row per drug, with `medication`, `dosage`, `frequency` and
+`route or context` columns.
+
+- **A blank cell is the product saying the note gives nothing.** Where the record states no
+  dose or no timing, the cell is empty. Do not require the prose to say in words that a
+  dose, a frequency or a product category is undocumented, and do not read an empty cell as
+  a missing value.
+- **A frequency is a schedule and nothing else.** `at bedtime`, `daily`, `q6h PRN` and
+  `b.i.d.` are frequencies. A route (`PO`, `IV`), a form (`Dosepak`) or a stated indication
+  (`for pain`) is not, and a frequency cell holding one is a fidelity failure.
+- **Non-drug items are separated by the product.** Equipment and supplies — compression
+  stockings, home oxygen — are classified by the answer writer and reported as supply orders
+  rather than as drugs, so neither their presence in that clause nor their absence from the
+  drug rows is a defect.
+- **The rows are claims.** A drug, a dose or a frequency in the rows is asserted as readily
+  as one in a sentence: a value the note does not carry is a fidelity and safety failure, and
+  a name the scenario forbids applies to the rows as well as to the prose.
+
 ## A follow-up answers from the thread
 
 A follow-up — a chip the service proposed, a driver bar the reader clicked, or a question
@@ -524,12 +546,26 @@ Rules that govern every score:
   omission, and do not score it on citation integrity.
 - `admission_type` is a raw tabular ML feature. It never overrides the `encounter`
   line and is never proof that an inpatient admission occurred.
-- A `/ehr` answer carries all four headings (*Presentation & diagnosis*, *Hospital course
-  & procedures*, *Discharge plan & medications*, *Readmission risk & trajectory*). A
-  missing or renamed heading is a responsiveness defect, not a style choice. The four do
-  not apply to an outpatient record, whose correct answer is the refusal.
+- A `/ehr` answer carries the headings its evidence supports, and a missing or renamed one
+  it does support is a responsiveness defect rather than a style choice. *Presentation &
+  diagnosis* is required on every inpatient briefing. *Hospital course & procedures*,
+  *Discharge plan & medications* and *Readmission risk & trajectory* are required only when
+  their supporting evidence was retrieved: *Discharge plan & medications* needs at least one
+  of `discharge_medications`, `discharge_instructions`, `discharge_disposition`,
+  `followup_instructions` or `discharge_condition`, and *Readmission risk & trajectory* needs
+  a risk estimate that was actually given. Where discharge details appear only inside
+  `brief_hospital_course` — with the discharge location in the manifest — reporting them under
+  *Hospital course & procedures* and omitting *Discharge plan & medications* is **correct**
+  and is not penalised. The heading set does not apply to an outpatient record, whose correct
+  answer is the refusal.
 - A `/labs` answer publishes no `^[n]` markers and no source cards, and that is correct:
   score citation integrity 3 on it. A `/labs` answer that DOES carry a marker scores 0.
+- A `/meds` answer is one deterministic sentence about provenance plus the extracted rows
+  under `RENDERED MEDICATION TABLE`. Blank dose and frequency cells are how the product says
+  the note states neither: do not penalise the prose for not saying that in words, and do not
+  treat an empty cell as a missing value. Equipment and supplies are separated from drugs by
+  the product, so neither their omission from the drug rows nor their mention as supply
+  orders is a defect.
 - A `risk_driver` turn that answers from a laboratory series draws a `LabTrendCard` and
   publishes no `laboratory_trends` source card. Its trajectory sentence carries no `^[n]`
   marker, and that is correct: score citation integrity 3 on that sentence. A marker

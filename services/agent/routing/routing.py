@@ -499,7 +499,6 @@ _NOTE_REQUIRED_TOKENS: tuple[str, ...] = (
 
 def asks_for_administrative_detail(question: str) -> bool:
     """Whether this question is answered by the feature manifest rather than the notes.
-
     Used to withhold the forced retrieval, never to answer: a false positive means
     the model is allowed to reply from the manifest, and the manifest is verified
     ground truth for exactly this vocabulary. A false negative costs the searches it
@@ -512,6 +511,54 @@ def asks_for_administrative_detail(question: str) -> bool:
         return False
     if any(token in _NOTE_REQUIRED_TOKENS for token in tokens):
         return False
+    for phrase in _ADMINISTRATIVE_PHRASES:
+        words = phrase.split()
+        span = len(words)
+        if span == 1:
+            if words[0] in tokens:
+                return True
+        elif any(tokens[i:i + span] == words
+                 for i in range(len(tokens) - span + 1)):
+            return True
+    return False
+
+
+#: The verbs a driver question puts between the factor it names and "this patient's
+#: readmission risk". "What is driving this patient's readmission risk" asks for the list
+#: and carries none of them; "why does oncology history increase this patient's readmission
+#: risk" names its factor and does.
+_DRIVER_VERB_TOKENS = frozenset({
+    "increase", "increases", "decrease", "decreases", "lower", "lowers",
+    "raise", "raises", "drive", "drives", "affect", "affects",
+})
+
+
+def names_one_driver(question: str) -> bool:
+    """Whether the question names ONE driver factor rather than asking what drives risk.
+
+    Read by `graph._freetext_allowed` to decide whether a driver turn may reach a
+    laboratory series. A question that names one factor has already said which evidence
+    answers it, and where that factor is an administrative or utilisation field a panel
+    documents nothing about it — asked why prior inpatient days drive the score, the loop
+    read a panel, answered from the model's mechanics, and then offered a lab chip under a
+    utilisation answer (`agent-00176-ngw`, 2026-10-24).
+
+    A question that names no factor cannot know which factors the model holds until the
+    estimate comes back, and the two commonest drivers in this cohort are laboratory
+    values, so the series stays reachable there (`v2_d1_free_01`, 2026-11-21).
+
+    Two vocabularies, both already owned here: the feature wording
+    `asks_for_administrative_detail` matches, and the driver-bar shape — a factor, then a
+    verb, then "this patient's readmission risk" (`_AFFORDANCE_TEMPLATES`). The open form
+    contains the same five template tokens and no verb of that kind ("what is driving this
+    patient's readmission risk"), which is what separates the two.
+    """
+    tokens = (question or "").lower().translate(_PUNCTUATION).split()
+    if not tokens:
+        return False
+    if _contains_affordance_template(tokens) and any(
+            token in _DRIVER_VERB_TOKENS for token in tokens):
+        return True
     for phrase in _ADMINISTRATIVE_PHRASES:
         words = phrase.split()
         span = len(words)
@@ -1220,8 +1267,14 @@ DOMAIN_TOOLS: dict[str, frozenset[str]] = {
     DOMAIN_MEDICATIONS: frozenset({
         "discharge_medications", "rag_search", "rag_search_sections"}),
     DOMAIN_CARE_PLAN: frozenset({"rag_search", "rag_search_sections"}),
+    # `get_lab_trends` belongs here. The risk model's most common drivers in this cohort
+    # are laboratory values, so a question asking what drives a patient's risk has a use
+    # for the series — and while it was absent, the open form of that question could not
+    # read the very evidence its own drivers pointed at (`v2_d1_free_01`, 2026-11-21).
+    # `graph._freetext_allowed` still withholds the series on a driver turn that names one
+    # factor, which is the case the 2026-10-24 defect was about.
     DOMAIN_RISK: frozenset({
-        "predict_readmission", "rag_search", "rag_search_sections"}),
+        "predict_readmission", "get_lab_trends", "rag_search", "rag_search_sections"}),
     DOMAIN_LABS: frozenset({"get_lab_trends", "rag_search"}),
     DOMAIN_CHART: frozenset({"rag_search", "rag_search_sections"}),
     DOMAIN_LITERATURE: LITERATURE_QUESTION_TOOLS,

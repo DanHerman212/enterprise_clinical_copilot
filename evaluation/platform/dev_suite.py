@@ -21,14 +21,43 @@ from evaluation.platform.schemas import DatasetItemInput, MAX_TURNS
 REPO = Path(__file__).resolve().parents[2]
 DEV_SUITE_PATH = REPO / "evaluation" / "datasets" / "dev_suite.jsonl"
 
-#: The seven records Phase 04 may run against.
+#: The twelve records the Tier 2 dev suite may run against.
+#:
+#: The seven original records stay: they carry the taper (90000015), the critical
+#: haemoglobin reading (90000108), the narrative-only medication section (90000106) and
+#: both outpatient encounters (90000051, 90000073). Five were added on 2026-11-22, chosen
+#: from the 62-record clean pool by structured inventory flags only, so the twelve span
+#: the phenotypes the suite has to exercise:
+#:
+#:   90000045  critical haemoglobin + a dedicated medication section, above threshold
+#:   90000046  an Urgent (medical) admission, dedicated section, above threshold
+#:   90000103  a documented TAPER beside a dedicated section, below threshold
+#:   90000065  a taper and NO dedicated section — the narrative-fallback record
+#:   90000035  no dedicated medication section at all, below threshold
+#:
+#: Every one of them is outside both selection slices, so no dev item can re-measure a
+#: record the model-selection arm already scored.
 DEV_HADM_IDS = ("90000015", "90000108", "90000106", "90000105",
-                "90000023", "90000051", "90000073")
+                "90000023", "90000051", "90000073",
+                "90000045", "90000046", "90000103", "90000065", "90000035")
 
-#: Reserved for Phase 05. Nothing in this suite may name one of these, and a row that
-#: did would invalidate the holdout before it was ever run.
+#: Reserved for Phase 05 — ten records, none of them a dev record.
+#:
+#: The six originals plus four added on 2026-11-22, picked from the remaining clean pool by
+#: the same structured flags and nothing else: no holdout note text was read, and none was
+#: generated into a fact sheet. 90000088 and 90000104 were already reserved as holdout
+#: capacity by `selection_slice.RESERVED_HADM_IDS`; this is the suite taking them up.
+#:
+#:   90000077  critical haemoglobin, dedicated section, above threshold
+#:   90000088  critical haemoglobin, no dedicated section
+#:   90000104  critical haemoglobin, dedicated section, above threshold
+#:   90000102  an Urgent admission at 0.4237, no dedicated section
+#:
+#: Nothing in this suite may name one of these, and a row that did would invalidate the
+#: holdout before it was ever run.
 HOLDOUT_HADM_IDS = ("90000087", "90000067", "90000101", "90000050",
-                    "90000026", "90000028")
+                    "90000026", "90000028",
+                    "90000077", "90000088", "90000104", "90000102")
 
 TRAJECTORIES = {
     "t1_declarative_command": 1,

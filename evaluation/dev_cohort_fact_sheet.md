@@ -8,33 +8,41 @@ Threshold is 0.11 on every record below; the decision is the model's own.
 
 ### Manifest and risk
 
-| field | value |
-|---|---|
-| age | 61 |
-| gender | Female |
-| discharge_location | Home with home health |
-| length_of_stay_days | 3.79167 |
-| prior_inpatient_days | 4.75 |
-| prior_admission_count | 1 |
-| recent_ed_visits | 0 |
-| admission_type | Emergency, direct admission (DIRECT EMER.) |
-| insurance | Medicaid |
-| race | White |
-| oncology_flag (feature row) | 0.0 |
+The raw field and the string the product publishes for it. A sentence may quote either; the right-hand column is the form the widget prints.
 
-**Readmission probability 0.090459** against a threshold of 0.11 → decision `below` (model `readmission-final-20260917173317`).
+| field | raw | published |
+|---|---|---|
+| encounter | `inpatient admission` | inpatient admission |
+| age | `61` | 61 |
+| gender | `Female` | Female |
+| admission_type | `Emergency, direct admission (DIRECT EMER.)` | Emergency, direct admission |
+| discharge_location | `Home with home health` | Home with home health |
+| length_of_stay_days | `3.79167` | 4 |
+| prior_admissions | `1` | 1 |
+| prior_inpatient_days | `4.75` | 4.75 |
+| ed_visits_prior_year | `0` | 0 |
+| insurance | `Medicaid` | Medicaid |
+| race | `White` | White |
+| oncology_flag (feature row) | `0.0` | — |
 
-| # | driver | raw value | contribution | direction |
-|---|---|---|---|---|
-| 1 | `monocytes_min` | 0.2 | -0.5138 | decreases |
-| 2 | `prior_inpatient_days` | 4.75 | -0.1544 | decreases |
-| 3 | `oncology_flag` | 0 | -0.1178 | decreases |
-| 4 | `admission_type` | Emergency, direct admission (DIRECT EMER.) | +0.1121 | increases |
-| 5 | `rdw_max` | 15.6 | +0.0709 | increases |
+**Readmission probability 0.090459** (published **9.0%**) against a threshold of 0.11 (published **11.0%**) → decision `below` (model `readmission-final-20260917173317`).
+
+Drivers, in the order the model receives them. `label` is `humanize()`; `value` is the patient's own value in clinical form, or empty when the factor is absent; `chip` is the question a driver bar asks. `contribution` is read from the raw response and is **not** published to the model or the widget — it is here so a reviewer can rank the drivers, and no answer key may quote it.
+
+| # | feature | label | direction | value | contribution | chip |
+|---|---|---|---|---|---|---|
+| 1 | `lowest monocyte count` | Lowest Monocyte Count | decreases | 0.2 ×10³/µL | — | How does Lowest Monocyte Count affect this patient's readmission risk? |
+| 2 | `prior inpatient days` | Prior Inpatient Days | decreases | 5 | — | How does Prior Inpatient Days affect this patient's readmission risk? |
+| 3 | `oncology history` | Oncology History | decreases | not present | — | How does Oncology History affect this patient's readmission risk? |
+| 4 | `admission type` | Admission Type | increases | — | — | How does Admission Type affect this patient's readmission risk? |
+| 5 | `red cell distribution width (RDW)` | Red Cell Distribution Width (rdw) | increases | 15.6% | — | How does Red Cell Distribution Width (rdw) affect this patient's readmission risk? |
 
 ### Discharge medications
 
-2 passage(s), 1539 characters. anticoagulant: PRESENT, beta-blocker: PRESENT, diuretic: absent, taper: PRESENT.
+2 passage(s), 1539 characters.
+
+inventory flags — taper: yes, anticoagulant: no, dedicated medication section: yes.
+text scan of the passages below — anticoagulant: PRESENT (`Coumadin`), beta-blocker: PRESENT (`Toprol`), diuretic: absent, taper: PRESENT (`then decrease`).
 
 ```
 On transfer, Celebrex, Coumadin, Colace, Synthroid, Lovenox, Percocet, Toprol XL, niacin, and trazodone.
@@ -42,62 +50,152 @@ On transfer, Celebrex, Coumadin, Colace, Synthroid, Lovenox, Percocet, Toprol XL
 The patient is advised to continue taking the following medications: Celebrex 200 mg daily, for one month, Colace 100 mg b.i.d. for one month, Protonix 40 mg b.i.d. for one month, Synthroid 137 mcg daily, Diprosone cream 0.05% cream b.i.d. to the right arm and right abdomen, oxycodone SR 20 mg p.o. q.12h. for five days, then decrease to oxycodone SR 10 mg p.o. q.12h. for five days, Percocet 5/325 mg one to two tablets q.6h. to be used p.r.n. for breakthrough pain, trazodone 50 mg p.o. at bedtime p.r.n. for two weeks, Ativan 0.25 mg b.i.d. for two weeks, and Toprol-XL 50 mg daily. The patient will also take Coumadin and the dose will be adjusted according to the INRs, which will be obtained every Monday and Thursday with results being sent to Dr. A and his fax number is 831-5926. At the present time, the patient is taking Coumadin 7 mg daily. She will remain on Coumadin for 30 days. An INR is to be obtained on 09/03/2007 and should the Coumadin dose be changed, an addendum will be dictated to accompany this discharge summary. Finally, the patient has a followup appointment with Dr. A on 09/21/2007 at noon at his office. The patient is encouraged to follow up with her primary care physician, Dr. B. As mentioned above, the patient will be discharged on 09/03/2007 in stable and improved condition since she is status post right total knee replacement and has made good progress with her therapies and rehabilitation.
 ```
 
-### Laboratory values at discharge
+### Laboratory panel
 
-| analyte | discharge value | unit | reference | decimals | flag |
-|---|---|---|---|---|---|
-| RDW | 15.6 | % | 11.5–14.5 | 1 | high |
-| Red blood cells | 3.47 | x10^6/uL | 4.2–5.4 | 2 | low |
-| Hemoglobin | 11.2 | g/dL | 12.0–15.5 | 1 | low |
-| Sodium | 137.0 | mmol/L | 135.0–145.0 | 0 | normal |
-| Monocytes | 0.5 | x10^3/uL | 0.2–0.8 | 1 | normal |
-| Creatinine | 1.04 | mg/dL | 0.5–1.1 | 2 | normal |
-| eGFR | 94.0 | mL/min/1.73m2 | 90.0–120.0 | 0 | normal |
-| Potassium | 4.2 | mmol/L | 3.5–5.0 | 1 | normal |
-| White blood cells | 7.3 | x10^3/uL | 4.0–11.0 | 1 | normal |
+One row per analyte, in the order the tool returned them. `baseline` is the first timepoint, `extreme` is the reading furthest outside the reference interval (the nadir or the peak), and `discharge` is the last. `anchored` names the values the readmission model was scored on: those are the patient's own numbers and may be stated as such; anything else was generated for a measure the model never saw.
+
+| analyte | unit | reference | decimals | baseline | extreme | discharge | anchored |
+|---|---|---|---|---|---|---|---|
+| RDW | % | 11.5–14.5 | 1 | d0 · 12.0 · `normal` | d3.8 · 15.6 · `high` | d3.8 · 15.6 · `high` | rdw_max |
+| Red blood cells | x10^6/uL | 4.2–5.4 | 2 | d0 · 4.13 · `low` | d1.3 · 2.71 · `low` | d3.8 · 3.47 · `low` | rbc_last, rbc_min |
+| Hemoglobin | g/dL | 12.0–15.5 | 1 | d0 · 13.0 · `normal` | d1.3 · 8.3 · `low` | d3.8 · 11.2 · `low` | hemoglobin_min |
+| Sodium | mmol/L | 135.0–145.0 | 0 | d0 · 139.0 · `normal` | d1.3 · 132.0 · `low` | d3.8 · 137.0 · `normal` | sodium_last, sodium_max, sodium_min |
+| Monocytes | x10^3/uL | 0.2–0.8 | 1 | d0 · 0.6 · `normal` | d0 · 0.6 · `normal` | d3.8 · 0.5 · `normal` | monocytes_min |
+| Creatinine | mg/dL | 0.5–1.1 | 2 | d0 · 0.59 · `normal` | d0 · 0.59 · `normal` | d3.8 · 1.04 · `normal` | — |
+| eGFR | mL/min/1.73m2 | 90.0–120.0 | 0 | d0 · 116.0 · `normal` | d0 · 116.0 · `normal` | d3.8 · 94.0 · `normal` | — |
+| Potassium | mmol/L | 3.5–5.0 | 1 | d0 · 4.4 · `normal` | d0 · 4.4 · `normal` | d3.8 · 4.2 · `normal` | — |
+| White blood cells | x10^3/uL | 4.0–11.0 | 1 | d0 · 6.0 · `normal` | d0 · 6.0 · `normal` | d3.8 · 7.3 · `normal` | — |
 
 9 panels; 3 abnormal at discharge (RDW, Red blood cells, Hemoglobin).
+No analyte carries a critical flag on this record.
 Most abnormal at discharge: **Red blood cells** 3.47 x10^6/uL (flag `low`, reference 4.2–5.4).
 
 ### Clinical note
 
 Sections present: `chief_complaint`, `history_of_present_illness`, `allergies`, `past_medical_history`, `discharge_medications`, `physical_exam`, `brief_hospital_course`, `discharge_diagnosis`, `discharge_instructions`.
 
+Sections absent: 29 of the 38 headings the retriever knows — `admission_date`, `admission_diagnosis`, `assessment_and_plan`, `attending`, `complications`, `consults`, `date_of_birth`, `discharge_condition`, `discharge_date`, `discharge_disposition`, `discharge_summary`, `facility`, `family_history`, `followup_instructions`, `indications`, `infections`, `major_procedure`, `medications_on_admission`, `medications_on_transfer`, `name`, `past_surgical_history`, `pathology`, `pertinent_results`, `review_of_systems`, `service`, `sex`, `social_history`, `transfusions`, `unit_no`.
+
+`/ehr` headings these sections support, and the passage that earns each: **Presentation & diagnosis.** (`history_of_present_illness`, `chief_complaint`, `discharge_diagnosis`), **Hospital course & procedures.** (`brief_hospital_course`), **Discharge plan & medications.** (`discharge_medications`, `discharge_instructions`), **Readmission risk & trajectory.** (the risk estimate).
+`/ehr` headings to OMIT: none.
+
 - **discharge_diagnosis** (quoted): "Status post right total knee replacement secondary to degenerative joint disease performed on 08/21/2007."
 - **brief_hospital_course** (quoted): "As mentioned above, the patient was admitted on 08/24/2007 to the Transitional Care Unit at XYZ Services for evaluation and rehabilitation."
 - **history_of_present_illness** (quoted): "The patient is a 61-year-old white female status post right total knee replacement secondary to degenerative joint disease performed by Dr."
+
+#### Verbatim passages
+
+**chief_complaint**
+
+```
+Decreased ability to perform daily living activities secondary to right knee surgery.
+```
+
+**history_of_present_illness**
+
+```
+The patient is a 61-year-old white female status post right total knee replacement secondary to degenerative joint disease performed by Dr. A at ABCD Hospital on 08/21/2007. The patient was transfused with 2 units of autologous blood postoperatively. She received DVT prophylaxis with a combination of Coumadin, Lovenox, SCD boots, and TED stockings. The remainder of her postoperative course was uneventful. She was discharged on 08/24/2007 from ABCD Hospital and admitted to the transitional care unit at XYZ Services for evaluation and rehabilitation. The patient reports that her last bowel movement was on 08/24/2007 just prior to her discharge from ABCD Hospital. She denies any urological symptoms such as dysuria, incomplete bladder emptying or other voiding difficulties. She reports having some right knee pain, which is most intense at a "certain position." The patient is unable to elaborate on which "certain position" causes her the most discomfort.
+```
+
+**allergies**
+
+```
+NKDA.
+```
+
+**past_medical_history**
+
+```
+Hypertension, hypothyroidism, degenerative joint disease, GERD, anxiety disorder, Morton neuroma of her feet bilaterally, and distant history of migraine headaches some 30 years ago.
+```
+
+**discharge_medications**
+
+```
+On transfer, Celebrex, Coumadin, Colace, Synthroid, Lovenox, Percocet, Toprol XL, niacin, and trazodone.
+```
+
+**physical_exam**
+
+```
+VITAL SIGNS: Temperature 96.5, blood pressure 127/72, pulse 70, respiratory rate 20, 95% O2 saturation on room air.
+GENERAL: No acute distress at the time of the exam except as mentioned above complains of right knee pain at "certain position."
+HEENT: Normocephalic. Sclerae nonicteric. EOMI. Dentition in good repair. Tongue is in midline with no evidence of thrush.
+NECK: No thyroid enlargement. Trachea is midline.
+LUNGS: Clear to auscultation.
+HEART: Regular rate and rhythm. Normal S1 and S2.
+ABDOMEN: Soft, nontender, and nondistended. No organomegaly.
+EXTREMITIES: The right knee incision is intact. Steri-Strips are in place. There is some diffuse right knee edema and some limited ecchymosis as well. No calf tenderness bilaterally. Pedal pulses are palpable bilaterally.
+MENTAL STATUS: The patient appears slightly anxious during the interview and exam, but she was alert and oriented.
+```
+
+**brief_hospital_course**
+
+```
+As mentioned above, the patient was admitted on 08/24/2007 to the Transitional Care Unit at XYZ Services for evaluation and rehabilitation. She was seen in consultation by Physical Therapy and Occupational Therapy and had begun her rehabilitation till recovery. The patient had been properly instructed regarding using the CPM machine and she had been instructed as well to limit each CPM session to two hours. Very early in her hospitalization, the patient enthusiastically used the CPM much longer than two hours and consequently had increased right knee pain. She remarked that she had a better degree of flexibility, but she did report an increased need for pain management. Additionally, she required Ativan and at one point scheduled the doses of Ativan to treat her known history of anxiety disorder. On the fourth hospital day, she was noted to have some rashes about the right upper extremity and right side of her abdomen. The patient reported that this rash was itchy. She reports that she had been doing quite a bit of gardening just prior to surgery and this was most likely contact dermatitis, most likely due to her gardening activities preoperatively. She was treated with betamethasone cream applied to the rash b.i.d. The patient's therapy had progressed and she continued to make a good progress. At one point, the patient reported some insomnia due to right knee pain. She was switched from Percocet to oxycodone SR 20 mg b.i.d. and she had good pain control with this using the Percocet only for breakthrough pain. The DVT prophylaxis was maintained with Lovenox 40 mg subcu daily until the INR was greater than 1.7 and it was discontinued on 08/30/2007 when the INR was 1.92 within therapeutic range. The Coumadin was adjusted accordingly according to the INRs during her hospital course. Early in the hospital course, the patient had reported right calf tenderness and a venous Doppler study obtained on 08/27/2007 showed no DVT bilaterally. Initial laboratory data includes a UA on 08/28/2007, which was negative. Additionally, CBC showed a white count of 6.3, hemoglobin was 12.1, hematocrit was 35.3, and platelets were 278,000. Chemistries were within normal limits. Creatinine was 0.8, BUN was 8, anion gap was slightly decreased at 5, fasting glucose was 102. The remainder of chemistries was unremarkable. The patient continued to make great progress with her therapies so much so that we are anticipating her discharge on Monday, 09/03/2007.
+```
+
+**discharge_diagnosis**
+
+```
+1. Status post right total knee replacement secondary to degenerative joint disease performed on 08/21/2007.
+2. Anxiety disorder.
+3. Insomnia secondary to pain and anxiety postoperatively.
+4. Postoperative constipation.
+5. Contact dermatitis secondary to preoperative gardening activities.
+6. Hypertension.
+
+7. Hypothyroidism.
+8. Gastroesophageal reflux disease.
+9. Morton neuroma of the feet bilaterally.
+10. Distant history of migraine headaches.
+```
+
+**discharge_instructions**
+
+```
+The patient is advised to continue taking the following medications: Celebrex 200 mg daily, for one month, Colace 100 mg b.i.d. for one month, Protonix 40 mg b.i.d. for one month, Synthroid 137 mcg daily, Diprosone cream 0.05% cream b.i.d. to the right arm and right abdomen, oxycodone SR 20 mg p.o. q.12h. for five days, then decrease to oxycodone SR 10 mg p.o. q.12h. for five days, Percocet 5/325 mg one to two tablets q.6h. to be used p.r.n. for breakthrough pain, trazodone 50 mg p.o. at bedtime p.r.n. for two weeks, Ativan 0.25 mg b.i.d. for two weeks, and Toprol-XL 50 mg daily. The patient will also take Coumadin and the dose will be adjusted according to the INRs, which will be obtained every Monday and Thursday with results being sent to Dr. A and his fax number is 831-5926. At the present time, the patient is taking Coumadin 7 mg daily. She will remain on Coumadin for 30 days. An INR is to be obtained on 09/03/2007 and should the Coumadin dose be changed, an addendum will be dictated to accompany this discharge summary. Finally, the patient has a followup appointment with Dr. A on 09/21/2007 at noon at his office. The patient is encouraged to follow up with her primary care physician, Dr. B. As mentioned above, the patient will be discharged on 09/03/2007 in stable and improved condition since she is status post right total knee replacement and has made good progress with her therapies and rehabilitation.
+```
 
 ## 90000108
 
 ### Manifest and risk
 
-| field | value |
-|---|---|
-| age | 48 |
-| gender | Male |
-| discharge_location | Home with home health |
-| length_of_stay_days | 9.08333 |
-| prior_inpatient_days | 0 |
-| prior_admission_count | 0 |
-| recent_ed_visits | 0 |
-| admission_type | Urgent (URGENT) |
-| insurance | Private |
-| race | White |
-| oncology_flag (feature row) | 1.0 |
+The raw field and the string the product publishes for it. A sentence may quote either; the right-hand column is the form the widget prints.
 
-**Readmission probability 0.175919** against a threshold of 0.11 → decision `above` (model `readmission-final-20260917173317`).
+| field | raw | published |
+|---|---|---|
+| encounter | `inpatient admission` | inpatient admission |
+| age | `48` | 48 |
+| gender | `Male` | Male |
+| admission_type | `Urgent (URGENT)` | Urgent |
+| discharge_location | `Home with home health` | Home with home health |
+| length_of_stay_days | `9.08333` | 9 |
+| prior_admissions | `0` | 0 |
+| prior_inpatient_days | `0` | 0 |
+| ed_visits_prior_year | `0` | 0 |
+| insurance | `Private` | Private |
+| race | `White` | White |
+| oncology_flag (feature row) | `1.0` | — |
 
-| # | driver | raw value | contribution | direction |
-|---|---|---|---|---|
-| 1 | `monocytes_min` | 0.47 | -0.5619 | decreases |
-| 2 | `oncology_flag` | 1 | +0.3075 | increases |
-| 3 | `prior_inpatient_days` | 0 | -0.2527 | decreases |
-| 4 | `rdw_max` | 17.5 | +0.1172 | increases |
-| 5 | `sodium_min` | 133 | +0.1125 | increases |
+**Readmission probability 0.175919** (published **17.6%**) against a threshold of 0.11 (published **11.0%**) → decision `above` (model `readmission-final-20260917173317`).
+
+Drivers, in the order the model receives them. `label` is `humanize()`; `value` is the patient's own value in clinical form, or empty when the factor is absent; `chip` is the question a driver bar asks. `contribution` is read from the raw response and is **not** published to the model or the widget — it is here so a reviewer can rank the drivers, and no answer key may quote it.
+
+| # | feature | label | direction | value | contribution | chip |
+|---|---|---|---|---|---|---|
+| 1 | `lowest monocyte count` | Lowest Monocyte Count | decreases | 0.47 ×10³/µL | — | How does Lowest Monocyte Count affect this patient's readmission risk? |
+| 2 | `oncology history` | Oncology History | increases | — | — | How does Oncology History affect this patient's readmission risk? |
+| 3 | `prior inpatient days` | Prior Inpatient Days | decreases | 0 | — | How does Prior Inpatient Days affect this patient's readmission risk? |
+| 4 | `red cell distribution width (RDW)` | Red Cell Distribution Width (rdw) | increases | 17.5% | — | How does Red Cell Distribution Width (rdw) affect this patient's readmission risk? |
+| 5 | `lowest sodium` | Lowest Sodium | increases | 133 mmol/L | — | How does Lowest Sodium affect this patient's readmission risk? |
 
 ### Discharge medications
 
-1 passage(s), 340 characters. anticoagulant: absent, beta-blocker: absent, diuretic: absent, taper: absent.
+1 passage(s), 340 characters.
+
+inventory flags — taper: no, anticoagulant: no, dedicated medication section: yes.
+text scan of the passages below — anticoagulant: absent, beta-blocker: absent, diuretic: absent, taper: absent.
 
 ```
 1. Phenergan 25 mg q.6. p.r.n.
@@ -107,209 +205,408 @@ Sections present: `chief_complaint`, `history_of_present_illness`, `allergies`, 
 5. The patient had initially been on enalapril here. His hypertension will be managed by Dr. X as well.
 ```
 
-### Laboratory values at discharge
+### Laboratory panel
 
-| analyte | discharge value | unit | reference | decimals | flag |
-|---|---|---|---|---|---|
-| RDW | 17.5 | % | 11.5–14.5 | 1 | high |
-| Red blood cells | 2.69 | x10^6/uL | 4.2–5.4 | 2 | low |
-| Hemoglobin | 10.0 | g/dL | 12.0–15.5 | 1 | low |
-| Sodium | 136.0 | mmol/L | 135.0–145.0 | 0 | normal |
-| Monocytes | 0.6 | x10^3/uL | 0.2–0.8 | 1 | normal |
-| Creatinine | 1.06 | mg/dL | 0.5–1.1 | 2 | normal |
-| eGFR | 95.0 | mL/min/1.73m2 | 90.0–120.0 | 0 | normal |
-| Potassium | 4.1 | mmol/L | 3.5–5.0 | 1 | normal |
-| White blood cells | 7.3 | x10^3/uL | 4.0–11.0 | 1 | normal |
+One row per analyte, in the order the tool returned them. `baseline` is the first timepoint, `extreme` is the reading furthest outside the reference interval (the nadir or the peak), and `discharge` is the last. `anchored` names the values the readmission model was scored on: those are the patient's own numbers and may be stated as such; anything else was generated for a measure the model never saw.
+
+| analyte | unit | reference | decimals | baseline | extreme | discharge | anchored |
+|---|---|---|---|---|---|---|---|
+| RDW | % | 11.5–14.5 | 1 | d0 · 12.0 · `normal` | d9.1 · 17.5 · `high` | d9.1 · 17.5 · `high` | rdw_max |
+| Red blood cells | x10^6/uL | 4.2–5.4 | 2 | d0 · 4.42 · `normal` | d1.8 · 2.68 · `low` | d9.1 · 2.69 · `low` | rbc_last, rbc_min |
+| Hemoglobin | g/dL | 12.0–15.5 | 1 | d0 · 11.2 · `low` | d1.8 · 6.1 · `critical_low` | d9.1 · 10.0 · `low` | hemoglobin_min |
+| Sodium | mmol/L | 135.0–145.0 | 0 | d0 · 137.0 · `normal` | d3.6 · 133.0 · `low` | d9.1 · 136.0 · `normal` | sodium_last, sodium_max, sodium_min |
+| Monocytes | x10^3/uL | 0.2–0.8 | 1 | d0 · 0.7 · `normal` | d0 · 0.7 · `normal` | d9.1 · 0.6 · `normal` | monocytes_min |
+| Creatinine | mg/dL | 0.5–1.1 | 2 | d0 · 0.59 · `normal` | d0 · 0.59 · `normal` | d9.1 · 1.06 · `normal` | — |
+| eGFR | mL/min/1.73m2 | 90.0–120.0 | 0 | d0 · 118.0 · `normal` | d0 · 118.0 · `normal` | d9.1 · 95.0 · `normal` | — |
+| Potassium | mmol/L | 3.5–5.0 | 1 | d0 · 4.5 · `normal` | d0 · 4.5 · `normal` | d9.1 · 4.1 · `normal` | — |
+| White blood cells | x10^3/uL | 4.0–11.0 | 1 | d0 · 6.2 · `normal` | d0 · 6.2 · `normal` | d9.1 · 7.3 · `normal` | — |
 
 9 panels; 3 abnormal at discharge (RDW, Red blood cells, Hemoglobin).
+Critical flags anywhere in the admission: **Hemoglobin**.
 Most abnormal at discharge: **Red blood cells** 2.69 x10^6/uL (flag `low`, reference 4.2–5.4).
 
 ### Clinical note
 
 Sections present: `history_of_present_illness`, `discharge_medications`, `assessment_and_plan`.
 
+Sections absent: 35 of the 38 headings the retriever knows — `admission_date`, `admission_diagnosis`, `allergies`, `attending`, `brief_hospital_course`, `chief_complaint`, `complications`, `consults`, `date_of_birth`, `discharge_condition`, `discharge_date`, `discharge_diagnosis`, `discharge_disposition`, `discharge_instructions`, `discharge_summary`, `facility`, `family_history`, `followup_instructions`, `indications`, `infections`, `major_procedure`, `medications_on_admission`, `medications_on_transfer`, `name`, `past_medical_history`, `past_surgical_history`, `pathology`, `pertinent_results`, `physical_exam`, `review_of_systems`, `service`, `sex`, `social_history`, `transfusions`, `unit_no`.
+
+`/ehr` headings these sections support, and the passage that earns each: **Presentation & diagnosis.** (`history_of_present_illness`), **Discharge plan & medications.** (`discharge_medications`), **Readmission risk & trajectory.** (the risk estimate).
+`/ehr` headings to OMIT: **Hospital course & procedures.**.
+
 - **history_of_present_illness** (quoted): "The patient is a 48-year-old man who has had abdominal pain since October of last year associated with a 30-pound weight loss and then developed jaundice."
+
+#### Verbatim passages
+
+**history_of_present_illness**
+
+```
+The patient is a 48-year-old man who has had abdominal pain since October of last year associated with a 30-pound weight loss and then developed jaundice. He had epigastric pain and was admitted to the hospital. A thin-slice CT scan was performed, which revealed a 4 x 3 x 2 cm pancreatic mass with involved lymph nodes and ring enhancing lesions consistent with liver metastases. The patient, additionally, had a questionable pseudocyst in the tail of the pancreas. The patient underwent ERCP on 04/04/2007 with placement of a stent. This revealed a strictured pancreatic duct, as well as strictured bile duct. A 10-french x 9 cm stent was placed with good drainage. The next morning, the patient felt quite a bit more comfortable. He additionally had a modest drop in his bilirubin and other liver tests. Of note, the patient has been having quite a bit of nausea during his admission. This responded to Zofran. It did not, initially, respond well to Phenergan, though after stent placement, he was significantly more comfortable and had less nausea, and in fact, had better response to the Phenergan itself. At the time of discharge, the patient's white count was 9.4, hemoglobin 10.8, hematocrit 32 with a MCV of 79, platelet count of 585,000. His sodium was 132, potassium 4.1, chloride 95, CO2 27, BUN of 8 with a creatinine of 0.3. His bilirubin was 17.1, alk phos 273, AST 104, ALT 136, total protein 7.8 and albumin of 3.8. He was tolerating a regular diet. The patient had been on oral hypoglycemics as an outpatient, but in hospital, he was simply managed with an insulin sliding scale. The patient will be transferred back to Pelican Bay, under the care of Dr. X at the infirmary. He will be further managed for his diabetes there. The patient will additionally undergo potential end of life meetings. I discussed the potentials of chemotherapy with patient. Certainly, there are modest benefits, which can be obtained with chemotherapy in metastatic pancreatic cancer, though at some cost with morbidity. The patient will consider this and will discuss this further with Dr. X.
+```
+
+**discharge_medications**
+
+```
+1. Phenergan 25 mg q.6. p.r.n.
+2. Duragesic patch 100 mcg q.3.d.
+3. Benadryl 25-50 mg p.o. q.i.d. for pruritus.
+4. Sliding scale will be discontinued at the time of discharge and will be reinstituted on arrival at Pelican Bay Infirmary.
+5. The patient had initially been on enalapril here. His hypertension will be managed by Dr. X as well.
+```
+
+**assessment_and_plan**
+
+```
+The patient should return for repeat ERCP if there are signs of stent occlusion such as fever, increased bilirubin, worsening pain. In the meantime, he will be kept on a regular diet and activity per Dr. X.
+```
 
 ## 90000106
 
 ### Manifest and risk
 
-| field | value |
-|---|---|
-| age | 76 |
-| gender | Male |
-| discharge_location | Home |
-| length_of_stay_days | 7.625 |
-| prior_inpatient_days | 18.5833 |
-| prior_admission_count | 2 |
-| recent_ed_visits | 0 |
-| admission_type | Emergency (EW EMER.) |
-| insurance | Medicare |
-| race | White |
-| oncology_flag (feature row) | 0.0 |
+The raw field and the string the product publishes for it. A sentence may quote either; the right-hand column is the form the widget prints.
 
-**Readmission probability 0.100860** against a threshold of 0.11 → decision `below` (model `readmission-final-20260917173317`).
+| field | raw | published |
+|---|---|---|
+| encounter | `inpatient admission` | inpatient admission |
+| age | `76` | 76 |
+| gender | `Male` | Male |
+| admission_type | `Emergency (EW EMER.)` | Emergency |
+| discharge_location | `Home` | Home |
+| length_of_stay_days | `7.625` | 8 |
+| prior_admissions | `2` | 2 |
+| prior_inpatient_days | `18.5833` | 18.5833 |
+| ed_visits_prior_year | `0` | 0 |
+| insurance | `Medicare` | Medicare |
+| race | `White` | White |
+| oncology_flag (feature row) | `0.0` | — |
 
-| # | driver | raw value | contribution | direction |
-|---|---|---|---|---|
-| 1 | `monocytes_min` | 0.4 | -0.5449 | decreases |
-| 2 | `rdw_max` | 23.7 | +0.2178 | increases |
-| 3 | `prior_inpatient_days` | 18.5833 | +0.2041 | increases |
-| 4 | `age` | 76 | -0.1326 | decreases |
-| 5 | `rbc_last` | 2.23 | +0.0974 | increases |
+**Readmission probability 0.100860** (published **10.1%**) against a threshold of 0.11 (published **11.0%**) → decision `below` (model `readmission-final-20260917173317`).
+
+Drivers, in the order the model receives them. `label` is `humanize()`; `value` is the patient's own value in clinical form, or empty when the factor is absent; `chip` is the question a driver bar asks. `contribution` is read from the raw response and is **not** published to the model or the widget — it is here so a reviewer can rank the drivers, and no answer key may quote it.
+
+| # | feature | label | direction | value | contribution | chip |
+|---|---|---|---|---|---|---|
+| 1 | `lowest monocyte count` | Lowest Monocyte Count | decreases | 0.4 ×10³/µL | — | How does Lowest Monocyte Count affect this patient's readmission risk? |
+| 2 | `red cell distribution width (RDW)` | Red Cell Distribution Width (rdw) | increases | 23.7% | — | How does Red Cell Distribution Width (rdw) affect this patient's readmission risk? |
+| 3 | `prior inpatient days` | Prior Inpatient Days | increases | 19 | — | How does Prior Inpatient Days affect this patient's readmission risk? |
+| 4 | `age` | age | decreases | 76 years | -0.1326 | How does age affect this patient's readmission risk? |
+| 5 | `recent red blood cell count` | Recent Red Blood Cell Count | increases | 2.23 ×10⁶/µL | — | How does Recent Red Blood Cell Count affect this patient's readmission risk? |
 
 ### Discharge medications
 
-1 passage(s), 1821 characters. anticoagulant: absent, beta-blocker: absent, diuretic: absent, taper: absent.
+1 passage(s), 1821 characters.
+
+inventory flags — taper: no, anticoagulant: no, dedicated medication section: no.
+text scan of the passages below — anticoagulant: absent, beta-blocker: absent, diuretic: absent, taper: absent.
 
 ```
 The patient was admitted to the emergency room. Plavix was started in addition to baby aspirin. He was kept on oral Zithromax for his cough. He was given Xopenex treatment, because of his respiratory distress. Carotid ultrasound was reviewed and revealed a 50 to 69% obstruction of left internal carotid. Dr. X saw him in consultation and recommended CT angiogram. This showed no significant obstructive lesion other than what was known on the ultrasound. Head MRI was done and revealed the above findings. The patient was begun on PT and improved. By discharge, he had much improved strength in his right arm. He had no further progressions. His cough improved with oral Zithromax and nebulizer treatments. His platelets also improved as well. By discharge, his platelets was up to 107,000. His H&H was stable at 41.7 and 14.6 and his white count was 4300 with a normal differential. Chest x-ray revealed a mild elevated right hemidiaphragm, but no infiltrate. Last chemistry panel on December 5, 2003, sodium 137, potassium 4.0, chloride 106, CO2 23, glucose 88, BUN 17, creatinine 0.7, calcium was 9.1. PT/INR on admission was 1.03, PTT 34.7. At the time of discharge, the patient's cough was much improved. His right arm weakness has much improved. His lung examination has just occasional rhonchi. He was changed to a metered dose inhaler with albuterol. He is being discharged home. An echocardiogram revealed mild concentric LVH with normal left ventricular function with an EF of 57%, moderate left atrial enlargement and diastolic dysfunction with mild mitral regurgitation. He will follow up in my office in 1 week. He is to start PT and OT as an outpatient. He is to avoid driving his car. He is to notify, if further symptoms. He has 2 more doses of Zithromax at home, he will complete. His prognosis is good.
 ```
 
-### Laboratory values at discharge
+### Laboratory panel
 
-| analyte | discharge value | unit | reference | decimals | flag |
-|---|---|---|---|---|---|
-| RDW | 23.7 | % | 11.5–14.5 | 1 | high |
-| Red blood cells | 2.23 | x10^6/uL | 4.2–5.4 | 2 | low |
-| Hemoglobin | 10.6 | g/dL | 12.0–15.5 | 1 | low |
-| Sodium | 142.0 | mmol/L | 135.0–145.0 | 0 | normal |
-| Monocytes | 0.5 | x10^3/uL | 0.2–0.8 | 1 | normal |
-| Creatinine | 0.98 | mg/dL | 0.5–1.1 | 2 | normal |
-| eGFR | 96.0 | mL/min/1.73m2 | 90.0–120.0 | 0 | normal |
-| Potassium | 4.2 | mmol/L | 3.5–5.0 | 1 | normal |
-| White blood cells | 7.4 | x10^3/uL | 4.0–11.0 | 1 | normal |
+One row per analyte, in the order the tool returned them. `baseline` is the first timepoint, `extreme` is the reading furthest outside the reference interval (the nadir or the peak), and `discharge` is the last. `anchored` names the values the readmission model was scored on: those are the patient's own numbers and may be stated as such; anything else was generated for a measure the model never saw.
+
+| analyte | unit | reference | decimals | baseline | extreme | discharge | anchored |
+|---|---|---|---|---|---|---|---|
+| RDW | % | 11.5–14.5 | 1 | d0 · 11.7 · `normal` | d7.6 · 23.7 · `high` | d7.6 · 23.7 · `high` | rdw_max |
+| Red blood cells | x10^6/uL | 4.2–5.4 | 2 | d0 · 4.21 · `normal` | d3 · 2.0 · `low` | d7.6 · 2.23 · `low` | rbc_last, rbc_min |
+| Hemoglobin | g/dL | 12.0–15.5 | 1 | d0 · 12.1 · `normal` | d1.5 · 7.1 · `low` | d7.6 · 10.6 · `low` | hemoglobin_min |
+| Sodium | mmol/L | 135.0–145.0 | 0 | d0 · 142.0 · `normal` | d0 · 142.0 · `normal` | d7.6 · 142.0 · `normal` | sodium_last, sodium_max, sodium_min |
+| Monocytes | x10^3/uL | 0.2–0.8 | 1 | d0 · 0.6 · `normal` | d0 · 0.6 · `normal` | d7.6 · 0.5 · `normal` | monocytes_min |
+| Creatinine | mg/dL | 0.5–1.1 | 2 | d0 · 0.63 · `normal` | d0 · 0.63 · `normal` | d7.6 · 0.98 · `normal` | — |
+| eGFR | mL/min/1.73m2 | 90.0–120.0 | 0 | d0 · 114.0 · `normal` | d0 · 114.0 · `normal` | d7.6 · 96.0 · `normal` | — |
+| Potassium | mmol/L | 3.5–5.0 | 1 | d0 · 4.4 · `normal` | d0 · 4.4 · `normal` | d7.6 · 4.2 · `normal` | — |
+| White blood cells | x10^3/uL | 4.0–11.0 | 1 | d0 · 6.4 · `normal` | d0 · 6.4 · `normal` | d7.6 · 7.4 · `normal` | — |
 
 9 panels; 3 abnormal at discharge (RDW, Red blood cells, Hemoglobin).
+No analyte carries a critical flag on this record.
 Most abnormal at discharge: **RDW** 23.7 % (flag `high`, reference 11.5–14.5).
 
 ### Clinical note
 
 Sections present: `admission_diagnosis`, `discharge_diagnosis`, `brief_hospital_course`.
 
+Sections absent: 35 of the 38 headings the retriever knows — `admission_date`, `allergies`, `assessment_and_plan`, `attending`, `chief_complaint`, `complications`, `consults`, `date_of_birth`, `discharge_condition`, `discharge_date`, `discharge_disposition`, `discharge_instructions`, `discharge_medications`, `discharge_summary`, `facility`, `family_history`, `followup_instructions`, `history_of_present_illness`, `indications`, `infections`, `major_procedure`, `medications_on_admission`, `medications_on_transfer`, `name`, `past_medical_history`, `past_surgical_history`, `pathology`, `pertinent_results`, `physical_exam`, `review_of_systems`, `service`, `sex`, `social_history`, `transfusions`, `unit_no`.
+
+`/ehr` headings these sections support, and the passage that earns each: **Presentation & diagnosis.** (`admission_diagnosis`, `discharge_diagnosis`), **Hospital course & procedures.** (`brief_hospital_course`), **Readmission risk & trajectory.** (the risk estimate).
+`/ehr` headings to OMIT: **Discharge plan & medications.**.
+
 - **discharge_diagnosis** (quoted): "Cerebrovascular accident with right arm weakness and MRI indicating acute/subacute infarct involving the left posterior parietal lobe without mass effect."
 - **brief_hospital_course** (quoted): "The patient was admitted to the emergency room."
+
+#### Verbatim passages
+
+**admission_diagnosis**
+
+```
+1. Cerebrovascular accident (CVA) with right arm weakness.
+2. Bronchitis.
+3. Atherosclerotic cardiovascular disease.
+4. Hyperlipidemia.
+5. Thrombocytopenia.
+```
+
+**discharge_diagnosis**
+
+```
+1. Cerebrovascular accident with right arm weakness and MRI indicating acute/subacute infarct involving the left posterior parietal lobe without mass effect.
+2. Old coronary infarct, anterior aspect of the right external capsule.
+
+3. Acute bronchitis with reactive airway disease.
+4. Thrombocytopenia most likely due to old coronary infarct, anterior aspect of the right external capsule.
+5. Atherosclerotic cardiovascular disease.
+6. Hyperlipidemia.
+```
+
+**brief_hospital_course**
+
+```
+The patient was admitted to the emergency room. Plavix was started in addition to baby aspirin. He was kept on oral Zithromax for his cough. He was given Xopenex treatment, because of his respiratory distress. Carotid ultrasound was reviewed and revealed a 50 to 69% obstruction of left internal carotid. Dr. X saw him in consultation and recommended CT angiogram. This showed no significant obstructive lesion other than what was known on the ultrasound. Head MRI was done and revealed the above findings. The patient was begun on PT and improved. By discharge, he had much improved strength in his right arm. He had no further progressions. His cough improved with oral Zithromax and nebulizer treatments. His platelets also improved as well. By discharge, his platelets was up to 107,000. His H&H was stable at 41.7 and 14.6 and his white count was 4300 with a normal differential. Chest x-ray revealed a mild elevated right hemidiaphragm, but no infiltrate. Last chemistry panel on December 5, 2003, sodium 137, potassium 4.0, chloride 106, CO2 23, glucose 88, BUN 17, creatinine 0.7, calcium was 9.1. PT/INR on admission was 1.03, PTT 34.7. At the time of discharge, the patient's cough was much improved. His right arm weakness has much improved. His lung examination has just occasional rhonchi. He was changed to a metered dose inhaler with albuterol. He is being discharged home. An echocardiogram revealed mild concentric LVH with normal left ventricular function with an EF of 57%, moderate left atrial enlargement and diastolic dysfunction with mild mitral regurgitation. He will follow up in my office in 1 week. He is to start PT and OT as an outpatient. He is to avoid driving his car. He is to notify, if further symptoms. He has 2 more doses of Zithromax at home, he will complete. His prognosis is good.
+```
 
 ## 90000105
 
 ### Manifest and risk
 
-| field | value |
-|---|---|
-| age | 30 |
-| gender | Male |
-| discharge_location | Home |
-| length_of_stay_days | 2 |
-| prior_inpatient_days | 0.916667 |
-| prior_admission_count | 1 |
-| recent_ed_visits | 0 |
-| admission_type | Urgent (URGENT) |
-| insurance | Private |
-| race | White |
-| oncology_flag (feature row) | 0.0 |
+The raw field and the string the product publishes for it. A sentence may quote either; the right-hand column is the form the widget prints.
 
-**Readmission probability 0.030344** against a threshold of 0.11 → decision `below` (model `readmission-final-20260917173317`).
+| field | raw | published |
+|---|---|---|
+| encounter | `inpatient admission` | inpatient admission |
+| age | `30` | 30 |
+| gender | `Male` | Male |
+| admission_type | `Urgent (URGENT)` | Urgent |
+| discharge_location | `Home` | Home |
+| length_of_stay_days | `2` | 2 |
+| prior_admissions | `1` | 1 |
+| prior_inpatient_days | `0.916667` | 0.916667 |
+| ed_visits_prior_year | `0` | 0 |
+| insurance | `Private` | Private |
+| race | `White` | White |
+| oncology_flag (feature row) | `0.0` | — |
 
-| # | driver | raw value | contribution | direction |
-|---|---|---|---|---|
-| 1 | `prior_inpatient_days` | 0.916667 | -0.3304 | decreases |
-| 2 | `sodium_min` | — | -0.1985 | decreases |
-| 3 | `procedure_count` | 1 | -0.1688 | decreases |
-| 4 | `medication_order_count` | 10.28 | -0.1622 | decreases |
-| 5 | `sodium_max` | — | -0.1527 | decreases |
+**Readmission probability 0.030344** (published **3.0%**) against a threshold of 0.11 (published **11.0%**) → decision `below` (model `readmission-final-20260917173317`).
+
+Drivers, in the order the model receives them. `label` is `humanize()`; `value` is the patient's own value in clinical form, or empty when the factor is absent; `chip` is the question a driver bar asks. `contribution` is read from the raw response and is **not** published to the model or the widget — it is here so a reviewer can rank the drivers, and no answer key may quote it.
+
+| # | feature | label | direction | value | contribution | chip |
+|---|---|---|---|---|---|---|
+| 1 | `prior inpatient days` | Prior Inpatient Days | decreases | 1 | — | How does Prior Inpatient Days affect this patient's readmission risk? |
+| 2 | `lowest sodium` | Lowest Sodium | decreases | — | — | How does Lowest Sodium affect this patient's readmission risk? |
+| 3 | `procedures` | Procedures | decreases | 1 | — | How does Procedures affect this patient's readmission risk? |
+| 4 | `medication order count` | Medication Order Count | decreases | 10 | — | How does Medication Order Count affect this patient's readmission risk? |
+| 5 | `highest sodium` | Highest Sodium | decreases | — | — | How does Highest Sodium affect this patient's readmission risk? |
 
 ### Discharge medications
 
-1 passage(s), 537 characters. anticoagulant: absent, beta-blocker: absent, diuretic: absent, taper: absent.
+1 passage(s), 537 characters.
+
+inventory flags — taper: no, anticoagulant: no, dedicated medication section: yes.
+text scan of the passages below — anticoagulant: absent, beta-blocker: absent, diuretic: absent, taper: absent.
 
 ```
 Include re-appointment in the office in the next week, call in the interim if any significant concerning complaints. Scripts left in the chart for omeprazole and Lortab. Med rec sheet completed (on no meds). He will maintain bariatric clear liquids at home, goal 64 ounces per day, maintain activity at home, but no heavy lifting or straining. Can shower starting tomorrow, drain site care and wound care reviewed. He will re-appoint in the office in the next week, certainly call in the interim if any significant concerning complaints.
 ```
 
-### Laboratory values at discharge
+### Laboratory panel
 
-| analyte | discharge value | unit | reference | decimals | flag |
-|---|---|---|---|---|---|
-| RDW | 14.3 | % | 11.5–14.5 | 1 | normal |
-| Red blood cells | 4.73 | x10^6/uL | 4.2–5.4 | 2 | normal |
-| Hemoglobin | 13.4 | g/dL | 12.0–15.5 | 1 | normal |
-| Sodium | 140.0 | mmol/L | 135.0–145.0 | 0 | normal |
-| Monocytes | 0.4 | x10^3/uL | 0.2–0.8 | 1 | normal |
-| Creatinine | 1.06 | mg/dL | 0.5–1.1 | 2 | normal |
-| eGFR | 95.0 | mL/min/1.73m2 | 90.0–120.0 | 0 | normal |
-| Potassium | 4.1 | mmol/L | 3.5–5.0 | 1 | normal |
-| White blood cells | 6.8 | x10^3/uL | 4.0–11.0 | 1 | normal |
+One row per analyte, in the order the tool returned them. `baseline` is the first timepoint, `extreme` is the reading furthest outside the reference interval (the nadir or the peak), and `discharge` is the last. `anchored` names the values the readmission model was scored on: those are the patient's own numbers and may be stated as such; anything else was generated for a measure the model never saw.
+
+| analyte | unit | reference | decimals | baseline | extreme | discharge | anchored |
+|---|---|---|---|---|---|---|---|
+| RDW | % | 11.5–14.5 | 1 | d0 · 11.9 · `normal` | d0 · 11.9 · `normal` | d2 · 14.3 · `normal` | — |
+| Red blood cells | x10^6/uL | 4.2–5.4 | 2 | d0 · 4.97 · `normal` | d0 · 4.97 · `normal` | d2 · 4.73 · `normal` | — |
+| Hemoglobin | g/dL | 12.0–15.5 | 1 | d0 · 14.0 · `normal` | d0 · 14.0 · `normal` | d2 · 13.4 · `normal` | — |
+| Sodium | mmol/L | 135.0–145.0 | 0 | d0 · 142.0 · `normal` | d0 · 142.0 · `normal` | d2 · 140.0 · `normal` | — |
+| Monocytes | x10^3/uL | 0.2–0.8 | 1 | d0 · 0.5 · `normal` | d0 · 0.5 · `normal` | d2 · 0.4 · `normal` | — |
+| Creatinine | mg/dL | 0.5–1.1 | 2 | d0 · 0.55 · `normal` | d0 · 0.55 · `normal` | d2 · 1.06 · `normal` | — |
+| eGFR | mL/min/1.73m2 | 90.0–120.0 | 0 | d0 · 117.0 · `normal` | d0 · 117.0 · `normal` | d2 · 95.0 · `normal` | — |
+| Potassium | mmol/L | 3.5–5.0 | 1 | d0 · 4.4 · `normal` | d0 · 4.4 · `normal` | d2 · 4.1 · `normal` | — |
+| White blood cells | x10^3/uL | 4.0–11.0 | 1 | d0 · 6.3 · `normal` | d0 · 6.3 · `normal` | d2 · 6.8 · `normal` | — |
 
 9 panels; 0 abnormal at discharge.
+No analyte carries a critical flag on this record.
 No value sits outside its reference range at discharge.
 
 ### Clinical note
 
 Sections present: `discharge_diagnosis`, `major_procedure`, `brief_hospital_course`, `discharge_instructions`.
 
+Sections absent: 34 of the 38 headings the retriever knows — `admission_date`, `admission_diagnosis`, `allergies`, `assessment_and_plan`, `attending`, `chief_complaint`, `complications`, `consults`, `date_of_birth`, `discharge_condition`, `discharge_date`, `discharge_disposition`, `discharge_medications`, `discharge_summary`, `facility`, `family_history`, `followup_instructions`, `history_of_present_illness`, `indications`, `infections`, `medications_on_admission`, `medications_on_transfer`, `name`, `past_medical_history`, `past_surgical_history`, `pathology`, `pertinent_results`, `physical_exam`, `review_of_systems`, `service`, `sex`, `social_history`, `transfusions`, `unit_no`.
+
+`/ehr` headings these sections support, and the passage that earns each: **Presentation & diagnosis.** (`discharge_diagnosis`), **Hospital course & procedures.** (`brief_hospital_course`, `major_procedure`), **Discharge plan & medications.** (`discharge_instructions`), **Readmission risk & trajectory.** (the risk estimate).
+`/ehr` headings to OMIT: none.
+
 - **discharge_diagnosis** (quoted): "Morbid obesity, status post laparoscopic Roux-en-Y gastric bypass."
 - **brief_hospital_course** (quoted): "This is a 30-year-old male, who presented recently to the Bariatric Center for evaluation and treatment of longstanding morbid obesity and associated comorbidities."
+
+#### Verbatim passages
+
+**discharge_diagnosis**
+
+```
+1. Morbid obesity, status post laparoscopic Roux-en-Y gastric bypass.
+2. Hypertension.
+3. Obstructive sleep apnea, on CPAP.
+```
+
+**major_procedure**
+
+```
+Laparoscopic Roux-en-Y gastric bypass.
+```
+
+**brief_hospital_course**
+
+```
+This is a 30-year-old male, who presented recently to the Bariatric Center for evaluation and treatment of longstanding morbid obesity and associated comorbidities. Underwent standard bariatric evaluation, consults, diagnostics, and preop Medifast induced weight loss in anticipation of elective bariatric surgery.
+
+Taken to the OR via same day surgery process for elective gastric bypass, tolerated well, recovered in the PACU, and sent to the floor for routine postoperative care. There, DVT prophylaxis was continued with subcu heparin, early and frequent mobilization, and SCDs. PCA was utilized for pain control, efficaciously, he utilized the CPAP, was monitored, and had no new cardiopulmonary complaints. Postop day #1, labs within normal limits, able to clinically start bariatric clear liquids at 2 ounces per hour, this was tolerated well. He was ambulatory, had no cardiopulmonary complaints, no unusual fever or concerning symptoms. By the second postoperative day, was able to advance to four ounces per hour, tolerated this well, and is able to discharge in stable and improved condition today. He had his drains removed today as well.
+```
+
+**discharge_instructions**
+
+```
+Include re-appointment in the office in the next week, call in the interim if any significant concerning complaints. Scripts left in the chart for omeprazole and Lortab. Med rec sheet completed (on no meds). He will maintain bariatric clear liquids at home, goal 64 ounces per day, maintain activity at home, but no heavy lifting or straining. Can shower starting tomorrow, drain site care and wound care reviewed. He will re-appoint in the office in the next week, certainly call in the interim if any significant concerning complaints.
+```
 
 ## 90000023
 
 ### Manifest and risk
 
-| field | value |
-|---|---|
-| age | 60 |
-| gender | Male |
-| discharge_location | Home |
-| length_of_stay_days | 9.875 |
-| prior_inpatient_days | 7.79167 |
-| prior_admission_count | 6 |
-| recent_ed_visits | 3 |
-| admission_type | Emergency (EW EMER.) |
-| insurance | Private |
-| race | White |
-| oncology_flag (feature row) | 1.0 |
+The raw field and the string the product publishes for it. A sentence may quote either; the right-hand column is the form the widget prints.
 
-**Readmission probability 0.316788** against a threshold of 0.11 → decision `above` (model `readmission-final-20260917173317`).
+| field | raw | published |
+|---|---|---|
+| encounter | `inpatient admission` | inpatient admission |
+| age | `60` | 60 |
+| gender | `Male` | Male |
+| admission_type | `Emergency (EW EMER.)` | Emergency |
+| discharge_location | `Home` | Home |
+| length_of_stay_days | `9.875` | 10 |
+| prior_admissions | `6` | 6 |
+| prior_inpatient_days | `7.79167` | 7.79167 |
+| ed_visits_prior_year | `3` | 3 |
+| insurance | `Private` | Private |
+| race | `White` | White |
+| oncology_flag (feature row) | `1.0` | — |
 
-| # | driver | raw value | contribution | direction |
-|---|---|---|---|---|
-| 1 | `oncology_flag` | 1 | +0.4104 | increases |
-| 2 | `prior_inpatient_days` | 7.79167 | +0.1190 | increases |
-| 3 | `rdw_max` | 15.7 | +0.1130 | increases |
-| 4 | `monocytes_min` | — | +0.0824 | increases |
-| 5 | `medication_order_count` | 13.64 | -0.0768 | decreases |
+**Readmission probability 0.316788** (published **31.7%**) against a threshold of 0.11 (published **11.0%**) → decision `above` (model `readmission-final-20260917173317`).
+
+Drivers, in the order the model receives them. `label` is `humanize()`; `value` is the patient's own value in clinical form, or empty when the factor is absent; `chip` is the question a driver bar asks. `contribution` is read from the raw response and is **not** published to the model or the widget — it is here so a reviewer can rank the drivers, and no answer key may quote it.
+
+| # | feature | label | direction | value | contribution | chip |
+|---|---|---|---|---|---|---|
+| 1 | `oncology history` | Oncology History | increases | — | — | How does Oncology History affect this patient's readmission risk? |
+| 2 | `prior inpatient days` | Prior Inpatient Days | increases | 8 | — | How does Prior Inpatient Days affect this patient's readmission risk? |
+| 3 | `red cell distribution width (RDW)` | Red Cell Distribution Width (rdw) | increases | 15.7% | — | How does Red Cell Distribution Width (rdw) affect this patient's readmission risk? |
+| 4 | `lowest monocyte count` | Lowest Monocyte Count | increases | — | — | How does Lowest Monocyte Count affect this patient's readmission risk? |
+| 5 | `medication order count` | Medication Order Count | decreases | 14 | — | How does Medication Order Count affect this patient's readmission risk? |
 
 ### Discharge medications
 
-1 passage(s), 729 characters. anticoagulant: absent, beta-blocker: absent, diuretic: absent, taper: absent.
+1 passage(s), 729 characters.
+
+inventory flags — taper: no, anticoagulant: no, dedicated medication section: yes.
+text scan of the passages below — anticoagulant: absent, beta-blocker: absent, diuretic: absent, taper: absent.
 
 ```
 Mr. ABC is discharged home. He should follow a low-fat, low-salt, low-cholesterol, and heart healthy diabetic diet. He should follow post-coronary artery intervention restrictions. He should not lift greater than 10 pounds for seven days. He should not drive for two days. He should not immerse in water for two weeks. Groin site care reviewed with patient prior to being discharged home. He should check groin for bleeding, edema, and signs of infection. Mr. ABC is to see his primary care physician within one to two weeks, return to Dr. XYZ's clinic in four to six weeks, appointment card to be mailed him. He is to follow up with Urology in their clinic on MM/DD/YYYY at 10 o'clock and then to scheduled CT scan at that time.
 ```
 
-### Laboratory values at discharge
+### Laboratory panel
 
-| analyte | discharge value | unit | reference | decimals | flag |
-|---|---|---|---|---|---|
-| RDW | 15.7 | % | 11.5–14.5 | 1 | high |
-| Red blood cells | 3.33 | x10^6/uL | 4.2–5.4 | 2 | low |
-| Hemoglobin | 11.5 | g/dL | 12.0–15.5 | 1 | low |
-| Sodium | 137.0 | mmol/L | 135.0–145.0 | 0 | normal |
-| Monocytes | 0.5 | x10^3/uL | 0.2–0.8 | 1 | normal |
-| Creatinine | 1.02 | mg/dL | 0.5–1.1 | 2 | normal |
-| eGFR | 97.0 | mL/min/1.73m2 | 90.0–120.0 | 0 | normal |
-| Potassium | 4.2 | mmol/L | 3.5–5.0 | 1 | normal |
-| White blood cells | 7.0 | x10^3/uL | 4.0–11.0 | 1 | normal |
+One row per analyte, in the order the tool returned them. `baseline` is the first timepoint, `extreme` is the reading furthest outside the reference interval (the nadir or the peak), and `discharge` is the last. `anchored` names the values the readmission model was scored on: those are the patient's own numbers and may be stated as such; anything else was generated for a measure the model never saw.
+
+| analyte | unit | reference | decimals | baseline | extreme | discharge | anchored |
+|---|---|---|---|---|---|---|---|
+| RDW | % | 11.5–14.5 | 1 | d0 · 11.6 · `normal` | d9.9 · 15.7 · `high` | d9.9 · 15.7 · `high` | rdw_max |
+| Red blood cells | x10^6/uL | 4.2–5.4 | 2 | d0 · 4.49 · `normal` | d2 · 3.33 · `low` | d9.9 · 3.33 · `low` | rbc_last, rbc_min |
+| Hemoglobin | g/dL | 12.0–15.5 | 1 | d0 · 12.3 · `normal` | d2 · 7.9 · `low` | d9.9 · 11.5 · `low` | hemoglobin_min |
+| Sodium | mmol/L | 135.0–145.0 | 0 | d0 · 139.0 · `normal` | d0 · 139.0 · `normal` | d9.9 · 137.0 · `normal` | sodium_last, sodium_max, sodium_min |
+| Monocytes | x10^3/uL | 0.2–0.8 | 1 | d0 · 0.5 · `normal` | d0 · 0.5 · `normal` | d9.9 · 0.5 · `normal` | — |
+| Creatinine | mg/dL | 0.5–1.1 | 2 | d0 · 0.58 · `normal` | d0 · 0.58 · `normal` | d9.9 · 1.02 · `normal` | — |
+| eGFR | mL/min/1.73m2 | 90.0–120.0 | 0 | d0 · 118.0 · `normal` | d0 · 118.0 · `normal` | d9.9 · 97.0 · `normal` | — |
+| Potassium | mmol/L | 3.5–5.0 | 1 | d0 · 4.5 · `normal` | d0 · 4.5 · `normal` | d9.9 · 4.2 · `normal` | — |
+| White blood cells | x10^3/uL | 4.0–11.0 | 1 | d0 · 6.2 · `normal` | d0 · 6.2 · `normal` | d9.9 · 7.0 · `normal` | — |
 
 9 panels; 3 abnormal at discharge (RDW, Red blood cells, Hemoglobin).
+No analyte carries a critical flag on this record.
 Most abnormal at discharge: **Red blood cells** 3.33 x10^6/uL (flag `low`, reference 4.2–5.4).
 
 ### Clinical note
 
 Sections present: `history_of_present_illness`, `brief_hospital_course`, `physical_exam`, `pertinent_results`, `major_procedure`, `discharge_instructions`, `discharge_diagnosis`.
 
+Sections absent: 31 of the 38 headings the retriever knows — `admission_date`, `admission_diagnosis`, `allergies`, `assessment_and_plan`, `attending`, `chief_complaint`, `complications`, `consults`, `date_of_birth`, `discharge_condition`, `discharge_date`, `discharge_disposition`, `discharge_medications`, `discharge_summary`, `facility`, `family_history`, `followup_instructions`, `indications`, `infections`, `medications_on_admission`, `medications_on_transfer`, `name`, `past_medical_history`, `past_surgical_history`, `pathology`, `review_of_systems`, `service`, `sex`, `social_history`, `transfusions`, `unit_no`.
+
+`/ehr` headings these sections support, and the passage that earns each: **Presentation & diagnosis.** (`history_of_present_illness`, `discharge_diagnosis`), **Hospital course & procedures.** (`brief_hospital_course`, `major_procedure`), **Discharge plan & medications.** (`discharge_instructions`), **Readmission risk & trajectory.** (the risk estimate).
+`/ehr` headings to OMIT: none.
+
 - **discharge_diagnosis** (quoted): "Coronary artery disease status post percutaneous coronary artery intervention to the right coronary artery and to the LAD."
 - **brief_hospital_course** (quoted): "ABC presented to the Day Hospital in anticipation for Urology surgery."
 - **history_of_present_illness** (quoted): "ABC is a 60-year-old white male veteran with multiple comorbidities, who has a history of bladder cancer diagnosed approximately two years ago by the VA Hospital."
+
+#### Verbatim passages
+
+**history_of_present_illness**
+
+```
+Mr. ABC is a 60-year-old white male veteran with multiple comorbidities, who has a history of bladder cancer diagnosed approximately two years ago by the VA Hospital. He underwent a resection there. He was to be admitted to the Day Hospital for cystectomy. He was seen in Urology Clinic and Radiology Clinic on MM/DD/YYYY.
+```
+
+**brief_hospital_course**
+
+```
+Mr. ABC presented to the Day Hospital in anticipation for Urology surgery. On evaluation, EKG, echocardiogram was abnormal, a Cardiology consult was obtained. A cardiac adenosine stress MRI was then proceeded, same was positive for inducible ischemia, mild-to-moderate inferolateral subendocardial infarction with peri-infarct ischemia. In addition, inducible ischemia seen in the inferior lateral septum. Mr. ABC underwent a left heart catheterization, which revealed two vessel coronary artery disease. The RCA, proximal was 95% stenosed and the distal 80% stenosed. The mid LAD was 85% stenosed and the distal LAD was 85% stenosed. There was four Multi-Link Vision bare metal stents placed to decrease all four lesions to 0%. Following intervention, Mr. ABC was admitted to 7 Ardmore Tower under Cardiology Service under the direction of Dr. XYZ. Mr. ABC had a noncomplicated post-intervention hospital course. He was stable for discharge home on MM/DD/YYYY with instructions to take Plavix daily for one month and Urology is aware of the same.
+```
+
+**physical_exam**
+
+```
+VITAL SIGNS: Temperature 97.4, heart rate 68, respirations 18, blood pressure 133/70.
+
+HEART: Regular rate and rhythm.
+LUNGS: Clear to auscultation.
+ABDOMEN: Obese, soft, nontender. Lower abdomen tender when touched due to bladder cancer.
+RIGHT GROIN: Dry and intact, no bruit, no ecchymosis, no hematoma. Distal pulses are intact.
+```
+
+**pertinent_results**
+
+```
+CBC: White count 5.4, hemoglobin 10.3, hematocrit 30, platelet count 132, hemoglobin A1c 9.1. BMP: Sodium 142, potassium 4.4, BUN 13, creatinine 1.1, glucose 211. Lipid profile: Cholesterol 157, triglycerides 146, HDL 22, LDL 106.
+```
+
+**major_procedure**
+
+```
+1. On MM/DD/YYYY, cardiac MRI adenosine stress.
+2. On MM/DD/YYYY, left heart catheterization, coronary angiogram, left ventriculogram, coronary angioplasty with four Multi-Link Vision bare metal stents, two placed to the LAD in two placed to the RCA.
+```
+
+**discharge_instructions**
+
+```
+Mr. ABC is discharged home. He should follow a low-fat, low-salt, low-cholesterol, and heart healthy diabetic diet. He should follow post-coronary artery intervention restrictions. He should not lift greater than 10 pounds for seven days. He should not drive for two days. He should not immerse in water for two weeks. Groin site care reviewed with patient prior to being discharged home. He should check groin for bleeding, edema, and signs of infection. Mr. ABC is to see his primary care physician within one to two weeks, return to Dr. XYZ's clinic in four to six weeks, appointment card to be mailed him. He is to follow up with Urology in their clinic on MM/DD/YYYY at 10 o'clock and then to scheduled CT scan at that time.
+```
+
+**discharge_diagnosis**
+
+```
+1. Coronary artery disease status post percutaneous coronary artery intervention to the right coronary artery and to the LAD.
+2. Bladder cancer.
+3. Diabetes.
+4. Dyslipidemia.
+5. Hypertension.
+6. Carotid artery stenosis, status post right carotid endarterectomy in 2004.
+
+7. Multiple resections of the bladder tumor.
+8. Distant history of appendectomy.
+9. Distant history of ankle surgery.
+```
 
 ## 90000051
 
@@ -317,33 +614,41 @@ Sections present: `history_of_present_illness`, `brief_hospital_course`, `physic
 
 ### Manifest and risk
 
-| field | value |
-|---|---|
-| age | 69 |
-| gender | Female |
-| discharge_location | — |
-| length_of_stay_days | — |
-| prior_inpatient_days | 13.4167 |
-| prior_admission_count | 2 |
-| recent_ed_visits | 0 |
-| admission_type | Emergency, direct admission (DIRECT EMER.) |
-| insurance | Medicare |
-| race | White |
-| oncology_flag (feature row) | 0.0 |
+The raw field and the string the product publishes for it. A sentence may quote either; the right-hand column is the form the widget prints.
 
-**Readmission probability 0.291645** against a threshold of 0.11 → decision `above` (model `readmission-final-20260917173317`).
+| field | raw | published |
+|---|---|---|
+| encounter | `outpatient encounter (no inpatient stay)` | outpatient encounter (no inpatient stay) |
+| age | `69` | 69 |
+| gender | `Female` | Female |
+| admission_type | `Emergency, direct admission (DIRECT EMER.)` | Emergency, direct admission |
+| discharge_location | `—` | — |
+| length_of_stay_days | `—` | — |
+| prior_admissions | `2` | 2 |
+| prior_inpatient_days | `13.4167` | 13.4167 |
+| ed_visits_prior_year | `0` | 0 |
+| insurance | `Medicare` | Medicare |
+| race | `White` | White |
+| oncology_flag (feature row) | `0.0` | — |
 
-| # | driver | raw value | contribution | direction |
-|---|---|---|---|---|
-| 1 | `rdw_max` | 23.1 | +0.3221 | increases |
-| 2 | `prior_inpatient_days` | 13.4167 | +0.1703 | increases |
-| 3 | `admission_type` | Emergency, direct admission (DIRECT EMER.) | +0.1532 | increases |
-| 4 | `oncology_flag` | 0 | -0.1176 | decreases |
-| 5 | `monocytes_min` | — | +0.0850 | increases |
+**Readmission probability 0.291645** (published **29.2%**) against a threshold of 0.11 (published **11.0%**) → decision `above` (model `readmission-final-20260917173317`).
+
+Drivers, in the order the model receives them. `label` is `humanize()`; `value` is the patient's own value in clinical form, or empty when the factor is absent; `chip` is the question a driver bar asks. `contribution` is read from the raw response and is **not** published to the model or the widget — it is here so a reviewer can rank the drivers, and no answer key may quote it.
+
+| # | feature | label | direction | value | contribution | chip |
+|---|---|---|---|---|---|---|
+| 1 | `red cell distribution width (RDW)` | Red Cell Distribution Width (rdw) | increases | 23.1% | — | How does Red Cell Distribution Width (rdw) affect this patient's readmission risk? |
+| 2 | `prior inpatient days` | Prior Inpatient Days | increases | 13 | — | How does Prior Inpatient Days affect this patient's readmission risk? |
+| 3 | `admission type` | Admission Type | increases | — | — | How does Admission Type affect this patient's readmission risk? |
+| 4 | `oncology history` | Oncology History | decreases | not present | — | How does Oncology History affect this patient's readmission risk? |
+| 5 | `lowest monocyte count` | Lowest Monocyte Count | increases | — | — | How does Lowest Monocyte Count affect this patient's readmission risk? |
 
 ### Discharge medications
 
-1 passage(s), 1447 characters. anticoagulant: absent, beta-blocker: absent, diuretic: absent, taper: absent.
+1 passage(s), 1447 characters.
+
+inventory flags — taper: no, anticoagulant: no, dedicated medication section: no.
+text scan of the passages below — anticoagulant: absent, beta-blocker: absent, diuretic: absent, taper: absent.
 
 ```
 The patient is a 69-year-old female, who was referred for outpatient skilled speech therapy, secondary to right hemisphere disorder, status post stroke. The patient attended nine outpatient skilled speech therapy sessions from her initial evaluation on 12/01/08 to her last session on 01/09/09.
@@ -351,27 +656,45 @@ The patient is a 69-year-old female, who was referred for outpatient skilled spe
 The patient made some progress during therapy. She accomplished two and a half out of her five short-term therapy goals. We did complete an oral mechanism examination and clinical swallow evaluation, which showed her swallowing to be within functional limits. The patient improved on her turn taking skills during conversation, and she was able to listen to a narrative and recall the main idea plus five details after a three-minute delay independently. The patient continues to have difficulty with visual scanning in cancellation task, secondary to her significant left neglect. She also did not accomplish her sustained attention goal, which required her to complete tasks greater than 80% accuracy for at least 15 minutes independently. Thus she also continued to have difficulty with reading, comprehension, secondary to the significance of her left neglect. The patient was initially authorized for 12 outpatient speech therapy sessions, but once again she only attended 9. Her last session occurred on 01/09/09. She has not made any additional followup sessions with me for over three weeks, so she is discharged from my services at this time.
 ```
 
-### Laboratory values at discharge
+### Laboratory panel
 
-| analyte | discharge value | unit | reference | decimals | flag |
-|---|---|---|---|---|---|
-| RDW | 23.1 | % | 11.5–14.5 | 1 | high |
-| Red blood cells | 3.7 | x10^6/uL | 4.2–5.4 | 2 | low |
-| Hemoglobin | 11.8 | g/dL | 12.0–15.5 | 1 | low |
-| Sodium | 136.0 | mmol/L | 135.0–145.0 | 0 | normal |
-| Monocytes | 0.4 | x10^3/uL | 0.2–0.8 | 1 | normal |
-| Creatinine | 1.04 | mg/dL | 0.5–1.1 | 2 | normal |
-| eGFR | 94.0 | mL/min/1.73m2 | 90.0–120.0 | 0 | normal |
-| Potassium | 4.1 | mmol/L | 3.5–5.0 | 1 | normal |
-| White blood cells | 6.9 | x10^3/uL | 4.0–11.0 | 1 | normal |
+One row per analyte, in the order the tool returned them. `baseline` is the first timepoint, `extreme` is the reading furthest outside the reference interval (the nadir or the peak), and `discharge` is the last. `anchored` names the values the readmission model was scored on: those are the patient's own numbers and may be stated as such; anything else was generated for a measure the model never saw.
+
+| analyte | unit | reference | decimals | baseline | extreme | discharge | anchored |
+|---|---|---|---|---|---|---|---|
+| RDW | % | 11.5–14.5 | 1 | d0 · 12.1 · `normal` | d7.9 · 23.1 · `high` | d7.9 · 23.1 · `high` | rdw_max |
+| Red blood cells | x10^6/uL | 4.2–5.4 | 2 | d0 · 4.47 · `normal` | d1.6 · 2.74 · `low` | d7.9 · 3.7 · `low` | rbc_last, rbc_min |
+| Hemoglobin | g/dL | 12.0–15.5 | 1 | d0 · 13.2 · `normal` | d1.6 · 8.5 · `low` | d7.9 · 11.8 · `low` | hemoglobin_min |
+| Sodium | mmol/L | 135.0–145.0 | 0 | d0 · 141.0 · `normal` | d3.2 · 133.0 · `low` | d7.9 · 136.0 · `normal` | sodium_last, sodium_max, sodium_min |
+| Monocytes | x10^3/uL | 0.2–0.8 | 1 | d0 · 0.5 · `normal` | d0 · 0.5 · `normal` | d7.9 · 0.4 · `normal` | — |
+| Creatinine | mg/dL | 0.5–1.1 | 2 | d0 · 0.57 · `normal` | d0 · 0.57 · `normal` | d7.9 · 1.04 · `normal` | — |
+| eGFR | mL/min/1.73m2 | 90.0–120.0 | 0 | d0 · 118.0 · `normal` | d0 · 118.0 · `normal` | d7.9 · 94.0 · `normal` | — |
+| Potassium | mmol/L | 3.5–5.0 | 1 | d0 · 4.4 · `normal` | d0 · 4.4 · `normal` | d7.9 · 4.1 · `normal` | — |
+| White blood cells | x10^3/uL | 4.0–11.0 | 1 | d0 · 6.1 · `normal` | d0 · 6.1 · `normal` | d7.9 · 6.9 · `normal` | — |
 
 9 panels; 3 abnormal at discharge (RDW, Red blood cells, Hemoglobin).
+No analyte carries a critical flag on this record.
 Most abnormal at discharge: **RDW** 23.1 % (flag `high`, reference 11.5–14.5).
 
 ### Clinical note
 
 Sections present: `discharge_summary`.
 
+Sections absent: 37 of the 38 headings the retriever knows — `admission_date`, `admission_diagnosis`, `allergies`, `assessment_and_plan`, `attending`, `brief_hospital_course`, `chief_complaint`, `complications`, `consults`, `date_of_birth`, `discharge_condition`, `discharge_date`, `discharge_diagnosis`, `discharge_disposition`, `discharge_instructions`, `discharge_medications`, `facility`, `family_history`, `followup_instructions`, `history_of_present_illness`, `indications`, `infections`, `major_procedure`, `medications_on_admission`, `medications_on_transfer`, `name`, `past_medical_history`, `past_surgical_history`, `pathology`, `pertinent_results`, `physical_exam`, `review_of_systems`, `service`, `sex`, `social_history`, `transfusions`, `unit_no`.
+
+`/ehr` headings these sections support, and the passage that earns each: **Readmission risk & trajectory.** (the risk estimate).
+`/ehr` headings to OMIT: **Presentation & diagnosis.**, **Hospital course & procedures.**, **Discharge plan & medications.**.
+
+
+#### Verbatim passages
+
+**discharge_summary**
+
+```
+The patient is a 69-year-old female, who was referred for outpatient skilled speech therapy, secondary to right hemisphere disorder, status post stroke. The patient attended nine outpatient skilled speech therapy sessions from her initial evaluation on 12/01/08 to her last session on 01/09/09.
+
+The patient made some progress during therapy. She accomplished two and a half out of her five short-term therapy goals. We did complete an oral mechanism examination and clinical swallow evaluation, which showed her swallowing to be within functional limits. The patient improved on her turn taking skills during conversation, and she was able to listen to a narrative and recall the main idea plus five details after a three-minute delay independently. The patient continues to have difficulty with visual scanning in cancellation task, secondary to her significant left neglect. She also did not accomplish her sustained attention goal, which required her to complete tasks greater than 80% accuracy for at least 15 minutes independently. Thus she also continued to have difficulty with reading, comprehension, secondary to the significance of her left neglect. The patient was initially authorized for 12 outpatient speech therapy sessions, but once again she only attended 9. Her last session occurred on 01/09/09. She has not made any additional followup sessions with me for over three weeks, so she is discharged from my services at this time.
+```
 
 ## 90000073
 
@@ -379,33 +702,41 @@ Sections present: `discharge_summary`.
 
 ### Manifest and risk
 
-| field | value |
-|---|---|
-| age | 78 |
-| gender | Female |
-| discharge_location | — |
-| length_of_stay_days | — |
-| prior_inpatient_days | 0 |
-| prior_admission_count | 0 |
-| recent_ed_visits | 0 |
-| admission_type | Urgent (URGENT) |
-| insurance | Medicare |
-| race | White |
-| oncology_flag (feature row) | 0.0 |
+The raw field and the string the product publishes for it. A sentence may quote either; the right-hand column is the form the widget prints.
 
-**Readmission probability 0.159066** against a threshold of 0.11 → decision `above` (model `readmission-final-20260917173317`).
+| field | raw | published |
+|---|---|---|
+| encounter | `outpatient encounter (no inpatient stay)` | outpatient encounter (no inpatient stay) |
+| age | `78` | 78 |
+| gender | `Female` | Female |
+| admission_type | `Urgent (URGENT)` | Urgent |
+| discharge_location | `—` | — |
+| length_of_stay_days | `—` | — |
+| prior_admissions | `0` | 0 |
+| prior_inpatient_days | `0` | 0 |
+| ed_visits_prior_year | `0` | 0 |
+| insurance | `Medicare` | Medicare |
+| race | `White` | White |
+| oncology_flag (feature row) | `0.0` | — |
 
-| # | driver | raw value | contribution | direction |
-|---|---|---|---|---|
-| 1 | `prior_inpatient_days` | 0 | -0.2155 | decreases |
-| 2 | `rdw_max` | 15.9 | +0.1262 | increases |
-| 3 | `index_los_days` | 7.83333 | +0.1123 | increases |
-| 4 | `monocytes_min` | — | +0.0820 | increases |
-| 5 | `recent_ed_visits` | 0 | +0.0775 | increases |
+**Readmission probability 0.159066** (published **15.9%**) against a threshold of 0.11 (published **11.0%**) → decision `above` (model `readmission-final-20260917173317`).
+
+Drivers, in the order the model receives them. `label` is `humanize()`; `value` is the patient's own value in clinical form, or empty when the factor is absent; `chip` is the question a driver bar asks. `contribution` is read from the raw response and is **not** published to the model or the widget — it is here so a reviewer can rank the drivers, and no answer key may quote it.
+
+| # | feature | label | direction | value | contribution | chip |
+|---|---|---|---|---|---|---|
+| 1 | `prior inpatient days` | Prior Inpatient Days | decreases | 0 | — | How does Prior Inpatient Days affect this patient's readmission risk? |
+| 2 | `red cell distribution width (RDW)` | Red Cell Distribution Width (rdw) | increases | 15.9% | — | How does Red Cell Distribution Width (rdw) affect this patient's readmission risk? |
+| 3 | `length of stay` | Length Of Stay | increases | 8 days | — | How does Length Of Stay affect this patient's readmission risk? |
+| 4 | `lowest monocyte count` | Lowest Monocyte Count | increases | — | — | How does Lowest Monocyte Count affect this patient's readmission risk? |
+| 5 | `recent ED visits` | Recent Ed Visits | increases | 0 | — | How does Recent Ed Visits affect this patient's readmission risk? |
 
 ### Discharge medications
 
-1 passage(s), 1758 characters. anticoagulant: absent, beta-blocker: absent, diuretic: absent, taper: absent.
+1 passage(s), 1758 characters.
+
+inventory flags — taper: no, anticoagulant: no, dedicated medication section: no.
+text scan of the passages below — anticoagulant: absent, beta-blocker: absent, diuretic: absent, taper: absent.
 
 ```
 The patient is a 78-year-old female, who was referred to Medical Center's Outpatient Rehabilitation Department for skilled speech therapy secondary to cognitive-linguistic deficits. Outpatient skilled speech therapy was recommended for two times a week to improve her overall memory, executive function, attention, and visuospatial skills. The patient made excellent progress during the therapy and she accomplished all of her short-term therapy goals. She is able to name 15 items in a broad category with minimal queuing. The patient can sequence activities with greater than 90% accuracy with minimal queuing. She is able to follow a 3 step direction with greater than 80% accuracy, and she is able to complete visual scanning tasks with greater than 80% accuracy. The patient is currently able to listen to and/or read a narrative and be able to recall the main idea plus 3 supporting elements after a 3-minute delay.
@@ -415,27 +746,721 @@ LONG-TERM GOALS: Both functional and cognitive-linguistic ability to improve saf
 The patient does no longer need a skilled speech therapy because she has accomplished all of her goals and her progress has plateaued. The patient and her husband both agreed with the patient's discharge.
 ```
 
-### Laboratory values at discharge
+### Laboratory panel
 
-| analyte | discharge value | unit | reference | decimals | flag |
-|---|---|---|---|---|---|
-| RDW | 15.9 | % | 11.5–14.5 | 1 | high |
-| Red blood cells | 3.16 | x10^6/uL | 4.2–5.4 | 2 | low |
-| Hemoglobin | 10.9 | g/dL | 12.0–15.5 | 1 | low |
-| Sodium | 141.0 | mmol/L | 135.0–145.0 | 0 | normal |
-| Monocytes | 0.5 | x10^3/uL | 0.2–0.8 | 1 | normal |
-| Creatinine | 0.98 | mg/dL | 0.5–1.1 | 2 | normal |
-| eGFR | 99.0 | mL/min/1.73m2 | 90.0–120.0 | 0 | normal |
-| Potassium | 4.2 | mmol/L | 3.5–5.0 | 1 | normal |
-| White blood cells | 7.4 | x10^3/uL | 4.0–11.0 | 1 | normal |
+One row per analyte, in the order the tool returned them. `baseline` is the first timepoint, `extreme` is the reading furthest outside the reference interval (the nadir or the peak), and `discharge` is the last. `anchored` names the values the readmission model was scored on: those are the patient's own numbers and may be stated as such; anything else was generated for a measure the model never saw.
+
+| analyte | unit | reference | decimals | baseline | extreme | discharge | anchored |
+|---|---|---|---|---|---|---|---|
+| RDW | % | 11.5–14.5 | 1 | d0 · 11.8 · `normal` | d7.8 · 15.9 · `high` | d7.8 · 15.9 · `high` | rdw_max |
+| Red blood cells | x10^6/uL | 4.2–5.4 | 2 | d0 · 4.45 · `normal` | d1.6 · 2.74 · `low` | d7.8 · 3.16 · `low` | rbc_last, rbc_min |
+| Hemoglobin | g/dL | 12.0–15.5 | 1 | d0 · 12.5 · `normal` | d1.6 · 8.3 · `low` | d7.8 · 10.9 · `low` | hemoglobin_min |
+| Sodium | mmol/L | 135.0–145.0 | 0 | d0 · 144.0 · `normal` | d0 · 144.0 · `normal` | d7.8 · 141.0 · `normal` | sodium_last, sodium_max, sodium_min |
+| Monocytes | x10^3/uL | 0.2–0.8 | 1 | d0 · 0.5 · `normal` | d0 · 0.5 · `normal` | d7.8 · 0.5 · `normal` | — |
+| Creatinine | mg/dL | 0.5–1.1 | 2 | d0 · 0.62 · `normal` | d0 · 0.62 · `normal` | d7.8 · 0.98 · `normal` | — |
+| eGFR | mL/min/1.73m2 | 90.0–120.0 | 0 | d0 · 114.0 · `normal` | d0 · 114.0 · `normal` | d7.8 · 99.0 · `normal` | — |
+| Potassium | mmol/L | 3.5–5.0 | 1 | d0 · 4.4 · `normal` | d0 · 4.4 · `normal` | d7.8 · 4.2 · `normal` | — |
+| White blood cells | x10^3/uL | 4.0–11.0 | 1 | d0 · 6.5 · `normal` | d0 · 6.5 · `normal` | d7.8 · 7.4 · `normal` | — |
 
 9 panels; 3 abnormal at discharge (RDW, Red blood cells, Hemoglobin).
+No analyte carries a critical flag on this record.
 Most abnormal at discharge: **Red blood cells** 3.16 x10^6/uL (flag `low`, reference 4.2–5.4).
 
 ### Clinical note
 
 Sections present: `discharge_summary`.
 
+Sections absent: 37 of the 38 headings the retriever knows — `admission_date`, `admission_diagnosis`, `allergies`, `assessment_and_plan`, `attending`, `brief_hospital_course`, `chief_complaint`, `complications`, `consults`, `date_of_birth`, `discharge_condition`, `discharge_date`, `discharge_diagnosis`, `discharge_disposition`, `discharge_instructions`, `discharge_medications`, `facility`, `family_history`, `followup_instructions`, `history_of_present_illness`, `indications`, `infections`, `major_procedure`, `medications_on_admission`, `medications_on_transfer`, `name`, `past_medical_history`, `past_surgical_history`, `pathology`, `pertinent_results`, `physical_exam`, `review_of_systems`, `service`, `sex`, `social_history`, `transfusions`, `unit_no`.
+
+`/ehr` headings these sections support, and the passage that earns each: **Readmission risk & trajectory.** (the risk estimate).
+`/ehr` headings to OMIT: **Presentation & diagnosis.**, **Hospital course & procedures.**, **Discharge plan & medications.**.
+
+
+#### Verbatim passages
+
+**discharge_summary**
+
+```
+The patient is a 78-year-old female, who was referred to Medical Center's Outpatient Rehabilitation Department for skilled speech therapy secondary to cognitive-linguistic deficits. Outpatient skilled speech therapy was recommended for two times a week to improve her overall memory, executive function, attention, and visuospatial skills. The patient made excellent progress during the therapy and she accomplished all of her short-term therapy goals. She is able to name 15 items in a broad category with minimal queuing. The patient can sequence activities with greater than 90% accuracy with minimal queuing. She is able to follow a 3 step direction with greater than 80% accuracy, and she is able to complete visual scanning tasks with greater than 80% accuracy. The patient is currently able to listen to and/or read a narrative and be able to recall the main idea plus 3 supporting elements after a 3-minute delay.
+
+LONG-TERM GOALS: Both functional and cognitive-linguistic ability to improve safety and independence at home and in the community. This goal has been met based on the patient and husband reports the patient is able to complete all activities, which she desires to do at home. During the last reevaluation, the patient had a significant progress and all cognitive domains evaluated, which are attention, memory, executive functions, language, and visuospatial skill. She continues to have an overall mild cognitive-linguistic deficit, but this is significantly improved from her initial evaluation, which showed severe impairment.
+
+The patient does no longer need a skilled speech therapy because she has accomplished all of her goals and her progress has plateaued. The patient and her husband both agreed with the patient's discharge.
+```
+
+## 90000045
+
+### Manifest and risk
+
+The raw field and the string the product publishes for it. A sentence may quote either; the right-hand column is the form the widget prints.
+
+| field | raw | published |
+|---|---|---|
+| encounter | `inpatient admission` | inpatient admission |
+| age | `57` | 57 |
+| gender | `Female` | Female |
+| admission_type | `Emergency (EW EMER.)` | Emergency |
+| discharge_location | `Home with home health` | Home with home health |
+| length_of_stay_days | `7.875` | 8 |
+| prior_admissions | `15` | 15 |
+| prior_inpatient_days | `83.375` | 83.375 |
+| ed_visits_prior_year | `2` | 2 |
+| insurance | `Medicaid` | Medicaid |
+| race | `Black` | Black |
+| oncology_flag (feature row) | `0.0` | — |
+
+**Readmission probability 0.275179** (published **27.5%**) against a threshold of 0.11 (published **11.0%**) → decision `above` (model `readmission-final-20260917173317`).
+
+Drivers, in the order the model receives them. `label` is `humanize()`; `value` is the patient's own value in clinical form, or empty when the factor is absent; `chip` is the question a driver bar asks. `contribution` is read from the raw response and is **not** published to the model or the widget — it is here so a reviewer can rank the drivers, and no answer key may quote it.
+
+| # | feature | label | direction | value | contribution | chip |
+|---|---|---|---|---|---|---|
+| 1 | `prior inpatient days` | Prior Inpatient Days | increases | 83 | — | How does Prior Inpatient Days affect this patient's readmission risk? |
+| 2 | `red cell distribution width (RDW)` | Red Cell Distribution Width (rdw) | increases | 16.3% | — | How does Red Cell Distribution Width (rdw) affect this patient's readmission risk? |
+| 3 | `recent ED visits` | Recent Ed Visits | decreases | 2 | — | How does Recent Ed Visits affect this patient's readmission risk? |
+| 4 | `recent red blood cell count` | Recent Red Blood Cell Count | increases | 2.46 ×10⁶/µL | — | How does Recent Red Blood Cell Count affect this patient's readmission risk? |
+| 5 | `oncology history` | Oncology History | decreases | not present | — | How does Oncology History affect this patient's readmission risk? |
+
+### Discharge medications
+
+1 passage(s), 409 characters.
+
+inventory flags — taper: no, anticoagulant: no, dedicated medication section: yes.
+text scan of the passages below — anticoagulant: absent, beta-blocker: absent, diuretic: absent, taper: absent.
+
+```
+To return to the Medifast diet. To continue with her blood glucose. She needs to follow up with Dr. B, and she will see me next week on Friday. We will determine if we will proceed with her lap band at that time. She may shower. She needs to keep her wounds clean and dry. No heavy lifting. No driving on narcotic pain medicines. She needs to continue with her CPAP machine and continue to monitor her sugars.
+```
+
+### Laboratory panel
+
+One row per analyte, in the order the tool returned them. `baseline` is the first timepoint, `extreme` is the reading furthest outside the reference interval (the nadir or the peak), and `discharge` is the last. `anchored` names the values the readmission model was scored on: those are the patient's own numbers and may be stated as such; anything else was generated for a measure the model never saw.
+
+| analyte | unit | reference | decimals | baseline | extreme | discharge | anchored |
+|---|---|---|---|---|---|---|---|
+| RDW | % | 11.5–14.5 | 1 | d0 · 11.5 · `normal` | d7.9 · 16.3 · `high` | d7.9 · 16.3 · `high` | rdw_max |
+| Red blood cells | x10^6/uL | 4.2–5.4 | 2 | d0 · 3.93 · `low` | d1.6 · 2.25 · `low` | d7.9 · 2.46 · `low` | rbc_last, rbc_min |
+| Hemoglobin | g/dL | 12.0–15.5 | 1 | d0 · 12.5 · `normal` | d1.6 · 6.5 · `critical_low` | d7.9 · 10.4 · `low` | hemoglobin_min |
+| Sodium | mmol/L | 135.0–145.0 | 0 | d0 · 147.0 · `high` | d0 · 147.0 · `high` | d7.9 · 141.0 · `normal` | sodium_last, sodium_max, sodium_min |
+| Monocytes | x10^3/uL | 0.2–0.8 | 1 | d0 · 0.6 · `normal` | d0 · 0.6 · `normal` | d7.9 · 0.5 · `normal` | — |
+| Creatinine | mg/dL | 0.5–1.1 | 2 | d0 · 0.55 · `normal` | d0 · 0.55 · `normal` | d7.9 · 1.04 · `normal` | — |
+| eGFR | mL/min/1.73m2 | 90.0–120.0 | 0 | d0 · 116.0 · `normal` | d0 · 116.0 · `normal` | d7.9 · 93.0 · `normal` | — |
+| Potassium | mmol/L | 3.5–5.0 | 1 | d0 · 4.5 · `normal` | d0 · 4.5 · `normal` | d7.9 · 4.2 · `normal` | — |
+| White blood cells | x10^3/uL | 4.0–11.0 | 1 | d0 · 6.6 · `normal` | d0 · 6.6 · `normal` | d7.9 · 7.2 · `normal` | — |
+
+9 panels; 3 abnormal at discharge (RDW, Red blood cells, Hemoglobin).
+Critical flags anywhere in the admission: **Hemoglobin**.
+Most abnormal at discharge: **Red blood cells** 2.46 x10^6/uL (flag `low`, reference 4.2–5.4).
+
+### Clinical note
+
+Sections present: `admission_diagnosis`, `discharge_diagnosis`, `major_procedure`, `service`, `history_of_present_illness`, `brief_hospital_course`, `discharge_instructions`.
+
+Sections absent: 31 of the 38 headings the retriever knows — `admission_date`, `allergies`, `assessment_and_plan`, `attending`, `chief_complaint`, `complications`, `consults`, `date_of_birth`, `discharge_condition`, `discharge_date`, `discharge_disposition`, `discharge_medications`, `discharge_summary`, `facility`, `family_history`, `followup_instructions`, `indications`, `infections`, `medications_on_admission`, `medications_on_transfer`, `name`, `past_medical_history`, `past_surgical_history`, `pathology`, `pertinent_results`, `physical_exam`, `review_of_systems`, `sex`, `social_history`, `transfusions`, `unit_no`.
+
+`/ehr` headings these sections support, and the passage that earns each: **Presentation & diagnosis.** (`history_of_present_illness`, `admission_diagnosis`, `discharge_diagnosis`), **Hospital course & procedures.** (`brief_hospital_course`, `major_procedure`), **Discharge plan & medications.** (`discharge_instructions`), **Readmission risk & trajectory.** (the risk estimate).
+`/ehr` headings to OMIT: none.
+
+- **discharge_diagnosis** (quoted): "Hyperglycemia, cholelithiasis, obstructive sleep apnea, diabetes mellitus, hypertension, and cholecystitis."
+- **brief_hospital_course** (quoted): "ABC was admitted to the hospital."
+- **history_of_present_illness** (quoted): "ABC is a 57-year-old woman."
+
+#### Verbatim passages
+
+**admission_diagnosis**
+
+```
+Hyperglycemia, cholelithiasis, obstructive sleep apnea, diabetes mellitus, and hypertension.
+```
+
+**discharge_diagnosis**
+
+```
+Hyperglycemia, cholelithiasis, obstructive sleep apnea, diabetes mellitus, hypertension, and cholecystitis.
+```
+
+**major_procedure**
+
+```
+Laparoscopic cholecystectomy.
+```
+
+**service**
+
+```
+Surgery.
+```
+
+**history_of_present_illness**
+
+```
+Ms. ABC is a 57-year-old woman. She suffers from morbid obesity. She also has diabetes and obstructive sleep apnea. She was evaluated in the Bariatric Surgical Center for placement of a band. During her workup, she was noted to have evidence of cholelithiasis. It was felt that the patient would benefit from removal of her gallbladder prior to having band placement secondary to her diabetes and the risk of infection of the band. The patient was scheduled to undergo her procedure on 12/31/09; however, at blood glucose check, the patient was noted to be hyperglycemic, her sugar was 438. She was admitted to the hospital for treatment of her hyperglycemia.
+```
+
+**brief_hospital_course**
+
+```
+Ms. ABC was admitted to the hospital. She was seen by Dr. A. He put her on an insulin drip. Her sugars slowly did come down to normal down to between 115 and 134. On the next day, she was then taken to the operating room, where she underwent her laparoscopic cholecystectomy. She was noted to be a difficult intubation for the procedure. There were some indications of chronic cholecystitis, a little bit of edema, mild edema and adhesions of omentum around the gallbladder. She underwent the procedure. She tolerated without difficulty. She was recovered in the Postoperative Care Unit and then returned to the floor. Her blood sugar postprocedure was noted to be 233. She was started back on a sliding scale insulin. She continued to do well and was felt to be stable for discharge following the procedure.
+```
+
+**discharge_instructions**
+
+```
+To return to the Medifast diet. To continue with her blood glucose. She needs to follow up with Dr. B, and she will see me next week on Friday. We will determine if we will proceed with her lap band at that time. She may shower. She needs to keep her wounds clean and dry. No heavy lifting. No driving on narcotic pain medicines. She needs to continue with her CPAP machine and continue to monitor her sugars.
+```
+
+## 90000046
+
+### Manifest and risk
+
+The raw field and the string the product publishes for it. A sentence may quote either; the right-hand column is the form the widget prints.
+
+| field | raw | published |
+|---|---|---|
+| encounter | `inpatient admission` | inpatient admission |
+| age | `93` | 93 |
+| gender | `Female` | Female |
+| admission_type | `Urgent (URGENT)` | Urgent |
+| discharge_location | `Inpatient rehabilitation` | Inpatient rehabilitation |
+| length_of_stay_days | `3.04167` | 3 |
+| prior_admissions | `14` | 14 |
+| prior_inpatient_days | `48.9583` | 48.9583 |
+| ed_visits_prior_year | `0` | 0 |
+| insurance | `Medicare` | Medicare |
+| race | `White` | White |
+| oncology_flag (feature row) | `0.0` | — |
+
+**Readmission probability 0.165716** (published **16.6%**) against a threshold of 0.11 (published **11.0%**) → decision `above` (model `readmission-final-20260917173317`).
+
+Drivers, in the order the model receives them. `label` is `humanize()`; `value` is the patient's own value in clinical form, or empty when the factor is absent; `chip` is the question a driver bar asks. `contribution` is read from the raw response and is **not** published to the model or the widget — it is here so a reviewer can rank the drivers, and no answer key may quote it.
+
+| # | feature | label | direction | value | contribution | chip |
+|---|---|---|---|---|---|---|
+| 1 | `prior inpatient days` | Prior Inpatient Days | increases | 49 | — | How does Prior Inpatient Days affect this patient's readmission risk? |
+| 2 | `medication order count` | Medication Order Count | decreases | 14 | — | How does Medication Order Count affect this patient's readmission risk? |
+| 3 | `admission type` | Admission Type | decreases | — | — | How does Admission Type affect this patient's readmission risk? |
+| 4 | `lowest red blood cell count` | Lowest Red Blood Cell Count | decreases | 3.82 ×10⁶/µL | — | How does Lowest Red Blood Cell Count affect this patient's readmission risk? |
+| 5 | `prior admissions` | Prior Admissions | increases | 14 | — | How does Prior Admissions affect this patient's readmission risk? |
+
+### Discharge medications
+
+2 passage(s), 924 characters.
+
+inventory flags — taper: no, anticoagulant: no, dedicated medication section: yes.
+text scan of the passages below — anticoagulant: absent, beta-blocker: absent, diuretic: absent, taper: absent.
+
+```
+1. Aspirin 81 mg orally once daily.
+2. Calcium with vitamin D two tablets orally once daily.
+
+3. Nexium 40 mg orally once daily.
+4. Multivitamins with minerals one capsule once daily.
+5. Zoloft 25 mg orally once daily.
+6. Norco 325/10 mg every 6-8 hours as needed for pain.
+7. Systane ophthalmic solution two drops in both eyes every two hours as needed.
+8. Herbal __________ by mouth everyday.
+9. Macrodantin 100 mg orally every six hours for seven days.
+
+1. DIET: 2 g sodium, low fat, low cholesterol diet.
+2. ACTIVITY: As tolerated.
+3. DISPOSITION: The patient is to be discharged to Mercy Manor in stable and improved condition. The patient would be influenza vaccination at the time of discharge. The patient would be seen by a physician while she is at Mercy Manor. Discharge instructions and hospital course summary were conveyed to the patient and she is agreeable and understood the instructions that were provided.
+```
+
+### Laboratory panel
+
+One row per analyte, in the order the tool returned them. `baseline` is the first timepoint, `extreme` is the reading furthest outside the reference interval (the nadir or the peak), and `discharge` is the last. `anchored` names the values the readmission model was scored on: those are the patient's own numbers and may be stated as such; anything else was generated for a measure the model never saw.
+
+| analyte | unit | reference | decimals | baseline | extreme | discharge | anchored |
+|---|---|---|---|---|---|---|---|
+| RDW | % | 11.5–14.5 | 1 | d0 · 11.9 · `normal` | d3 · 15.9 · `high` | d3 · 15.9 · `high` | rdw_max |
+| Red blood cells | x10^6/uL | 4.2–5.4 | 2 | d0 · 4.87 · `normal` | d1 · 3.82 · `low` | d3 · 3.89 · `low` | rbc_last, rbc_min |
+| Hemoglobin | g/dL | 12.0–15.5 | 1 | d0 · 13.6 · `normal` | d1 · 11.1 · `low` | d3 · 12.6 · `normal` | hemoglobin_min |
+| Sodium | mmol/L | 135.0–145.0 | 0 | d0 · 135.0 · `normal` | d1 · 134.0 · `low` | d3 · 134.0 · `low` | sodium_last, sodium_max, sodium_min |
+| Monocytes | x10^3/uL | 0.2–0.8 | 1 | d0 · 0.5 · `normal` | d0 · 0.5 · `normal` | d3 · 0.5 · `normal` | — |
+| Creatinine | mg/dL | 0.5–1.1 | 2 | d0 · 0.56 · `normal` | d0 · 0.56 · `normal` | d3 · 1.06 · `normal` | — |
+| eGFR | mL/min/1.73m2 | 90.0–120.0 | 0 | d0 · 116.0 · `normal` | d0 · 116.0 · `normal` | d3 · 96.0 · `normal` | — |
+| Potassium | mmol/L | 3.5–5.0 | 1 | d0 · 4.5 · `normal` | d0 · 4.5 · `normal` | d3 · 4.2 · `normal` | — |
+| White blood cells | x10^3/uL | 4.0–11.0 | 1 | d0 · 6.1 · `normal` | d0 · 6.1 · `normal` | d3 · 6.5 · `normal` | — |
+
+9 panels; 3 abnormal at discharge (RDW, Red blood cells, Sodium).
+No analyte carries a critical flag on this record.
+Most abnormal at discharge: **RDW** 15.9 % (flag `high`, reference 11.5–14.5).
+
+### Clinical note
+
+Sections present: `discharge_diagnosis`, `brief_hospital_course`, `past_medical_history`, `physical_exam`, `pertinent_results`, `discharge_medications`, `allergies`, `assessment_and_plan`, `discharge_instructions`.
+
+Sections absent: 29 of the 38 headings the retriever knows — `admission_date`, `admission_diagnosis`, `attending`, `chief_complaint`, `complications`, `consults`, `date_of_birth`, `discharge_condition`, `discharge_date`, `discharge_disposition`, `discharge_summary`, `facility`, `family_history`, `followup_instructions`, `history_of_present_illness`, `indications`, `infections`, `major_procedure`, `medications_on_admission`, `medications_on_transfer`, `name`, `past_surgical_history`, `pathology`, `review_of_systems`, `service`, `sex`, `social_history`, `transfusions`, `unit_no`.
+
+`/ehr` headings these sections support, and the passage that earns each: **Presentation & diagnosis.** (`discharge_diagnosis`), **Hospital course & procedures.** (`brief_hospital_course`), **Discharge plan & medications.** (`discharge_medications`, `discharge_instructions`), **Readmission risk & trajectory.** (the risk estimate).
+`/ehr` headings to OMIT: none.
+
+- **discharge_diagnosis** (quoted): "Gastroesophageal reflux disease."
+- **brief_hospital_course** (quoted): "The patient is 93-year-old Caucasian female with a past medical history of hypertension, chronic atrial fibrillation, gastroesophageal reflux disease, osteoporosis and chronic right hip pain after total hip arthroplasty was admitted to our hospital for complaints of nausea and vomiting and urinary t"
+
+#### Verbatim passages
+
+**discharge_diagnosis**
+
+```
+1. Hypertension.
+2. Gastroesophageal reflux disease.
+3. Chronic atrial fibrillation.
+
+4. Osteoporosis.
+5. Valvular heart disease.
+```
+
+**brief_hospital_course**
+
+```
+The patient is 93-year-old Caucasian female with a past medical history of hypertension, chronic atrial fibrillation, gastroesophageal reflux disease, osteoporosis and chronic right hip pain after total hip arthroplasty was admitted to our hospital for complaints of nausea and vomiting and urinary tract infection. Over the course of her hospitalization, the patient was started on antibiotic regimen and proton pump inhibitors for an episode of coffee-ground emesis. The patient was managed conservatively and was also provided with physical therapy for chronic right hip pain.
+
+At the time of discharge, the patient continues to complain of right hip pain impairing ability to walk. The patient denies any chest pain, nausea, vomiting, fever, chills, shortness of breath, abdominal pain or any urine or bowel problems.
+```
+
+**past_medical_history**
+
+```
+Can be referred to the H&P dictated in the chart.
+```
+
+**physical_exam**
+
+```
+VITAL SIGNS: At the time of discharge temperature 36.6 degree Celsius, pulse rate of 77 per minute, respiratory rate 20 per minute, blood pressure 115/63, and oxygen saturation of 94% on room air.
+GENERAL: The patient is a thin built Caucasian female with no pallor, cyanosis or icterus. She is alert and oriented x3.
+HEENT: No carotid bruits, JVD, lymphadenopathy or thyromegaly. Pupils are equally reactive to light and accommodation.
+BACK AND EXTREMITY: Bilateral pitting edema and peripheral pulses are palpable. The patient has right hip brace/immobilizer.
+HEART: Irregularly irregular heart rhythm, grade 2-3/6 systolic ejection murmur best heard over the aortic area and normal S1 and S2.
+CHEST: Auscultation revealed bibasilar crackles.
+ABDOMEN: Soft, nontender, no organomegaly and bowel sounds are present.
+CNS: Nonfocal.
+```
+
+**pertinent_results**
+
+```
+WBC 6.5, hemoglobin 12.5, hematocrit 38.9, platelet count 177,000, INR 1.2, sodium 141, potassium 3.6 and serum creatinine of 0.8. Liver function tests were normal. The patient's troponin was elevated at 0.05 at the time or presentation, but it trended down to 0.04 on the third set. Urinalysis revealed trace protein, trace blood, and 10-20 WBCs. Blood culture showed no growth till date. Urine culture grew 50-100,000 colonies of Enterococcus susceptible to ampicillin and nitrofurantoin.
+
+Chest x-ray showed enlarged heart with large intrathoracic hiatal hernia. Lung parenchyma was otherwise clear.
+
+Right hip x-ray showed that the prosthesis was in satisfactory position. There was small gap between the cancellous bone and the long stem femoral component of the prosthesis, which is within normal limits.
+```
+
+**discharge_medications**
+
+```
+1. Aspirin 81 mg orally once daily.
+2. Calcium with vitamin D two tablets orally once daily.
+
+3. Nexium 40 mg orally once daily.
+4. Multivitamins with minerals one capsule once daily.
+5. Zoloft 25 mg orally once daily.
+6. Norco 325/10 mg every 6-8 hours as needed for pain.
+7. Systane ophthalmic solution two drops in both eyes every two hours as needed.
+8. Herbal __________ by mouth everyday.
+9. Macrodantin 100 mg orally every six hours for seven days.
+```
+
+**allergies**
+
+```
+Penicillin.
+
+PROGNOSIS: Improved.
+```
+
+**assessment_and_plan**
+
+```
+The patient is a 93-year-old Caucasian female with a past medical history of chronic right hip pain, osteoporosis, hypertension, depression, and chronic atrial fibrillation admitted for evaluation and management of severe nausea and vomiting and urinary tract infection.
+
+PROBLEM #1: Severe nausea and vomiting likely secondary gastroenteritis, resolved.
+
+PROBLEM #2: Coffee-ground emesis secondary to severe gastritis, resolved and stable. Hemoglobin at the time of discharge was stable and the patient to continue on Nexium 40 mg once daily.
+
+PROBLEM #3: Urinary tract infection, the patient was started on Macrodantin 100 mg orally every six hours for urinary tract infection secondary to Enterococcus species.
+
+PROBLEM #4: Right hip pain, the patient to undergo physical therapy and rehabilitation at Mercy Manor.
+
+PROBLEM #5: Acute renal failure, resolved.
+
+PROBLEM #6: Chronic atrial fibrillation, the patient has been restarted back on aspirin 81 mg at the time of discharge. Aspirin should be continued with Nexium 40 mg once daily in order to prevent any future occurrence of upper GI bleed. If the patient has any occurrence of upper GI bleed such as coffee-ground emesis or melena then aspirin should be discontinued.
+```
+
+**discharge_instructions**
+
+```
+1. DIET: 2 g sodium, low fat, low cholesterol diet.
+2. ACTIVITY: As tolerated.
+3. DISPOSITION: The patient is to be discharged to Mercy Manor in stable and improved condition. The patient would be influenza vaccination at the time of discharge. The patient would be seen by a physician while she is at Mercy Manor. Discharge instructions and hospital course summary were conveyed to the patient and she is agreeable and understood the instructions that were provided.
+```
+
+## 90000103
+
+### Manifest and risk
+
+The raw field and the string the product publishes for it. A sentence may quote either; the right-hand column is the form the widget prints.
+
+| field | raw | published |
+|---|---|---|
+| encounter | `inpatient admission` | inpatient admission |
+| age | `46` | 46 |
+| gender | `Male` | Male |
+| admission_type | `Emergency (EW EMER.)` | Emergency |
+| discharge_location | `Home` | Home |
+| length_of_stay_days | `1.20833` | 1 |
+| prior_admissions | `1` | 1 |
+| prior_inpatient_days | `0.0833333` | 0.0833333 |
+| ed_visits_prior_year | `1` | 1 |
+| insurance | `Private` | Private |
+| race | `White` | White |
+| oncology_flag (feature row) | `0.0` | — |
+
+**Readmission probability 0.046281** (published **4.6%**) against a threshold of 0.11 (published **11.0%**) → decision `below` (model `readmission-final-20260917173317`).
+
+Drivers, in the order the model receives them. `label` is `humanize()`; `value` is the patient's own value in clinical form, or empty when the factor is absent; `chip` is the question a driver bar asks. `contribution` is read from the raw response and is **not** published to the model or the widget — it is here so a reviewer can rank the drivers, and no answer key may quote it.
+
+| # | feature | label | direction | value | contribution | chip |
+|---|---|---|---|---|---|---|
+| 1 | `prior inpatient days` | Prior Inpatient Days | decreases | 0 | — | How does Prior Inpatient Days affect this patient's readmission risk? |
+| 2 | `recent ED visits` | Recent Ed Visits | decreases | 1 | — | How does Recent Ed Visits affect this patient's readmission risk? |
+| 3 | `medication order count` | Medication Order Count | decreases | 16 | — | How does Medication Order Count affect this patient's readmission risk? |
+| 4 | `red cell distribution width (RDW)` | Red Cell Distribution Width (rdw) | decreases | — | — | How does Red Cell Distribution Width (rdw) affect this patient's readmission risk? |
+| 5 | `procedures` | Procedures | increases | 0 | — | How does Procedures affect this patient's readmission risk? |
+
+### Discharge medications
+
+1 passage(s), 666 characters.
+
+inventory flags — taper: yes, anticoagulant: no, dedicated medication section: yes.
+text scan of the passages below — anticoagulant: absent, beta-blocker: absent, diuretic: absent, taper: PRESENT (`dose was decreased`).
+
+```
+The patient is discharged with instructions to seek medical attention in the event if he develops fevers, chills, nausea, vomiting, decreased urine output, or other concerns. He is discharged on a low-potassium diet with activity as tolerated. He is instructed that he may shower; however, he is to undergo no underwater soaking activities for approximately two weeks. The patient will be followed up in the Transplant Clinic at ABCD tomorrow, at which time, his labs will be rechecked. The patient's Prograf levels at the time of discharge are pending; however, given that his Prograf dose was decreased, he will be followed tomorrow at the Renal Transplant Clinic.
+```
+
+### Laboratory panel
+
+One row per analyte, in the order the tool returned them. `baseline` is the first timepoint, `extreme` is the reading furthest outside the reference interval (the nadir or the peak), and `discharge` is the last. `anchored` names the values the readmission model was scored on: those are the patient's own numbers and may be stated as such; anything else was generated for a measure the model never saw.
+
+| analyte | unit | reference | decimals | baseline | extreme | discharge | anchored |
+|---|---|---|---|---|---|---|---|
+| RDW | % | 11.5–14.5 | 1 | d0 · 12.3 · `normal` | d0 · 12.3 · `normal` | d1.2 · 13.9 · `normal` | — |
+| Red blood cells | x10^6/uL | 4.2–5.4 | 2 | d0 · 4.86 · `normal` | d0 · 4.86 · `normal` | d1.2 · 4.73 · `normal` | — |
+| Hemoglobin | g/dL | 12.0–15.5 | 1 | d0 · 13.9 · `normal` | d0 · 13.9 · `normal` | d1.2 · 13.4 · `normal` | — |
+| Sodium | mmol/L | 135.0–145.0 | 0 | d0 · 141.0 · `normal` | d0 · 141.0 · `normal` | d1.2 · 140.0 · `normal` | — |
+| Monocytes | x10^3/uL | 0.2–0.8 | 1 | d0 · 0.5 · `normal` | d0 · 0.5 · `normal` | d1.2 · 0.5 · `normal` | — |
+| Creatinine | mg/dL | 0.5–1.1 | 2 | d0 · 0.65 · `normal` | d0 · 0.65 · `normal` | d1.2 · 0.98 · `normal` | — |
+| eGFR | mL/min/1.73m2 | 90.0–120.0 | 0 | d0 · 114.0 · `normal` | d0 · 114.0 · `normal` | d1.2 · 99.0 · `normal` | — |
+| Potassium | mmol/L | 3.5–5.0 | 1 | d0 · 4.3 · `normal` | d0 · 4.3 · `normal` | d1.2 · 4.1 · `normal` | — |
+| White blood cells | x10^3/uL | 4.0–11.0 | 1 | d0 · 6.4 · `normal` | d0 · 6.4 · `normal` | d1.2 · 7.1 · `normal` | — |
+
+9 panels; 0 abnormal at discharge.
+No analyte carries a critical flag on this record.
+No value sits outside its reference range at discharge.
+
+### Clinical note
+
+Sections present: `discharge_diagnosis`, `major_procedure`, `history_of_present_illness`, `past_medical_history`, `past_surgical_history`, `social_history`, `family_history`, `physical_exam`, `pertinent_results`, `brief_hospital_course`, `discharge_instructions`.
+
+Sections absent: 27 of the 38 headings the retriever knows — `admission_date`, `admission_diagnosis`, `allergies`, `assessment_and_plan`, `attending`, `chief_complaint`, `complications`, `consults`, `date_of_birth`, `discharge_condition`, `discharge_date`, `discharge_disposition`, `discharge_medications`, `discharge_summary`, `facility`, `followup_instructions`, `indications`, `infections`, `medications_on_admission`, `medications_on_transfer`, `name`, `pathology`, `review_of_systems`, `service`, `sex`, `transfusions`, `unit_no`.
+
+`/ehr` headings these sections support, and the passage that earns each: **Presentation & diagnosis.** (`history_of_present_illness`, `discharge_diagnosis`), **Hospital course & procedures.** (`brief_hospital_course`, `major_procedure`), **Discharge plan & medications.** (`discharge_instructions`), **Readmission risk & trajectory.** (the risk estimate).
+`/ehr` headings to OMIT: none.
+
+- **discharge_diagnosis** (quoted): "End-stage renal disease (ESRD)."
+- **brief_hospital_course** (quoted): "The patient was admitted postoperatively to the surgical intensive care unit."
+- **history_of_present_illness** (quoted): "This is a 46-year-old gentleman with end-stage renal disease (ESRD) secondary to diabetes and hypertension, who had been on hemodialysis since 1993 and is also status post cadaveric kidney transplant in 1996 with chronic rejection."
+
+#### Verbatim passages
+
+**discharge_diagnosis**
+
+```
+End-stage renal disease (ESRD).
+```
+
+**major_procedure**
+
+```
+Cadaveric renal transplant.
+```
+
+**history_of_present_illness**
+
+```
+This is a 46-year-old gentleman with end-stage renal disease (ESRD) secondary to diabetes and hypertension, who had been on hemodialysis since 1993 and is also status post cadaveric kidney transplant in 1996 with chronic rejection.
+```
+
+**past_medical_history**
+
+```
+1. Diabetes mellitus diagnosed 12 years ago.
+
+2. Hypertension.
+3. Coronary artery disease with a myocardial infarct in September of 2006.
+4. End-stage renal disease.
+```
+
+**past_surgical_history**
+
+```
+Coronary artery bypass graft x5 in 1995 and cadaveric renal transplant in 1996.
+```
+
+**social_history**
+
+```
+The patient denies tobacco or ethanol use.
+```
+
+**family_history**
+
+```
+Hypertension.
+```
+
+**physical_exam**
+
+```
+GENERAL: The patient was alert and oriented x3 in no acute distress, healthy-appearing male.
+VITAL SIGNS: Temperature 96.6, blood pressure 166/106, heart rate 83, respiratory rate 18, and saturations 96% on room air.
+CARDIOVASCULAR: Regular rate and rhythm.
+PULMONARY: Clear to auscultation bilaterally.
+ABDOMEN: Soft, nontender, and nondistended with positive bowel sounds.
+EXTREMITIES: No clubbing, cyanosis, or edema.
+```
+
+**pertinent_results**
+
+```
+White blood cell count 6.4, hematocrit 34.6, and platelet count 182. Sodium 137, potassium 5.4, BUN 41, creatinine 7.9, and glucose 295. Total protein 6.5, albumin 3.4, AST 51, ALT 51, alk phos 175, and total bilirubin 0.5.
+```
+
+**brief_hospital_course**
+
+```
+The patient was admitted postoperatively to the surgical intensive care unit. Initially, the patient had a decrease in hematocrit from 30 to 25. The patient's hematocrit stabilized at 25. During the patient's stay, the patient's creatinine progressively decreased from 8.1 to a creatinine at the time of discharge of 2.3. The patient was making excellent urine throughout his stay. The patient's Jackson-Pratt drain was removed on postoperative day #1 and he was moved to the floor. The patient was advanced in diet appropriately. The patient was started on Prograf by postoperative day #2. Initial Prograf levels came back high at 18. The patient's Prograf doses were changed accordingly and today, the patient is deemed stable to be discharged home. During the patient's stay, the patient received four total doses of Thymoglobulin. Today, he will complete his final dose of Thymoglobulin prior to being discharged. In addition, today, the patient has an elevated blood pressure of 198/96. The patient is being given an extra dose of metoprolol for this blood pressure. In addition, the patient has an elevated glucose of 393 and for this reason he has been given an extra dose of insulin. These labs will be rechecked later today and once his blood pressure has decreased to systolic blood pressure less than 116 and his glucose has come down to a more normal level, he will be discharged to home.
+```
+
+**discharge_instructions**
+
+```
+The patient is discharged with instructions to seek medical attention in the event if he develops fevers, chills, nausea, vomiting, decreased urine output, or other concerns. He is discharged on a low-potassium diet with activity as tolerated. He is instructed that he may shower; however, he is to undergo no underwater soaking activities for approximately two weeks. The patient will be followed up in the Transplant Clinic at ABCD tomorrow, at which time, his labs will be rechecked. The patient's Prograf levels at the time of discharge are pending; however, given that his Prograf dose was decreased, he will be followed tomorrow at the Renal Transplant Clinic.
+```
+
+## 90000065
+
+### Manifest and risk
+
+The raw field and the string the product publishes for it. A sentence may quote either; the right-hand column is the form the widget prints.
+
+| field | raw | published |
+|---|---|---|
+| encounter | `inpatient admission` | inpatient admission |
+| age | `33` | 33 |
+| gender | `Female` | Female |
+| admission_type | `Emergency (EW EMER.)` | Emergency |
+| discharge_location | `Home` | Home |
+| length_of_stay_days | `3.625` | 4 |
+| prior_admissions | `0` | 0 |
+| prior_inpatient_days | `0` | 0 |
+| ed_visits_prior_year | `1` | 1 |
+| insurance | `Private` | Private |
+| race | `Asian` | Asian |
+| oncology_flag (feature row) | `0.0` | — |
+
+**Readmission probability 0.036788** (published **3.7%**) against a threshold of 0.11 (published **11.0%**) → decision `below` (model `readmission-final-20260917173317`).
+
+Drivers, in the order the model receives them. `label` is `humanize()`; `value` is the patient's own value in clinical form, or empty when the factor is absent; `chip` is the question a driver bar asks. `contribution` is read from the raw response and is **not** published to the model or the widget — it is here so a reviewer can rank the drivers, and no answer key may quote it.
+
+| # | feature | label | direction | value | contribution | chip |
+|---|---|---|---|---|---|---|
+| 1 | `prior inpatient days` | Prior Inpatient Days | decreases | 0 | — | How does Prior Inpatient Days affect this patient's readmission risk? |
+| 2 | `red cell distribution width (RDW)` | Red Cell Distribution Width (rdw) | decreases | 12.9% | — | How does Red Cell Distribution Width (rdw) affect this patient's readmission risk? |
+| 3 | `recent ED visits` | Recent Ed Visits | decreases | 1 | — | How does Recent Ed Visits affect this patient's readmission risk? |
+| 4 | `medication order count` | Medication Order Count | decreases | 0 | — | How does Medication Order Count affect this patient's readmission risk? |
+| 5 | `discharge destination` | Discharge Destination | decreases | — | — | How does Discharge Destination affect this patient's readmission risk? |
+
+### Discharge medications
+
+1 passage(s), 2135 characters.
+
+inventory flags — taper: yes, anticoagulant: no, dedicated medication section: no.
+text scan of the passages below — anticoagulant: absent, beta-blocker: absent, diuretic: absent, taper: absent.
+**Taper: the inventory records one; the passages above do not name one.** Treat a taper item on this record as unverified until the phrase is located.
+
+```
+The patient is a 33-year-old female admitted with elevated bilirubin and probable common bile duct stone. She was admitted through the emergency room with abdominal pain, elevated bilirubin, and gallstones on ultrasound with a dilated common bile duct. She subsequently went for a HIDA scan to rule out cholecystitis. Gallbladder was filled but was unable to empty into the small bowel consistent with the common bile duct blockage. She was taken to the operating room that night for laparoscopic cholecystectomy. We proceeded with laparoscopic cholecystectomy and during the cholangiogram there was no contrast. It was able to be extravasated into the duodenum with the filling defect consistent with the distal common bile duct stone. The patient had undergone a Roux-en-Y gastric bypass but could not receive an ERCP and stone extraction, therefore, common bile duct exploration was performed and a stone was extracted. This necessitated conversion to an open operation. She was transferred to the medical surgical unit postoperatively. She had a significant amount of incisional pain following morning, but no nausea. A Jackson-Pratt drain, which was left in place in two places showed serosanguineous fluid. White blood cell count was down to 7500 and bilirubin decreased to 2.1. Next morning she was started on a liquid diet. Foley catheter was discontinued. There was no evidence of bile leak from the drains. She was advanced to a regular diet on postoperative day #3, which was 12/09/07. The following morning she was tolerating regular diet. Her bowels had begun to function, and she was afebrile with her pain control with oral pain medications. Jackson-Pratt drain was discontinued from the wound. The remaining Jackson-Pratt drain was left adjacent to her cystic duct. Following morning, her laboratory studies were better. Her bilirubin was down to normal and white blood cell count was normal with an H&H of 9 and 26.3. Jackson-Pratt drain was discontinued, and she was discharged home. Followup was in 3 days for staple removal. She was given iron 325 mg p.o. t.i.d. and Lortab elixir 15 cc p.o. q.4 h. p.r.n. for pain.
+```
+
+### Laboratory panel
+
+One row per analyte, in the order the tool returned them. `baseline` is the first timepoint, `extreme` is the reading furthest outside the reference interval (the nadir or the peak), and `discharge` is the last. `anchored` names the values the readmission model was scored on: those are the patient's own numbers and may be stated as such; anything else was generated for a measure the model never saw.
+
+| analyte | unit | reference | decimals | baseline | extreme | discharge | anchored |
+|---|---|---|---|---|---|---|---|
+| RDW | % | 11.5–14.5 | 1 | d0 · 11.6 · `normal` | d0 · 11.6 · `normal` | d3.6 · 12.9 · `normal` | rdw_max |
+| Red blood cells | x10^6/uL | 4.2–5.4 | 2 | d0 · 4.9 · `normal` | d0 · 4.9 · `normal` | d3.6 · 5.03 · `normal` | rbc_last, rbc_min |
+| Hemoglobin | g/dL | 12.0–15.5 | 1 | d0 · 14.5 · `normal` | d0 · 14.5 · `normal` | d3.6 · 13.8 · `normal` | hemoglobin_min |
+| Sodium | mmol/L | 135.0–145.0 | 0 | d0 · 143.0 · `normal` | d0 · 143.0 · `normal` | d3.6 · 140.0 · `normal` | sodium_last, sodium_max, sodium_min |
+| Monocytes | x10^3/uL | 0.2–0.8 | 1 | d0 · 0.6 · `normal` | d0 · 0.6 · `normal` | d3.6 · 0.5 · `normal` | — |
+| Creatinine | mg/dL | 0.5–1.1 | 2 | d0 · 0.55 · `normal` | d0 · 0.55 · `normal` | d3.6 · 1.06 · `normal` | — |
+| eGFR | mL/min/1.73m2 | 90.0–120.0 | 0 | d0 · 117.0 · `normal` | d0 · 117.0 · `normal` | d3.6 · 95.0 · `normal` | — |
+| Potassium | mmol/L | 3.5–5.0 | 1 | d0 · 4.4 · `normal` | d0 · 4.4 · `normal` | d3.6 · 4.2 · `normal` | — |
+| White blood cells | x10^3/uL | 4.0–11.0 | 1 | d0 · 6.4 · `normal` | d0 · 6.4 · `normal` | d3.6 · 6.9 · `normal` | — |
+
+9 panels; 0 abnormal at discharge.
+No analyte carries a critical flag on this record.
+No value sits outside its reference range at discharge.
+
+### Clinical note
+
+Sections present: `chief_complaint`, `discharge_diagnosis`, `major_procedure`, `brief_hospital_course`.
+
+Sections absent: 34 of the 38 headings the retriever knows — `admission_date`, `admission_diagnosis`, `allergies`, `assessment_and_plan`, `attending`, `complications`, `consults`, `date_of_birth`, `discharge_condition`, `discharge_date`, `discharge_disposition`, `discharge_instructions`, `discharge_medications`, `discharge_summary`, `facility`, `family_history`, `followup_instructions`, `history_of_present_illness`, `indications`, `infections`, `medications_on_admission`, `medications_on_transfer`, `name`, `past_medical_history`, `past_surgical_history`, `pathology`, `pertinent_results`, `physical_exam`, `review_of_systems`, `service`, `sex`, `social_history`, `transfusions`, `unit_no`.
+
+`/ehr` headings these sections support, and the passage that earns each: **Presentation & diagnosis.** (`chief_complaint`, `discharge_diagnosis`), **Hospital course & procedures.** (`brief_hospital_course`, `major_procedure`), **Readmission risk & trajectory.** (the risk estimate).
+`/ehr` headings to OMIT: **Discharge plan & medications.**.
+
+- **discharge_diagnosis** (quoted): "Cholecystitis, choledocholithiasis."
+- **brief_hospital_course** (quoted): "The patient is a 33-year-old female admitted with elevated bilirubin and probable common bile duct stone."
+
+#### Verbatim passages
+
+**chief_complaint**
+
+```
+Cholecystitis with choledocholithiasis.
+```
+
+**discharge_diagnosis**
+
+```
+Cholecystitis, choledocholithiasis.
+
+ADDITIONAL DIAGNOSES
+1. Status post roux-en-y gastric bypass converted to an open procedure in 01/07.
+2. Laparoscopic paraventral hernia in 11/07.
+3. History of sleep apnea with reversal after 100-pound weight loss.
+4. Morbid obesity with bmi of 39.4.
+```
+
+**major_procedure**
+
+```
+Laparoscopic cholecystectomy with laparoscopy converted to open common bile duct exploration and stone extraction.
+```
+
+**brief_hospital_course**
+
+```
+The patient is a 33-year-old female admitted with elevated bilirubin and probable common bile duct stone. She was admitted through the emergency room with abdominal pain, elevated bilirubin, and gallstones on ultrasound with a dilated common bile duct. She subsequently went for a HIDA scan to rule out cholecystitis. Gallbladder was filled but was unable to empty into the small bowel consistent with the common bile duct blockage. She was taken to the operating room that night for laparoscopic cholecystectomy. We proceeded with laparoscopic cholecystectomy and during the cholangiogram there was no contrast. It was able to be extravasated into the duodenum with the filling defect consistent with the distal common bile duct stone. The patient had undergone a Roux-en-Y gastric bypass but could not receive an ERCP and stone extraction, therefore, common bile duct exploration was performed and a stone was extracted. This necessitated conversion to an open operation. She was transferred to the medical surgical unit postoperatively. She had a significant amount of incisional pain following morning, but no nausea. A Jackson-Pratt drain, which was left in place in two places showed serosanguineous fluid. White blood cell count was down to 7500 and bilirubin decreased to 2.1. Next morning she was started on a liquid diet. Foley catheter was discontinued. There was no evidence of bile leak from the drains. She was advanced to a regular diet on postoperative day #3, which was 12/09/07. The following morning she was tolerating regular diet. Her bowels had begun to function, and she was afebrile with her pain control with oral pain medications. Jackson-Pratt drain was discontinued from the wound. The remaining Jackson-Pratt drain was left adjacent to her cystic duct. Following morning, her laboratory studies were better. Her bilirubin was down to normal and white blood cell count was normal with an H&H of 9 and 26.3. Jackson-Pratt drain was discontinued, and she was discharged home. Followup was in 3 days for staple removal. She was given iron 325 mg p.o. t.i.d. and Lortab elixir 15 cc p.o. q.4 h. p.r.n. for pain.
+```
+
+## 90000035
+
+### Manifest and risk
+
+The raw field and the string the product publishes for it. A sentence may quote either; the right-hand column is the form the widget prints.
+
+| field | raw | published |
+|---|---|---|
+| encounter | `inpatient admission` | inpatient admission |
+| age | `71` | 71 |
+| gender | `Female` | Female |
+| admission_type | `Emergency (EW EMER.)` | Emergency |
+| discharge_location | `Home` | Home |
+| length_of_stay_days | `3` | 3 |
+| prior_admissions | `1` | 1 |
+| prior_inpatient_days | `3.66667` | 3.66667 |
+| ed_visits_prior_year | `0` | 0 |
+| insurance | `Medicaid` | Medicaid |
+| race | `White` | White |
+| oncology_flag (feature row) | `0.0` | — |
+
+**Readmission probability 0.074944** (published **7.5%**) against a threshold of 0.11 (published **11.0%**) → decision `below` (model `readmission-final-20260917173317`).
+
+Drivers, in the order the model receives them. `label` is `humanize()`; `value` is the patient's own value in clinical form, or empty when the factor is absent; `chip` is the question a driver bar asks. `contribution` is read from the raw response and is **not** published to the model or the widget — it is here so a reviewer can rank the drivers, and no answer key may quote it.
+
+| # | feature | label | direction | value | contribution | chip |
+|---|---|---|---|---|---|---|
+| 1 | `lowest monocyte count` | Lowest Monocyte Count | decreases | 0.64 ×10³/µL | — | How does Lowest Monocyte Count affect this patient's readmission risk? |
+| 2 | `red cell distribution width (RDW)` | Red Cell Distribution Width (rdw) | decreases | 14% | — | How does Red Cell Distribution Width (rdw) affect this patient's readmission risk? |
+| 3 | `recent red blood cell count` | Recent Red Blood Cell Count | increases | 2.35 ×10⁶/µL | — | How does Recent Red Blood Cell Count affect this patient's readmission risk? |
+| 4 | `prior inpatient days` | Prior Inpatient Days | decreases | 4 | — | How does Prior Inpatient Days affect this patient's readmission risk? |
+| 5 | `discharge destination` | Discharge Destination | decreases | — | — | How does Discharge Destination affect this patient's readmission risk? |
+
+### Discharge medications
+
+1 passage(s), 769 characters.
+
+inventory flags — taper: no, anticoagulant: no, dedicated medication section: no.
+text scan of the passages below — anticoagulant: absent, beta-blocker: absent, diuretic: absent, taper: absent.
+
+```
+The patient underwent total thyroidectomy on 09/22/08, which she tolerated very well and remained stable in the postoperative period. On postoperative day #1, she was tolerating her diet, began on thyroid hormone replacement, and remained afebrile with stable vital signs. She required intravenous narcotics for pain control. She was judged stable for discharge home on 09/25/08, tolerating a diet well, having no fever, stable vital signs, and good pain control. The wound was clean and dry. The drain was removed. She was instructed to follow up in the surgical office within one week after discharge. She was given prescription for Vicodin for pain and Synthroid thyroid hormone, and otherwise the appropriate wound care instructions per my routine wound care sheet.
+```
+
+### Laboratory panel
+
+One row per analyte, in the order the tool returned them. `baseline` is the first timepoint, `extreme` is the reading furthest outside the reference interval (the nadir or the peak), and `discharge` is the last. `anchored` names the values the readmission model was scored on: those are the patient's own numbers and may be stated as such; anything else was generated for a measure the model never saw.
+
+| analyte | unit | reference | decimals | baseline | extreme | discharge | anchored |
+|---|---|---|---|---|---|---|---|
+| RDW | % | 11.5–14.5 | 1 | d0 · 11.8 · `normal` | d0 · 11.8 · `normal` | d3 · 14.0 · `normal` | rdw_max |
+| Red blood cells | x10^6/uL | 4.2–5.4 | 2 | d0 · 4.04 · `low` | d1 · 2.35 · `low` | d3 · 2.35 · `low` | rbc_last, rbc_min |
+| Hemoglobin | g/dL | 12.0–15.5 | 1 | d0 · 12.8 · `normal` | d1 · 7.0 · `low` | d3 · 10.7 · `low` | hemoglobin_min |
+| Sodium | mmol/L | 135.0–145.0 | 0 | d0 · 145.0 · `normal` | d0 · 145.0 · `normal` | d3 · 144.0 · `normal` | sodium_last, sodium_max, sodium_min |
+| Monocytes | x10^3/uL | 0.2–0.8 | 1 | d0 · 0.7 · `normal` | d0 · 0.7 · `normal` | d3 · 0.7 · `normal` | monocytes_min |
+| Creatinine | mg/dL | 0.5–1.1 | 2 | d0 · 0.55 · `normal` | d0 · 0.55 · `normal` | d3 · 1.06 · `normal` | — |
+| eGFR | mL/min/1.73m2 | 90.0–120.0 | 0 | d0 · 116.0 · `normal` | d0 · 116.0 · `normal` | d3 · 94.0 · `normal` | — |
+| Potassium | mmol/L | 3.5–5.0 | 1 | d0 · 4.5 · `normal` | d0 · 4.5 · `normal` | d3 · 4.2 · `normal` | — |
+| White blood cells | x10^3/uL | 4.0–11.0 | 1 | d0 · 6.6 · `normal` | d0 · 6.6 · `normal` | d3 · 7.1 · `normal` | — |
+
+9 panels; 2 abnormal at discharge (Red blood cells, Hemoglobin).
+No analyte carries a critical flag on this record.
+Most abnormal at discharge: **Red blood cells** 2.35 x10^6/uL (flag `low`, reference 4.2–5.4).
+
+### Clinical note
+
+Sections present: `discharge_diagnosis`, `major_procedure`, `indications`, `brief_hospital_course`.
+
+Sections absent: 34 of the 38 headings the retriever knows — `admission_date`, `admission_diagnosis`, `allergies`, `assessment_and_plan`, `attending`, `chief_complaint`, `complications`, `consults`, `date_of_birth`, `discharge_condition`, `discharge_date`, `discharge_disposition`, `discharge_instructions`, `discharge_medications`, `discharge_summary`, `facility`, `family_history`, `followup_instructions`, `history_of_present_illness`, `infections`, `medications_on_admission`, `medications_on_transfer`, `name`, `past_medical_history`, `past_surgical_history`, `pathology`, `pertinent_results`, `physical_exam`, `review_of_systems`, `service`, `sex`, `social_history`, `transfusions`, `unit_no`.
+
+`/ehr` headings these sections support, and the passage that earns each: **Presentation & diagnosis.** (`discharge_diagnosis`), **Hospital course & procedures.** (`brief_hospital_course`, `major_procedure`), **Readmission risk & trajectory.** (the risk estimate).
+`/ehr` headings to OMIT: **Discharge plan & medications.**.
+
+- **discharge_diagnosis** (quoted): "Symptomatic thyroid goiter."
+- **brief_hospital_course** (quoted): "The patient underwent total thyroidectomy on 09/22/08, which she tolerated very well and remained stable in the postoperative period."
+
+#### Verbatim passages
+
+**discharge_diagnosis**
+
+```
+Symptomatic thyroid goiter.
+```
+
+**major_procedure**
+
+```
+Total thyroidectomy.
+```
+
+**indications**
+
+```
+Briefly, the patient is a 71-year-old female referred with increasingly symptomatic large nodular thyroid goiter. She presented now after informed consent for the above procedure, understanding the inherent risks and complications and risk-benefit ratio.
+```
+
+**brief_hospital_course**
+
+```
+The patient underwent total thyroidectomy on 09/22/08, which she tolerated very well and remained stable in the postoperative period. On postoperative day #1, she was tolerating her diet, began on thyroid hormone replacement, and remained afebrile with stable vital signs. She required intravenous narcotics for pain control. She was judged stable for discharge home on 09/25/08, tolerating a diet well, having no fever, stable vital signs, and good pain control. The wound was clean and dry. The drain was removed. She was instructed to follow up in the surgical office within one week after discharge. She was given prescription for Vicodin for pain and Synthroid thyroid hormone, and otherwise the appropriate wound care instructions per my routine wound care sheet.
+```
 
 ---
 

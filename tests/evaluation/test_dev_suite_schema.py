@@ -92,6 +92,58 @@ def test_a_holdout_row_is_refused_by_the_validator():
         validate_rows([bad])
 
 
+# --- the three cohorts are disjoint --------------------------------------------
+#
+# Twelve dev records, ten holdout records, twelve selection-slice records. They are
+# selected by three different scripts at three different times, and nothing in the code
+# compares them: a record that drifted into two cohorts would be measured twice — once as
+# a dev item the prompts were tuned against and once as a blind holdout — and both numbers
+# would be wrong in the direction that flatters the product. Asserted here, at import, so
+# the collision is a failing test rather than a report nobody reads twice.
+
+#: `ecc-model-selection-slice-v1` (14 items, 5 records) and `v2` (16 items, 7 records).
+#: Written out rather than imported: v1 is retired and exists only in Langfuse, and
+#: importing the live set would make this test pass by construction.
+SELECTION_SLICE_RECORDS = frozenset({
+    "90000010", "90000011", "90000054", "90000081", "90000086",   # v1
+    "90000020", "90000040", "90000041", "90000059", "90000069",   # v2
+    "90000090", "90000099",
+})
+
+
+def test_the_three_cohorts_are_pairwise_disjoint():
+    dev = set(DEV_HADM_IDS)
+    holdout = set(HOLDOUT_HADM_IDS)
+    slice_records = set(SELECTION_SLICE_RECORDS)
+
+    assert not dev & holdout, f"dev and holdout share {sorted(dev & holdout)}"
+    assert not dev & slice_records, \
+        f"dev and the selection slice share {sorted(dev & slice_records)}"
+    assert not holdout & slice_records, \
+        f"holdout and the selection slice share {sorted(holdout & slice_records)}"
+
+
+def test_every_cohort_record_is_one_the_service_serves():
+    """A cohort entry outside `SERVED_HADM_IDS` is a record the service refuses.
+
+    Measured on 2026-10-20: two ids in the boundary have neither a note nor a feature row,
+    and a suite that names one gets a refusal it reads as a model failure.
+    """
+    from services.agent.ingress.contracts import SERVED_HADM_IDS
+
+    served = {str(hadm) for hadm in SERVED_HADM_IDS}
+    for name, cohort in (("dev", DEV_HADM_IDS), ("holdout", HOLDOUT_HADM_IDS)):
+        missing = sorted(set(cohort) - served)
+        assert not missing, f"{name} records the service does not serve: {missing}"
+
+
+def test_the_cohorts_are_the_sizes_the_selection_was_made_for():
+    assert len(DEV_HADM_IDS) == 12
+    assert len(HOLDOUT_HADM_IDS) == 10
+    assert len(set(DEV_HADM_IDS)) == 12, "a dev record is listed twice"
+    assert len(set(HOLDOUT_HADM_IDS)) == 10, "a holdout record is listed twice"
+
+
 def test_every_scenario_becomes_a_harness_item():
     items = dev_suite.dev_suite_items(manifest_provider=_manifest_provider)
     assert len(items) == 27

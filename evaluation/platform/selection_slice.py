@@ -23,22 +23,28 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
+from evaluation.platform import dev_suite
 from evaluation.platform.schemas import DatasetItemInput, MAX_TURNS
 
 REPO = Path(__file__).resolve().parents[2]
 SELECTION_SLICE_PATH = REPO / "evaluation" / "datasets" / "selection_slice.jsonl"
 
-#: The seven records the Dev suite runs on, read from its own rows.
-DEV_HADM_IDS = frozenset(
-    {90000015, 90000023, 90000051, 90000073, 90000105, 90000106, 90000108})
+#: The Dev and Holdout cohorts, read from `dev_suite` rather than copied here.
+#:
+#: They were two literal sets until 2026-11-22, and the day the cohorts grew to twelve and
+#: ten the copy in this file would have gone on excluding seven and six — quietly, because
+#: nothing compares them. One owner, one answer: the tuples in `dev_suite` are what a suite
+#: actually runs against, so they are what this file excludes.
+DEV_HADM_IDS = frozenset(int(hadm) for hadm in dev_suite.DEV_HADM_IDS)
 
-#: The six the Holdout suite runs on plus the two the census reserved for it. Extracted as
-#: integers only: no holdout prompt or expected output is read here.
-HOLDOUT_HADM_IDS = frozenset(
-    {90000026, 90000028, 90000050, 90000067, 90000087, 90000088, 90000101})
+#: The holdout cohort plus the two the census reserved for it. Extracted as integers only:
+#: no holdout prompt or expected output is read here.
+HOLDOUT_HADM_IDS = frozenset(int(hadm) for hadm in dev_suite.HOLDOUT_HADM_IDS)
 
-#: The two the census inventories as holdout capacity and no suite has taken.
-RESERVED_HADM_IDS = frozenset({90000014, 90000104})
+#: The records the census inventories as holdout capacity that the holdout suite does not
+#: yet name. Kept beside the cohort rather than folded into it: capacity is not a cohort,
+#: and a record that moved out of this set is one the suite has taken up.
+RESERVED_HADM_IDS = frozenset({90000014, 90000104}) - HOLDOUT_HADM_IDS
 
 #: The five records `ecc-model-selection-slice-v1` used. v2 is a clean-slate rebuild, so
 #: reusing one of them would carry the measurements v1 was retired for into the new matrix.

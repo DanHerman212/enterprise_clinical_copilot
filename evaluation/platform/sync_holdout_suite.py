@@ -37,6 +37,7 @@ from evaluation.platform.dev_suite import (  # noqa: E402
     TRAJECTORIES,
     item_payload,
 )
+from evaluation.platform.schemas import MAX_TURNS  # noqa: E402
 
 DATASET = "ecc-tier2-holdout-suite"
 HOLDOUT_SUITE_PATH = REPO / "evaluation" / "datasets" / "holdout_suite.jsonl"
@@ -104,16 +105,22 @@ def validate_rows(rows: list[dict[str, Any]]) -> None:
         turns = row.get("turns")
         if not isinstance(turns, list) or not turns:
             raise HoldoutSuiteError(f"{scenario}: turns must be a non-empty list")
-        if len(turns) > 3:
-            raise HoldoutSuiteError(f"{scenario}: {len(turns)} turns exceeds 3")
+        if len(turns) > MAX_TURNS:
+            raise HoldoutSuiteError(
+                f"{scenario}: {len(turns)} turns exceeds {MAX_TURNS}")
 
         expected = row.get("expected_output")
         if not isinstance(expected, dict) or not expected:
             raise HoldoutSuiteError(f"{scenario}: expected_output is mandatory")
 
         workflow = row.get("workflow_type")
-        wanted = {1: {"single_probe"}, 2: {"command_plus_followup"},
-                  3: {"multi_turn"}}[len(turns)]
+        # Same rule as `dev_suite.validate_rows`: a two-turn thread may be a command with
+        # its follow-up or a short multi-turn item, and three and above are always
+        # `multi_turn`. This file used to cap at three turns and index a dict by turn
+        # count, so a five-turn row raised KeyError instead of being refused.
+        wanted = {"single_probe"} if len(turns) == 1 else (
+            {"command_plus_followup", "multi_turn"} if len(turns) == 2
+            else {"multi_turn"})
         if workflow not in wanted:
             raise HoldoutSuiteError(
                 f"{scenario}: {len(turns)} turn(s) need workflow_type in {wanted}, "
@@ -227,13 +234,14 @@ def main(argv: list[str] | None = None) -> int:
         # expectation that no envelope model describes.
     )
 
-    wanted = {payload["id"] for payload in payloads}
-    stale = [item_id for item_id in existing_item_ids(client, args.dataset)
-             if item_id in wanted]
-    for item_id in stale:
+    # Every existing item, not only the ones this run rewrites — the same rule as the dev
+    # sync: an id the new file no longer contains would otherwise survive as an orphan and
+    # be scored by a run that believes it is measuring this file.
+    existing = existing_item_ids(client, args.dataset)
+    for item_id in existing:
         client.api.dataset_items.delete(item_id)
-    if stale:
-        print(f"replaced {len(stale)} existing item(s)")
+    if existing:
+        print(f"removed {len(existing)} existing item(s)")
 
     for payload in payloads:
         client.create_dataset_item(

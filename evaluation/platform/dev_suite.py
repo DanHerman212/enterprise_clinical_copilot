@@ -98,8 +98,14 @@ def validate_rows(rows: list[dict[str, Any]]) -> None:
             raise DevSuiteError(f"{scenario}: expected_output is mandatory")
 
         workflow = row.get("workflow_type")
-        wanted = {1: {"single_probe"}, 2: {"command_plus_followup"},
-                  3: {"multi_turn"}, 4: {"multi_turn"}}[len(turns)]
+        # A two-turn thread is a command and its follow-up OR a multi-turn item that
+        # happens to be short, so both are legal there. Three turns and above are always
+        # `multi_turn`. Computed rather than looked up in a dict keyed by turn count: the
+        # dict raised KeyError on any count it did not name, which is how a five-turn row
+        # would have failed at load rather than being refused with its scenario id.
+        wanted = {"single_probe"} if len(turns) == 1 else (
+            {"command_plus_followup", "multi_turn"} if len(turns) == 2
+            else {"multi_turn"})
         if workflow not in wanted:
             raise DevSuiteError(
                 f"{scenario}: {len(turns)} turn(s) need workflow_type in {wanted}, "

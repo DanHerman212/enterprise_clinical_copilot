@@ -76,8 +76,10 @@ def test_the_chart_rules_keep_one_passage_per_sentence():
     text = " ".join(prompts.EHR_FORMATTING.split())
 
     assert "ONE PASSAGE PER SENTENCE" in text
-    assert "Every cited sentence carries exactly one `^[k]`" in text
-    assert "100% of that sentence's clinical claims" in text
+    # The ban on two markers went on 2026-11-22: a sentence drawing on two passages must
+    # carry both markers rather than either dropping one or being forced apart.
+    assert "MUST carry a marker for BOTH" in text
+    assert "Do not merge and cite only the first" in text
     # The sections the measured failure merged, named as separate passages.
     assert ("`history_of_present_illness`, `chief_complaint` and `brief_hospital_course` "
             "are separate passages") in text
@@ -106,8 +108,9 @@ def test_the_hub_keeps_one_passage_per_sentence():
     text = " ".join(prompts.CORE_HUB_PROMPT.split())
 
     assert "ONE PASSAGE PER SENTENCE" in text
-    assert "A sentence states what ONE `<evidence_items>` passage states" in text
-    assert "never attach two numbered markers" in text
+    # A sentence normally states one passage's facts; when it states two, both are marked.
+    assert "A sentence states what one `<evidence_items>` passage states" in text
+    assert "it MUST carry a marker for EVERY supporting passage" in text
     # And the two kinds of evidence that carry no numbered marker are named with it.
     assert "`<literature>` records keep `^[PMID: <id>]`" in text
     assert "`<admission_metadata>` carry no `^[k]`" in text

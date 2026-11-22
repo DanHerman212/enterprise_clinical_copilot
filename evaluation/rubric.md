@@ -389,12 +389,19 @@ retrieved and verified. Re-running the tool is one way to answer; reading what t
 already holds is equally valid, and is what a reader who just read the previous answer
 expects.
 
-- A follow-up that cites a passage an earlier turn published — `^[7]`, where `7` is the
-  number that turn's answer used — is correctly cited. The numbering is cumulative across
-  the thread, and the reader can open it.
+- A follow-up that cites a passage from a `SOURCES` list the thread published is correctly
+  cited. Each turn's settled answer numbers **its own** `SOURCES` list starting from
+  `[1]`, so `^[1]` in a later turn names that turn's first source, not turn 1's, and
+  starting a turn's list at `[1]` is the standard per-turn display contract — never score
+  it as a renumbering defect. Only when a turn publishes no `SOURCES` list of its own do
+  its `^[k]` markers resolve against the `SOURCES` list of the most recent earlier turn
+  that published one; that is an inherited list, not a missing one. A number with no
+  entry in either list addresses no unit the thread published, and **that** is a citation
+  failure.
 - A follow-up that cites a `^[PMID: ...]` record an earlier turn retrieved and verified is
-  correctly cited for the same reason. Quoting a published record the thread already
-  holds is not fabrication.
+  correctly cited for the same reason. Those badges resolve by identifier across the whole
+  thread, so a PMID quoted three turns later still names the same paper. Quoting a
+  published record the thread already holds is not fabrication.
 - A follow-up that says the record does not document something an earlier turn *did*
   document is the failure dimension 6 exists to catch.
 - Not calling a tool is not an omission. Score **responsiveness** on whether the question
@@ -425,6 +432,27 @@ inpatient readmission risk, stating that reason, that is the correct answer and 
 A refusal that is **not** grounded is not covered by this clause and is scored
 normally: stonewalling with no reason, contradicting the `encounter` line, or using the
 refusal to avoid a question that the evidence could have answered.
+
+**A refusal is not the whole answer to every question about an outpatient record.** The
+clause above covers `/ehr` and readmission-risk requests, which properly decline to
+summarise an inpatient stay or produce a risk score that does not exist. A free-text
+question asking what happened during the outpatient visit — why the patient came, what was
+found, what was advised — **is answerable**, and the correct answer is written from the
+retrieved note passages like any other summary. Score it as follows:
+
+- **Fidelity and grounding** — the answer reports what the passages state, and every
+  clinical claim is traceable to one of them.
+- **Citation** — passage claims carry `^[n]` markers resolving to the turn's `SOURCES`
+  list, exactly as on an inpatient turn. An answer with no markers on passage claims is a
+  citation defect, not a refusal.
+- **Responsiveness** — the answer addresses the question. It says what the visit was for
+  and what was recorded; it does not announce that the record is outpatient and stop.
+- **Register** — refer to the encounter as the visit or the encounter, and label the
+  section **Clinical course.** rather than **Hospital course.**; write no length of stay,
+  admission type or discharge disposition the record does not have.
+
+Declining a *risk score* and answering a *visit* are different requests on the same
+record, and a thread can contain both. Only the first is a refusal.
 
 ## Refuting a false premise
 

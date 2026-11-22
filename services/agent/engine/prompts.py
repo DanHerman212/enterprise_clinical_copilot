@@ -132,12 +132,12 @@ CITATIONS
   carries `^[n]`. An estimate, driver, contribution or model `value` carries none, even
   restated in a follow-up, and never shares a sentence with a cited chart claim; nor does
   a statement that the whole panel was normal.
-- ONE PASSAGE PER SENTENCE. A sentence states what ONE `<evidence_items>` passage states and
-  carries only that passage's single `^[k]`. Never combine facts from two chart sections in
-  one compound sentence, and never attach two numbered markers (`^[1], ^[2]` or
-  `^[1] ^[2]`) to one sentence: split it, so each sentence cites the section that states its
-  claim. `<literature>` records keep `^[PMID: <id>]`; `<readmission_risk>` and
-  `<admission_metadata>` carry no `^[k]`.
+- ONE PASSAGE PER SENTENCE, PREFERABLY. A sentence states what one `<evidence_items>`
+  passage states and carries that passage's `^[k]`; two passages' facts belong in two
+  sentences. When one sentence does state claims from two passages, it MUST carry a marker
+  for EVERY supporting passage, before the full stop — never only its trailing clause's:
+  a claim whose passage is unnumbered is uncited. `<literature>` records keep
+  `^[PMID: <id>]`; `<readmission_risk>` and `<admission_metadata>` carry no `^[k]`.
 - A `<literature>` record is cited as `^[PMID: <id>]` and NEVER as `^[n]`: a number
   addresses a position in this conversation's evidence, and a published record holds none.
 - A LIST IS ONE CLAIM. A list drawn from a single passage carries its marker ONCE, on the
@@ -295,9 +295,9 @@ LABORATORY TRAJECTORIES & RANKING
   hemoglobin call has looked at half of what it was asked about.
 - `<lab_inventory>` lists the values this session has READ (`present`) and the ones it asked
   for and did not get (`absent`). An analyte's absence is sayable only from that list, or
-  from a panel you fetched that does not contain it. A value that is neither present nor
-  absent there is a value nobody has looked for: say what the panel shows and say the rest
-  is unread — never "the record does not document" a series no call requested.
+  from a panel you fetched that does not contain it. A value in neither list was never
+  looked for: say what the panel shows and say the rest is unread —
+  never "the record does not document" a series no call requested.
 - STRUCTURED DATA OUTRANKS NOTE PROSE for every quantitative laboratory value. A series
   from `get_lab_trends` — this turn's, or carried from an earlier `/labs` turn — is the
   authoritative record of what a value was, what it was at discharge, and which
@@ -308,12 +308,13 @@ LABORATORY TRAJECTORIES & RANKING
   for `critical_high`, "within its reference range" for "normal"). Do not re-derive
   normality from the digits, and never say an analyte "remained within reference range",
   "stayed normal" or "was unremarkable" when ANY timepoint carries a non-"normal" flag.
-- A question that RANKS or COMPARES values — "which lab was worst at discharge", "which
-  was most abnormal", "highest", "lowest", "peak", "nadir", "compared with the reference
-  range" — is answered from the series: the FIRST sentence names the single value furthest
-  outside its reference interval (`reference_low` and `reference_high`) at the requested
-  timepoint, with its value and `flag`, or says every value was inside its range. A list of
-  several abnormal values is not an answer to "which".
+- A RANKING question — "which lab was worst at discharge", "which was most abnormal",
+  "highest", "lowest", "peak", "nadir" — is answered from the series: the FIRST sentence
+  names the value furthest outside its reference interval at the requested timepoint, with
+  its value and `flag`, or says all were inside range. A `critical_low` or `critical_high`
+  flag outranks distance: name a critical reading ahead of any merely low or high one,
+  ranking by distance only when none is critical.
+  A list of abnormal values is not an answer to "which".
 - A sentence naming two or three specific analytes cites each analyte's series
   (`^[1], ^[2]`).
 - Do not open a lab answer with a blanket reassurance that contradicts the rest of it. When
@@ -329,9 +330,8 @@ LABORATORY TRAJECTORIES & RANKING
   exact value: a series is a trajectory, not a set of endpoints.
 - A series carries an `anchored` list naming the values the model was scored on.
   Anything named there is the patient's own number and is stated as such; anything else
-  is generated for a measure the model never saw, so describe what the payload shows and
-  write no sentence about where it came from — the card beneath the answer states that
-  itself.
+  was generated for a measure the model never saw, so describe the payload and write no
+  sentence about where it came from — the card states that itself.
 """
 
 
@@ -842,19 +842,19 @@ Two rules on where a citation goes, and no others:
   nothing else, so it is never the source for a finding or a symptom. The diagnosis is stated
   once: if the diagnosis passage has named the condition, no earlier sentence names it again.
 
-ONE PASSAGE PER SENTENCE. Keep one note passage's facts in one sentence, and split facts that
-come from different sections into separate sentences, each carrying the single marker of the
-passage that states everything it claims. Every cited sentence carries exactly one `^[k]` —
-one number per claim — and that passage contains 100% of that sentence's clinical claims. Do
-not merge and cite only the first: a sentence saying the patient was transferred to a named
-clinician who will manage his diabetes and his hypertension, cited to the history of present
-illness alone, asserts that the history states the hypertension management when it is the
-medication list that does. Do not merge and cite both either: a sentence drawing on two
-sections is two sentences, because the reader who opens one marker must not be shown a passage
-the other clause did not come from. This holds for every pair of sections this answer draws
-on: a hospital-course fact beside a procedure section, a medication clause inside the hospital
-course beside an activity or follow-up rule in the discharge instructions, and the unmarked
-`discharge_location` from `<admission_metadata>` beside anything a passage states.
+ONE PASSAGE PER SENTENCE, PREFERABLY. Keep one note passage's facts in one sentence, and prefer
+splitting facts that come from different sections into separate sentences, each carrying the
+marker of the passage that states everything it claims. Where a single sentence does state a
+claim from each of two passages, it MUST carry a marker for BOTH, before the full stop: a
+sentence saying the patient was transferred to a named clinician who will manage his diabetes
+and his hypertension needs the history's marker for the first clause AND the medication list's
+marker for the second, because the reader who opens only the first is shown a passage that
+does not mention the hypertension management. Do not merge and cite only the first: that leaves
+half the sentence resting on a passage that says nothing about it. This holds for every pair of
+sections this answer draws on: a hospital-course fact beside a procedure section, a medication
+clause inside the hospital course beside an activity or follow-up rule in the discharge
+instructions, and the unmarked `discharge_location` from `<admission_metadata>` — which takes no
+marker even inside a sentence that carries one — beside anything a passage states.
 
 The section you name in the prose must be the section you cite. If a sentence says "the
 discharge instructions state …" or "the brief hospital course notes …", the passage behind its

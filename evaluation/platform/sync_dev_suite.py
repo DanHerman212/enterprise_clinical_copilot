@@ -161,13 +161,16 @@ def main(argv: list[str] | None = None) -> int:
         # describes. Declaring one silently drops the other.
     )
 
-    wanted = {payload["id"] for payload in payloads}
-    stale = [item_id for item_id in existing_item_ids(client, args.dataset)
-             if item_id in wanted]
-    for item_id in stale:
+    # Every existing item, not only the ones this run rewrites. Deleting with `if item_id
+    # in wanted` left the removed ids behind: a suite that drops a scenario or renames one
+    # then holds both the new item and the old one, and the run scores a row that no file
+    # contains any more. The dataset is a projection of the file, so the projection is
+    # cleared before it is rebuilt.
+    existing = existing_item_ids(client, args.dataset)
+    for item_id in existing:
         client.api.dataset_items.delete(item_id)
-    if stale:
-        print(f"replaced {len(stale)} existing item(s)")
+    if existing:
+        print(f"removed {len(existing)} existing item(s)")
 
     for payload in payloads:
         client.create_dataset_item(

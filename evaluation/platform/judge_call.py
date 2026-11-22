@@ -142,7 +142,11 @@ MANIFEST_RULES = (
     "  * `encounter` states what kind of record this is, and it is authoritative. A "
     "record marked outpatient has no inpatient stay, so no inpatient readmission risk "
     "applies to it; an answer that says so is correct and must not be scored as "
-    "fabricated.\n"
+    "fabricated. That covers a refusal to summarise a stay and a refusal to produce a "
+    "risk score. It does NOT license a bare refusal to a free-text question about the "
+    "visit itself: \"what happened at this visit\" is answered from the retrieved note "
+    "passages, with `^[n]` markers on its claims, and an answer that declines it or "
+    "recites only the encounter type is a responsiveness and citation failure.\n"
     "  * `admission_type` is a raw tabular ML feature — a one-hot input to the risk "
     "model, not clinical evidence that an admission occurred. Never use it to "
     "contradict `encounter`, and never treat it as proof of an inpatient stay.\n"
@@ -214,7 +218,7 @@ def _scenario_constraints(input_doc: dict[str, Any],
     # every three-turn scenario: the judge graded a thread against the facts of its
     # opening turn alone, and `turn_3`'s scope and facts never reached it.
     for key in ("facts", "forbidden_claims", "behaviour", "turn_2", "turn_3",
-                "turn_4"):
+                "turn_4", "turn_5"):
         value = expected.get(key)
         if value in (None, "", [], {}):
             continue

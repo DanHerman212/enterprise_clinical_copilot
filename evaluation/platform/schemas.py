@@ -19,9 +19,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 WorkflowType = Literal["command_plus_followup", "single_probe", "multi_turn"]
 
 #: The most turns one item may script. Trajectory 4 of the Tier 2 dev suite runs a
-#: three- or four-turn thread, and stating the ceiling here keeps a mis-authored row
-#: from arriving at the service as an unbounded replay.
-MAX_TURNS = 4
+#: three-, four- or five-turn thread, and stating the ceiling here keeps a mis-authored
+#: row from arriving at the service as an unbounded replay.
+MAX_TURNS = 5
 
 #: A response that is present but says nothing. Treated as blank, because a card
 #: rendered as an em dash is what made the dashboard unreadable.

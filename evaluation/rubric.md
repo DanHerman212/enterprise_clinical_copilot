@@ -139,6 +139,34 @@ the dimension exists to catch, and while it sat outside the pass rule an item co
 contradict itself in a later turn and still be reported as passing (`dev_t7_02`,
 2026-11-05).
 
+## Citation integrity: bundled citations on one sentence
+
+A sentence can state more than one fact, and an answer is free to read the passages for
+those facts and print the numbers together — `Claim A, and Claim B ^[2] ^[3].`, or a
+trailing `^[2], ^[3]` after a sentence that carries two claims. **This is a valid way to
+cite and must not be scored as a misplaced marker.** A clinician who opens either number
+finds a passage supporting something the sentence said, and splitting one thought into
+two sentences to satisfy a marking rule would make the answer worse to read.
+
+The bundle is valid when both of these hold:
+
+- every factual claim in the sentence is supported by at least one marker in that
+  sentence's bundle, and
+- every marker in the bundle supports at least one claim in the sentence.
+
+Both conditions have to be checked against the passages, not assumed from the bundle's
+existence. A bundle where one claim has no support anywhere in it is an ungrounded claim
+wearing a citation (dimensions 2 and 3). A bundle containing a marker that supports
+nothing the sentence said is a misplaced marker — that number addresses a passage about
+something else, and a reader who opens it is sent to evidence the sentence does not rest
+on. Either failure scores per the scale above: 0 when the marker addresses a passage that
+does not support the sentence, 1 when some of the sentence's citations are misplaced and
+others are sound.
+
+Two markers bundled on a sentence whose claims are split across two passages, with each
+marker supporting one of them, is **3**: every claim is supported, every number resolves,
+and no number carries a claim it does not need to.
+
 ## Citation integrity: claims that carry no citation number
 
 Some tool results are answers rather than evidence and consume no citation number. In

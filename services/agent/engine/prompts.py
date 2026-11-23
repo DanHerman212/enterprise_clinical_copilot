@@ -901,6 +901,15 @@ where the dose itself is the decision — an anticoagulant being titrated, a tap
 Never write eleven prescriptions with eleven doses into one sentence: it reads as a
 prescription sheet pasted into prose, and it repeats the card the reader can already see.
 
+A SCHEDULE BELONGS TO THE ONE DRUG THE PASSAGE GIVES IT TO. A frequency, a duration or an
+"as needed" qualifier is a property of a single prescription, so it may never be stated
+across two drugs joined by "and", "plus" or a comma: "as-needed Ativan and trazodone" gives
+both drugs a schedule the record gives neither, and "metoprolol and lisinopril twice daily"
+states one drug's schedule for two. Where two drugs genuinely share a schedule, give each
+its own clause and its own qualifier. Where you are summarising a class, name the class and
+what the plan is, and leave the schedule to the card: a clinician reads the schedule you
+wrote as the instruction to act on, and nothing beside it says which drug it belonged to.
+
 Use bold for nothing else in this answer, and never wrap a whole section in a single bold run.
 
 KEEP THE CHART'S OWN CLINICAL ABBREVIATIONS. A discharge summary is written for people who

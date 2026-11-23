@@ -120,12 +120,12 @@ def test_a_comparison_that_verified_nothing_is_not_a_degraded_one():
 # --- what reaches the span ----------------------------------------------------------
 
 
-def test_the_span_records_the_three_facts():
+def test_the_span_records_the_four_facts():
     span = _Span()
 
     observability.record_turn_signals(
         guardrail_flags=["dose_rewritten"], comparator_outcome="extraction_degraded",
-        meds_dropped_count=2, span=span,
+        meds_dropped_count=2, deterministic_turn=True, span=span,
     )
 
     (update,) = span.metadata
@@ -133,7 +133,22 @@ def test_the_span_records_the_three_facts():
         "guardrail_flags": ["dose_rewritten"],
         "comparator_outcome": "extraction_degraded",
         "meds_dropped_count": 2,
+        "deterministic_turn": True,
     }
+
+
+def test_a_turn_that_called_the_model_is_not_marked_deterministic():
+    """The key defaults to False, and it is written every time rather than omitted.
+
+    A reader of the cost column has to distinguish "this turn cost nothing" from "this
+    trace predates the field", and an omitted key reads as the second.
+    """
+    span = _Span()
+
+    observability.record_turn_signals(guardrail_flags=[], span=span)
+
+    (update,) = span.metadata
+    assert update["metadata"]["deterministic_turn"] is False
 
 
 def test_the_tools_count_survives_and_the_markers_ride_beside_it():

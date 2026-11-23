@@ -229,7 +229,8 @@ def _totals(generations: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-SIGNAL_KEYS = ("guardrail_flags", "comparator_outcome", "meds_dropped_count")
+SIGNAL_KEYS = ("guardrail_flags", "comparator_outcome", "meds_dropped_count",
+               "deterministic_turn")
 
 
 def signal_metadata(trace: Any) -> dict[str, Any]:
@@ -286,6 +287,19 @@ def turn_usage(client: Any, trace_id: str, *, turn: int,
     "No generations found" stays an unattributed result rather than a zero: it means the
     trace was read and held nothing to price, which is a fact about the tracing, not a
     price of zero.
+
+    One exception, and it is the opposite case. A turn the service marked
+    `deterministic_turn: true` answered with no model call at all — the outpatient `/ehr`
+    encounter notice, the foreign-admission refusal — so its price IS zero and the absence
+    of a GENERATION is the evidence for it rather than a gap in the tracing. Those return
+    immediately instead of sleeping through four attempts waiting for a generation that
+    will never arrive, which on a zero-generation item is four and a half seconds spent to
+    keep reporting less than the service already told us.
+
+    A zero-generation trace that does NOT carry the flag stays unattributed, and that is
+    the load-bearing half. An older revision of the service, or a turn whose generation
+    failed to ingest, is exactly the shape a free turn has on the wire — and calling those
+    free would move real spend out of the column the arms are compared on.
     """
     if not trace_id:
         return {"turn": turn, "trace_id": "", "error": "no trace id for this turn",
@@ -301,6 +315,25 @@ def turn_usage(client: Any, trace_id: str, *, turn: int,
             last_error = f"unreadable: {type(exc).__name__}"
         else:
             generations = generation_usages(trace)
+            signals = signal_metadata(trace)
+            if not generations and signals.get("deterministic_turn") is True:
+                return {
+                    "turn": turn,
+                    "trace_id": trace_id,
+                    # Stated as zeros rather than left None: the turn answered, and it
+                    # spent nothing. `merge_usage` sums these straight into an item total.
+                    "input": 0, "cached": 0, "output": 0, "cache_write": 0,
+                    "thinking": 0, "total": 0,
+                    "billable_input": 0, "billable_output": 0,
+                    "cost_usd": 0.0,
+                    "models": [], "unpriced_models": [],
+                    "generations": 0,
+                    "unattributed": False,
+                    "latency_ms": _latency_ms(trace),
+                    "signals": signals,
+                    "reason": None,
+                    "error": None,
+                }
             if generations:
                 summary = _totals(generations)
                 return {

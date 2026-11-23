@@ -1338,6 +1338,8 @@ async def run_command(
             "replayed_tool_calls": replayed_calls or [],
             "command": command.wire,
             "deterministic_answer": answer_text.outpatient_ehr_notice(),
+            # No formatting turn was asked for and none ran: the notice IS the answer.
+            "zero_llm": True,
             # The manifest answered this turn. `encounter: outpatient` is the fact the
             # notice states, and it came from the pre-flight block rather than from a
             # passage — so the composer has to be told, or it reads a citation-free

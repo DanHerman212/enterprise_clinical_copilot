@@ -262,7 +262,7 @@ EHR_HEADINGS: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 
 def heading_sets(sections: dict[str, str]) -> tuple[list[tuple[str, list[str]]], list[str]]:
-    """Which `/ehr` headings these passages support, and which they do not.
+    """Which `/ehr` headings these passages REQUIRE, and which they do not.
 
     `Readmission risk & trajectory` is supported by the estimate rather than by a
     passage: every inpatient dev record has one, so it is always in the first list here.
@@ -270,6 +270,14 @@ def heading_sets(sections: dict[str, str]) -> tuple[list[tuple[str, list[str]]],
     the hospital course alone reads differently from one supported by the presenting
     history, and the difference decides whether an answer key may say "the note does not
     describe the procedure".
+
+    The second list is the FLOOR's complement, not a prohibition. A heading whose own
+    sections are absent is not required — but it is also not forbidden, because
+    `EHR_FORMATTING` asks for the hospital course "only if the passages describe the
+    hospital course, procedures, or inpatient treatment", and `history_of_present_illness`
+    that narrates the ERCP does describe it. `evaluators._ehr_required_headings` makes the
+    same distinction, and an answer key that read this list as "must be omitted" would
+    fail a briefing that was faithful.
     """
     available = set(sections) | {"<risk estimate>"}
     present: list[tuple[str, list[str]]] = []
@@ -484,9 +492,10 @@ def render(inventory: dict, rows: dict[int, dict], facts: dict[int, dict]) -> st
                 f"{len(KNOWN_HEADINGS)} headings the retriever knows"
                 + (f" — {absent_text}" if absent else "") + ".",
                 "",
-                "`/ehr` headings these sections support, and the passage that earns each: "
-                + (supported or "none") + ".",
-                "`/ehr` headings to OMIT: "
+                "`/ehr` headings required by these section tags, and the passage that "
+                "earns each: " + (supported or "none") + ".",
+                "`/ehr` headings omitted unless narrated inside another retrieved "
+                "passage: "
                 + (", ".join(f"**{name}.**" for name in missing) or "none") + ".",
                 "",
             ]

@@ -516,13 +516,18 @@ def test_a_marker_past_the_conversation_is_still_stripped():
 # --- dose removal by span (ECC-11) --------------------------------------------
 
 def test_dropping_a_dose_does_not_corrupt_a_similar_dose():
-    """str.replace on the surface "5 mg" also destroyed "2.5 mg" (ECC-11);
-    span removal must leave the supported dose intact."""
+    """`str.replace` on the surface "5 mg" also destroyed "2.5 mg" (ECC-11).
+
+    The repair was span removal, and span removal had a failure of its own: slicing "50
+    mg" out of "Benadryl 25 to 50 mg" published "Benadryl 25 to orally" (2026-11-22).
+    The unit is now the SENTENCE, so the property is stated across two of them — the one
+    that states the unsupported dose goes, and the supported dose in the sentence beside
+    it is untouched and intact.
+    """
     evidence = "Discharge Medications:\n1. Warfarin 2.5 mg PO DAILY"
-    answer = "Take warfarin 2.5 mg daily and unknowndrug 5 mg nightly."
+    answer = "Take warfarin 2.5 mg daily. Also give unknowndrug 5 mg nightly."
     cleaned, flags = g.verify_med_tokens(answer, evidence)
-    assert "2.5 mg" in cleaned
-    assert "unknowndrug 5 mg" not in cleaned
+    assert cleaned == "Take warfarin 2.5 mg daily."
     assert "med_dose_mismatch:5 mg" in flags
 
 
@@ -869,11 +874,17 @@ def test_verify_med_tokens_keeps_paragraph_break_after_dose_drop():
     # Regression (2026-08-18 dry-run, 24592634): dropping an unverifiable dose
     # collapsed the \n\n paragraph break via re.sub(r"\s{2,}"). The cleanup
     # must collapse only intra-line space runs, never newlines.
+    #
+    # Restated 2026-11-22 for the sentence unit: the paragraph that loses a sentence keeps
+    # the sentences it still has, and the paragraph break in front of the next section
+    # survives with it.
     evidence = "cyanocobalamin 1000 mcg oral, vitamin D 800 IU oral"
-    answer = ("The patient was given cyanocobalamin 2000 UNIT oral.\n\n"
+    answer = ("The patient was given cyanocobalamin 2000 UNIT oral. "
+              "She was monitored overnight.\n\n"
               "**Discharge Diagnosis.** Pneumonia ^[1].")
     cleaned, flags = g.verify_med_tokens(answer, evidence)
-    assert "\n\n**Discharge Diagnosis.**" in cleaned
+    assert cleaned == ("She was monitored overnight.\n\n"
+                       "**Discharge Diagnosis.** Pneumonia ^[1].")
     assert any("2000 UNIT" in f for f in flags)
 
 

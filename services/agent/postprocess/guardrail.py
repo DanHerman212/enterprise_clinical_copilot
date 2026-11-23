@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from typing import Callable
 
 from services.agent.postprocess import answer as answer_text
 from services.agent.postprocess import citations
@@ -60,7 +61,10 @@ _ANSWER_AGE = re.compile(
 # the same key as the answer's "2000 mcg" — a comma used to break the match and
 # made the verifier drop a CORRECT dose (regression on 24592634/summarize).
 _DOSE_RE = re.compile(
-    r"(?<![\d\-])(\d+(?:,\d{3})*(?:\.\d+)?)\s*(mg|mcg|g|mEq|units?|mL|%)\b"
+    # `cc` is a unit this cohort's notes write and an answer renders as `mL` ("flush with
+    # 15 cc" in the note, "15 mL" in the prose). It was missing, so the answer's volume
+    # was verified against nothing and the sentence holding it was rewritten.
+    r"(?<![\d\-])(\d+(?:,\d{3})*(?:\.\d+)?)\s*(mg|mcg|g|mEq|units?|mL|cc|%)\b"
     # A unit followed by a lab DENOMINATOR is a concentration, not a dose — and it is both
     # a false positive and a false negative, which is why the rule is written here.
     #
@@ -81,16 +85,96 @@ _DOSE_RE = re.compile(
 )
 
 
+#: Spellings of one unit. `cc` and `mL` are the same volume, and this corpus uses both:
+#: a note writes a bladder irrigation in `cc` and the sentence describing it writes `mL`.
+#: Folded at normalisation so the two verify against each other rather than against
+#: nothing (measured 2026-11-22).
+_DOSE_UNIT_ALIASES = {"cc": "ml"}
+
+
+def _dose_key(num: str, unit: str) -> str:
+    """The comparable key for a dose written as two strings rather than as a match.
+
+    `_norm_dose` reads a `_DOSE_RE` match; the range and combination patterns below name
+    an endpoint or a component that no single-match rule can see, and they need the same
+    key or the source index and the answer would be speaking two languages.
+    """
+    canon = unit.lower().rstrip("s")  # units -> unit
+    return f"{num.replace(',', '')}{_DOSE_UNIT_ALIASES.get(canon, canon)}"
+
+
 def _norm_dose(m: re.Match) -> str:
     """Normalize a dose match to a comparable key (handles "10 units" vs
-    "10units", "300  mg" vs "300 mg", "1000 units" vs "1000 UNIT", and
-    "2,000 mcg" vs "2000 mcg")."""
-    num, unit = m.group(1), m.group(2).lower().rstrip("s")  # units -> unit
-    return f"{num.replace(',', '')}{unit}"
+    "10units", "300  mg" vs "300 mg", "1000 units" vs "1000 UNIT",
+    "2,000 mcg" vs "2000 mcg", and "15 cc" vs "15 mL")."""
+    return _dose_key(m.group(1), m.group(2))
 
 
 def _norm_doses(text: str) -> set[str]:
+    """The STANDALONE dose tokens in this text — what `_DOSE_RE` can see on its own.
+
+    Deliberately not the whole vocabulary: `_source_doses` is. This one stays narrow
+    because it also decides how many doses a single medication entry states, which is a
+    question about one token per prescription (see `verify_med_freqs_per_med`).
+    """
     return {_norm_dose(m) for m in _DOSE_RE.finditer(text)}
+
+
+#: A dose RANGE whose endpoints share one trailing unit: "25-50 mg", "25–50 mg",
+#: "25 to 50 mg", "0.25 - 0.5 mg".
+#:
+#: `_DOSE_RE` cannot see either endpoint: its lookbehind excludes a digit-or-hyphen
+#: before the number, and its lookahead excludes a hyphen after the unit, so a range
+#: indexes as NOTHING. Both halves of that are wrong in opposite directions — the note
+#: "Benadryl 25-50 mg p.o. q.i.d." put no dose in the source vocabulary at all, so an
+#: answer that wrote "50 mg" was judged invented and rewritten to "Benadryl 25 to
+#: orally" (`dev_d1_slash_01`, 2026-11-22) — and an answer that wrote the range was
+#: never checked.
+_DOSE_RANGE = re.compile(
+    r"(?<![\d.\-/])"
+    r"(\d+(?:,\d{3})*(?:\.\d+)?)\s*(?:-|\u2013|\u2014|to)\s*"
+    r"(\d+(?:,\d{3})*(?:\.\d+)?)\s*"
+    r"(mg|mcg|g|mEq|units?|mL|cc|%)"
+    r"(?!\s*/\s*(?:dL|L|min|uL|\u00b5L|mm3|10\^?3)\b)",
+    re.IGNORECASE,
+)
+
+#: A slash-separated COMBINATION strength sharing one trailing unit: "5/325 mg" is
+#: 5 mg of one active ingredient and 325 mg of the other, and an answer may name either.
+#:
+#: A denominator is excluded here and not above because the two shapes collide: "40 mg/kg"
+#: is weight-based dosing over a weight, "5/325 mg" is two strengths of one tablet, and
+#: only the second is a dose a summary can state.
+_DOSE_COMBO = re.compile(
+    r"(?<![\d.\-/])"
+    r"(\d+(?:,\d{3})*(?:\.\d+)?)\s*/\s*"
+    r"(\d+(?:,\d{3})*(?:\.\d+)?)\s*"
+    r"(mg|mcg|g|mEq|units?|mL|cc|%)",
+    re.IGNORECASE,
+)
+
+
+def _source_doses(text: str) -> set[str]:
+    """Every dose this EVIDENCE can state, in the forms an answer may write it.
+
+    The source index and the answer index have to read the same grammar or the guard
+    deletes correct prose. A discharge sig writes all three shapes — a standalone dose, a
+    range, and a combination tablet — and `_DOSE_RE` sees only the first, so the other two
+    were indexed as nothing and any answer naming one of their values was judged invented.
+
+    Widening here narrows what the guard can DELETE, which is the correct direction: a
+    dose the note states in a shape this module used to miss is a dose the note states.
+    The residual is a fabricated dose that happens to equal a range endpoint in the note,
+    which is accepted deliberately — the guard's job is to remove what nothing supports,
+    not to require the prose to quote the record's punctuation.
+    """
+    doses = _norm_doses(text)
+    for pattern in (_DOSE_RANGE, _DOSE_COMBO):
+        for match in pattern.finditer(text):
+            unit = match.group(3)
+            doses.add(_dose_key(match.group(1), unit))
+            doses.add(_dose_key(match.group(2), unit))
+    return doses
 
 # Normalize an answer/source frequency phrase to a canonical token.
 #
@@ -108,7 +192,10 @@ _FREQ_PATTERNS = [
                 r"|\bonce\s*(?:a\s*day|daily)\b|\bevery\s*day\b|\bDAILY\b|\bQD\b|\bQAM\b", re.I), "DAILY"),
     (re.compile(r"\bat\s*bedtime\b|\bHS\b|\bQHS\b", re.I), "HS"),
     (re.compile(r"\bQ([1-9][0-9]?)H\b", re.I), lambda m: f"Q{m.group(1)}H"),
-    (re.compile(r"\bPRN\b|\bas\s*needed\b", re.I), "PRN"),
+    # `as-needed` as well as `as needed`: the hyphen is this cohort's summary spelling and
+    # the spaced form was the only one the canonicaliser knew, so a schedule the note and
+    # the answer wrote the same way was read as no schedule at all (2026-11-22).
+    (re.compile(r"\bPRN\b|\bas[\s\-]*needed\b", re.I), "PRN"),
     (re.compile(r"\b2X\s*/\s*WEEK\b|\b2\s*x\s*a\s*week\b|\btwice\s*a\s*week\b", re.I), "2X/WEEK"),
 ]
 
@@ -292,43 +379,54 @@ def redact_invented_age(answer: str, passages: list[dict],
 
 
 def verify_med_tokens(answer: str, evidence_text: str) -> tuple[str, list[str]]:
-    """Drop dose/freq tokens asserted in the answer that appear NOWHERE in the
-    retrieved evidence. Verifying against the full evidence (not just the
-    discharge-meds section) keeps this precise: a dose in Meds-on-Admission or
-    the HPI is still supported, so it is not dropped; only a dose/freq invented
-    from nothing is. Conservative: exact normalized tokens, and the answer is
-    only rewritten when something was actually dropped."""
+    """Drop the SENTENCES whose dose the evidence does not state.
+
+    Verifying against the full evidence (not just the discharge-meds section) keeps this
+    precise: a dose in Meds-on-Admission or the HPI is still supported, so it is not
+    dropped; only a dose invented from nothing is. Conservative: exact normalized tokens,
+    and the answer is only rewritten when a sentence was actually dropped.
+
+    The unit of removal is the sentence, and it used to be the token. Slicing "50 mg" out
+    of "Benadryl 25 to 50 mg orally" by character offset published **"Benadryl 25 to
+    orally"** — a sentence that reads as a different instruction, that nothing marks as
+    having been edited, and whose surviving words ("25 to") are themselves a fragment of
+    the dose that was removed (`dev_d1_slash_01`, 2026-11-22). A redaction a clinician
+    cannot see is worse than the sentence being absent: `verify_lab_values` already drops
+    the whole sentence for exactly this reason, and "creatinine rose from 0.55 to" with
+    the second value taken out reads as if the rise ended nowhere.
+
+    A section label is not a sentence. The label that opened a paragraph whose opening
+    sentence is dropped re-attaches to the first sentence under it that survives, and
+    goes with the section only when nothing survives — the rule `verify_dispositions`
+    states, applied through the one implementation of it (`_drop_sentences`).
+    """
     flags: list[str] = []
     if not evidence_text:
         return answer, flags  # no evidence -> can't verify, don't act
 
-    source_norm = _norm_doses(evidence_text)
+    source_norm = _source_doses(evidence_text)
     source_freqs = _source_freqs(evidence_text)
     answer_freqs = _answer_freqs(answer)
 
-    spans: list[tuple[int, int]] = []
-    for m in _DOSE_RE.finditer(answer):
-        if _norm_dose(m) not in source_norm:
-            flags.append(f"med_dose_mismatch:{m.group(0)}")
-            spans.append((m.start(), m.end()))
     # Frequencies are flagged, not auto-edited: a wrong frequency is lower-risk
     # than a wrong dose, and auto-editing risks false positives (e.g. "as
     # needed"). The prompt hardening tells the agent to reproduce frequencies
     # exactly; the flag is surfaced for review.
     for freq in sorted(answer_freqs - source_freqs):
         flags.append(f"med_freq_mismatch:{freq}")
-    if not spans:
+
+    def unsupported(sentence: str) -> list[str]:
+        return [f"med_dose_mismatch:{m.group(0)}"
+                for m in _DOSE_RE.finditer(sentence)
+                if _norm_dose(m) not in source_norm]
+
+    cleaned, dropped = _drop_sentences(answer, unsupported)
+    if not dropped:
         return answer, flags
-    # Remove by match span, never `str.replace`: a plain substring replace
-    # ignores the regex lookarounds, so dropping an unsupported "5 mg" also
-    # destroyed a supported "2.5 mg" (-> "2.") — the guardrail corrupting a
-    # correct dose (ECC-11).
-    cleaned = _remove_spans(answer, spans)
-    # Collapse only intra-line space runs — never across newlines. The earlier
-    # `re.sub(r"\s{2,}", ...)` also collapsed `\n\n` paragraph breaks and
-    # markdown structure, which modified a passing summarize answer after a
-    # dose drop (regression observed on 24592634/summarize).
-    return re.sub(r"[ \t]{2,}", " ", cleaned).strip(), flags
+    # An emptied answer is not this pass's to fill: `guard_answer` already turns "every
+    # claim was unsupported" into the abstention the turn should serve, and it does it
+    # after every guard has run, so returning the empty string here is the route to it.
+    return cleaned, flags + dropped
 
 
 def _literature_text(tool_calls: list[dict]) -> str:
@@ -875,7 +973,10 @@ def _make_entry(lines: list[str]) -> dict | None:
         return None
     return {
         "name": name,
-        "doses": _norm_doses(text),
+        # `_source_doses`, not `_norm_doses`: an entry that states its strength as a range
+        # or a combination tablet has doses, and an entry indexed as dose-less could not
+        # disambiguate the same drug at two strengths.
+        "doses": _source_doses(text),
         "freqs": _canon_freqs(text),
     }
 
@@ -930,6 +1031,224 @@ def _remove_spans(text: str, spans: list[tuple[int, int]]) -> str:
     return "".join(out)
 
 
+# --- Sentence-level redaction -------------------------------------------------------
+#
+# The unit a guard decides about is a SENTENCE, and the unit a briefing is made of is a
+# PARAGRAPH whose first sentence is a bold label. Rebuilding the answer out of the
+# sentences that survived is what preserves the document; the passes that did it ad hoc
+# each had to rediscover the two rules, so the rules live here once.
+#
+# `_PARAGRAPH_SPLIT`, `_SENTENCE_SPLIT` and `_SECTION_HEADING` are declared with the
+# disposition and laboratory checks below, and are used here rather than restated: a
+# second sentence splitter would break the first time one of them learned a clinical
+# abbreviation the other had not (`verify_lab_values` names the same hazard).
+
+
+def _drop_sentences(
+    answer: str,
+    decide: Callable[[str], list[str]],
+) -> tuple[str, list[str]]:
+    """Rebuild `answer` without the sentences `decide` rejects, keeping its headings.
+
+    `decide` is handed a sentence's BODY — a leading `**Label.**` is separated first,
+    because a label names a section and is not a claim — and returns the flags that
+    condemn it, or an empty list to keep it. A condemned sentence that opened its section
+    takes the label with it, and the label then opens the first sentence under it that
+    survives; it is dropped only when nothing survives under it at all. That is the rule
+    `verify_dispositions` states and the reason `/ehr` is never served three headings out
+    of four.
+
+    Two properties the caller depends on. An answer with nothing condemned is returned
+    BYTE-FOR-BYTE, so a turn this pass has no opinion about is never rewritten. And an
+    answer whose every sentence is condemned comes back empty, which is the signal
+    `guard_answer` turns into the abstention the turn should serve.
+    """
+    flags: list[str] = []
+    paragraphs: list[str] = []
+    for paragraph in _PARAGRAPH_SPLIT.split(answer or ""):
+        kept: list[str] = []
+        heading = ""
+        for sentence in _SENTENCE_SPLIT.split(paragraph):
+            if not sentence.strip():
+                continue
+            label = _SECTION_HEADING.match(sentence)
+            head = label.group(0).strip() if label else ""
+            body = sentence[label.end():] if label else sentence
+            condemned = decide(body or sentence)
+            if condemned:
+                flags += condemned
+                if head:
+                    # The section lost its opening sentence. Its label waits for the
+                    # next one rather than going with it.
+                    heading = head
+                continue
+            if heading:
+                kept.append(f"{heading} {sentence}".strip())
+                heading = ""
+            else:
+                kept.append(sentence)
+        if not kept:
+            # A paragraph whose every sentence was condemned has no label worth keeping.
+            if heading:
+                flags.append("section_without_sentences")
+            continue
+        paragraphs.append(" ".join(kept))
+    if not flags:
+        return answer, []
+    return "\n\n".join(paragraphs).strip(), flags
+
+
+#: The `/ehr` label that opens the paragraph stating a discharge regimen. `discharge_section`
+#: owns the paragraph's content; this module only needs to know where it starts and ends.
+_DISCHARGE_PLAN_LABEL = "**Discharge plan & medications.**"
+
+#: Any bold run ending in the label's period, wherever it sits. Used to find where the
+#: discharge paragraph ENDS — the next section's heading — and not to decide whether a
+#: label is well formed (`_SECTION_HEADING` does that, and only at a sentence's start).
+_ANY_SECTION_LABEL = re.compile(r"\*\*[^*\n]+?\.\*\*")
+
+
+def _med_region(answer: str) -> tuple[int, str]:
+    """`(offset, text)` of the part of an answer that states a discharge regimen.
+
+    Two answer shapes, one window. `/ehr` opens its paragraph with the bold label
+    `**Discharge plan & medications.**` and closes it at the next section's heading; a
+    `/meds` or free-text answer names the section the way a note does ("Discharge
+    Medications") and runs until a different section begins.
+
+    Without the label branch the window was the whole briefing, so a frequency stated in
+    the hospital course was checked against the discharge regimen and the two disagreed
+    about a sentence that was never a prescription (`dev_d3_fup_01`, 2026-11-22).
+    """
+    label_at = answer.find(_DISCHARGE_PLAN_LABEL)
+    if label_at >= 0:
+        base = label_at + len(_DISCHARGE_PLAN_LABEL)
+        following = _ANY_SECTION_LABEL.search(answer, base)
+        return base, answer[base:following.start() if following else len(answer)]
+    idx = answer.lower().find("discharge medication")
+    base = idx if idx != -1 else 0
+    region = answer[base:]
+    for hdr in ("discharge instructions", "brief hospital course",
+                "discharge diagnosis", "discharge disposition"):
+        j = region.lower().find(hdr)
+        if j > 0:
+            region = region[:j]
+            break
+    return base, region
+
+
+#: A joiner between two medication names, and nothing else: `as-needed Ativan and
+#: trazodone`. The emptiness of the gap is what makes this precise — a sentence naming two
+#: drugs in separate clauses states two claims, and only a conjoined noun phrase carries
+#: one schedule across both.
+_MED_JOINER = re.compile(
+    r"^\s*(?:(?:,|/|&|\+|and|plus|with|as\s+well\s+as)\s*)+$", re.IGNORECASE)
+
+
+def _conjoined_med_groups(
+    sentence: str, entries: list[dict],
+) -> list[tuple[int, int, list[dict]]]:
+    """Runs of discharge medications this sentence names with only a joiner between them.
+
+    `(start, end, members)` per run, positions relative to the sentence. A run of two or
+    more is one noun phrase, and a schedule stated beside it is a schedule for every drug
+    in the phrase — which is the claim `_drop_conjoined_schedule_claims` checks.
+    """
+    low = sentence.lower()
+    seen: set[str] = set()
+    hits: list[tuple[int, dict]] = []
+    for entry in entries:
+        name = str(entry.get("name") or "")
+        if len(name) < 4 or name in seen:
+            continue
+        at = low.find(name)
+        if at < 0:
+            continue
+        seen.add(name)
+        hits.append((at, entry))
+    hits.sort(key=lambda pair: pair[0])
+    groups: list[tuple[int, int, list[dict]]] = []
+    start = end = 0
+    members: list[dict] = []
+    for at, entry in hits:
+        if not members:
+            start, end, members = at, at + len(entry["name"]), [entry]
+            continue
+        if _MED_JOINER.match(low[end:at]):
+            members.append(entry)
+            end = at + len(entry["name"])
+            continue
+        if len(members) > 1:
+            groups.append((start, end, members))
+        start, end, members = at, at + len(entry["name"]), [entry]
+    if len(members) > 1:
+        groups.append((start, end, members))
+    return groups
+
+
+def _shared_schedule(sentence: str, start: int, end: int) -> set[str]:
+    """The schedule a conjoined pair carries: what is stated BESIDE it, not the whole
+    sentence's.
+
+    The window is the clause up to the pair and the qualifier after it, stopping at a
+    comma or a semicolon. A sentence that goes on to give a third drug its own schedule —
+    "as needed for anxiety, and metoprolol twice daily" — must not have that schedule read
+    back onto the pair.
+    """
+    clause_start = sentence.rfind(";", 0, start) + 1
+    tail = sentence[end:]
+    stop = min((i for i in (tail.find(","), tail.find(";")) if i >= 0), default=-1)
+    return _canon_freqs(f"{sentence[clause_start:start]} "
+                        f"{tail if stop < 0 else tail[:stop]}")
+
+
+def _drop_conjoined_schedule_claims(
+    answer: str, entries: list[dict],
+) -> tuple[str, list[str]]:
+    """Drop a sentence that gives two conjoined drugs ONE schedule the record gives
+    neither.
+
+    The failure this closes is a sentence a reader cannot check: "… short-term as-needed
+    Ativan and trazodone." where the note schedules Ativan 0.25 mg twice daily and
+    trazodone at bedtime. The "as-needed" is true of neither, and a reader titrates a
+    benzodiazepine on it (`dev_d3_fup_01`, 2026-11-22).
+
+    The chunk pass below cannot see it. That pass checks a frequency against ONE entry for
+    ONE chunk, and its "exactly one dose in the chunk" gate skips a pair with no dose at
+    all — which is precisely how a summary writes a pair it is trying not to turn into a
+    prescription sheet. So the pair is checked here, against EVERY named drug's own entry,
+    and the sentence goes whole rather than having the qualifier cut out of it (a sentence
+    reading "as-needed  and trazodone" is the defect this pass exists to stop).
+
+    This pass reads the WHOLE answer rather than the discharge paragraph, unlike the chunk
+    pass below. A schedule stated across two drug names is a claim about those drugs
+    wherever the sentence sits, and the test that decides it is the drugs' own entries — so
+    scoping it to one section would stop it catching the same sentence written under
+    another heading, and would buy nothing: it fires only on an adjacent pair with a
+    schedule beside it that one of their entries contradicts.
+    """
+    def offending(sentence: str) -> list[str]:
+        flags: list[str] = []
+        for start, end, members in _conjoined_med_groups(sentence, entries):
+            shared = _shared_schedule(sentence, start, end)
+            if not shared:
+                continue
+            for entry in members:
+                stated = set(entry.get("freqs") or ())
+                if not stated:
+                    # An entry this pass could not parse states nothing it could
+                    # contradict; silence is not consent, so it is left alone.
+                    continue
+                for token in sorted(shared - stated):
+                    flags.append(
+                        f"med_freq_permed_mismatch:{entry['name']}:{token}")
+            if flags:
+                break
+        return flags
+
+    return _drop_sentences(answer, offending)
+
+
 def verify_med_freqs_per_med(answer: str, med_text: str) -> tuple[str, list[str]]:
     """Drop a freq that contradicts the SAME med's discharge entry (per-med,
     name+dose matched). Flags f"med_freq_permed_mismatch:{name}:{token}"."""
@@ -940,18 +1259,14 @@ def verify_med_freqs_per_med(answer: str, med_text: str) -> tuple[str, list[str]
     if not entries:
         return answer, flags
 
-    # Answer's Discharge Medications region (or the whole answer if none).
-    idx = answer.lower().find("discharge medication")
-    region = answer[idx:] if idx != -1 else answer
-    for hdr in ("discharge instructions", "brief hospital course",
-                "discharge diagnosis", "discharge disposition"):
-        j = region.lower().find(hdr)
-        if j > 0:
-            region = region[:j]
-            break
+    # A schedule carried across a conjunction is dropped at sentence granularity first,
+    # because the token edit below is right for the one drug it names and wrong for a pair.
+    answer, dropped = _drop_conjoined_schedule_claims(answer, entries)
+    flags += dropped
+
+    base, region = _med_region(answer)
 
     spans_to_remove: list[tuple[int, int]] = []
-    base = idx if idx != -1 else 0
     # Chunk on newlines, commas AND semicolons: the meds prompt lists meds one
     # per line ("docusate sodium 100 mg … PO BID.\nsenna …"), while summarize
     # embeds them as comma- or semicolon-separated prose. Splitting on commas

@@ -1618,6 +1618,9 @@ def _foreign_admission_turn(question: str, hadm_id: int, trace_id: str = "") -> 
         "wants_literature": False,
         "retrieval_demanded": False,
         "deterministic_answer": answer_text.foreign_admission_refusal(),
+        # No model call was made for this turn, which is what the cost column needs to
+        # know: a trace with no GENERATION on it is unpriceable, and this one is free.
+        "zero_llm": True,
         "langfuse_trace_id": trace_id,
     }
 

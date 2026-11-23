@@ -226,6 +226,13 @@ def _turn_signals(state: dict, guarded: dict, presentation: dict) -> dict:
         "comparator_outcome": state.get("comparator_outcome"),
         "meds_dropped_count": len(
             (state.get("command_payload") or {}).get("dropped") or []),
+        # Whether the answer was written without asking the model anything. Read from a
+        # key the zero-LLM branches stamp and NOT from `deterministic_answer`, because
+        # that key is also carried by the `/meds` narrative, by a withheld formatting
+        # reply and by the unanswerable-question fallback — three turns a model really
+        # ran on, and three turns the cost column must not be told were free.
+        "deterministic_turn": bool(
+            state.get("zero_llm") or state.get("answer_in_surface")),
     }
 
 
@@ -506,6 +513,7 @@ async def compose_success(
         guardrail_flags=signals["flags"],
         comparator_outcome=signals["comparator_outcome"],
         meds_dropped_count=signals["meds_dropped_count"],
+        deterministic_turn=signals["deterministic_turn"],
     )
     observability.stamp_trace_tags(
         observability.current_turn_span(), _signal_tags(signals))
@@ -785,7 +793,7 @@ async def unserved_admission(parsed: dict, trace: str) -> dict | None:
         payload = await compose_success(
             parsed.get("question") or "",
             {"deterministic_answer": ADMISSION_NOT_FOUND, "tool_calls": [],
-             "command": None},
+             "command": None, "zero_llm": True},
             trace,
         )
         # A refusal is a turn: it has a question and it has an answer, and the span

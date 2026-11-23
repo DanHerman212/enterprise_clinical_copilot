@@ -236,6 +236,7 @@ def record_turn_signals(
     guardrail_flags: Sequence[str] = (),
     comparator_outcome: str | None = None,
     meds_dropped_count: int = 0,
+    deterministic_turn: bool = False,
     span=None,
 ) -> None:
     """Record what the SAFETY nets and the extraction did, on the root span's metadata.
@@ -256,6 +257,15 @@ def record_turn_signals(
     are withheld from the grid rather than shown, which is right, and until now nothing
     said how many were withheld.
 
+    `deterministic_turn` says the turn answered with NO model call at all — the
+    outpatient `/ehr` encounter notice, the foreign-admission refusal, the unserved-
+    admission refusal. It is the fact a reader of the cost column needs: a trace with no
+    GENERATION on it is normally an unpriceable turn, and on these it is a turn that cost
+    nothing. Defaulted to False rather than derived here, because "this turn has a
+    `deterministic_answer`" is NOT the same question — a `/meds` narrative, a withheld
+    formatting reply and an unanswerable-question fallback all carry one over a model
+    call that really ran.
+
     Best-effort like everything here (rule 1). Never raises.
     """
     span = span or current_turn_span()
@@ -266,6 +276,7 @@ def record_turn_signals(
             "guardrail_flags": sorted(str(flag) for flag in guardrail_flags),
             "comparator_outcome": comparator_outcome,
             "meds_dropped_count": int(meds_dropped_count or 0),
+            "deterministic_turn": bool(deterministic_turn),
         })
     except Exception:  # noqa: BLE001 — rule 1
         logger.warning("could not record the turn's safety signals", exc_info=True)

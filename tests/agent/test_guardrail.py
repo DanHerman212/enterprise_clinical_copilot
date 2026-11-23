@@ -35,10 +35,13 @@ def test_supported_risk_numbers_pass_untouched():
 
 
 def test_fabricated_probability_is_stripped_and_flagged():
-    answer = "The readmission risk is 0.14, above the 0.12 threshold."
+    answer = ("The readmission risk is 0.14 for this patient. "
+              "The operating threshold is 0.12.")
     cleaned, flags = g.verify_risk_numbers(answer, _PREDICT_CALL)
     assert "0.14" not in cleaned
-    assert "0.12" in cleaned  # the real threshold survives
+    # The unit is the SENTENCE: the claim goes whole rather than being served with a hole
+    # where its number was, and the sentence beside it is untouched.
+    assert cleaned == "The operating threshold is 0.12."
     assert "risk_number_unsupported:0.14" in flags
 
 
@@ -104,16 +107,19 @@ def test_a_rate_the_literature_does_not_state_is_still_stripped():
 
     A comparator turn is where an invented percentage is most tempting and least
     visible: the sentence around it is about published cohorts, so a number nobody
-    published reads as one with a source.
+    published reads as one with a source. The sentence carrying it goes whole, and the
+    sentence stating the patient's own served figure survives — which is the pair of
+    facts a reader needs, without the invention between them.
     """
-    answer = "Her 13.1% sits below the 9.4% pooled across 24 reports ^[1]."
+    answer = ("Her own estimate is 13.1%. Her 13.1% sits below the 9.4% pooled across "
+              "24 reports ^[1].")
 
     cleaned, flags = g.verify_risk_numbers(
         answer, _PREDICT_CALL + _LITERATURE_CALL, evidence_text="",
         literature_text=g._literature_text(_LITERATURE_CALL))
 
     assert "9.4%" not in cleaned
-    assert "13.1%" in cleaned
+    assert cleaned == "Her own estimate is 13.1%."
     assert "risk_number_unsupported:9.4%" in flags
 
 
@@ -428,22 +434,25 @@ _REPLAYED_PREDICTION = [{
 def test_a_replayed_prediction_supports_the_numbers_it_published():
     """The live defect (2026-09-18), reduced.
 
-    A follow-up that repeats the stored score made no tool call of its own, so
-    the risk guard saw no prediction and struck both numbers out of a correct
-    answer: "the risk for this patient is, which is above the operating
-    threshold." The replayed turn's prediction is the evidence for it.
+    A follow-up that repeats the stored score made no tool call of its own, so the risk
+    guard saw no prediction and struck both numbers out of a correct answer. The replayed
+    turn's prediction is the evidence for it.
+
+    With the sentence as the unit of removal, the un-evidenced turn now loses the whole
+    sentence rather than being served with two holes in it, and `guard_answer` turns the
+    emptied answer into the abstention. That is the sharper version of the same protection:
+    the old shape left "the risk for this patient is, which is above the operating
+    threshold" in front of a clinician, which still asserts a threshold and no longer says
+    what it applies to.
     """
     answer = ("The 30-day unplanned readmission risk for this patient is 0.206685, "
               "which is above the 0.11 operating threshold.")
 
     alone = g.guard_answer(answer, [])
-    # The doubled space is the removal's own artifact, kept as the guard really
-    # produces it: the browser collapses it, so the page rendered the sentence as
-    # "the risk for this patient is, which is above the operating threshold."
-    assert alone["answer"] == ("The 30-day unplanned readmission risk for this "
-                               "patient is, which is above the  operating threshold.")
-    assert alone["flags"] == ["risk_number_unsupported:0.11",
-                              "risk_number_unsupported:0.206685"]
+    assert alone["answer"] == answer_text.GUARDED_ABSTENTION
+    assert alone["flags"] == ["abstained_after_guard",
+                               "risk_number_unsupported:0.11",
+                               "risk_number_unsupported:0.206685"]
 
     replayed = g.guard_answer(answer, [], _REPLAYED_PREDICTION)
     assert replayed["answer"] == answer
@@ -455,7 +464,8 @@ def test_a_replayed_turn_does_not_license_a_different_number():
     out = g.guard_answer("The risk is 0.14.", [], _REPLAYED_PREDICTION)
 
     assert "0.14" not in out["answer"]
-    assert out["flags"] == ["risk_number_unsupported:0.14"]
+    # The only sentence was the invented one, so the turn abstains and says so.
+    assert out["flags"] == ["abstained_after_guard", "risk_number_unsupported:0.14"]
 
 
 def test_a_note_value_quoted_from_a_replayed_passage_is_supported():
@@ -777,9 +787,10 @@ def test_permed_drops_once_daily_contradicting_bid():
               "tablet daily ^[3].")
     cleaned, flags = g.verify_med_freqs_per_med(answer, METOPROLOL_SECTION)
     assert "once daily" not in cleaned
-    assert "metoprolol tartrate" in cleaned
+    # The SENTENCE is the unit: the contradicted schedule goes with the words that stated
+    # it, rather than being lifted out of a clause that still reads as an instruction.
+    assert cleaned == "Discharge Medications."
     assert any("metoprolol tartrate:DAILY" in f for f in flags)
-    assert "sertraline" in cleaned  # other med untouched
 
 
 def test_permed_drops_twice_daily_contradicting_qam():
@@ -788,9 +799,10 @@ def test_permed_drops_twice_daily_contradicting_qam():
               "daily, and Citalopram 20 mg three tablets at bedtime ^[3].")
     cleaned, flags = g.verify_med_freqs_per_med(answer, BUPROPION_SECTION)
     assert "twice daily" not in cleaned
-    assert "Bupropion 150 mg sustained release" in cleaned
+    # One sentence, one contradicted schedule, one removal — the correct aspirin clause
+    # goes with it, because the sentence is the smallest unit this pass can judge.
+    assert cleaned == "Discharge Medications."
     assert any("bupropion:BID" in f for f in flags)
-    assert "Aspirin 325 mg daily" in cleaned  # correct med untouched
 
 
 def test_permed_leaves_correct_freq_alone():
@@ -991,7 +1003,14 @@ def test_an_answer_that_is_only_an_invented_disposition_abstains():
 
 
 def test_an_invented_lab_trajectory_is_removed():
-    """fab-01: eGFR and creatinine endpoints the tool output never contained."""
+    """fab-01: eGFR and creatinine endpoints the tool output never contained.
+
+    Which pass names it changed when removal moved to the sentence. `0.55` is shaped like
+    a risk decimal and no channel carries it, so the risk guard reads it first and takes
+    the sentence with it — the laboratory guard never sees the text. The protection is the
+    same and the flag still names the invented value; the sentence, and not just the
+    number, is what the reader no longer gets.
+    """
     note = _note("Renal function was monitored; the note does not report the "
                  "laboratory results.")
     answer = ("Her eGFR declined from 117 to 94 mL/min/1.73m2 and creatinine rose "
@@ -1000,7 +1019,8 @@ def test_an_invented_lab_trajectory_is_removed():
     out = g.guard_answer(answer, note)
 
     assert "94" not in out["answer"], out
-    assert any(f.startswith("lab_value_unsupported") for f in out["flags"]), out["flags"]
+    assert "117" not in out["answer"], out
+    assert "risk_number_unsupported:0.55" in out["flags"], out["flags"]
 
 
 def test_a_lab_value_carried_by_a_tool_payload_is_grounded():
@@ -1086,3 +1106,137 @@ def test_a_marker_past_the_last_analyte_is_still_stripped():
 
     assert "^[10]" not in out["answer"], out
     assert out["flags"] == ["citation_out_of_range:^10"], out["flags"]
+
+
+# --- the sentence is the unit of redaction (Gate C2b, 2026-11-22) ---------------------
+#
+# Every pass that removes prose now removes a SENTENCE. Cutting the offending token out
+# by character offset leaves the rest of the claim standing — "(contribution -)", "the
+# risk for this patient is, which is above the operating threshold" — and in one case
+# removed nothing at all, because the canonical token (`QID`, from `q.i.d.`) is not the
+# spelling in the prose and no span could be found for it.
+
+
+_RISK_HEADING = "**Readmission risk & trajectory.**"
+
+#: Lorazepam twice daily and trazodone at bedtime — the two entries the dotted, mapped
+#: and as-needed cases below contradict.
+_DOTTED_SECTION = (
+    "Discharge Medications:\n"
+    "1. lorazepam 0.5 mg Tablet Sig: One (1) Tablet PO BID.\n"
+    "2. trazodone 50 mg Tablet Sig: One (1) Tablet PO QHS.\n"
+)
+
+#: Metoprolol once daily, so an answer's `q12h` (which folds to BID) contradicts it.
+_DAILY_SECTION = (
+    "Discharge Medications:\n"
+    "1. metoprolol tartrate 25 mg Tablet Sig: One (1) Tablet PO DAILY.\n"
+)
+
+
+def test_the_risk_guard_drops_the_sentence_and_keeps_the_heading():
+    """A briefing is a document: losing a claim must not cost it its structure."""
+    answer = (f"{_RISK_HEADING} The estimated readmission risk is 0.14 for this patient. "
+              "The operating threshold is 0.12.")
+
+    cleaned, flags = g.verify_risk_numbers(answer, _PREDICT_CALL)
+
+    assert cleaned == f"{_RISK_HEADING} The operating threshold is 0.12."
+    assert flags == ["risk_number_unsupported:0.14"]
+
+
+def test_the_risk_guard_returns_nothing_when_every_sentence_is_condemned():
+    """The empty string is the signal `guard_answer` turns into the abstention."""
+    cleaned, flags = g.verify_risk_numbers("The risk is 0.14. It is 0.15 at most.",
+                                           _PREDICT_CALL)
+
+    assert cleaned == ""
+    assert "risk_number_unsupported:0.14" in flags
+    assert "risk_number_unsupported:0.15" in flags
+
+
+def test_the_risk_guard_leaves_a_supported_sentence_byte_for_byte():
+    answer = (f"{_RISK_HEADING} The estimated readmission risk is 13.1% "
+              "(0.131398), above the 0.12 threshold.")
+
+    cleaned, flags = g.verify_risk_numbers(answer, _PREDICT_CALL)
+
+    assert cleaned == answer
+    assert flags == []
+
+
+def test_a_schedule_before_a_comma_does_not_bleed_onto_a_later_pair():
+    """"oxycodone SR every 12 hours, and Celebrex and Protonix".
+
+    The qualifier belongs to the drug on its own side of the comma. Reading it onto the
+    conjoined pair would delete a sentence about two drugs that carry no schedule at all.
+    """
+    sentence = ("Patient continues oxycodone SR every 12 hours, and Celebrex and "
+                "Protonix")
+    entries = [{"name": "oxycodone sr", "doses": {"5mg"}, "freqs": {"BID"}},
+               {"name": "celebrex", "doses": {"200mg"}, "freqs": set()},
+               {"name": "protonix", "doses": {"40mg"}, "freqs": set()}]
+
+    groups = g._conjoined_med_groups(sentence, entries)
+
+    assert len(groups) == 1, groups
+    start, end, members = groups[0]
+    assert [entry["name"] for entry in members] == ["celebrex", "protonix"]
+    assert g._shared_schedule(sentence, start, end) == set()
+
+
+def test_a_dotted_schedule_that_contradicts_the_entry_is_removed_as_a_sentence():
+    """`q.i.d.` canonicalises to `QID`, which is not a token the prose contains.
+
+    The span-based pass could find no span for it, so it flagged the mismatch and served
+    the wrong schedule unchanged. The sentence goes now, and no fragment of it survives.
+    """
+    answer = (f"{g._DISCHARGE_PLAN_LABEL} She takes lorazepam 0.5 mg p.o. q.i.d. for "
+              "anxiety. She takes trazodone 50 mg at bedtime.")
+
+    cleaned, flags = g.verify_med_freqs_per_med(answer, _DOTTED_SECTION)
+
+    assert "q.i.d." not in cleaned
+    assert cleaned == (f"{g._DISCHARGE_PLAN_LABEL} She takes trazodone 50 mg at "
+                       "bedtime.")
+    assert "med_freq_permed_mismatch:lorazepam:QID" in flags
+
+
+def test_a_mapped_schedule_that_contradicts_the_entry_is_removed_as_a_sentence():
+    """`q12h` folds to `BID` through `_FREQUENCY_EQUIVALENTS`, and the entry says DAILY.
+
+    The old pass looked for the token `BID` in the raw text, found nothing, and served the
+    wrong schedule untouched. The sentence goes now, and the sentence after it survives.
+    """
+    answer = (f"{g._DISCHARGE_PLAN_LABEL} She takes metoprolol tartrate 25 mg q12h for "
+              "her blood pressure. She was discharged to home.")
+
+    cleaned, flags = g.verify_med_freqs_per_med(answer, _DAILY_SECTION)
+
+    assert "q12h" not in cleaned
+    assert cleaned == (f"{g._DISCHARGE_PLAN_LABEL} She was discharged to home.")
+    assert "med_freq_permed_mismatch:metoprolol tartrate:BID" in flags
+
+
+def test_an_as_needed_basis_contradicting_the_entry_is_removed_as_a_sentence():
+    """"on an as-needed basis" is PRN, and the entry schedules the drug twice daily."""
+    answer = (f"{g._DISCHARGE_PLAN_LABEL} She takes lorazepam 0.5 mg on an as-needed "
+              "basis for anxiety. She was discharged to home.")
+
+    cleaned, flags = g.verify_med_freqs_per_med(answer, _DOTTED_SECTION)
+
+    assert "as-needed" not in cleaned
+    assert cleaned == f"{g._DISCHARGE_PLAN_LABEL} She was discharged to home."
+    assert "med_freq_permed_mismatch:lorazepam:PRN" in flags
+
+
+def test_the_frequency_pass_leaves_text_outside_the_discharge_window_alone():
+    """A schedule stated in the hospital course is not a discharge prescription."""
+    answer = ("**Hospital course & procedures.** She was given metoprolol tartrate "
+              "25 mg q12h on the ward.\n\n"
+              f"{g._DISCHARGE_PLAN_LABEL} She was discharged to home.")
+
+    cleaned, flags = g.verify_med_freqs_per_med(answer, _DAILY_SECTION)
+
+    assert cleaned == answer
+    assert flags == []

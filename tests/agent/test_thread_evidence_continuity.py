@@ -640,11 +640,19 @@ def test_a_follow_up_without_a_literature_word_may_still_cite_the_thread():
 
     Gated on wording, a follow-up that quoted the thread had an empty PMID allowance and
     `enforce_citations` deleted a correct citation.
+
+    The record arrives the way a follow-up really receives it — replayed in the
+    conversation — because the rate in the sentence has to be findable in a corpus the
+    risk guard reads. With the sentence as the unit of removal, a fixture that put the
+    article only in `thread_literature` (a channel the citation layer reads and the risk
+    guard does not) would lose both the sentence and the badge the test is about.
     """
     answer = "That cohort reported 2.5% ^[PMID: 24108298]."
+    replayed = [{"name": "search_literature", "args": {"query": "readmission"},
+                 "response": {"returned": 1, "articles": [ARTICLE]}}]
 
     guarded = guard_answer(
-        answer, [], [], literature_replay=True,
+        answer, [], replayed, literature_replay=True,
         finish_reason=None,
         state={"thread_literature": [ARTICLE]},
     )

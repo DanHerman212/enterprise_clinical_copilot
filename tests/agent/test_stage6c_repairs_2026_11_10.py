@@ -303,15 +303,20 @@ def test_the_magnitude_of_a_negative_contribution_survives():
 
 
 def test_a_fabricated_negative_decimal_leaves_no_stranded_sign():
-    """`(contribution -)` was the served artefact: the number went and the sign stayed."""
+    """`(contribution -)` was the served artefact: the number went and the sign stayed.
+
+    Removing the sentence is the repair that cannot leave a stranded sign at all, and it
+    is the rule this pass now follows: the sentence stating the invented figure goes whole,
+    and the sentence beside it is untouched.
+    """
     answer = ("These factors pushed the estimate down (contribution -0.9999) and that "
-              "is the whole story.")
+              "is the whole story. Her estimate is below the threshold.")
 
     cleaned, flags = guard.verify_risk_numbers(answer, PREDICT)
 
     assert "-0.9999" not in cleaned
     assert "-)" not in cleaned, "the sign was left behind by the removed number"
-    assert "(contribution)" in cleaned
+    assert cleaned == "Her estimate is below the threshold."
     assert any(flag.startswith("risk_number_unsupported:") for flag in flags)
 
 

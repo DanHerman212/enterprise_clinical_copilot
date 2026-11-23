@@ -35,6 +35,7 @@ from typing import Callable
 
 from services.agent.postprocess import answer as answer_text
 from services.agent.postprocess import citations
+from services.agent.postprocess import discharge_section
 from services.agent.routing import admission_context
 from services.agent.routing import routing
 
@@ -797,8 +798,15 @@ def verify_risk_numbers(
     decimal is exact in binary, and the number would be stripped from the prose
     describing it. The slack is 1e-12 against representation error of order 1e-17,
     and it is far below any difference that could hide a fabricated value.
+
+    The SENTENCE is the unit of removal. This pass used to cut the number out and leave
+    the rest of the claim standing, which published "the risk for this patient is, which
+    is above the operating threshold" — a sentence that still makes an assertion and no
+    longer says what the assertion is about. A sentence holding an unsupported figure goes
+    whole through `_drop_sentences`, which keeps the briefing's headings, and a turn whose
+    every sentence is condemned comes back empty so `guard_answer` can serve the
+    abstention.
     """
-    flags: list[str] = []
     values = _predict_values(tool_calls)
     # The patient's own drivers' values, in their OWN units, and the model's attribution
     # weight beside them. A separate comparison for the reason `_factor_values` gives:
@@ -811,7 +819,6 @@ def verify_risk_numbers(
     # the other direction: a driver answer that named `+0.0824` lost it (2026-11-10).
     measurements = [*_factor_values(tool_calls), *_contributions(tool_calls)]
     contributions = _contributions(tool_calls)
-    spans: list[tuple[int, int]] = []
 
     def supported(x: float, tol: float) -> bool:
         return any(abs(x - v) <= tol + 1e-12 for v in values)
@@ -830,58 +837,64 @@ def verify_risk_numbers(
         """
         return any(abs(abs(x) - abs(v)) <= tol + 1e-12 for v in contributions)
 
-    for m in _RISK_DECIMAL.finditer(answer):
-        token = m.group(0)
-        if _UNIT_TAIL.match(answer, m.end()):
-            continue
-        if evidence_text and token in evidence_text:
-            continue
-        if literature_text and token in literature_text:
-            continue
-        if lab_text and token in lab_text:
-            continue
-        decimals = len(token.split(".")[1])
-        tolerance = 0.5 * 10 ** -decimals
-        value = float(token)
-        # Three readings, and the third is why the sign is in the pattern. `value` is the
-        # number as written — `-0.0768` matches the contribution it was served for;
-        # `measured` matches a factor value or a contribution exactly; `by_magnitude`
-        # matches a contribution of that SIZE whatever its direction, which is what
-        # "decreased by 0.0768" and "+0.0768" against a served `-0.0768` both are.
-        # `supported` is the score and the threshold, where a sign is not part of the
-        # claim.
-        if not (supported(value, tolerance)
-                or measured(value, tolerance)
-                or by_magnitude(value, tolerance)):
-            flags.append(f"risk_number_unsupported:{token}")
-            spans.append((m.start(), m.end()))
-    for m in _RISK_PERCENT.finditer(answer):
-        num = m.group(1)
-        # Quoted verbatim from the notes — a med concentration ("0.05% cream")
-        # or an O2 sat — is a note fact, not a risk claim. Quoted from a retrieved
-        # record, it is that record's published rate.
-        if evidence_text and (f"{num}%" in evidence_text or f"{num} %" in evidence_text):
-            continue
-        if literature_text and (f"{num}%" in literature_text or f"{num} %" in literature_text):
-            continue
-        # The RDW case: a percentage the turn retrieved from a trajectory, not a risk
-        # claim about the patient. Without this the numbers were stripped and the prose
-        # served as "the RDW rose from to" (see `_lab_text`).
-        if lab_text and (f"{num}%" in lab_text or f"{num} %" in lab_text):
-            continue
-        decimals = len(num.split(".")[1]) if "." in num else 0
-        tolerance = 0.5 * 10 ** -decimals
-        if not (supported(float(num) / 100.0, tolerance / 100.0)
-                or measured(float(num), tolerance)):
-            flags.append(f"risk_number_unsupported:{m.group(0)}")
-            spans.append((m.start(), m.end()))
-    if not spans:
-        return answer, flags
-    cleaned = _remove_spans(answer, spans)
-    # `)` and `]` join the tidy set. A removed span can strand a space in front of either,
-    # and `(contribution )` is the same artefact as `discharge ,`: the reader sees that
-    # something was taken out, which is the one thing this pass must not show.
-    return re.sub(r" +([,.;:)])", r"\1", cleaned).strip(), flags
+    def unsupported(sentence: str) -> list[str]:
+        """The risk-shaped tokens in this sentence that nothing in the turn supports.
+
+        The decision is made per SENTENCE and the sentence is what the caller removes.
+        Taking the token out instead published the rest of the claim with a hole in it —
+        "the risk for this patient is, which is above the operating threshold" — which is
+        the one thing this pass exists to stop being read. The whitelists below are the
+        same three channels, tested the same way; what changed is the unit of removal.
+        """
+        found: list[str] = []
+        for m in _RISK_DECIMAL.finditer(sentence):
+            token = m.group(0)
+            if _UNIT_TAIL.match(sentence, m.end()):
+                continue
+            if evidence_text and token in evidence_text:
+                continue
+            if literature_text and token in literature_text:
+                continue
+            if lab_text and token in lab_text:
+                continue
+            decimals = len(token.split(".")[1])
+            tolerance = 0.5 * 10 ** -decimals
+            value = float(token)
+            # Three readings, and the third is why the sign is in the pattern. `value` is
+            # the number as written — `-0.0768` matches the contribution it was served
+            # for; `measured` matches a factor value or a contribution exactly;
+            # `by_magnitude` matches a contribution of that SIZE whatever its direction,
+            # which is what "decreased by 0.0768" and "+0.0768" against a served `-0.0768`
+            # both are. `supported` is the score and the threshold, where a sign is not
+            # part of the claim.
+            if not (supported(value, tolerance)
+                    or measured(value, tolerance)
+                    or by_magnitude(value, tolerance)):
+                found.append(f"risk_number_unsupported:{token}")
+        for m in _RISK_PERCENT.finditer(sentence):
+            num = m.group(1)
+            # Quoted verbatim from the notes — a med concentration ("0.05% cream")
+            # or an O2 sat — is a note fact, not a risk claim. Quoted from a retrieved
+            # record, it is that record's published rate.
+            if evidence_text and (f"{num}%" in evidence_text
+                                  or f"{num} %" in evidence_text):
+                continue
+            if literature_text and (f"{num}%" in literature_text
+                                    or f"{num} %" in literature_text):
+                continue
+            # The RDW case: a percentage the turn retrieved from a trajectory, not a risk
+            # claim about the patient. Without this the numbers were stripped and the
+            # prose served as "the RDW rose from to" (see `_lab_text`).
+            if lab_text and (f"{num}%" in lab_text or f"{num} %" in lab_text):
+                continue
+            decimals = len(num.split(".")[1]) if "." in num else 0
+            tolerance = 0.5 * 10 ** -decimals
+            if not (supported(float(num) / 100.0, tolerance / 100.0)
+                    or measured(float(num), tolerance)):
+                found.append(f"risk_number_unsupported:{m.group(0)}")
+        return found
+
+    return _drop_sentences(answer, unsupported)
 
 
 # --- Invented calendar dates (ECC-35) ----------------------------------------
@@ -1015,22 +1028,6 @@ def _match_entry(chunk: str, doses: set[str], entries: list[dict]) -> dict | Non
     return next((e for e in name_matches if e["freqs"]), None)
 
 
-def _freq_token(m: re.Match, repl) -> str:
-    return repl(m) if callable(repl) else repl
-
-
-def _remove_spans(text: str, spans: list[tuple[int, int]]) -> str:
-    """Remove [start,end) slices (sorted, non-overlapping assumed)."""
-    out = []
-    prev = 0
-    for s, e in sorted(spans):
-        if s >= prev:
-            out.append(text[prev:s])
-            prev = e
-    out.append(text[prev:])
-    return "".join(out)
-
-
 # --- Sentence-level redaction -------------------------------------------------------
 #
 # The unit a guard decides about is a SENTENCE, and the unit a briefing is made of is a
@@ -1042,6 +1039,33 @@ def _remove_spans(text: str, spans: list[tuple[int, int]]) -> str:
 # disposition and laboratory checks below, and are used here rather than restated: a
 # second sentence splitter would break the first time one of them learned a clinical
 # abbreviation the other had not (`verify_lab_values` names the same hazard).
+#
+# One exception, and it is the splitter rather than the heading rule: sentence splitting
+# here goes through `discharge_section.split_sentences`, which knows that `p.o.`,
+# `q.i.d.`, `p.r.n.` and `Dr.` are abbreviations and not full stops. `_SENTENCE_SPLIT`
+# cuts at any full stop followed by a space, so a discharge sig written in the note's own
+# shorthand arrived here as "… lorazepam 0.5 mg p.o." plus "q.i.d. for anxiety" — two
+# half-sentences, neither of which is the claim that needs removing.
+
+
+def _sentence_units(paragraph: str) -> list[str]:
+    """A paragraph's sentences, with any bold section label kept whole.
+
+    The clinical splitter handles the abbreviations; it cannot handle a LABEL, because a
+    label's full stop is followed by `**` and the splitter reads `*` as the start of the
+    next sentence — `**Readmission risk & trajectory.**` came back as
+    `**Readmission risk & trajectory.` plus `** The threshold is 0.12.`, leaving the
+    closing bold run stranded on the sentence after it. So the labels are lifted out
+    first, each becomes a unit of its own, and the prose between them is split normally.
+    """
+    units: list[str] = []
+    cursor = 0
+    for match in _ANY_SECTION_LABEL.finditer(paragraph):
+        units.extend(discharge_section.split_sentences(paragraph[cursor:match.start()]))
+        units.append(match.group(0))
+        cursor = match.end()
+    units.extend(discharge_section.split_sentences(paragraph[cursor:]))
+    return [unit.strip() for unit in units if unit.strip()]
 
 
 def _drop_sentences(
@@ -1068,12 +1092,18 @@ def _drop_sentences(
     for paragraph in _PARAGRAPH_SPLIT.split(answer or ""):
         kept: list[str] = []
         heading = ""
-        for sentence in _SENTENCE_SPLIT.split(paragraph):
+        for sentence in _sentence_units(paragraph):
             if not sentence.strip():
                 continue
             label = _SECTION_HEADING.match(sentence)
             head = label.group(0).strip() if label else ""
             body = sentence[label.end():] if label else sentence
+            if head and not body.strip():
+                # A label standing on its own opens the section. It is never a claim, so
+                # it is never judged, and it does not reach `kept` until a sentence under
+                # it survives.
+                heading = head
+                continue
             condemned = decide(body or sentence)
             if condemned:
                 flags += condemned
@@ -1191,11 +1221,15 @@ def _shared_schedule(sentence: str, start: int, end: int) -> set[str]:
     sentence's.
 
     The window is the clause up to the pair and the qualifier after it, stopping at a
-    comma or a semicolon. A sentence that goes on to give a third drug its own schedule —
-    "as needed for anxiety, and metoprolol twice daily" — must not have that schedule read
-    back onto the pair.
+    comma or a semicolon — and the clause boundary on the LEFT stops at a comma for the
+    same reason it stops at a semicolon. A discharge list is comma-separated prose, so a
+    schedule written for an earlier drug sits one comma before the pair:
+    "oxycodone SR every 12 hours, and Celebrex and Protonix" states every-12-hours for
+    oxycodone, and reading it onto the Celebrex/Protonix pair would delete a sentence about
+    two drugs that carry no schedule at all (measured 2026-11-22).
     """
-    clause_start = sentence.rfind(";", 0, start) + 1
+    clause_start = max(sentence.rfind(";", 0, start),
+                       sentence.rfind(",", 0, start)) + 1
     tail = sentence[end:]
     stop = min((i for i in (tail.find(","), tail.find(";")) if i >= 0), default=-1)
     return _canon_freqs(f"{sentence[clause_start:start]} "
@@ -1250,8 +1284,16 @@ def _drop_conjoined_schedule_claims(
 
 
 def verify_med_freqs_per_med(answer: str, med_text: str) -> tuple[str, list[str]]:
-    """Drop a freq that contradicts the SAME med's discharge entry (per-med,
-    name+dose matched). Flags f"med_freq_permed_mismatch:{name}:{token}"."""
+    """Drop the SENTENCES whose frequency contradicts the same med's discharge entry.
+
+    Flags f"med_freq_permed_mismatch:{name}:{token}". The unit of removal is the sentence,
+    on the same rule the laboratory and risk passes follow: the token used to be cut out by
+    character offset, which leaves a clause that still reads as an instruction and no longer
+    says what it modifies. It also silently failed to remove anything when the canonical
+    token was not the spelling in the prose — `q.i.d.` canonicalises to `QID` and `q12h` to
+    `BID`, and neither token appears in the text, so the flag fired, the span list stayed
+    empty and the wrong schedule was served unchanged (measured 2026-11-22).
+    """
     flags: list[str] = []
     if not med_text or not answer:
         return answer, flags
@@ -1260,61 +1302,91 @@ def verify_med_freqs_per_med(answer: str, med_text: str) -> tuple[str, list[str]
         return answer, flags
 
     # A schedule carried across a conjunction is dropped at sentence granularity first,
-    # because the token edit below is right for the one drug it names and wrong for a pair.
+    # because the per-chunk check below is right for the one drug it names and wrong for a
+    # pair.
     answer, dropped = _drop_conjoined_schedule_claims(answer, entries)
     flags += dropped
 
-    base, region = _med_region(answer)
+    answer, dropped = _drop_contradicted_frequencies(answer, entries)
+    flags += dropped
+    return answer, flags
 
-    spans_to_remove: list[tuple[int, int]] = []
-    # Chunk on newlines, commas AND semicolons: the meds prompt lists meds one
-    # per line ("docusate sodium 100 mg … PO BID.\nsenna …"), while summarize
-    # embeds them as comma- or semicolon-separated prose. Splitting on commas
-    # alone turns a newline or semicolon list into one giant chunk and
-    # misattributes every med's freq to the first name.
-    for m in re.finditer(r"[^\n,;]+", region):
-        raw = m.group(0)
-        chunk = raw.strip()
-        if not chunk or not any(c.isdigit() for c in chunk):
-            continue
-        chunk_doses = _norm_doses(chunk)
-        # CONSERVATIVE: only act on a clean single-med chunk.
-        #  - exactly ONE dose token: a chunk naming several meds ("… amLODIPine
-        #    5 mg PO DAILY" glued on) or a held med list carries several doses
-        #    and must not have one med's freq attributed to another.
-        #  - no held/stopped/discontinued marker: held meds (Alyacen,
-        #    GlipiZIDE, HYDROcodone) are NOT in the discharge section, so their
-        #    chunk matches a section med by accident and their freq gets dropped.
-        if len(chunk_doses) != 1:
-            continue
-        if re.search(r"\b(?:held|stop(?:ped)?|discontin|not\s*restart)\b", chunk, re.I):
-            continue
-        chunk_freqs = _canon_freqs(chunk)
-        if not chunk_freqs:
-            continue
-        entry = _match_entry(chunk, chunk_doses, entries)
-        if entry is None or not entry["freqs"]:
-            continue
-        bad = chunk_freqs - entry["freqs"]
-        if not bad:
-            continue
-        for tok in sorted(bad):
-            flags.append(f"med_freq_permed_mismatch:{entry['name']}:{tok}")
-        # Remove the wrong freq phrases inside this chunk. Spans must be
-        # relative to the RAW (unstripped) match so offsets line up.
-        for pat, repl in _FREQ_PATTERNS:
-            for fm in pat.finditer(raw):
-                if _freq_token(fm, repl) in bad:
-                    spans_to_remove.append((base + m.start() + fm.start(),
-                                            base + m.start() + fm.end()))
-    if not spans_to_remove:
-        return answer, flags
-    cleaned = _remove_spans(answer, spans_to_remove)
-    # Fix only the "word ," artifacts left by a removal. Deliberately do NOT
-    # collapse runs of spaces globally — that destroys markdown bullet
-    # indentation ("*   Acetaminophen") and is a regression on passing answers.
-    cleaned = re.sub(r" +([,.;:])", r"\1", cleaned)
-    return cleaned.strip(), flags
+
+def _drop_contradicted_frequencies(
+    answer: str, entries: list[dict],
+) -> tuple[str, list[str]]:
+    """Drop the sentences inside the discharge window that state a contradicted schedule.
+
+    The window is `_med_region`'s: `/ehr`'s labelled paragraph, or a `/meds` answer's own
+    medication section. Sentences outside it are returned untouched, so a frequency stated
+    in the hospital course is never checked against the discharge regimen.
+
+    Inside it, each sentence is split into the same `[^\\n,;]+` chunks the pass has always
+    used, and a chunk is only acted on when it is a clean single-medication chunk: exactly
+    one dose token, no held/stopped/discontinued marker, and a name that resolves to one
+    entry. That conservatism is what keeps a correct schedule from being deleted, and it is
+    unchanged — only the remedy is: the sentence that carries the contradiction goes whole.
+    """
+    base, region = _med_region(answer)
+    if not region.strip():
+        return answer, []
+
+    def offending(sentence: str) -> list[str]:
+        found: list[str] = []
+        for m in re.finditer(r"[^\n,;]+", sentence):
+            chunk = m.group(0).strip()
+            if not chunk or not any(c.isdigit() for c in chunk):
+                continue
+            chunk_doses = _norm_doses(chunk)
+            # CONSERVATIVE: only act on a clean single-med chunk.
+            #  - exactly ONE dose token: a chunk naming several meds ("… amLODIPine
+            #    5 mg PO DAILY" glued on) or a held med list carries several doses
+            #    and must not have one med's freq attributed to another.
+            #  - no held/stopped/discontinued marker: held meds (Alyacen,
+            #    GlipiZIDE, HYDROcodone) are NOT in the discharge section, so their
+            #    chunk matches a section med by accident and their freq gets dropped.
+            if len(chunk_doses) != 1:
+                continue
+            if re.search(r"\b(?:held|stop(?:ped)?|discontin|not\s*restart)\b", chunk, re.I):
+                continue
+            chunk_freqs = _canon_freqs(chunk)
+            if not chunk_freqs:
+                continue
+            entry = _match_entry(chunk, chunk_doses, entries)
+            if entry is None or not entry["freqs"]:
+                continue
+            bad = chunk_freqs - entry["freqs"]
+            if not bad:
+                continue
+            found.extend(f"med_freq_permed_mismatch:{entry['name']}:{tok}"
+                         for tok in sorted(bad))
+        return found
+
+    rebuilt, flags = _drop_sentences(region, offending)
+    if not flags:
+        return answer, []
+    return _splice_region(answer, base, len(region), rebuilt), flags
+
+
+def _splice_region(answer: str, base: int, width: int, body: str) -> str:
+    """Put a rebuilt region back into the answer it came from, label and all.
+
+    `base`/`width` delimit what `_med_region` returned, so the text outside it is the
+    caller's and is not rewritten. The label that opens the region belongs to the
+    replacement rather than to the answer: when the region loses every sentence the label
+    goes with them, because an empty heading promises a section and delivers a gap.
+    """
+    label_at = answer.find(_DISCHARGE_PLAN_LABEL)
+    head = answer[:label_at] if 0 <= label_at < base else answer[:base]
+    prefix = answer[len(head):base]
+    tail = answer[base + width:]
+    body = body.strip()
+    # A label and its prose are one line, so the space the region offset stops on is put
+    # back; and a label whose region lost every sentence goes with it, because an empty
+    # heading promises a section and delivers a gap.
+    replaced = (f"{prefix} {body}" if prefix else body) if body else ""
+    pieces = [part.strip() for part in (head, replaced, tail) if part.strip()]
+    return "\n\n".join(pieces)
 
 
 # --- Disposition and lab claims must be in the record ------------------------

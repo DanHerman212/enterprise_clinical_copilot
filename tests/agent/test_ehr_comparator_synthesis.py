@@ -96,8 +96,20 @@ def test_the_formatter_input_carries_the_block_after_the_evidence():
 
 def test_a_verified_comparator_pmid_may_be_cited():
     answer = "Her estimate of 21.9% sits above the 4.9% published for octogenarian THA ^[PMID: 32742739]."
+    # The channels the turn really holds: the score the sentence quotes, and the search
+    # whose abstracts the comparator rows were verified against. Both are needed now that
+    # the SENTENCE is the unit of removal — a fixture carrying neither number would be a
+    # turn whose sentence has no support, and the risk guard would take the badge with it.
+    calls = [
+        {"name": "predict_readmission", "args": {"hadm_id": 1},
+         "response": {"probability": 0.219, "threshold": 0.11, "prediction": 1}},
+        {"name": "search_literature", "args": {"query": "tha readmission"},
+         "response": {"returned": 1, "articles": [{
+             "pmid": COMPARATOR["pmid"], "title": COMPARATOR["title"],
+             "abstract": COMPARATOR["rate_sentence"]}]}},
+    ]
 
-    guarded = guard_answer(answer, [], state={
+    guarded = guard_answer(answer, calls, state={
         "comparators": [COMPARATOR],
         "messages": [],
     })

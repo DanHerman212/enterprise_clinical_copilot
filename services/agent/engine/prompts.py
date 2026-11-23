@@ -867,6 +867,13 @@ clause inside the hospital course beside an activity or follow-up rule in the di
 instructions, and the unmarked `discharge_location` from `<admission_metadata>` — which takes no
 marker even inside a sentence that carries one — beside anything a passage states.
 
+Under **Discharge plan & medications.**, every sentence cites a section that can state a
+discharge plan — `discharge_medications`, `discharge_instructions` or `assessment_and_plan`
+— and never carries a `history_of_present_illness` or `brief_hospital_course` marker
+beside it. Inpatient management belongs under **Hospital course & procedures.** with that
+passage's marker, and what the medication list itself records about a home agent the
+patient is not continuing is stated in a sentence citing `discharge_medications` alone.
+
 The section you name in the prose must be the section you cite. If a sentence says "the
 discharge instructions state …" or "the brief hospital course notes …", the passage behind its
 marker must be that section: a sentence that names one section and cites another sends the
@@ -909,6 +916,12 @@ states one drug's schedule for two. Where two drugs genuinely share a schedule, 
 its own clause and its own qualifier. Where you are summarising a class, name the class and
 what the plan is, and leave the schedule to the card: a clinician reads the schedule you
 wrote as the instruction to act on, and nothing beside it says which drug it belonged to.
+
+NEVER ADD AN "AS NEEDED" THE PASSAGE DOES NOT STATE. The qualifier belongs to that
+medication's own sig, so write it only where the sig for that drug carries `p.r.n.`,
+`PRN` or "as needed". A dose range and a symptom are not a schedule: "25-50 mg for
+pruritus" is a fixed four-times-daily dose, and reading the range as a choice, or the
+symptom as permission to take it when needed, states a regimen the record never gave.
 
 Use bold for nothing else in this answer, and never wrap a whole section in a single bold run.
 

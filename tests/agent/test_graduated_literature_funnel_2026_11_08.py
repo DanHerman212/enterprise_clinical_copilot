@@ -216,8 +216,13 @@ def test_exactly_one_of_the_two_blocks_reaches_the_formatter():
 
 def test_the_prompt_forbids_a_rate_when_only_the_fallback_is_given():
     """A rate-shaped sentence over a paper that reported no rate is the failure."""
-    assert "<retrieved_readmission_literature>" in prompts.EHR_FORMATTING
-    assert "never stating a readmission rate of any kind" in prompts.EHR_FORMATTING
+    fallback = prompts.ehr_formatting_for(literature=True)
+    assert "<retrieved_readmission_literature>" in fallback
+    assert "never stating a readmission rate of any kind" in fallback
+    # And the turn that retrieved no cohort is told nothing about a literature block.
+    plain = prompts.ehr_formatting_for()
+    assert "<retrieved_readmission_literature>" not in plain
+    assert "this section places that estimate" not in plain
 
 
 # --- 4. the direction of the comparison is computed, not inferred -------------
@@ -271,8 +276,9 @@ def test_the_estimate_is_read_from_the_prediction_call():
 
 
 def test_the_prompt_tells_the_formatter_to_use_the_relation_verbatim():
-    assert "relation:" in prompts.EHR_FORMATTING
-    assert "do not decide the\ndirection yourself" in prompts.EHR_FORMATTING
+    with_cohort = prompts.ehr_formatting_for(comparators=True)
+    assert "relation:" in with_cohort
+    assert "do not decide the\ndirection yourself" in with_cohort
 
 
 # --- 5. the badge survives; the drawer gets a row; no LiteratureList ----------

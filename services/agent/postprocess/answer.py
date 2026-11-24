@@ -273,11 +273,19 @@ def medication_narrative(verified: list[dict[str, str]], returned_passages: int,
     source = _cite_suffix(cite if cite is not None else
                           (_FIRST_TURN_POSITION if returned_passages else None))
     dedicated = "discharge_medications" in sections
-    instructions_only = "discharge_instructions" in sections
-    # Neither section: the retrieval fell back to narrative text, and a statement about
-    # what the patient takes home has to be made about that text rather than about a
-    # discharge list the record does not have.
-    narrative_fallback = not dedicated and not instructions_only
+    # `discharge_instructions` is where most notes write the dose, but it is not a
+    # discharge LIST: on a surgical or cardiology note it states diet, activity and
+    # warning signs while the drug the patient leaves on is written into the course. So
+    # the sentence follows where the text came from — when the retrieval also had to read
+    # a narrative section, the answer is a narrative answer, and 90000023's `/meds` said
+    # "no medications are documented in the discharge instructions" about a record whose
+    # course sends the patient home on an antiplatelet (2026-11-24). A record whose only
+    # medication text is its instructions keeps the instructions wording, which is where
+    # `dev_t4_02`'s Medrol and Darvocet are written.
+    narrative_sections = tuple(
+        section for section in sections
+        if section not in ("discharge_medications", "discharge_instructions"))
+    narrative_fallback = not dedicated and bool(narrative_sections)
     where = ", ".join(section.replace("_", " ") for section in sections) or (
         "material that was retrieved")
     if narrative_fallback:

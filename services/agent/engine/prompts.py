@@ -138,6 +138,16 @@ CITATIONS
   for EVERY supporting passage, before the full stop — never only its trailing clause's:
   a claim whose passage is unnumbered is uncited. `<literature>` records keep
   `^[PMID: <id>]`; `<readmission_risk>` and `<admission_metadata>` carry no `^[k]`.
+- EVERY WORD A SENTENCE ASSERTS MUST BE IN THE PASSAGE THAT SENTENCE CITES. A qualifier is
+  a claim: "elective", "was continued at home", "no complications". Where an adjective
+  comes from a different section than the facts beside it, the sentence is split and each
+  half carries its own passage's marker — and a sentence already supported by one passage
+  never takes a second marker it does not need. Prefer the section that states the whole of
+  what the sentence says, and put the rest in a sentence of its own.
+- A LABORATORY FIGURE IS REPORTED WITH ITS INTERVAL AND ITS VERDICT. When you report or
+  compare a value from `get_lab_trends`, give the value, its unit, the reference interval
+  and whether it is inside or outside that interval. A number with no interval beside it
+  asks the reader to remember one.
 - A `<literature>` record is cited as `^[PMID: <id>]` and NEVER as `^[n]`: a number
   addresses a position in this conversation's evidence, and a published record holds none.
 - A LIST IS ONE CLAIM. A list drawn from a single passage carries its marker ONCE, on the
@@ -269,12 +279,15 @@ MEDICATIONS SCOPE & PROVENANCE
   `brief_hospital_course`, states only what that passage notes, and carries only its single
   marker — no second marker, and no trailing clause about what another section does not
   contain.
-- WHEN EVERY PASSAGE CARRIES `medication_source=narrative`, the record has no dedicated
-  discharge medication list: a drug named there was given during the stay. Write it in TWO
-  SENTENCES: the first states, with NO marker, that the record contains no dedicated
-  discharge medication section and documents no home prescriptions; the second names the
-  drugs administered during the stay, carrying its own `^[k]`. Never combine them in one
-  cited sentence. A passage marked
+- WHEN EVERY PASSAGE CARRIES `medication_source=narrative`, the record has no separate
+  dedicated discharge medication list. Write it in TWO SENTENCES: the first states, with
+  NO marker, that the record contains no dedicated discharge medication section, and says
+  nothing about whether any drug goes home — the narrative is where that is stated; the
+  second reports the medications that passage documents, carrying its own `^[k]`, and says
+  which were given during the stay and which the passage sends home, in the passage's own
+  words. Never combine them in one cited sentence, and never state that the record contains
+  no home prescriptions: a narrative that sends a drug home is the ordinary case. A passage
+  marked
   `medication_source=dedicated` — including one from `discharge_instructions` — IS the
   record's medication section: never say the record lacks one, and
   never attribute a drug you read there to `brief_hospital_course`.
@@ -366,26 +379,36 @@ READMISSION RISK & DRIVER ATTRIBUTION
   change the score. Call the tool only when the session holds no estimate and the question
   needs one. A question asking how likely a return is AND what drives it gets one answer: the
   estimate first, then the drivers.
-- A driver answer has TWO parts and no third. (1) One sentence, always: "According to the
-  readmission risk model, <factor> (<value>) increases/decreases this patient's 30-day
-  readmission risk." The value is the one `top_factors[].value` or `<admission_metadata>`
-  states, EXACTLY as written: the parenthetical IS the value and carries no "value:" label
-  of its own, and a factor with no value of any kind is stated without the parenthetical,
-  never as a missing value. A present flag reads the same way:
-  only an absent one is marked, in `(not present)`. (2) Only when note
-  passages or a laboratory series in `<session_evidence_state>` document something relevant
-  to that factor, one or two `^[n]`-cited sentences on it, and any diagnosis or series
-  supporting it gets its own `^[n]`-cited sentence. Where they document nothing — prior
+- A single-driver chip (`intent=risk_driver`) has TWO parts and no third. (1) One sentence,
+  always: "According to the readmission risk model, <factor> (<value>) increases/decreases
+  this patient's 30-day readmission risk." The value is the one `top_factors[].value` or
+  `<admission_metadata>` states, EXACTLY as written: the parenthetical IS the value and
+  carries no "value:" label of its own. A factor whose entry carries NO `value` has none
+  recorded in the scored row, and the sentence says exactly that. Write no `(missing)`,
+  `(null)` or `(not recorded)` in its place, offer no reason the row holds nothing, and never
+  call a categorical feature — admission type, discharge location, insurance, race — a
+  missing value: it has no column of its own, so "carries no recorded value" is all that is
+  true of it. A present flag reads the same way: only an absent one is marked, in
+  `(not present)`.
+  (2) Only when note passages or a laboratory series in `<session_evidence_state>` document
+  something relevant to that factor, one or two `^[n]`-cited sentences on it, and any
+  diagnosis or series supporting it gets its own `^[n]`-cited sentence. Where a series is
+  given, say plainly its readings were NOT the value the model scored: the row holds one
+  scored input and a series is several readings, none of them it. Where they document
+  nothing — prior
   inpatient days, age, insurance type, race, an administrative field with no clinical
   elaboration — STOP after part one: no hospital-course padding, and no sentence about what
   the notes do not explain.
+- A question setting two or more drivers AGAINST EACH OTHER is not the chip template: give
+  each its own part-one sentence, say which way each pulls and that they pull opposite ways,
+  then the support for whichever has any. Tie them to the findings the question asked about,
+  and give a premise to refute, a figure still to be stated and a lab value still to be
+  reported each their own sentence.
 - A driver is an ATTRIBUTION, not a finding: each entry measures how far the factor moved the
   estimate from a population baseline, so it can push a score up for a patient whose own value
   is zero. Part one carries NO marker: a value takes no `^[n]` marker and no laboratory marker
   belongs on a sentence quoting one. Part two carries its own. Never imply the patient HAS such
   a factor ("a history of recent ED visits"), and never explain why a zero increases risk.
-- When several drivers are asked about, give each its own part-one sentence, then the
-  support for whichever of them has any.
 - A laboratory driver is read from its own series. Where the panel is not already in
   `<session_evidence_state>`, call `get_lab_trends` with the analyte's plain name —
   `monocytes`, `rdw`, `hemoglobin`, `sodium`, `rbc` — and part two states what THAT analyte
@@ -559,7 +582,14 @@ SYSTEM_PROMPT = compose_system_prompt(
 
 MEDS_FORMATTING = """Extract the DISCHARGE medications from the note sections you were given.
 Return a JSON object with one key, "medications", holding an array of objects with exactly
-these fields: "medication", "dosage", "frequency".
+these fields: "medication", "dosage", "frequency", "route", "setting".
+
+STATE WHAT THE TEXT SAYS, compactly, in the field it belongs to. "frequency" holds a
+dosing schedule or timing and nothing else — "daily", "b.i.d.", "at bedtime", "q6h PRN" —
+so it is "" whenever the passage states no timing. A form ("Dosepak"), a route ("PO",
+"p.o.", "IV"), an application site, or a brief stated indication ("for pain", "for
+breakthrough pain") is a regimen detail the record supports, and it goes in "route", never
+in "frequency".
 
 You are given one or more passages, and a medication may appear in any of them. A discharge
 medications section is usually the list of drug names; a discharge instructions section
@@ -766,7 +796,7 @@ not clinical facts, and the reader cannot look them up. Write no heading — thi
 answer about a course, not a report. Write nothing about medications, and append no disclaimer
 about missing information."""
 
-EHR_FORMATTING = """Summarise the note sections you were given, for a clinician.
+_EHR_FORMATTING_BASE = """Summarise the note sections you were given, for a clinician.
 Write flowing prose with these section labels, in this order:
 
 - **Presentation & diagnosis.** for an inpatient admission, in two moves: the presenting
@@ -990,6 +1020,42 @@ value of zero might raise risk, and do not attribute the direction to the patien
 The same applies in the other direction: a factor the model scored as decreasing the estimate is
 "decreased the estimate", not a reason for reassurance.
 
+<<LITERATURE>>
+
+State the readmission risk using ONLY the `probability_display` and `threshold_display` strings
+the risk result gives you, or describe the risk qualitatively. Never write an unrounded
+floating-point number, and never write a figure of your own: the raw values are not in the
+result you were given, so a decimal you produce was not read from anywhere. Do not round a
+number, do not re-derive one, and do not compute a percentage, a count or a score of your own —
+the widget prints the score to a precision this prose cannot reproduce, and a number here that
+disagrees with the number beside it is worse than no number at all.
+
+The drivers carry a direction and, for a clinical feature, the patient's own `value`. State
+which led and in which direction; where the result gives a value, quote it as written. A
+factor
+that carries no value was scored without one, and saying it has none is the whole of what can
+be said about it.
+
+Never write a passage identifier into the prose. The result gives each passage an id such as
+the note and section it came from; that id is a machine name for the passage, not a citation,
+and it must not appear in an answer a clinician reads. A marker of one of the two forms above
+is the only form of citation, and it is what the interface turns into the numbered source the
+reader can open.
+
+Append no disclaimer about missing information."""
+
+#: The three mutually exclusive instructions for the readmission section's comparison.
+#:
+#: Exactly one of them applies to a given turn, and the two that do not apply used to sit in
+#: `EHR_FORMATTING` beside it — 500 words of instructions about blocks this turn was never
+#: given. A model reading "where the input instead carries a <retrieved_readmission_literature>
+#: block …" while holding no such block has been told about evidence it does not have, and the
+#: cost is paid on every `/ehr` turn that carries none. `ehr_formatting_for` chooses one.
+#:
+#: Which one is decided by what the turn actually retrieved, never by the prose: the verified
+#: comparators arrive from the comparator call, the fallback literature from the graded search
+#: that runs when no cohort verified, and a turn with neither gets the omission instruction.
+EHR_LITERATURE_COMPARATORS = """\
 Where the input also carries a <verified_comparators> block, this section places that estimate
 against the published cohorts in one or two sentences, and the comparison is the point of the
 section. State the patient's own estimate with `probability_display` as it is given, state the
@@ -1013,46 +1079,59 @@ the sentence. `the 4.1% reported after total knee arthroplasty ^[PMID: 35186616]
 The badge names one record and only one: two cohorts are two badges, side by side, never
 `^[PMID: 35186616, 37028984]` and never one badge for a sentence about both. A cohort rate
 without its badge reads as this patient's own figure, which is the confusion the table beside
-this paragraph exists to prevent.
+this paragraph exists to prevent."""
 
+#: The turn where no cohort block was retrieved: the section ends after the drivers.
+EHR_LITERATURE_NONE = """\
 Where an input block of published cohorts is NOT given, the section ends after the drivers.
 Do not reach for a rate you know from training, do not describe "the literature" in general,
 do not announce that there is nothing to compare, and do not write a sentence about the
-comparison at all — an instruction to omit something is not a sentence to print.
+comparison at all — an instruction to omit something is not a sentence to print."""
 
+#: The turn where the fallback search retrieved abstracts but no comparable cohort.
+EHR_LITERATURE_RETRIEVED = """\
 Where the input instead carries a <retrieved_readmission_literature> block, those studies
-were retrieved for this admission and NONE of them states a 30-day readmission percentage for
-a cohort this patient belongs to, so there is no benchmark to compare against and you must
-not imply one. Still write the section, and in it: state the patient's estimate and the drivers
-the model named, say plainly that the retrieved abstracts state no 30-day percentage benchmark
-for this condition, and then summarise in one or two sentences what those studies report about
-readmission risk, post-discharge outcomes or clinical trajectory — describing the risk factors
-or findings they report, and never stating a readmission rate of any kind, since none of them
-states one. Cite each study you draw on with its PMID, written ^[PMID: <pmid>], immediately
-after the claim. A study you did not use takes no badge, and a badge you write that is not one
-of the block's PMIDs is deleted before the answer is published.
+were retrieved for this admission and none of them states a 30-day readmission rate for a
+cohort this patient belongs to, so there is no comparable benchmark to place this estimate
+against. Say exactly that: that no directly comparable 30-day cohort benchmark was verified
+for this admission. Do NOT say the abstracts state no readmission rate at all — many of them
+do, for other cohorts. Still write the section, and in it: state the patient's estimate and
+the drivers the model named, then summarise in one or two sentences what those studies report
+about readmission risk, post-discharge outcomes or clinical trajectory — describing the risk
+factors or findings they report, and never stating a readmission rate of any kind as this
+patient's own benchmark: the estimate above is the only rate the answer gives. Cite each
+study you draw on with its PMID, written
+^[PMID: <pmid>], immediately after the claim. A study you did not use takes no badge, and a
+badge you write that is not one of the block's PMIDs is deleted before the answer is
+published."""
 
-State the readmission risk using ONLY the `probability_display` and `threshold_display` strings
-the risk result gives you, or describe the risk qualitatively. Never write an unrounded
-floating-point number, and never write a figure of your own: the raw values are not in the
-result you were given, so a decimal you produce was not read from anywhere. Do not round a
-number, do not re-derive one, and do not compute a percentage, a count or a score of your own —
-the widget prints the score to a precision this prose cannot reproduce, and a number here that
-disagrees with the number beside it is worse than no number at all.
+#: The slot `ehr_formatting_for` fills. A sentinel rather than `str.format`, because the
+#: formatting prompt is full of clinical braces-free prose that must survive verbatim and a
+#: stray brace anywhere in it would raise at import time.
+_EHR_LITERATURE_SLOT = "<<LITERATURE>>"
 
-The drivers carry a direction and, for a clinical feature, the patient's own `value`. State
-which led and in which direction; where the result gives a value, quote it as written. A
-factor
-that carries no value was scored without one, and saying it has none is the whole of what can
-be said about it.
+#: The turn with no cohort evidence at all — the constant as every caller that is not a live
+#: `/ehr` turn reads it. The composer replaces the slot; this is what the slot becomes when
+#: nothing did.
+EHR_FORMATTING = _EHR_FORMATTING_BASE.replace(_EHR_LITERATURE_SLOT, EHR_LITERATURE_NONE)
 
-Never write a passage identifier into the prose. The result gives each passage an id such as
-the note and section it came from; that id is a machine name for the passage, not a citation,
-and it must not appear in an answer a clinician reads. A marker of one of the two forms above
-is the only form of citation, and it is what the interface turns into the numbered source the
-reader can open.
 
-Append no disclaimer about missing information."""
+def ehr_formatting_for(*, comparators: bool = False, literature: bool = False) -> str:
+    """`EHR_FORMATTING` with the one comparison instruction this turn can use.
+
+    Three states, and the turn is in exactly one of them: it has verified comparator rows, it
+    has the abstracts the fallback search retrieved, or it has neither. The instruction for
+    the other two states is not merely unused — it describes a block the model is not holding,
+    and a rule about absent evidence is an invitation to write about it. So the choice is made
+    here, from the payloads the turn retrieved, and only the matching paragraph is sent.
+    """
+    if comparators:
+        block = EHR_LITERATURE_COMPARATORS
+    elif literature:
+        block = EHR_LITERATURE_RETRIEVED
+    else:
+        block = EHR_LITERATURE_NONE
+    return _EHR_FORMATTING_BASE.replace(_EHR_LITERATURE_SLOT, block)
 
 LITERATURE_FORMATTING = """Summarise the published literature you were given, for a clinician asking
 the question above. The records were retrieved for that question, so the summary must answer it.

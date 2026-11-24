@@ -97,6 +97,14 @@ from services.mcp.retrieval.sections import ADMISSION_DIAGNOSIS
 
 logger = logging.getLogger(__name__)
 
+#: How long `/ehr` will spend on the published-cohort comparison before serving the
+#: briefing without it. The step is a target extraction, a PubMed search and a comparator
+#: extraction — the only part of the turn whose length nothing here bounds. The request
+#: ceiling is 110 s and one run's turn exceeded it, which cost the briefing, the estimate
+#: and every later turn that quoted them (2026-11-24). A chart-only `/ehr` is a complete
+#: answer, so the budget degrades rather than retrying.
+COMPARATOR_BUDGET_S = 30.0
+
 
 # A medication line's dose, as it appears in note text: a number followed by a
 # unit, optionally with a route and a frequency. Used only to VERIFY an extracted
@@ -212,14 +220,78 @@ def parse_medications(
         # A route or indication is kept only when the passage states it. "IV" and "for
         # pain" are short enough to appear in any clinical note by accident, so the same
         # rule the dose gets applies: what the note does not say is not carried.
+        #
+        # And a schedule field is a schedule. A route, a form, an application site or a
+        # stated indication that arrives in `frequency` is moved to `route` and taken out
+        # of the schedule, because the two prompts ask for the same five fields and one of
+        # them was answered with "p.o." in the schedule column while the route column sat
+        # empty (`dev_d1_slash_02`, 2026-11-24). Doing it here rather than in the prompt is
+        # the control: an instruction is a request, this is the guarantee.
+        frequency, moved = _split_regimen_detail(
+            str(row.get("frequency") or "").strip(),
+            str(row.get("route") or "").strip())
         verified.append({
             "medication": str(row.get("medication") or "").strip(),
             "dosage": str(row.get("dosage") or "").strip(),
-            "frequency": str(row.get("frequency") or "").strip(),
-            "route": str(row.get("route") or "").strip() if route and route in source else "",
+            "frequency": frequency,
+            "route": (moved if moved else str(row.get("route") or "").strip())
+                     if (moved and moved in source) or (not moved
+                        and route and route in source)
+                     else "",
             "setting": setting,
         })
     return verified, dropped
+
+
+#: A route that arrived in the schedule column: `p.o.`, `IV`, `subcut`.
+_ROUTE_IN_CELL = re.compile(
+    r"(?<![\w.])(?:p\.?o\.?|i\.?v\.?|i\.?m\.?|subcut\w*|subcu|subq|s\.?c\.?)"
+    r"(?![\w])",
+    re.IGNORECASE,
+)
+
+#: An application site: "to the right arm and right abdomen".
+_SITE_IN_CELL = re.compile(r"\bto the [A-Za-z ]+", re.IGNORECASE)
+
+#: A stated indication, which runs to the end of the cell: "for breakthrough pain".
+_INDICATION_IN_CELL = re.compile(r"\bfor [A-Za-z][A-Za-z \-]*$", re.IGNORECASE)
+
+#: Fillers that mean nothing once the route or indication they introduced has moved.
+_FILLER_IN_CELL = re.compile(
+    r"\b(?:to be used|to be taken|to be applied|as directed)\b", re.IGNORECASE)
+
+
+def _split_regimen_detail(frequency: str, route: str) -> tuple[str, str]:
+    """`frequency` with any non-schedule detail taken out of it, and that detail.
+
+    Returns `(schedule, detail)`. `detail` is empty when the frequency held nothing but
+    timing, which is what both extraction prompts ask for and the common case.
+
+    Only three shapes are moved — a route, an application site, and a stated indication —
+    and the rest of the cell is returned VERBATIM: the note writes `q.12h.` and the grid
+    should show `q.12h.`, so the schedule is not rebuilt from normalized tokens. What is
+    removed is exactly the words that are not a schedule.
+    """
+    if not frequency:
+        return "", ""
+    moved: list[str] = []
+    rest = frequency
+    for pattern in (_ROUTE_IN_CELL, _SITE_IN_CELL, _INDICATION_IN_CELL):
+        match = pattern.search(rest)
+        if match is None:
+            continue
+        moved.append(match.group(0).strip())
+        rest = f"{rest[:match.start()]} {rest[match.end():]}"
+    if not moved:
+        return frequency, ""
+    rest = _FILLER_IN_CELL.sub(" ", rest)
+    # Only whitespace runs and the punctuation the removal stranded. The dots INSIDE the
+    # schedule are the note's own spelling — `q.12h.` must survive as `q.12h.` — so this
+    # cannot be a character-class collapse that eats them.
+    rest = re.sub(r"[ \t]{2,}", " ", rest)
+    rest = re.sub(r"\s+([,;])", r"\1", rest)
+    rest = rest.strip(" ,;")
+    return rest, " ".join(part for part in moved if part)
 
 
 def _dose_supported(dosage: str, source: str) -> bool:
@@ -1361,15 +1433,38 @@ async def run_command(
     # and recorded as tool calls like every other piece of evidence this turn rests on.
     command_extras: dict[str, Any] = {}
     if command.wire == "summarize" and not outpatient_record:
-        (comparators, target_payload, literature_recorded, passes, outcome,
-         fallback_literature) = \
-            await _readmission_comparators(
-                toolbox, model, recorded, on_event, extraction_llm=extraction_llm,
-                evidence_state=evidence_state,
-                admission_context=admission_context,
-                # The turn's tracing callbacks, so the target and comparator extractions
-                # are generations in the trace rather than gaps between stage events.
-                callbacks=callbacks)
+        # The benchmark step is four model calls and a network search on top of the
+        # retrieval the turn already did, and it is the only part of `/ehr` whose length
+        # is not bounded by anything this service controls. On `dev_d5_slash_01` turn 1
+        # the whole turn passed the request ceiling and answered `[HTTP 504] timeout`,
+        # losing the briefing, the estimate that turn would have scored, and the thread's
+        # later risk sentence with it (2026-11-24).
+        #
+        # A budget rather than a retry: the comparison is the part of the briefing a
+        # reader can live without, and a chart-only `/ehr` is a complete answer. The
+        # outcome says so — `extraction_degraded` is the word the surface already uses for
+        # a benchmark that did not complete, so nothing downstream needs a new case.
+        try:
+            (comparators, target_payload, literature_recorded, passes, outcome,
+             fallback_literature) = await asyncio.wait_for(
+                _readmission_comparators(
+                    toolbox, model, recorded, on_event, extraction_llm=extraction_llm,
+                    evidence_state=evidence_state,
+                    admission_context=admission_context,
+                    # The turn's tracing callbacks, so the target and comparator
+                    # extractions are generations in the trace rather than gaps between
+                    # stage events.
+                    callbacks=callbacks),
+                timeout=COMPARATOR_BUDGET_S,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "comparator step exceeded its %.0fs budget; serving chart-only /ehr",
+                COMPARATOR_BUDGET_S,
+            )
+            (comparators, target_payload, literature_recorded, passes, outcome,
+             fallback_literature) = (
+                [], None, [], [], routing.OUTCOME_EXTRACTION_DEGRADED, [])
         recorded += literature_recorded
         command_extras["comparators"] = comparators
         command_extras["clinical_target"] = target_payload
@@ -1467,6 +1562,15 @@ async def run_command(
     instruction = formatting_for(command.wire)
     if command.wire == "meds":
         instruction = meds_formatting_for(sections)
+    elif command.wire == "summarize":
+        # `/ehr` carries one of three mutually exclusive comparison instructions. Sending the
+        # whole set described blocks the turn had not retrieved — a paragraph about a
+        # `<retrieved_readmission_literature>` block on a turn holding none is an invitation
+        # to write about evidence that is not there (2026-11-24).
+        instruction = prompts.ehr_formatting_for(
+            comparators=bool(command_extras.get("comparators")),
+            literature=bool(command_extras.get("fallback_literature")),
+        )
     response = await _formatting_turn(
         llm,
         [

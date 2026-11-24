@@ -874,9 +874,19 @@ def _search_medication_sections(hadm_id: int) -> dict[str, Any]:
     ordered = _ordered_sections(parse_note(text), normalised)
 
     dedicated = [entry for entry in ordered if entry[0] in _DEDICATED_MED_SECTIONS]
-    chosen = dedicated or [
-        entry for entry in ordered if entry[0] in _FALLBACK_MED_SECTIONS
-    ]
+    # A dedicated HEADING is not a medication LIST. `discharge_instructions` is filed with
+    # the medication sections because that is where most notes write the dose and the
+    # frequency, but on a surgical or cardiology note it often carries only diet, activity
+    # and warning signs, while the drug the patient leaves on is written into the course.
+    # Read from the instructions alone, such a record reports restrictions and no
+    # medication at all (90000023, whose antiplatelet course is in the narrative and whose
+    # instructions say no lifting over ten pounds, 2026-11-24). So the narrative sections
+    # join the chosen text whenever the record has no `discharge_medications` heading —
+    # the heading that exists to hold a list — and the `medication_source` label on each
+    # passage is what tells the extraction which is which.
+    has_list = any(name == DISCHARGE_MEDICATIONS for name, _ in dedicated)
+    chosen = dedicated if has_list else (
+        dedicated + [entry for entry in ordered if entry[0] in _FALLBACK_MED_SECTIONS])
 
     passages: list[dict[str, Any]] = []
     ordinals: dict[str, int] = {}
@@ -904,7 +914,11 @@ def _search_medication_sections(hadm_id: int) -> dict[str, Any]:
         return _no_medication_sections_payload(hadm_id, note_id)
     return {"hadm_id": hadm_id, "query": "discharge medications",
             "returned": len(passages), "passages": passages,
-            "dedicated_section_present": bool(dedicated)}
+            # Whether the record has a section that exists to hold a LIST, which is the
+            # question every caller downstream is really asking. A record whose only
+            # medication heading is `discharge_instructions` is not a record with a
+            # discharge list, and saying otherwise let a narrative answer claim one.
+            "dedicated_section_present": has_list}
 
 
 async def discharge_medications(hadm_id: int) -> RetrievalResult | ToolError:

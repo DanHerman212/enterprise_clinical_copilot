@@ -141,7 +141,13 @@ def test_the_allowance_is_the_drawn_rows_not_the_pool():
 # --- what the prompt says -----------------------------------------------------
 
 def _ehr_prompt() -> str:
-    return " ".join(prompts.EHR_FORMATTING.split())
+    """The `/ehr` instruction for the turn that HAS comparator rows.
+
+    `EHR_FORMATTING` is composed per turn since Gate C4a: the three comparison instructions
+    are mutually exclusive and only the matching one is sent, so a test about what the model
+    is told when it holds a `<verified_comparators>` block asks the composer for that turn.
+    """
+    return " ".join(prompts.ehr_formatting_for(comparators=True).split())
 
 
 def test_the_prompt_places_the_estimate_against_the_cohorts():
@@ -169,11 +175,14 @@ def test_every_cohort_rate_carries_its_own_badge_and_never_a_combined_one():
 
 
 def test_the_prompt_forbids_a_comparison_when_there_is_no_block():
-    text = " ".join(_ehr_prompt().split())
+    # The turn that retrieved no cohort at all is the one this instruction is composed for.
+    text = " ".join(prompts.ehr_formatting_for().split())
 
     assert "Where an input block of published cohorts is NOT given" in text
     assert "do not write a sentence about the comparison at all" in text
     assert "Do not reach for a rate you know from training" in text
+    assert "<verified_comparators> block, this section places" not in text
+    assert "<retrieved_readmission_literature>" not in text
 
 
 def test_the_prompt_keeps_a_two_arm_row_two_figures():

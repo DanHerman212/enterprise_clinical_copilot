@@ -894,7 +894,50 @@ def verify_risk_numbers(
                 found.append(f"risk_number_unsupported:{m.group(0)}")
         return found
 
-    return _drop_sentences(answer, unsupported)
+    cleaned, flags = _drop_sentences(answer, unsupported)
+    if not flags:
+        return answer, flags
+    cleaned, orphaned = _drop_orphaned_risk_disclaimer(cleaned)
+    return cleaned, flags + orphaned
+
+
+#: The stock sentence the risk instruction asks for (`prompts.py:156`): "- This is a
+#: decision-support signal, not a diagnosis and not a care directive: say so". It is about
+#: "this figure", so it is a fragment the moment the figure is gone.
+_RISK_DISCLAIMER = re.compile(r"decision[\s-]*support signal", re.IGNORECASE)
+
+#: A number that could be the patient's own estimate.
+_RISK_FIGURE = re.compile(r"\d{1,3}(?:\.\d{1,2})?\s*%|(?<![\d.])0\.\d{2,6}(?![\d])")
+
+#: The words that make a figure the PATIENT's rather than a published cohort's. The
+#: comparator sentences a briefing carries are full of percentages — 4%, 0.48%, 1.66% —
+#: and none of them is the estimate the disclaimer is about.
+_RISK_ANCHOR = re.compile(r"\b(?:readmission|threshold)\b", re.IGNORECASE)
+
+
+def _drop_orphaned_risk_disclaimer(answer: str) -> tuple[str, list[str]]:
+    """Drop "this figure is a decision-support signal" when no figure is left to point at.
+
+    Removing an unsupported risk sentence can leave the disclaimer standing alone, about a
+    number that is no longer in the answer: `dev_d5_slash_01` turn 5 was served a closing
+    "This figure is a decision-support signal, not a diagnosis and not a care directive."
+    with no estimate anywhere above it (2026-11-24). A reader meets a caveat about nothing.
+
+    The test is whether any sentence still pairs a figure with the estimate it belongs to —
+    `readmission` or `threshold`. Published cohort rates in the same answer are figures
+    without that anchor, so a briefing that kept its comparison and lost its score still
+    loses the orphan.
+    """
+    if not _RISK_DISCLAIMER.search(answer):
+        return answer, []
+    for sentence in discharge_section.split_sentences(answer):
+        if _RISK_FIGURE.search(sentence) and _RISK_ANCHOR.search(sentence):
+            return answer, []
+
+    def orphan(sentence: str) -> list[str]:
+        return ["risk_disclaimer_orphaned"] if _RISK_DISCLAIMER.search(sentence) else []
+
+    return _drop_sentences(answer, orphan)
 
 
 # --- Invented calendar dates (ECC-35) ----------------------------------------

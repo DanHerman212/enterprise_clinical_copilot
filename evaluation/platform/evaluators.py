@@ -425,15 +425,34 @@ _EHR_HEADING_SECTIONS: dict[str, frozenset[str]] = {
 #: different sets in the agent (`/ehr` is the wire command `summarize`, `/pubmed` is
 #: `literature`), and a check that knew one would silently classify nothing for the other.
 _WIRE_COMMANDS = frozenset({"ehr", "labs", "meds", "pubmed", "risk"})
+
+#: The whole prompt, when a chip's label names the command outright. An EXACT match, not a
+#: prefix: `summarize` is the chip name a caller can send, and "Summarize the smoking
+#: cessation plan…" is a clinician's question that must never be read as one.
 _WIRE_ALIASES = {"summarize": "ehr", "literature": "pubmed"}
 
 
 def _leading_wire_command(text: str) -> str | None:
-    """`"ehr"` for a prompt of `"/ehr"`, and for the chip name `summarize`."""
-    token = str(text or "").strip().split(" ")[0].lstrip("/").strip().lower()
-    if token in _WIRE_ALIASES:
-        return _WIRE_ALIASES[token]
-    return token if token in _WIRE_COMMANDS else None
+    """`"ehr"` for a prompt of `"/ehr"`, and `None` for anything written as prose.
+
+    A command turn OPENS with the slash form — that is the only thing the wire carries.
+    This used to split on the first space and consult an alias table, so any free-text
+    question beginning "Summarize …" classified as `/ehr` and was then failed by the
+    briefing's heading contract: three of the four structural failures in the Gate C3 run
+    (`dev_d1_adv_02`, `dev_d5_fup_02` turn 5, `dev_d5_risk_01` turn 5) were correct
+    answers to correct questions, judged against a command they never ran (2026-11-24).
+
+    The alias survives only as a WHOLE-prompt match, because a chip's label can be the
+    command's own name and nothing else.
+    """
+    stripped = str(text or "").strip()
+    if not stripped:
+        return None
+    if stripped.startswith("/"):
+        token = stripped.split(" ")[0].lstrip("/").strip().lower()
+        return token if token in _WIRE_COMMANDS else None
+    whole = stripped.rstrip(".,;:!?").strip().lower()
+    return _WIRE_ALIASES.get(whole)
 
 
 def _command_turns(item_input: dict[str, Any], output: dict[str, Any],
@@ -441,15 +460,17 @@ def _command_turns(item_input: dict[str, Any], output: dict[str, Any],
     """Which turns of the thread ran `wire`.
 
     Read from the prompts the harness actually sent (`turn_prompts`, with any loop-back
-    placeholder already resolved) and, failing that, from the item's own command — not
-    from the fixture's `command` field alone, because a trajectory can carry a command
-    on a later turn (`dev_t4_01` runs `/ehr`, `/labs`, `/meds`).
+    placeholder already resolved) and, failing that, from the item's own DECLARED command
+    — not from the fixture's `command` field as though it were prose, because that field
+    is a bare name (`"ehr"`), not a slash prompt, and running it through the prose
+    classifier would classify every item as free text.
     """
     prompts = output.get("turn_prompts")
-    commands = ([_leading_wire_command(str(prompt)) for prompt in prompts]
-                if isinstance(prompts, list) and prompts else [])
-    if not commands:
-        commands = [_leading_wire_command(str(item_input.get("command") or ""))]
+    if isinstance(prompts, list) and prompts:
+        commands = [_leading_wire_command(str(prompt)) for prompt in prompts]
+    else:
+        declared = str(item_input.get("command") or "").strip().lstrip("/").lower()
+        commands = [declared if declared in _WIRE_COMMANDS else None]
     return [index for index, command in enumerate(commands) if command == wire]
 
 
@@ -1060,8 +1081,17 @@ def make_judge_composite(judge_fn: Callable[..., dict]) -> Callable[..., list[Ev
         scores = {e.name: e.value for e in (evaluations or [])}
 
         if float(scores.get(STRUCTURAL, 0.0)) < 1.0:
+            # WHAT failed, not just that something did. The short-circuit used to write a
+            # fixed sentence, so the run artifact could not say which assertion tripped and
+            # a post-mortem had to fetch the trace to find out. The assertion string is
+            # already in the evaluation beside this one; it is carried into `reason`, which
+            # the diagnostics sink persists (2026-11-24).
+            detail = next((str(e.comment or "") for e in (evaluations or [])
+                           if e.name == STRUCTURAL), "")
+            reason = ("structural failure; judge not called"
+                      + (f": {detail}" if detail else ": structural check did not run"))
             diagnostics.record(input=input or {}, output=output or {}, result=None,
-                               reason="structural failure; judge not called")
+                               reason=reason)
             return [_score(VERDICT, 0.0,
                            comment="structural assertion failed; judge not called")]
 

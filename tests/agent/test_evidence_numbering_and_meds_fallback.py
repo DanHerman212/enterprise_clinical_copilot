@@ -141,6 +141,23 @@ def test_a_fallback_from_the_instructions_is_a_discharge_list():
         "Medrol, Darvocet ^[1].")
 
 
+def test_instructions_beside_a_narrative_section_are_not_a_discharge_list():
+    """90000023: the instructions hold the restrictions, the course holds the drug.
+
+    The retrieval has to read both on a record with no `discharge_medications` heading, so
+    the answer is a narrative answer and says which passage carries the medication. The
+    instructions-only wording is kept for a record whose instructions really do state the
+    prescription (`test_a_fallback_from_the_instructions_is_a_discharge_list`).
+    """
+    text = answer_text.medication_narrative(
+        _rows("Plavix"), 1,
+        sections=("discharge_instructions", "brief_hospital_course"))
+
+    assert text == (
+        "No dedicated discharge medications section is documented in the record. "
+        "Documented to continue at discharge: Plavix ^[1].")
+
+
 def test_a_fallback_with_no_drugs_does_not_speak_for_the_whole_record():
     """`dev_t4_02`: one section holding no list is not the record holding no medication."""
     text = answer_text.medication_narrative(

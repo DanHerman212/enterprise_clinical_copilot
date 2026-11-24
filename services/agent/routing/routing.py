@@ -754,6 +754,24 @@ _READMISSION_TOKENS = frozenset({
     "rehospitalization", "rehospitalisation", "rehospitalized", "rehospitalised",
 })
 
+#: What a question looks like when it has ALREADY SEEN the estimate.
+#:
+#: Two shapes, both non-interrogative, and both were deflections before Gate C4a:
+#:
+#:   * a stated figure beside the word "risk" — "bring his coronary intervention, the
+#:     abnormal discharge labs, the discharge medication status and 31.7% readmission risk
+#:     together" (`dev_d4_adv_01` turn 4, 2026-11-23). The reader is quoting the number the
+#:     card printed and asking for it to be held beside the chart; the predictor was not
+#:     bound, so the turn described the chart and never read the estimate it was handed.
+#:   * a verdict the question asserts — "he is high risk for readmission, isn't he" — which
+#:     presupposes the estimate rather than asking for it.
+#:
+#: Neither needs the interrogative vocabulary above, so `asks_for_risk_score` returns False
+#: on both and the tool stays unbound. A question that states the number wants it placed;
+#: that is the same request the chip makes in the interrogative.
+_RISK_VERDICT_WORDS = frozenset({"high", "low", "elevated", "raised", "borderline"})
+_STATED_PERCENT = re.compile(r"\d+(?:\.\d+)?\s*%")
+
 #: How the same event is named without the word for it. A question can ask for the
 #: estimate in plain English — "how likely is she to bounce back within a month?" — and
 #: every predicate below that keys on the word "risk" misses it.
@@ -822,8 +840,18 @@ def asks_for_risk_score(question: str) -> bool:
         return True
     if any(token in _RISK_OUTLOOK_WORDS for token in tokens):
         return True
-    return ("risk" in tokens
-            and any(token in _RISK_SCORE_COMPARISONS for token in tokens))
+    if "risk" in tokens:
+        # The two presupposing shapes: the number is quoted back, or the verdict is
+        # asserted. A literature question is excluded because the predictor beside a
+        # published-cohort question is this patient's estimate on a turn nobody asked for
+        # it — the deflection this predicate exists to prevent, in reverse.
+        if _STATED_PERCENT.search(question or "") and not asks_for_literature(question):
+            return True
+        if any(token in _RISK_VERDICT_WORDS for token in tokens) \
+                and not asks_for_literature(question):
+            return True
+        return any(token in _RISK_SCORE_COMPARISONS for token in tokens)
+    return False
 
 
 #: How a question names one of the analytes the lab series carries.

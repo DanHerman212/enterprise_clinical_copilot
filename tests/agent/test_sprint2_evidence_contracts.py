@@ -91,25 +91,28 @@ def test_a_present_value_is_unaffected():
 
 
 def test_the_prompt_states_what_a_driver_without_a_value_means():
-    """A factor with no value is described by its direction, and the gap is not narrated.
+    """A null driver is stated as "no recorded value", never as a null or a reason.
 
-    The rule used to instruct the model to say "the value is null" and never substitute a
-    lab series. Both are gone with the null itself: the projection stopped carrying a
-    `value` key when there is nothing to state, so there is no null for the prose to name
-    and no substitute to reach for (2026-11-20).
-
-    It then said "a factor with no `value` was scored without one", and the model
-    paraphrased the rule into the answer: "admission type ... scored without a specific
-    feature value" (measured 2026-11-20, 90000015). A rule that describes the absence is a
-    rule that invites the sentence describing it, so the absence is now stated only as a
-    prohibition (third polish, 2026-11-20).
+    T1's projection omits the `value` key altogether for a row that holds nothing, so there
+    is no null for the prose to name. The rule that told the model what the absence MEANT
+    ("a factor with no `value` was scored without one") was paraphrased into the answer —
+    "admission type ... scored without a specific feature value" (measured 2026-11-20,
+    90000015) — so the absence is now stated as one fixed phrase with no explanation
+    attached. A categorical feature is named separately because it has no column of its
+    own: "carries no recorded value" is the whole truth about it. Part two keeps the
+    `dev_d2_risk_01` prohibition, that a laboratory series was not the scored input
+    (Gate C4a, 2026-11-24).
     """
     text = " ".join(prompts.RISK_SPOKE.split())
 
-    assert "a factor with no value of any kind is" in text
-    assert "stated without the parenthetical" in text
+    assert "has none recorded in the scored row" in text
+    assert "carries no recorded value" in text
+    assert "never call a categorical feature" in text
+    assert "Write no `(missing)`, `(null)` or `(not recorded)`" in text
     assert "was scored without one" not in text
     assert "are not yours to state" in text
+    # The substitution `dev_d2_risk_01` made: a series reading offered as the scored value.
+    assert "its readings were NOT the value the model scored" in text
 
 
 # --------------------------------------------------------------------- T2

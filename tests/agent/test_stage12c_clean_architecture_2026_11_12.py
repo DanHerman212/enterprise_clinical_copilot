@@ -382,7 +382,9 @@ def test_the_literature_spoke_maps_each_arm_to_its_group():
 
 
 def test_the_ehr_formatter_reports_the_attribution_without_editorialising():
-    text = " ".join(prompts.EHR_FORMATTING.split())
+    # The two-arm example lives in the comparator instruction, which is composed into the
+    # `/ehr` prompt only on a turn that has verified cohort rows (Gate C4a).
+    text = " ".join(prompts.ehr_formatting_for(comparators=True).split())
     assert "REPORT THE MODEL'S ATTRIBUTION AND STOP" in text
     for editorial in (
         "what the named drivers mean clinically",

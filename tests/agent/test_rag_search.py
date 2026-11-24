@@ -758,6 +758,47 @@ def test_medication_sections_falls_back_to_a_headingless_note():
     assert [p["section"] for p in result["passages"]] == ["discharge_summary"]
 
 
+def test_an_instructions_heading_alone_does_not_hide_the_course_that_names_the_drug():
+    """The 90000023 shape: instructions state restrictions, the course states the drug.
+
+    `discharge_instructions` is filed with the medication sections because that is where
+    most notes write the dose, but this note's instructions hold no medication at all — the
+    antiplatelet is in the course. Read from the instructions alone the record reported
+    "no medications are documented", which is what `/meds` served on 2026-11-23.
+    """
+    note = (
+        "HOSPITAL COURSE: Mr. ABC had a noncomplicated post-intervention course. He was "
+        "stable for discharge home with instructions to take Plavix daily for one month.\n\n"
+        "DISCHARGE INSTRUCTIONS: Low-fat, low-salt diet. No lifting over ten pounds for "
+        "seven days. No driving for two days."
+    )
+    with patch.object(rs, "_fetch_note_row", lambda hadm: ("MT-99-DS", note)):
+        result = rs._search_medication_sections(90000023)
+
+    sections = [p["section"] for p in result["passages"]]
+    assert sections == ["discharge_instructions", "brief_hospital_course"], sections
+    by_section = {p["section"]: p for p in result["passages"]}
+    assert "Plavix" in by_section["brief_hospital_course"]["text"]
+    # The label is what tells the extraction which passage is a list and which is a story.
+    assert by_section["brief_hospital_course"]["medication_source"] == "narrative"
+    assert by_section["discharge_instructions"]["medication_source"] == "dedicated"
+    # And the record still has no section that exists to hold a LIST.
+    assert result["dedicated_section_present"] is False
+
+
+def test_a_dedicated_list_is_still_read_alone():
+    """The guard the fallback must not break: a real list is never mixed with the course."""
+    note = (
+        "HOSPITAL COURSE: Treated with IV morphine overnight.\n\n"
+        "DISCHARGE MEDICATIONS: Coumadin 5 mg daily."
+    )
+    with patch.object(rs, "_fetch_note_row", lambda hadm: ("MT-98-DS", note)):
+        result = rs._search_medication_sections(90000014)
+
+    assert [p["section"] for p in result["passages"]] == ["discharge_medications"]
+    assert result["dedicated_section_present"] is True
+
+
 def test_a_dedicated_medication_section_wins_over_the_narrative():
     """Both are present: the list is the answer, and the course is not mixed into it.
 

@@ -58,6 +58,44 @@ def test_a_null_value_is_absent_rather_than_stated_as_null():
     assert "null" not in str(presented)
 
 
+def test_a_lab_backed_null_driver_reaches_the_model_with_no_number_to_quote():
+    """The two null shapes `dev_d2_risk_01` produced, side by side (Gate C4a).
+
+    One driver is clinical — the model names "lowest monocyte count" while the scored row
+    holds nothing for `monocytes_min`, and a whole monocyte series sits in the same turn's
+    evidence. The other is categorical: `admission_type` is one hot encoding with no column
+    of its own and no level supplied here. Both must arrive with no `value` at all, so the
+    prose has no number it could present as the scored input; what is left is the sentence
+    the prompt requires, "carries no recorded value", and the separate statement that a
+    series' readings were not it.
+    """
+    served = {
+        "probability": 0.317, "threshold": 0.11,
+        "top_factors": [
+            {"feature": "monocytes_min", "direction": "decreases",
+             "contribution": -0.0836, "value": None},
+            {"feature": "admission_type", "direction": "increases",
+             "contribution": 0.0896, "value": None},
+        ],
+    }
+
+    projected = _presented_for_model("predict_readmission", served)
+
+    monocytes, admission = projected["top_factors"]
+    assert monocytes["feature"] == "lowest monocyte count"
+    assert admission["feature"] == "admission type"
+    for factor in (monocytes, admission):
+        assert "value" not in factor, factor
+        assert "null" not in str(factor)
+        assert factor["direction"] in {"increases", "decreases"}
+
+    # The prompt carries the two obligations the projection leaves the prose: name the
+    # missing scored input once, and refuse the series as a substitute for it.
+    spoke = " ".join(prompts.RISK_SPOKE.split())
+    assert "carries no recorded value" in spoke
+    assert "its readings were NOT the value the model scored" in spoke
+
+
 def test_a_database_flag_reaches_the_model_as_words():
     """`oncology_flag` is 1 because the row is one column of an encoding.
 
@@ -398,13 +436,24 @@ def test_the_guardrail_rewrites_a_served_count_to_its_whole_number():
 
 
 def test_the_risk_spoke_forbids_narrating_an_absent_value():
-    """A rule that DESCRIBES the absence invites the sentence describing it.
+    """A null driver is stated once, in one fixed phrase, and never explained.
 
     90000015's answer said admission type was "scored without a specific feature value",
-    paraphrasing the rule that told the model what an absence meant (2026-11-20).
+    paraphrasing a rule that told the model what an absence MEANT (2026-11-20). The rule now
+    names the phrase it wants — "carries no recorded value" — and forbids the parenthetical
+    and the explanation that produced the paraphrase. The obligation survives because a
+    reader has to be told the row holds nothing; the narration does not (Gate C4a,
+    2026-11-24).
     """
     spoke = _flat(prompts.RISK_SPOKE)
 
-    assert "stated without the parenthetical" in spoke
-    assert "never as a missing value" in spoke
+    assert "has none recorded in the scored row" in spoke
+    assert "carries no recorded value" in spoke
+    # The markers are named only inside the prohibition; the parenthetical position never
+    # carries one, which is the fault 90000015 shipped.
+    assert "Write no `(missing)`, `(null)` or `(not recorded)`" in spoke
+    assert "offer no reason the row holds nothing" in spoke
+    # The formulations that produced the 2026-11-20 paraphrase are gone, not reworded.
     assert "was scored without one" not in spoke
+    assert "never as a missing value" not in spoke
+    assert "stated without the parenthetical" not in spoke

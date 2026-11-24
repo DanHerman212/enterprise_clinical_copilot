@@ -135,6 +135,14 @@ LAB_ANALYTE_WORDS = (
     "potassium",
     "white blood cell", "wbc", "leukocyte",
     "nt-probnp", "bnp",
+    # The collective and the panel. A clinician asks to compare "his discharge blood
+    # counts" without naming hemoglobin, and a question with no analyte name in it lost the
+    # series: the only domain cue left was the word "stay", which is a chart cue, and one
+    # domain narrows the tool set — so `get_lab_trends` was dropped from a question whose
+    # whole subject was laboratory values (`dev_d5_fup_02`, 2026-11-23). These name the
+    # panel rather than one column, so they bind the series and canonicalise to no single
+    # analyte.
+    "blood count", "blood work", "lab value", "lab values",
 )
 
 _LAB_ANALYTE = re.compile(

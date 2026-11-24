@@ -35,6 +35,7 @@ from services.agent.routing import routing  # noqa: E402
 from services.agent.engine import prompts  # noqa: E402
 from services.agent.engine.deterministic import (  # noqa: E402
     _NO_READMISSION,
+    _has_discharge_section,
     _medication_sections,
     _presented_prediction,
     meds_formatting_for,
@@ -279,9 +280,17 @@ def test_the_formatting_turn_cannot_call_anything(command):
     # turn was given a medication instruction at all rather than the reasoning prompt.
     expected = (meds_formatting_for(_medication_sections(state["tool_calls"]))
                 if command.wire == "meds" else prompts.formatting_for(command.wire))
-    assert expected in system.content
+    if command.wire == "summarize":
+        # `/ehr` has more than one instruction too, chosen from what the turn retrieved:
+        # which cohort paragraph applies, and whether the record has a discharge plan for a
+        # heading to sit over. The expectation is composed the way the engine composes it,
+        # so this still asserts the turn received ITS instruction rather than the reasoning
+        # prompt.
+        expected = prompts.ehr_formatting_for(
+            has_discharge_section=_has_discharge_section(state["tool_calls"]))
     # Neither the composed prompt nor its hub: a command's formatting turn is told how to
     # write its own answer, not how to choose a tool.
+    assert expected in system.content
     assert prompts.SYSTEM_PROMPT not in system.content
     assert prompts.CORE_HUB_PROMPT not in system.content
 

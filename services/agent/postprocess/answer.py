@@ -163,6 +163,37 @@ def _distinct_medications(verified: list[dict[str, str]]) -> list[str]:
     return names
 
 
+def fold_unsupported_plan_heading(prose: str) -> str:
+    """Drop the discharge-plan label from an answer the record cannot support.
+
+    The rule lives in `discharge_section`, beside the paragraph it edits, and is re-exported
+    here because `engine/` may import this module and may not import that one (Charter §5).
+    One implementation, one caller-facing name.
+    """
+    return discharge_section.fold_unsupported_plan_heading(prose)
+
+
+def _also_not_continued(sentence: str, inpatient_names: list[str],
+                        source: str) -> str:
+    """Add the drugs the record lists and does not send home, after the discharge list.
+
+    A medication section can hold both halves of one fact. 90000015's opens with the regimen
+    the patient left on and also carries the bridge anticoagulant that was stopped at a
+    target INR — "Lovenox 40 mg daily, discontinued 08/30/2007". Reporting only the home
+    drugs leaves a reader holding a transfer list that appears to continue a drug the record
+    stopped, which is the question `/meds` was asked in the first place (2026-11-24).
+
+    Stated as one short second sentence, and only when the extraction labelled a row
+    `inpatient`. The count sentence above is about what the patient takes; this one is about
+    what the record put down, and the two are not the same list.
+    """
+    if not inpatient_names:
+        return sentence
+    tail = source if sentence else ""
+    return (f"{sentence} Listed and not continued at discharge: "
+            f"{', '.join(inpatient_names)}{tail}.")
+
+
 def _course_only(sections: tuple[str, ...]) -> bool:
     """Whether the only thing the retrieval could read was the hospital course.
 
@@ -337,10 +368,10 @@ def medication_narrative(verified: list[dict[str, str]], returned_passages: int,
                              f"{', '.join(supply_names)}; {total} listed items in total)")
             else:
                 aside = ""
-            return (
+            return _also_not_continued(
                 f"{count} discharge {noun}{aside}, as recorded in the discharge note: "
-                f"{', '.join(drug_names)}{source}."
-            )
+                f"{', '.join(drug_names)}{source}.",
+                inpatient_names, source)
         # Direct clinical prose. The sentence used to open with a statement about the
         # NOTE — "The clinical record does not contain a dedicated discharge medications
         # section" — which is a fact about the document's headings, told to a clinician who

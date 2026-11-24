@@ -152,6 +152,35 @@ def _paragraph(prose: str) -> tuple[int, int, str] | None:
     return label_at, end, prose[body_at:end]
 
 
+def fold_unsupported_plan_heading(prose: str) -> str:
+    """Drop the discharge-plan LABEL from an answer the record cannot support.
+
+    The heading is a claim about the document: it says this record has a discharge plan to
+    report. A record whose retrieved sections stop at the diagnosis, the procedure, the
+    indications and the course has nowhere to have said where the patient went home to, and
+    90000035's `/ehr` opening turn wrote the label anyway over facts the hospital-course
+    heading had already carried (2026-11-24).
+
+    Only the label goes. The sentences under it are kept exactly as the model wrote them,
+    with their markers, because removing prose is a different and larger act than removing a
+    heading: the sentence was graded on its content, and the heading was the only thing that
+    was wrong.
+    """
+    span = _paragraph(prose)
+    if span is None:
+        return prose
+    start, end, body = span
+    head = prose[:start].rstrip()
+    # Left-stripped, not stripped: the whitespace between the kept sentences and the next
+    # heading is part of the spacing this function has to preserve.
+    tail = body.lstrip()
+    rest = prose[end:]
+    if not tail.strip():
+        return f"{head}{rest}" if rest else head
+    joiner = "\n\n" if head else ""
+    return f"{head}{joiner}{tail}{rest}"
+
+
 def _sections_by_position(units: Iterable[Mapping[str, Any]]) -> dict[int, str]:
     """Marker number -> section name, for the array a pre-compaction marker indexes."""
     return {position: str(unit.get("section") or "")

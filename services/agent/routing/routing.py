@@ -892,6 +892,36 @@ def asks_about_a_lab_analyte(question: str) -> bool:
     return names_an_analyte(question)
 
 
+#: The words that ask about the panel as a WHOLE rather than about one analyte in it.
+#:
+#: A question that says "her discharge blood counts" is asking for every count, and the
+#: answer needs the whole panel: one analyte's series cannot tell a reader which counts were
+#: high and which were low. `get_lab_trends` takes an optional analyte for exactly this
+#: reason — a call without one returns every trend the admission has — so the vocabulary
+#: that opens the tool has to include the collective names as well as the analyte names.
+_PANEL_PHRASES: tuple[str, ...] = (
+    "blood count", "blood counts", "blood work", "bloods",
+    "lab panel", "lab panels", "laboratory panel", "laboratory panels",
+    "abnormal discharge labs", "discharge labs", "the labs", "all the labs",
+    "her labs", "his labs", "their labs", "lab values", "the panel",
+)
+
+
+def asks_for_the_whole_panel(question: str) -> bool:
+    """Whether this question is about the panel rather than one named analyte.
+
+    Read by `graph._freetext_allowed` to keep `get_lab_trends` reachable on a plural
+    request. A thread that already holds one analyte's series — `get_lab_trends(analyte=
+    'rbc')` from an earlier driver chip — is exactly the state in which a turn can look
+    answered: 90000046's fourth turn asked to compare two opposing drivers "with her
+    discharge blood counts" and made no tool call at all, so it reported the RBC series it
+    already had and an admission snapshot it had already read, and said nothing about the
+    counts it had been asked for (`dev_d4_risk_01`, 2026-11-24).
+    """
+    text = " " + re.sub(r"[^a-z0-9]+", " ", (question or "").lower()).strip() + " "
+    return any(f" {phrase} " in text for phrase in _PANEL_PHRASES)
+
+
 def lab_analytes_named(question: str) -> tuple[str, ...]:
     """The analytes this question names, for the caller that has to read every one.
 

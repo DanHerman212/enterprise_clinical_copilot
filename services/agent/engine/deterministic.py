@@ -157,6 +157,29 @@ def _medication_sections(recorded: list[RecordedToolCall]) -> tuple[str, ...]:
 #: The section whose presence makes `/meds` a discharge-list question.
 _DISCHARGE_MEDS_SECTION = "discharge_medications"
 
+#: The sections that state a DISCHARGE PLAN rather than a course. `/ehr` may write a
+#: "Discharge plan & medications" heading only when one of these came back: the heading is
+#: about where the patient went and what they were sent home with, and a record whose
+#: retrieved sections stop at the diagnosis, the procedure, the indications and the course
+#: has nowhere to have said it. Omitted rather than left to the prompt, because the prompt's
+#: own condition ("only if the passages contain discharge medications, a disposition,
+#: restrictions, or follow-up instructions") is satisfied by a COURSE that happens to
+#: mention a discharge, which is how `dev_d5_fup_02` turn 1 on 90000035 wrote the heading
+#: over the four sections listed above (2026-11-24).
+_DISCHARGE_PLAN_SECTIONS = frozenset({
+    "discharge_medications",
+    "discharge_instructions",
+    "discharge_disposition",
+    "discharge_plan",
+    "medications_on_discharge",
+})
+
+
+def _has_discharge_section(recorded: list[RecordedToolCall]) -> bool:
+    """Whether this turn retrieved a section that exists to state a discharge plan."""
+    return any(section in _DISCHARGE_PLAN_SECTIONS
+               for section in _medication_sections(recorded))
+
 
 def meds_formatting_for(sections: tuple[str, ...]) -> str:
     """The extraction instruction this record's own retrieval calls for.
@@ -203,7 +226,6 @@ def parse_medications(
         name = _normalise(str(row.get("medication") or ""))
         dosage = _normalise(str(row.get("dosage") or ""))
         frequency = _normalise(str(row.get("frequency") or ""))
-        route = _normalise(str(row.get("route") or ""))
         if not name:
             continue
         reason = None
@@ -217,27 +239,24 @@ def parse_medications(
         setting = _normalise(str(row.get("setting") or ""))
         if setting not in ("discharge", "inpatient"):
             setting = ""
-        # A route or indication is kept only when the passage states it. "IV" and "for
-        # pain" are short enough to appear in any clinical note by accident, so the same
-        # rule the dose gets applies: what the note does not say is not carried.
-        #
         # And a schedule field is a schedule. A route, a form, an application site or a
         # stated indication that arrives in `frequency` is moved to `route` and taken out
         # of the schedule, because the two prompts ask for the same five fields and one of
         # them was answered with "p.o." in the schedule column while the route column sat
         # empty (`dev_d1_slash_02`, 2026-11-24). Doing it here rather than in the prompt is
         # the control: an instruction is a request, this is the guarantee.
-        frequency, moved = _split_regimen_detail(
-            str(row.get("frequency") or "").strip(),
-            str(row.get("route") or "").strip())
+        #
+        # What is NOT moved is a DURATION. "for five days, then 10 mg q.12h. for five
+        # days" is the taper itself, and stripping it turned two dated steps into two
+        # open-ended rows that no reader could titrate from (`dev_d1_slash_02`,
+        # `dev_d5_slash_01`, 2026-11-24).
+        frequency, moved = _split_regimen_detail(frequency)
         verified.append({
             "medication": str(row.get("medication") or "").strip(),
             "dosage": str(row.get("dosage") or "").strip(),
             "frequency": frequency,
-            "route": (moved if moved else str(row.get("route") or "").strip())
-                     if (moved and moved in source) or (not moved
-                        and route and route in source)
-                     else "",
+            "route": _regimen_route(
+                str(row.get("route") or "").strip(), moved, source),
             "setting": setting,
         })
     return verified, dropped
@@ -256,34 +275,75 @@ _SITE_IN_CELL = re.compile(r"\bto the [A-Za-z ]+", re.IGNORECASE)
 #: A stated indication, which runs to the end of the cell: "for breakthrough pain".
 _INDICATION_IN_CELL = re.compile(r"\bfor [A-Za-z][A-Za-z \-]*$", re.IGNORECASE)
 
+#: The words that make a trailing `for …` phrase a DURATION rather than an indication.
+#:
+#: `for breakthrough pain` says what a drug is for; `for five days` says how long. The
+#: pattern above cannot tell them apart — every one of those words is a letter — so the
+#: distinction is made on the phrase itself. "day, days, week, weeks, month, months, hour,
+#: hours, dose, doses, dosing, time, times" plus any number, written as a digit or as a
+#: word, is a duration; anything else is an indication.
+_DURATION_WORDS = frozenset({
+    "day", "days", "week", "weeks", "month", "months",
+    "hour", "hours", "minute", "minutes", "dose", "doses", "dosing",
+    "time", "times",
+})
+
+#: A count, as a sig writes one. `for 2 weeks` and `for two weeks` are the same duration.
+_CALENDAR_NUMBER = re.compile(
+    r"\b(?:a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\d+)\b",
+    re.IGNORECASE,
+)
+
 #: Fillers that mean nothing once the route or indication they introduced has moved.
 _FILLER_IN_CELL = re.compile(
     r"\b(?:to be used|to be taken|to be applied|as directed)\b", re.IGNORECASE)
 
 
-def _split_regimen_detail(frequency: str, route: str) -> tuple[str, str]:
+def _is_duration_phrase(phrase: str) -> bool:
+    """Whether a trailing `for …` names how LONG rather than what FOR.
+
+    A duration belongs to the schedule. Moving it out is what turned `20 mg q.12h. for five
+    days, then 10 mg q.12h. for five days` into two undated rows, and what dropped the
+    two-week course from a bedtime dose (`dev_d1_slash_02`, `dev_d5_slash_01`, 2026-11-24).
+    """
+    tokens = {token.lower() for token in re.findall(r"[A-Za-z]+", phrase)}
+    if tokens & _DURATION_WORDS:
+        return True
+    return bool(_CALENDAR_NUMBER.search(phrase))
+
+
+def _split_regimen_detail(frequency: str) -> tuple[str, list[str]]:
     """`frequency` with any non-schedule detail taken out of it, and that detail.
 
-    Returns `(schedule, detail)`. `detail` is empty when the frequency held nothing but
-    timing, which is what both extraction prompts ask for and the common case.
+    Returns `(schedule, moved)`, where `moved` is the list of fragments the caller may add
+    to the route column — each one separately, because the note has to support each one
+    separately. A joined string is not evidence: the note never writes "p.o. for five
+    days", so testing a join discarded a legal route whenever anything moved beside it.
 
     Only three shapes are moved — a route, an application site, and a stated indication —
     and the rest of the cell is returned VERBATIM: the note writes `q.12h.` and the grid
-    should show `q.12h.`, so the schedule is not rebuilt from normalized tokens. What is
-    removed is exactly the words that are not a schedule.
+    should show `q.12h.`, so the schedule is not rebuilt from normalized tokens. A
+    DURATION is not one of the three, and stays where it is.
     """
     if not frequency:
-        return "", ""
+        return "", []
     moved: list[str] = []
     rest = frequency
     for pattern in (_ROUTE_IN_CELL, _SITE_IN_CELL, _INDICATION_IN_CELL):
-        match = pattern.search(rest)
-        if match is None:
-            continue
-        moved.append(match.group(0).strip())
-        rest = f"{rest[:match.start()]} {rest[match.end():]}"
+        # Every occurrence, not the first: a taper writes the route once per step —
+        # "20 mg p.o. q.12h. for five days, then 10 mg p.o. …" — and leaving the second one
+        # in the schedule puts a route back in the field this function exists to clean.
+        while True:
+            match = pattern.search(rest)
+            if match is None:
+                break
+            phrase = match.group(0).strip()
+            if pattern is _INDICATION_IN_CELL and _is_duration_phrase(phrase):
+                break
+            moved.append(phrase)
+            rest = f"{rest[:match.start()]} {rest[match.end():]}"
     if not moved:
-        return frequency, ""
+        return frequency, []
     rest = _FILLER_IN_CELL.sub(" ", rest)
     # Only whitespace runs and the punctuation the removal stranded. The dots INSIDE the
     # schedule are the note's own spelling — `q.12h.` must survive as `q.12h.` — so this
@@ -291,7 +351,34 @@ def _split_regimen_detail(frequency: str, route: str) -> tuple[str, str]:
     rest = re.sub(r"[ \t]{2,}", " ", rest)
     rest = re.sub(r"\s+([,;])", r"\1", rest)
     rest = rest.strip(" ,;")
-    return rest, " ".join(part for part in moved if part)
+    return rest, [part for part in moved if part]
+
+
+def _supported_in(text: str, source: str) -> bool:
+    """Whether the note states this fragment, compared the way `parse_medications` does."""
+    needle = _normalise(text)
+    return bool(needle) and needle in source
+
+
+def _regimen_route(stated: str, moved: list[str], source: str) -> str:
+    """The route column: what the model stated, plus what it put in the schedule.
+
+    Each candidate is checked against the note ON ITS OWN and the supported ones are
+    combined. The previous version tested the fragments joined together, so a legal route
+    was thrown away whenever it arrived beside anything else, and it REPLACED the model's
+    own route rather than adding to it.
+    """
+    parts: list[str] = []
+    seen: set[str] = set()
+    for candidate in ([stated] if stated else []) + list(moved):
+        if not _supported_in(candidate, source):
+            continue
+        key = re.sub(r"[^a-z0-9]+", " ", candidate.lower()).strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        parts.append(candidate)
+    return ", ".join(parts)
 
 
 def _dose_supported(dosage: str, source: str) -> bool:
@@ -568,9 +655,46 @@ def lab_flag_annotation(recorded: list[RecordedToolCall]) -> str:
             )
     if not lines:
         return ""
+    if _panel_has_abnormal(recorded) and not _panel_has_critical(recorded):
+        # The count the answer cannot derive: three flagged rows and no critical one is a
+        # different sentence from three flagged rows, and a reader cannot tell the two apart
+        # by omission (`dev_d5_fup_02` turn 3, 2026-11-24).
+        lines.append("- No reading in this panel carries a critical flag.")
     return ("<lab_flags>\nHow many readings of each analyte the panel flags abnormal, "
             "and the flag on the baseline (first) reading:\n"
             + "\n".join(lines) + "\n</lab_flags>")
+
+
+def _panel_flags(recorded: list[RecordedToolCall]) -> list[str]:
+    """Every timepoint flag the panel carries, lower-cased, in payload order."""
+    flags: list[str] = []
+    for call in recorded or []:
+        response = call.get("response")
+        if not isinstance(response, dict):
+            continue
+        for trend in response.get("trends") or []:
+            if not isinstance(trend, dict):
+                continue
+            for point in trend.get("series") or []:
+                if isinstance(point, dict):
+                    flags.append(str(point.get("flag") or "normal").strip().lower())
+    return flags
+
+
+def _panel_has_abnormal(recorded: list[RecordedToolCall]) -> bool:
+    """Whether any timepoint in the panel sits outside its reference interval."""
+    return any(flag != "normal" for flag in _panel_flags(recorded))
+
+
+def _panel_has_critical(recorded: list[RecordedToolCall]) -> bool:
+    """Whether any timepoint in the panel carries a critical flag.
+
+    Read from the payload rather than from the prose, because this decides which of two
+    instructions the formatter is given, and an instruction chosen from the answer would be
+    chosen from the thing it is meant to govern.
+    """
+    return any(flag.startswith("critical") for flag in _panel_flags(recorded))
+
 
 
 def _formatter_input(tool_messages: list[Any], outpatient: bool,
@@ -1567,9 +1691,23 @@ async def run_command(
         # whole set described blocks the turn had not retrieved — a paragraph about a
         # `<retrieved_readmission_literature>` block on a turn holding none is an invitation
         # to write about evidence that is not there (2026-11-24).
+        #
+        # And it carries a discharge-plan heading only when a section that exists to state
+        # one came back. The decision is the retrieval's, not the model's, for the reason
+        # `_DISCHARGE_PLAN_SECTIONS` records.
+        command_extras["has_discharge_section"] = _has_discharge_section(recorded)
         instruction = prompts.ehr_formatting_for(
             comparators=bool(command_extras.get("comparators")),
             literature=bool(command_extras.get("fallback_literature")),
+            has_discharge_section=command_extras["has_discharge_section"],
+        )
+    elif command.wire == "labs":
+        # A panel with abnormal readings and no critical one says so, because a reader
+        # looking at three flagged rows has to be told whether any of them was critical and
+        # the panel cannot say it by omission (`dev_d5_fup_02` turn 3, 2026-11-24).
+        instruction = prompts.labs_formatting_for(
+            abnormal=_panel_has_abnormal(recorded),
+            critical=_panel_has_critical(recorded),
         )
     response = await _formatting_turn(
         llm,
@@ -1622,6 +1760,14 @@ async def run_command(
     # because a marker with no citation behind it renders as a dead badge.
     if command.wire == "labs":
         text = citations.strip_markers(text)
+
+    # The heading is withheld from the instruction when the turn retrieved no section that
+    # states a discharge plan, and this is the second control on the same decision. A model
+    # that writes it anyway would put a label over the hospital-course facts the passages
+    # already put under their own heading, which is what `dev_d5_fup_02` turn 1 did on
+    # 2026-11-24. Folded rather than left: the sentence is kept, the unsupported label goes.
+    if command.wire == "summarize" and not command_extras.get("has_discharge_section"):
+        text = answer_text.fold_unsupported_plan_heading(text)
 
     state: dict[str, Any] = {
         "messages": [

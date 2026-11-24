@@ -184,13 +184,13 @@ def test_the_manifest_states_a_recorded_value_at_the_published_precision():
     Stating the row verbatim was the fix for `24.7` being scored a fidelity failure, and
     it produced its own defect: the risk result publishes the same value at two decimals,
     so one answer carried both forms (2026-11-20, 90000069). Two decimals is the precision
-    `prediction._clinical_value` chose. A count then went one step further: a fractional
-    number of days is a formatting fault rather than a measurement, so the block, the
-    projection, the guardrail and the prose all write it whole (2026-11-20, third polish).
+    `prediction._clinical_value` chose, and since 2026-11-24 a DURATION keeps it: rounding
+    a day count whole made the block disagree with the payload it was quoting, which is
+    what `dev_d5_slash_01` was docked for.
     """
     block = admission_context.render(90000101, {"prior_inpatient_days": "24.6667"})
 
-    assert "prior_inpatient_days: 25" in block
+    assert "prior_inpatient_days: 24.67" in block
     assert "24.6667" not in block
 
 

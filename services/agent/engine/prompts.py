@@ -17,6 +17,8 @@ no rule: it describes a call that cannot happen.
 
 from typing import Any, Iterable
 
+import re
+
 from services.agent.routing import routing
 
 CORE_HUB_PROMPT = """\
@@ -52,8 +54,17 @@ CLINICAL SCOPE & SAFETY
   index admission's administrative fields — admission type, discharge location, insurance,
   age, sex, prior utilisation — and `discharge_location` in it is where the patient went.
   A question it answers alone needs no tool call: state the value and stop.
-- State numeric feature values EXACTLY as the block or the tool payload writes them:
-  `19` prior inpatient days, not 18.58. A count is written whole.
+- State numeric feature values EXACTLY as the block or the tool payload writes them. A
+  DURATION keeps its fraction — `4.75` prior inpatient days is not `5`, and the payload
+  says 4.75 — while a TALLY of things you can count one at a time is written whole.
+- TWO OPPOSING DRIVERS ARE CONTRASTED, NOT LISTED. When a question sets one driver that
+  increases the estimate against one that decreases it, give each its own sentence, say
+  they pull in opposite directions, and then answer the findings the question named: each
+  factor beside the chart value it is about, rather than one reported and the other left
+  unaddressed.
+- NO SPECIALTY THE PASSAGE DOES NOT NAME. A clinician's name is not a service and an order
+  is not a consultation: "Dr. A started an insulin drip" does not license "evaluated by
+  endocrinology". Name a specialty only where the passage names it or its consult service.
 - Every patient-scoped tool is bound to this admission by the session: the admission is
   supplied for you, is not an argument you can pass, and must never appear in a tool call
   — not even as `null`. Never ask the user for an admission id and never invent or echo
@@ -209,6 +220,16 @@ CHART RETRIEVAL & SUMMARIZATION
   rather than `rag_search`. A note without headings comes back as one passage,
   `discharge_summary`, the whole note. Never refuse a summarization request or ask the
   user to narrow it down.
+- TWO CLINICS ARE TWO APPOINTMENTS. When the discharge instructions name two clinics, keep
+  each one with the task the passage gives that clinic; a question about follow-up names
+  every visit the passage states, not the first one it reaches.
+- A CHECKLIST IS EVERY ITEM ON IT. Asked about discharge instructions, restrictions or
+  precautions, report activity, diet, wound or drain care, any scheduled appointment and
+  the return precautions the passage states. A partial subset reads as the whole list.
+- A DRUG NOT CONTINUED IS CITED TO THE PASSAGE THAT SAYS WHAT WAS. "Heparin and the PCA
+  were not continued" is a claim about the home regimen, so it cites
+  `discharge_instructions` or `discharge_medications` — never `brief_hospital_course`,
+  which states what was given during the stay and cannot say what was stopped.
 - Write the summary as flowing prose, never a numbered or bulleted list; do NOT prefix a
   heading or line with a number or a bullet. Give each section its own paragraph,
   beginning with a bold inline label and a BLANK LINE between sections:
@@ -334,6 +355,12 @@ LABORATORY TRAJECTORIES & RANKING
   its value and `flag`, or says all were inside range. A `critical_low` or `critical_high`
   flag outranks distance: name a critical reading ahead of any merely low or high one,
   ranking by distance only when none is critical.
+- A PANEL WITH ABNORMAL READINGS AND NONE CRITICAL SAYS SO, in one sentence: the reader
+  looking at flagged rows cannot tell by omission whether any of them was critical. Omit
+  the sentence when every reading is normal.
+- `pertinent_results` IN A NOTE IS NOT THE DISCHARGE PANEL: it prints a snapshot, often of
+  the admission, and nothing taken from it is a discharge value. Discharge values are the
+  series' final timepoint.
   Where the abnormal readings left are merely low or high and sit in DIFFERENT units, no
   unitless comparison is meaningful and none may be invented: name the single analyte that
   is clearly furthest outside its own interval when one dominates, and otherwise state each
@@ -383,18 +410,20 @@ READMISSION RISK & DRIVER ATTRIBUTION
   always: "According to the readmission risk model, <factor> (<value>) increases/decreases
   this patient's 30-day readmission risk." The value is the one `top_factors[].value` or
   `<admission_metadata>` states, EXACTLY as written: the parenthetical IS the value and
-  carries no "value:" label of its own. A factor whose entry carries NO `value` has none
+  carries no "value:" label of its own. A decimal value keeps its decimal: `4.75` is not
+  `5`. A factor whose
+  entry carries NO `value` has none
   recorded in the scored row, and the sentence says exactly that. Write no `(missing)`,
   `(null)` or `(not recorded)` in its place, offer no reason the row holds nothing, and never
-  call a categorical feature — admission type, discharge location, insurance, race — a
-  missing value: it has no column of its own, so "carries no recorded value" is all that is
-  true of it. A present flag reads the same way: only an absent one is marked, in
+  call a categorical feature — admission type, discharge location — a missing value: it has
+  no column of its own. A present flag reads the same way: only an absent one is marked, in
   `(not present)`.
   (2) Only when note passages or a laboratory series in `<session_evidence_state>` document
   something relevant to that factor, one or two `^[n]`-cited sentences on it, and any
-  diagnosis or series supporting it gets its own `^[n]`-cited sentence. Where a series is
-  given, say plainly its readings were NOT the value the model scored: the row holds one
-  scored input and a series is several readings, none of them it. Where they document
+  diagnosis or series supporting it gets its own `^[n]`-cited sentence. Qualify the series
+  ONLY where part one said the row carries no recorded value: there, say its readings were
+  NOT the value scored. Where part one stated a value, the series is that value's own course
+  and is never disclaimed (`dev_d4_risk_01`, 2026-11-24). Where they document
   nothing — prior
   inpatient days, age, insurance type, race, an administrative field with no clinical
   elaboration — STOP after part one: no hospital-course padding, and no sentence about what
@@ -591,6 +620,11 @@ so it is "" whenever the passage states no timing. A form ("Dosepak"), a route (
 breakthrough pain") is a regimen detail the record supports, and it goes in "route", never
 in "frequency".
 
+A DURATION IS PART OF THE SCHEDULE, AND A TAPER IS ONE DRUG. "for five days", "for two
+weeks" and the "then …" that follows stay in "frequency": a passage writing "20 mg p.o.
+q.12h. for five days, then 10 mg p.o. q.12h. for five days" states ONE drug in two steps —
+one row carrying both steps and their durations, never two rows with the dates dropped.
+
 You are given one or more passages, and a medication may appear in any of them. A discharge
 medications section is usually the list of drug names; a discharge instructions section
 usually states the doses and frequencies, and sometimes names drugs the list omits. When the
@@ -708,6 +742,15 @@ is four items: a leading verb ("Resume", "Continue") is not a frequency, an adja
 ("DVT prophylaxis") is not a frequency or a dose, and neither may be copied into another \
 row's field.
 
+A BRIDGE THAT WAS STOPPED IS STILL WORTH A ROW. A record may open its medication list with \
+the drugs the patient arrived on and then state, in the same list, that one of them was \
+stopped — "Lovenox 40 mg daily, discontinued 08/30/2007 at INR 1.92", or an intravenous \
+agent "not continued at discharge". That row takes "setting": "inpatient", because the \
+passage states it did not go home, and its "frequency" keeps the stopping condition the \
+passage gives. Reporting it as an inpatient row is how the reader is told the patient is \
+NOT taking a drug their transfer list names; omitting it silently leaves them looking at a \
+list that appears to continue it.
+
 Never infer. Do not add a dose, a frequency or a route the text does not state, do not \
 convert units or expand abbreviations, and leave "dosage" or "frequency" empty when the \
 passage states neither — an empty field is honest, a guessed one is a clinical error.
@@ -796,6 +839,33 @@ not clinical facts, and the reader cannot look them up. Write no heading — thi
 answer about a course, not a report. Write nothing about medications, and append no disclaimer
 about missing information."""
 
+#: What a panel with abnormal readings and no critical one is told, and why it is told.
+#:
+#: A reader looking at flagged rows has two questions and the answer usually settles only the
+#: first: which values are abnormal. Whether any of them was CRITICAL is the question that
+#: changes what they do next, and silence does not answer it — 90000035's `/labs` follow-up
+#: reported two low analytes, including a hemoglobin nadir of 7.0 g/dL, and never said that
+#: none of them carried a critical flag (`dev_d5_fup_02` turn 3, 2026-11-24). The count is
+#: arithmetic over the payload, so it is generated here and only the sentence is the model's.
+LABS_NO_CRITICAL = """\
+None of this panel's readings carries a critical flag. Say so in one sentence when you report
+the abnormal values, in the same register as the rest of the answer: the reader needs to know
+that the flags they are looking at are outside a reference interval and not critical. Do not
+say it where every reading is inside its range — there is nothing flagged to qualify."""
+
+
+def labs_formatting_for(*, abnormal: bool = False, critical: bool = False) -> str:
+    """`LABS_FORMATTING`, plus the zero-critical sentence when the panel calls for it.
+
+    The decision is the payload's: `abnormal` and `critical` are read off the flags on the
+    recorded series, never off the question and never off the answer. A panel with nothing
+    outside its range gets no sentence, because "none was critical" is a statement about
+    flagged readings and there are none to speak of.
+    """
+    if abnormal and not critical:
+        return f"{LABS_FORMATTING}\n\n{LABS_NO_CRITICAL}"
+    return LABS_FORMATTING
+
 _EHR_FORMATTING_BASE = """Summarise the note sections you were given, for a clinician.
 Write flowing prose with these section labels, in this order:
 
@@ -824,6 +894,7 @@ Write flowing prose with these section labels, in this order:
   and how the patient's symptoms progressed. A medication, or a post-procedure medication
   instruction, that `brief_hospital_course` states belongs here, cited to that passage: it is
   something that happened during the stay, not a discharge prescription.
+<<DISCHARGE_PLAN>>
 - **Discharge plan & medications.** only if the passages contain discharge medications, a
   disposition, restrictions, or follow-up instructions: where the patient went, what they were
   prescribed, what they were told not to do, and who follows them. A medication list and an
@@ -855,7 +926,25 @@ Write flowing prose with these section labels, in this order:
   stating the patient leaves on no home medications is a record that prescribed nothing to
   take, and flattening it into "she was prescribed that drug" is a claim the section does not
   make.
+<<END_DISCHARGE_PLAN>>
 - **Readmission risk & trajectory.** only where a readmission-risk estimate was given to you.
+
+NO SPECIALTY THE PASSAGE DOES NOT NAME. A clinician's name is not a service and an order is
+not a consultation: "Dr. A started an insulin drip" does not license "evaluated by
+endocrinology", and a surgeon performing a procedure does not license "seen by cardiology".
+Name a specialty only where the passage names that specialty or its consult service.
+
+TWO CLINICS ARE TWO APPOINTMENTS, AND A CHECKLIST IS EVERY ITEM ON IT. When the discharge
+instructions name two clinics, keep each with the task the passage gives that clinic
+(laboratory rechecks at one and a drug-level check at the other are not one visit), and when
+they list activity, diet, wound or drain care, an office reappointment and return precautions,
+report each one. A follow-up question is answered in full or the reader is sent to a clinic
+that will not do what they were told it would.
+
+STATE THAT A DRUG WAS NOT CONTINUED ONLY FROM THE PASSAGE THAT SAYS WHAT WAS. "Heparin and the
+PCA were not continued" is a claim about the home regimen, so it cites the instructions or
+medication list that states what the regimen IS — never `brief_hospital_course`, which states
+what was given and cannot say what was stopped.
 
 A label the passages do not support is a label you omit. Omitting a section is the correct
 answer; inventing one to satisfy the format is a clinical error, and a fabricated discharge plan
@@ -897,7 +986,7 @@ clause inside the hospital course beside an activity or follow-up rule in the di
 instructions, and the unmarked `discharge_location` from `<admission_metadata>` — which takes no
 marker even inside a sentence that carries one — beside anything a passage states.
 
-Under **Discharge plan & medications.**, every sentence cites a section that can state a
+Under the discharge-plan heading, every sentence cites a section that can state a
 discharge plan — `discharge_medications`, `discharge_instructions` or `assessment_and_plan`
 — and never carries a `history_of_present_illness` or `brief_hospital_course` marker
 beside it. Inpatient management belongs under **Hospital course & procedures.** with that
@@ -1031,7 +1120,9 @@ the widget prints the score to a precision this prose cannot reproduce, and a nu
 disagrees with the number beside it is worse than no number at all.
 
 The drivers carry a direction and, for a clinical feature, the patient's own `value`. State
-which led and in which direction; where the result gives a value, quote it as written. A
+which led and in which direction; where the result gives a value, quote it as written — a
+decimal is quoted with its decimal, so `4.75` is never written `5` and `3.67` is never `4`.
+A
 factor
 that carries no value was scored without one, and saying it has none is the whole of what can
 be said about it.
@@ -1110,13 +1201,41 @@ published."""
 #: stray brace anywhere in it would raise at import time.
 _EHR_LITERATURE_SLOT = "<<LITERATURE>>"
 
+#: The discharge-plan bullet, bracketed so the composer can withhold it whole.
+_EHR_PLAN_SLOT = re.compile(
+    r"<<DISCHARGE_PLAN>>.*?<<END_DISCHARGE_PLAN>>\n", re.DOTALL)
+
+#: What a record with no discharge section is told instead of that bullet.
+#:
+#: The heading is not merely unnecessary there; it has nothing under it. A record whose
+#: retrieved sections stop at the diagnosis, the procedure, the indications and the course
+#: has nowhere to have said where the patient went, so the label either goes unfilled or is
+#: filled from the course — and both put discharge facts under a heading the document does
+#: not support (90000035, 2026-11-24). Where the patient went is still a fact worth one
+#: sentence, and `<admission_metadata>` holds it: stated at the close of the course, with no
+#: marker, because it rests on the manifest rather than on a passage.
+EHR_NO_DISCHARGE_PLAN = """\
+This record's passages state no discharge plan, so this answer carries no discharge-plan
+heading: where the patient went is one uncited sentence at the close of **Hospital course &
+procedures.**, taken from `<admission_metadata>` and no passage, and anything the notes say
+about restrictions or follow-up belongs under the heading whose passage states it."""
+
+
+def _without_plan_markers(text: str) -> str:
+    """The plan bullet as the instruction writes it, without the composer's sentinels."""
+    return text.replace("<<DISCHARGE_PLAN>>\n", "").replace(
+        "<<END_DISCHARGE_PLAN>>\n", "")
+
+
 #: The turn with no cohort evidence at all — the constant as every caller that is not a live
-#: `/ehr` turn reads it. The composer replaces the slot; this is what the slot becomes when
+#: `/ehr` turn reads it. The composer replaces the slots; these are what they become when
 #: nothing did.
-EHR_FORMATTING = _EHR_FORMATTING_BASE.replace(_EHR_LITERATURE_SLOT, EHR_LITERATURE_NONE)
+EHR_FORMATTING = _without_plan_markers(
+    _EHR_FORMATTING_BASE.replace(_EHR_LITERATURE_SLOT, EHR_LITERATURE_NONE))
 
 
-def ehr_formatting_for(*, comparators: bool = False, literature: bool = False) -> str:
+def ehr_formatting_for(*, comparators: bool = False, literature: bool = False,
+                       has_discharge_section: bool = True) -> str:
     """`EHR_FORMATTING` with the one comparison instruction this turn can use.
 
     Three states, and the turn is in exactly one of them: it has verified comparator rows, it
@@ -1124,6 +1243,13 @@ def ehr_formatting_for(*, comparators: bool = False, literature: bool = False) -
     the other two states is not merely unused — it describes a block the model is not holding,
     and a rule about absent evidence is an invitation to write about it. So the choice is made
     here, from the payloads the turn retrieved, and only the matching paragraph is sent.
+
+    `has_discharge_section` is the retrieval's answer to whether this record has a discharge
+    plan at all, and it decides whether the plan heading exists in the instruction. Withheld
+    rather than qualified, because a rule saying "only if the passages contain discharge
+    medications, a disposition, restrictions, or follow-up instructions" is satisfied by a
+    COURSE that mentions a discharge, and the model is not the party that can tell the
+    difference from inside its context.
     """
     if comparators:
         block = EHR_LITERATURE_COMPARATORS
@@ -1131,7 +1257,10 @@ def ehr_formatting_for(*, comparators: bool = False, literature: bool = False) -
         block = EHR_LITERATURE_RETRIEVED
     else:
         block = EHR_LITERATURE_NONE
-    return _EHR_FORMATTING_BASE.replace(_EHR_LITERATURE_SLOT, block)
+    text = _EHR_FORMATTING_BASE.replace(_EHR_LITERATURE_SLOT, block)
+    if has_discharge_section:
+        return _without_plan_markers(text)
+    return f"{_EHR_PLAN_SLOT.sub('', text)}\n\n{EHR_NO_DISCHARGE_PLAN}"
 
 LITERATURE_FORMATTING = """Summarise the published literature you were given, for a clinician asking
 the question above. The records were retrieved for that question, so the summary must answer it.

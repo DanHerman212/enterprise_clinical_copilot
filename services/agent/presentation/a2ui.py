@@ -562,6 +562,20 @@ def compose_presentation(question: str, answer: str,
             answer = _without_markers(answer, lab_cites)
             record_sources = [source for source in record_sources
                               if int(source.get("cite") or 0) not in lab_cites]
+        stray_lab_cites: set[int] = set()
+    else:
+        # The same reasoning reaches every other turn that can resolve a trajectory. A
+        # marker into a laboratory series is a badge that opens the card the answer already
+        # drew under the sentence, and on a free-text or chip turn it reads as a note
+        # citation for a passage that does not exist: `dev_d4_risk_01` turn 4 cited the RBC
+        # series as `^[1]`, which the judge could only report as "a unit that is not an
+        # openable note passage" (2026-11-24). What changes here is the PUBLISHED channel,
+        # not the record: `record_sources` still decides what the turn rests on, so the
+        # scope badge and the grounding verdict are untouched.
+        stray_lab_cites = {int(source.get("cite") or 0) for source in record_sources
+                           if str(source.get("section") or "") == LAB_SECTION}
+        if stray_lab_cites:
+            answer = _without_markers(answer, stray_lab_cites)
     # What the reader is SHOWN as evidence, which for `/labs` is nothing at all
     # (2026-11-03). A laboratory turn already draws every reading it discusses — the
     # measurement, the reference interval, the course and the flag, one row per timepoint —

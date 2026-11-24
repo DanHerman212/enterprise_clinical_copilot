@@ -112,7 +112,7 @@ def test_the_prompt_states_what_a_driver_without_a_value_means():
     assert "was scored without one" not in text
     assert "are not yours to state" in text
     # The substitution `dev_d2_risk_01` made: a series reading offered as the scored value.
-    assert "its readings were NOT the value the model scored" in text
+    assert "its readings were NOT the value scored" in text
 
 
 # --------------------------------------------------------------------- T2

@@ -580,14 +580,15 @@ def test_a_comparative_lab_question_is_answered_in_the_first_sentence():
 def test_feature_values_are_stated_exactly_as_recorded():
     """The example is the precision every layer now states.
 
-    It has been `18.5833 … not 18.58`, then `18.58 … not 18.6`, and since the count rule it
-    is `19`: the block rounds a count to a whole number and the risk projection does the
-    same, so the illustration has to agree with them or it asks the model for a number
-    nothing gives it (2026-11-20).
+    It has been `18.5833 … not 18.58`, then `18.58 … not 18.6`, then `19` when every day
+    count was rounded whole, and since 2026-11-24 it is the served fraction: a DURATION
+    keeps two decimals so the prose agrees with the payload beside it, and only a tally of
+    countable things is whole. The illustration has to agree with the layers or it asks the
+    model for a number nothing gives it.
     """
-    assert "`19` prior inpatient days" in SYSTEM_PROMPT
-    assert "not 18.58" in SYSTEM_PROMPT
-    assert "18.5833" not in SYSTEM_PROMPT
+    assert "`4.75` prior inpatient days is not `5`" in SYSTEM_PROMPT
+    assert "keeps its fraction" in SYSTEM_PROMPT
+    assert "`19` prior inpatient days" not in SYSTEM_PROMPT
 
 
 def test_the_manifest_outranks_a_historical_facility():

@@ -113,27 +113,26 @@ def _display(value: Any, feature: str = "") -> str:
     return _clinical_number_text(str(value).strip(), feature)
 
 
-#: Features whose row value counts discrete things rather than measuring one.
+#: Features whose row value counts DISCRETE things rather than measuring one.
 #:
-#: `medication_order_count` was served as 4.85 and `prior_inpatient_days` as 4.75
-#: (measured 2026-11-20, 90000020 and 90000015): the columns hold an order rate and an
-#: averaged day count under names that promise a tally. Two decimals on a count reads as a
-#: formatting fault — "4.85 orders" is not a number of orders — and the fraction carries no
-#: clinical meaning, so the last digit is not information the reader is owed.
+#: `medication_order_count` was served as 4.85 (measured 2026-11-20, 90000020): the column
+#: holds an order RATE under a name that promises a tally. Two decimals on a tally reads as
+#: a formatting fault — "4.85 orders" is not a number of orders — so a feature in this set
+#: is stated whole.
 #:
-#: Length of stay is here, and it is the correction this rule needed. The encoder holds
-#: `index_los_days` as 42.458333333333336 and the risk result published 42.46, so one
-#: answer stated "length of stay (patient value: 42.46)" — a prediction the reader cannot
-#: reconcile with a ward that counts days (measured 2026-11-20, 90000069). A day is a
-#: tally, not a measurement with a fraction, so it rounds whole like every other count.
+#: DURATIONS ARE NOT TALLIES, and they used to be in this set. `prior_inpatient_days` is
+#: served as 4.75 and `index_los_days` as 42.458333333333336, and rounding either one to an
+#: integer makes the prose disagree with the number the model was handed: `dev_d5_slash_01`
+#: was docked for stating prior inpatient days as 5 when the result said 4.75, and the
+#: manifest had rounded it before the model ever saw it (2026-11-24). A duration is a
+#: measurement the encoder keeps a fraction of, so it keeps two decimals like any other
+#: measurement. What stays whole is the count of a thing you can count one at a time.
 COUNT_FEATURES: frozenset[str] = frozenset({
     "procedure_count",
     "medication_count",
     "medication_order_count",
     "prior_admission_count",
-    "prior_inpatient_days",
     "recent_ed_visits",
-    "index_los_days",
 })
 
 

@@ -564,6 +564,13 @@ def _freetext_allowed(risk_driver_question: bool,
         # drivers it had just named (2026-11-21).
         if not _open_driver_question(intent, question):
             allowed.discard("get_lab_trends")
+    if routing.asks_for_the_whole_panel(question):
+        # A plural request outranks both narrowing rules. "Her discharge blood counts" needs
+        # every count the admission has, and one analyte's series — which the thread may
+        # already hold from a driver chip — answers a different question. The tool is put
+        # back AFTER the driver-turn discard above, because that discard is about a turn
+        # that names one factor, and a turn asking for the panel named none.
+        allowed.add("get_lab_trends")
     if domains is None:
         domains = (routing.question_domains(question, intent=intent)
                    if question else frozenset())
@@ -720,6 +727,61 @@ def _lab_analyte_already_read(state: AgentState, record: Any) -> bool:
     if named:
         return all(analyte in held for analyte in named)
     return _record_holds(record, "get_lab_trends") or bool(held)
+
+
+async def _prefetch_full_panel(
+    toolbox: Any, session: Any, *, question: str, hadm_id: int | None,
+    on_event: Any, cite_offset: int, replayed: list[dict],
+) -> list[dict]:
+    """Read the WHOLE panel when the question asks for blood counts as a set.
+
+    Binding the tool is not enough. 90000046's fourth turn asked to compare two opposing
+    drivers "with her discharge blood counts", held one analyte's series from a driver chip
+    and an admission snapshot from its `/ehr` turn, and answered with both of those and no
+    tool call at all (`dev_d4_risk_01`, measured 2026-11-24). A model holding an answer to a
+    neighbouring question will use it; the only reliable control is to put the panel in the
+    record before it writes.
+
+    A call that passes no `analyte` returns every trend the admission has, and
+    `spends_turn_allowance` makes that the only form that consumes the once-per-turn slot —
+    a single-analyte read leaves the panel available. Nothing happens when the thread
+    already holds an unfiltered read, when the session is not an admission, or when the
+    question names no panel.
+    """
+    if session is None or hadm_id is None:
+        return []
+    if not routing.asks_for_the_whole_panel(question):
+        return []
+    for call in replayed or []:
+        if str(call.get("name") or "") != "get_lab_trends":
+            continue
+        if not _arguments_of(call).get("analyte"):
+            return []
+    _messages, recorded = await _execute_tool_calls(
+        toolbox,
+        [{"name": "get_lab_trends", "args": {}, "id": ""}],
+        on_event=on_event,
+        # The same outbound check the loop's calls get.
+        guard=lambda name, args: _outbound_patient_identifier(name, args, hadm_id),
+        cite_offset=cite_offset,
+        evidence_state=session,
+        hadm_id=hadm_id,
+    )
+    return recorded
+
+
+def _arguments_of(call: dict) -> dict:
+    """A replayed call's arguments, whether stored as a mapping or as JSON text."""
+    raw = call.get("args")
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
 
 
 async def _prefetch_lab_series(
@@ -2002,6 +2064,14 @@ async def ask(
                 on_event=on_event, cite_offset=replayed_positions,
             )
             if risk_driver_question and lab_driver_question else []
+        )
+        # And the whole panel, when the question asks for the counts as a set. This runs
+        # after the per-analyte read so its own "already held" test sees it: a plural
+        # question that also named one analyte needs both.
+        prefetched += await _prefetch_full_panel(
+            toolbox, session, question=question, hadm_id=hadm_id,
+            on_event=on_event, cite_offset=replayed_positions,
+            replayed=[*(replayed_calls or []), *prefetched],
         )
         system_prompt = prompts.compose_system_prompt(
             allowed_tools=allowed_for_prompt,

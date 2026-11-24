@@ -307,10 +307,14 @@ def test_the_sentence_template_carries_the_value_with_no_label():
 
 
 def test_a_count_whose_label_says_days_carries_no_unit():
-    """"prior inpatient days (0 days)" repeated the label; "length of stay" needs one."""
+    """"prior inpatient days (0 days)" repeated the label; "length of stay" needs one.
+
+    Both are durations, so both keep the served fraction: the label that already says days
+    carries no unit, and the one that does not carries it.
+    """
     assert admission_context.unit_for("prior_inpatient_days") == ""
-    assert admission_context.clinical_measure("prior_inpatient_days", 4.75) == "5"
-    assert admission_context.clinical_measure("index_los_days", 42.46) == "42 days"
+    assert admission_context.clinical_measure("prior_inpatient_days", 4.75) == "4.75"
+    assert admission_context.clinical_measure("index_los_days", 42.46) == "42.46 days"
 
 
 @pytest.mark.parametrize("feature, value, stated", [

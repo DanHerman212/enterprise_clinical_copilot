@@ -358,8 +358,13 @@ def test_a_machine_float_is_stated_at_the_published_precision():
     published precision is two decimals (`prediction._clinical_value`) and every layer now
     writes it: the block, the risk projection, the guardrail and the prose.
 
-    A count is the exception and is written whole: "16.0417" prior inpatient days is
-    "16" (2026-11-20, third polish — a fraction of a day is not a number of days).
+    A DURATION keeps its fraction, and that is the correction this rule needed twice. It
+    was rounded whole on 2026-11-20 ("a fraction of a day is not a number of days"), and the
+    rounding then made the manifest disagree with the number the model was handed:
+    `dev_d5_slash_01` was docked for stating prior inpatient days as 5 when the risk result
+    said 4.75, and it had been shown the 5 (2026-11-24). So a day count keeps two decimals
+    like any other measurement, and only a count of things you can count one at a time —
+    admissions, orders, procedures, ED visits — is written whole.
     """
     block = admission_context.render(
         90000078, {"prior_inpatient_days": "16.0417",
@@ -367,7 +372,7 @@ def test_a_machine_float_is_stated_at_the_published_precision():
                    "admission_type": "Emergency (EW EMER.)"},
     )
 
-    assert "prior_inpatient_days: 16" in block
+    assert "prior_inpatient_days: 16.04" in block
     assert "prior_admissions: 4" in block
     # A non-numeric column keeps its words and loses the warehouse code beside them.
     assert "admission_type: Emergency" in block
@@ -377,17 +382,19 @@ def test_a_machine_float_is_stated_at_the_published_precision():
 def test_a_numeric_float_is_stated_at_the_same_precision():
     block = admission_context.render(90000078, {"prior_inpatient_days": 16.0417})
 
-    assert "prior_inpatient_days: 16" in block
+    assert "prior_inpatient_days: 16.04" in block
 
 
-def test_a_length_of_stay_is_stated_whole():
-    """A day is a tally: `4.46` days is a duration no ward keeps.
+def test_a_length_of_stay_keeps_its_fraction():
+    """A duration is a measurement, so the row's fraction is the number that is stated.
 
-    2026-11-20: 90000069's driver answer read "length of stay (patient value: 42.46)", the
-    encoder's float reaching a reader as a measurement. The row still holds the fraction —
-    the risk result publishes 42.46 — and every surface a reader sees states the whole day.
+    2026-11-20 rounded it whole so that the manifest and the risk result agreed; on
+    2026-11-24 the rounding was found to be the disagreement — 4.75 days stated as 5 — and
+    the two now agree on the served value instead.
     """
     block = admission_context.render(90000078, {"index_los_days": "4.46"})
 
-    assert "length_of_stay_days: 4" in block
-    assert admission_context.clinical_value("index_los_days", 42.46) == 42
+    assert "length_of_stay_days: 4.46" in block
+    assert admission_context.clinical_value("index_los_days", 42.46) == 42.46
+    # A tally still rounds: nobody leaves on four and a half medications.
+    assert admission_context.clinical_value("medication_order_count", 4.85) == 5

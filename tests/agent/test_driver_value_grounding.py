@@ -130,15 +130,16 @@ def test_a_repeating_float_is_published_at_clinical_precision():
     (factor,) = payload["top_factors"]
 
     assert factor["value"] == 42.46
-    # And the copy the model reads is the same number, stated as a day count with its unit
-    # (2026-11-20): nobody is admitted for 42.46 days, and "(patient value: 42)" alone left
-    # the reader to work out what was counted.
+    # And the copy the model reads is the same number, stated as a duration with its unit:
+    # the row holds 42.458333333333336, the risk result publishes 42.46, and a projection
+    # that rounded one of them to 42 would hand the prose a number it could not reconcile
+    # with the payload beside it (2026-11-24).
     presented = mcp_client._presented_for_model("predict_readmission", payload)
-    assert presented["top_factors"][0]["value"] == "42 days"
+    assert presented["top_factors"][0]["value"] == "42.46 days"
 
 
-def test_the_guardrail_corrects_the_fraction_to_the_whole_day():
-    """The number the model is served is 42; a copied 42.46 is rewritten to it."""
+def test_the_guardrail_leaves_a_faithful_duration_alone():
+    """The number the model is served is 42.46, so a copied 42.46 is already correct."""
     call = {"name": "predict_readmission", "response": {
         "top_factors": [{"feature": "index_los_days", "value": 42.46,
                          "direction": "increases"}],
@@ -148,10 +149,10 @@ def test_the_guardrail_corrects_the_fraction_to_the_whole_day():
     normalised, rounding_flags = normalise_factor_values(answer, [call])
     verified, risk_flags = verify_risk_numbers(normalised, [call])
 
-    assert normalised == "Her length of stay was 42 days, which raises her risk."
-    assert rounding_flags == ["factor_value_rounded:42.46"]
+    assert normalised == answer
+    assert rounding_flags == []
     assert risk_flags == []
-    assert "42 days" in verified
+    assert "42.46 days" in verified
 
 
 def test_a_parent_feature_carries_no_value_rather_than_a_guessed_one():

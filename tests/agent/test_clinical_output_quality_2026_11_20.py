@@ -93,7 +93,7 @@ def test_a_lab_backed_null_driver_reaches_the_model_with_no_number_to_quote():
     # missing scored input once, and refuse the series as a substitute for it.
     spoke = " ".join(prompts.RISK_SPOKE.split())
     assert "carries no recorded value" in spoke
-    assert "its readings were NOT the value the model scored" in spoke
+    assert "its readings were NOT the value scored" in spoke
 
 
 def test_a_database_flag_reaches_the_model_as_words():
@@ -153,20 +153,23 @@ def test_the_recorded_call_still_carries_every_served_float():
 
 
 @pytest.mark.parametrize("row_value, stated", [
-    ("42.458333333333336", "42"),
-    (42.458333333333336, "42"),
-    ("24.6667", "25"),
-    ("16.0417", "16"),
-    ("4.75", "5"),
+    ("42.458333333333336", "42.46"),
+    (42.458333333333336, "42.46"),
+    ("24.6667", "24.67"),
+    ("16.0417", "16.04"),
+    ("4.75", "4.75"),
     ("3", "3"),
     ("3.00", "3"),
 ])
-def test_the_manifest_states_a_day_count_whole(row_value, stated):
-    """A stay is counted in days. `42.46` is the encoder's float, not a duration.
+def test_the_manifest_states_a_duration_at_the_published_precision(row_value, stated):
+    """A stay is a duration, so the row's fraction is the number that is stated.
 
-    2026-11-20: 90000069's driver answer read "length of stay (patient value: 42.46)", so the
-    block, the projection, the record and the guardrail all state the whole day now. The
-    served payload keeps the float the risk result publishes.
+    2026-11-20 rounded the day whole, on the argument that a ward counts days. That made the
+    manifest disagree with the risk result the same turn was given: `dev_d5_slash_01` stated
+    prior inpatient days as 5 when the payload said 4.75, and had been shown the 5
+    (2026-11-24). Two decimals is the precision `prediction._clinical_value` publishes, so
+    the block, the projection, the record and the guardrail all write that one. A TALLY of
+    things you can count one at a time is still whole — that rule is pinned separately.
     """
     block = admission_context.render(90000069, {"index_los_days": row_value})
 
@@ -193,7 +196,7 @@ def test_the_guardrail_rewrites_to_the_same_precision_the_record_states():
 
     out, flags = normalise_factor_values("Her length of stay was 42.4583 days.", calls)
 
-    assert "42 days" in out
+    assert "42.46 days" in out
     assert "42.4583" not in out
     assert flags == ["factor_value_rounded:42.458333333333336"]
 
@@ -357,19 +360,26 @@ def test_a_count_reaches_the_model_as_a_whole_number():
     assert presented["value"] == 5
 
 
-def test_a_day_count_rounds_half_up():
-    """`prior_inpatient_days` 4.75 is 5, and 4.5 is 5 rather than Python's even 4."""
-    assert admission_context.clinical_value("prior_inpatient_days", 4.75) == 5
-    assert admission_context.clinical_value("prior_inpatient_days", 4.5) == 5
+def test_a_day_duration_keeps_the_served_fraction():
+    """`prior_inpatient_days` 4.75 is 4.75, and 4.5 is 4.5.
+
+    A duration is a measurement the encoder keeps a fraction of. Rounding it whole made the
+    prose disagree with the payload it was quoting (`dev_d5_slash_01`, 2026-11-24), and the
+    only number that agrees with both is the served one.
+    """
+    assert admission_context.clinical_value("prior_inpatient_days", 4.75) == 4.75
+    assert admission_context.clinical_value("prior_inpatient_days", 4.5) == 4.5
+    # A tally of countable things still rounds, and still rounds half up.
+    assert admission_context.clinical_value("prior_admission_count", 4.5) == 5
 
 
-def test_a_duration_is_a_count_and_states_its_unit():
-    """Length of stay is counted in days, so it is whole and it says what it counts."""
+def test_a_duration_states_its_fraction_and_its_unit():
+    """Length of stay states the served duration and says what it measures."""
     presented = _presented_factor({
         "feature": "index_los_days", "direction": "decreases",
         "value": 42.458333333333336})
 
-    assert presented["value"] == "42 days"
+    assert presented["value"] == "42.46 days"
 
 
 def test_a_lab_value_keeps_its_own_precision_and_states_its_unit():
@@ -384,14 +394,14 @@ def test_a_lab_value_keeps_its_own_precision_and_states_its_unit():
 # ---------------------------------------------------------------------------------------
 
 
-def test_the_manifest_states_the_counts_whole():
+def test_the_manifest_states_the_durations_at_the_published_precision():
     block = admission_context.render(90000020, {
         "prior_inpatient_days": "4.75",
         "index_los_days": "42.458333333333336",
     })
 
-    assert "prior_inpatient_days: 5" in block
-    assert "length_of_stay_days: 42" in block
+    assert "prior_inpatient_days: 4.75" in block
+    assert "length_of_stay_days: 42.46" in block
 
 
 def test_the_session_record_states_the_count_whole_too():

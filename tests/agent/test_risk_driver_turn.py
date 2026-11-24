@@ -64,19 +64,24 @@ def test_the_analyte_test_reads_both_vocabularies():
 
 
 def test_a_copied_machine_float_is_written_at_the_published_precision():
-    """`16.0417` becomes `16`: prior inpatient days is a count, so it is written whole."""
+    """`16.0417` becomes `16.04`: two decimals is the precision the payload publishes.
+
+    A duration keeps its fraction (2026-11-24); what the guardrail removes is the encoder's
+    extra places, not the fraction itself.
+    """
     out, flags = normalise_factor_values("She had 16.0417 days as an inpatient.",
                                          _predict())
 
-    assert "16 days" in out
+    assert "16.04 days" in out
     assert "16.0417" not in out
     assert flags == ["factor_value_rounded:16.0417"]
 
 
-def test_a_truncated_copy_of_the_same_value_is_written_the_same_way():
-    out, _ = normalise_factor_values("She had 16.04 days as an inpatient.", _predict())
+def test_a_value_already_at_the_published_precision_is_left_alone():
+    out, flags = normalise_factor_values("She had 16.04 days as an inpatient.", _predict())
 
-    assert "16 days" in out
+    assert "16.04 days" in out
+    assert flags == []
 
 
 def test_a_lab_value_quoted_from_the_note_keeps_its_precision():
@@ -85,7 +90,7 @@ def test_a_lab_value_quoted_from_the_note_keeps_its_precision():
         "Creatinine was 1.06 mg/dL and she had 16.0417 inpatient days.", _predict())
 
     assert "1.06 mg/dL" in out
-    assert "16 inpatient days" in out
+    assert "16.04 inpatient days" in out
     assert flags == ["factor_value_rounded:16.0417"]
 
 

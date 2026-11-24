@@ -198,14 +198,14 @@ def test_a_literature_turn_is_still_badged_as_general_evidence():
 
 
 # ---------------------------------------------------------------------------------------
-# 3. A risk value states its unit, and a duration is a whole day
+# 3. A risk value states its unit, and a duration states its fraction
 # ---------------------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("feature, value, stated", [
     ("age", 68.0, "68 years"),
-    ("index_los_days", 42.458333333333336, "42 days"),
-    ("prior_inpatient_days", 4.75, 5),
+    ("index_los_days", 42.458333333333336, "42.46 days"),
+    ("prior_inpatient_days", 4.75, 4.75),
     ("index_los_days", 1.0, "1 day"),
     ("rdw_max", 15.5879, "15.59%"),
     ("hemoglobin_min", 6.8, "6.8 g/dL"),
@@ -249,14 +249,14 @@ def test_a_value_with_its_unit_is_not_stripped_as_invented():
     """The guard compares magnitudes, so a unit beside a served value changes nothing."""
     out, flags = verify_risk_numbers(
         "Her red cell distribution width peaked at 15.59%, and her length of stay was "
-        "42 days.", [_ESTIMATE, {"name": "predict_readmission", "args": {},
+        "42.46 days.", [_ESTIMATE, {"name": "predict_readmission", "args": {},
                                  "response": {"top_factors": [
                                      {"feature": "rdw_max", "value": 15.5879},
                                      {"feature": "index_los_days", "value": 42.46},
                                  ]}}])
 
     assert "15.59" in out
-    assert "42 days" in out
+    assert "42.46 days" in out
     assert flags == []
 
 

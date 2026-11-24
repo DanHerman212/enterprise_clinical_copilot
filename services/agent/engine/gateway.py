@@ -67,10 +67,16 @@ logger = logging.getLogger(__name__)
 #: with no timeout at all the SDK's retry-on-timeout can never fire.
 MODEL_TIMEOUT_SECONDS = timeout_chain().model
 
-#: How many times the SDK retries one model call before the failure is ours. Three, which
-#: is what the client was already given, and it is not larger because each attempt is
-#: bounded by `MODEL_TIMEOUT_SECONDS`.
-MODEL_MAX_RETRIES = 3
+#: How many times the SDK retries one model call before the failure is ours. Two, and the
+#: number is a budget rather than a preference: each attempt is bounded by
+#: `MODEL_TIMEOUT_SECONDS`, and the whole ladder has to finish inside `ASK_TIMEOUT_SECONDS`
+#: or the retry is what times the question out. At 30 s a call, two retries is three
+#: attempts and about 94 s of worst case, which leaves the ask deadline a margin. The
+#: previous pair — 60 s and three retries — could reach 240 s, and on 2026-11-24 that is
+#: exactly what happened: the provider answered `504 DEADLINE_EXCEEDED`, the SDK retried,
+#: the second attempt ran past 110 s, and three turns were served an HTTP 504 instead of an
+#: answer (`dev_d4_risk_01` turns 3-4, `dev_d5_fup_01` turn 4).
+MODEL_MAX_RETRIES = 2
 
 #: Every configurable content filter off, for the extraction turns only.
 #:

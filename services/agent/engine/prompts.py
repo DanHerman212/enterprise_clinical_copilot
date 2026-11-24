@@ -616,21 +616,19 @@ these fields: "medication", "dosage", "frequency", "route", "setting".
 STATE WHAT THE TEXT SAYS, compactly, in the field it belongs to. "frequency" holds a
 dosing schedule or timing and nothing else — "daily", "b.i.d.", "at bedtime", "q6h PRN" —
 so it is "" whenever the passage states no timing. A form ("Dosepak"), a route ("PO",
-"p.o.", "IV"), an application site, or a brief stated indication ("for pain", "for
-breakthrough pain") is a regimen detail the record supports, and it goes in "route", never
-in "frequency".
+"p.o.", "IV"), an application site or a brief stated indication ("for pain") is a regimen
+detail the record supports: it goes in "route", never in "frequency".
 
 A DURATION IS PART OF THE SCHEDULE, AND A TAPER IS ONE DRUG. "for five days", "for two
 weeks" and the "then …" that follows stay in "frequency": a passage writing "20 mg p.o.
 q.12h. for five days, then 10 mg p.o. q.12h. for five days" states ONE drug in two steps —
 one row carrying both steps and their durations, never two rows with the dates dropped.
 
-You are given one or more passages, and a medication may appear in any of them. A discharge
-medications section is usually the list of drug names; a discharge instructions section
-usually states the doses and frequencies, and sometimes names drugs the list omits. When the
-note has no medication section at all, the passages you were given are narrative ones — the
-assessment and plan, the hospital course, the admission list, the history — and the
-prescription is usually a clause at the end of one of them.
+A medication may appear in any passage you were given. A discharge medications section is
+usually the list of drug names; a discharge instructions section usually states the doses and
+frequencies, and sometimes names drugs the list omits. When the note has no medication section
+at all, the passages are narrative ones — the assessment and plan, the hospital course, the
+admission list, the history — and the prescription is usually a clause at the end of one.
 
 Include EVERY medication the patient was discharged on. A drug named in the instructions but
 absent from the list is still a discharge medication and must have a row: dropping a prescribed
@@ -645,11 +643,13 @@ states discharge medications, while a clause about how a symptom was managed on 
 states hospital treatment rather than a prescription.
 
 A passage may also carry what the patient ARRIVED on — "On transfer, …", "On admission, …",
-"Medications on transfer", "home medications" — beside the regimen to continue at discharge.
-Extract only the discharge regimen: an arrival list is what the patient came in taking, and a
-drug on it is not a discharge medication unless the discharge regimen names it again or a
-passage says it was continued. Do not give an arrival-list drug a row on the strength of the
-arrival list alone.
+"Medications on transfer", "home medications". A drug on such a list that the discharge regimen
+also names is one discharge row, with "setting" "discharge". When a passage also states the
+discharge regimen, a drug on the arrival list that the regimen does not name — and any drug a
+passage says was stopped or discontinued — gets a row with "setting" "inpatient" and the stated
+reason in "frequency": a transfer list naming a bridge anticoagulant beside a passage saying
+it was stopped at a target INR is a fact the reader checking that list needs — dropped, the
+list reads as though the drug continued.
 
 Order the rows as the medication list gives them, then any drug that appears only in the
 prose, in the order it appears there.
@@ -657,14 +657,13 @@ prose, in the order it appears there.
 Extract EVERY numbered line of the list as it is written, including orders that are not drugs.
 A discharge list numbers home oxygen, a CPAP machine, a walker or test strips beside the
 prescriptions, and every one of those lines is part of the record's list: return a row for it,
-with the name as written. Do not decide here which lines are drugs — a line you drop is a line
-the reader can still see, and a count taken from what remains contradicts the page.
+with the name as written. Do not decide here which lines are drugs: a dropped line is one the
+reader can still see, and a count from what remains contradicts the page.
 
 Take each value verbatim from the text you were given. If no passage states a dosage or a
 frequency for a medication, use an empty string. An empty field is the honest answer; a guessed
-dose is a clinical error. Do not infer a dose from a similar drug, do not normalise or expand an
-abbreviation, do not convert units or spellings, and do not add a medication, a dosage or a
-frequency that does not appear in the text.
+dose is a clinical error. Do not infer a dose from a similar drug, normalise or expand an
+abbreviation, convert units or spellings, or add anything that does not appear in the text.
 
 An empty "medications" array is the correct answer when no passage names a discharge
 medication. Do not fill it in from what the diagnosis implies, and do not list an inpatient

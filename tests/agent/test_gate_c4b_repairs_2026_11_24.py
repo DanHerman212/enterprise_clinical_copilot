@@ -259,8 +259,12 @@ def test_a_fractional_day_duration_is_never_rounded_to_an_integer():
     """The payload says 4.75 and every layer repeats it, or the prose contradicts the bar."""
     assert admission_context.clinical_value("prior_inpatient_days", 4.75) == 4.75
     assert admission_context.clinical_measure("prior_inpatient_days", 4.75) == "4.75"
-    # A tally of countable things is still whole.
-    assert admission_context.clinical_value("medication_order_count", 4.85) == 5
+    # A served fraction in a column whose NAME promises a tally is still the served
+    # fraction: this assertion required 5 until 2026-11-24, and the same rounding of a
+    # served `medication_order_count` from 13.64 to 14 is what the judge docked
+    # `dev_d2_risk_01` for. Whole in, whole out — 14.0 is 14 — is the whole rule.
+    assert admission_context.clinical_value("medication_order_count", 4.85) == 4.85
+    assert admission_context.clinical_value("medication_order_count", 14.0) == 14
 
 
 def test_the_guardrail_leaves_the_served_fraction_alone():

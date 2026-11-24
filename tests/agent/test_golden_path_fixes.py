@@ -106,14 +106,28 @@ def test_the_trace_id_is_read_from_the_span_not_from_the_context():
 
 
 def test_both_routes_take_the_id_from_the_span():
-    """The wiring, asserted where it lives: both root spans hand their id over."""
+    """The wiring, asserted where it lives: both root spans hand their id over.
+
+    Asserted against `_turn_trace_id` rather than against the expression, because the
+    expression moved. Both branches now take the id from ONE helper, called as the span
+    opens instead of as the turn ends: a turn the ask deadline cancels never reached the
+    old call sites, so on 2026-11-24 three timeouts were logged with
+    `"langfuse_trace_id": ""` and the traces explaining them could not be found. The
+    requirement is unchanged — the id comes from the span we opened, not from the ambient
+    context — so this test now pins the two call sites AND the order of preference the
+    helper applies.
+    """
     from pathlib import Path
 
     from services.agent.engine import graph
 
     source = Path(graph.__file__).read_text(encoding="utf-8")
-    assert source.count("observability.span_trace_id(root_span)") == 2, (
-        "the command path and the free-text path must both read the span's own id"
+    assert source.count("= _turn_trace_id(root_span, turn_root)") == 2, (
+        "the command path and the free-text path must both take the id as the span opens"
+    )
+    helper = source.split("def _turn_trace_id", 1)[1].split("\n\n\n", 1)[0]
+    assert "observability.span_trace_id(root_span)" in helper, (
+        "the span we opened is the first source, not the ambient context"
     )
 
 

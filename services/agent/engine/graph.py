@@ -1687,6 +1687,28 @@ def _foreign_admission_turn(question: str, hadm_id: int, trace_id: str = "") -> 
     }
 
 
+def _turn_trace_id(root_span, turn_root) -> str:
+    """The trace this turn belongs to, resolved while the span is still OPEN.
+
+    Resolved when the span opens rather than when the turn ends, because a turn that
+    never ends has no id to report. On 2026-11-24 three questions were cut off by the
+    110 s ask deadline and each wrote `"outcome": "timeout"` with
+    `"langfuse_trace_id": ""`, so the traces that would have explained the timeouts
+    could not be found from the record and the record could not be found from them.
+    The id exists the moment the span does; only the state it was being written to
+    waited for the answer.
+
+    The span is read rather than the ambient context first, for the reason the command
+    path already gives: the context can go missing (four command turns on 2026-10-21
+    reported no id at all), while a span always knows the trace it belongs to.
+    """
+    return (
+        observability.span_trace_id(root_span)
+        or observability.span_trace_id(turn_root)
+        or observability.current_trace_id()
+    )
+
+
 async def ask(
     toolbox: MCPToolbox,
     question: str,
@@ -1772,6 +1794,11 @@ async def ask(
             else contextlib.nullcontext(turn_root)
         )
         with span as root_span:
+            # Fixed here, first, and not at the end of the branch: a command that runs
+            # past the ask deadline is cut off before the settlement below, and the record
+            # written for that failure can only name its trace if this id was taken while
+            # the span was open.
+            trace_id = _turn_trace_id(root_span, turn_root)
             # The thread's evidence, replayed BEFORE the command runs (Stage 3,
             # 2026-11-08). This branch used to skip the replay entirely, so `/ehr` on
             # turn 1 and `/meds` on turn 2 started from an EMPTY record: the second
@@ -1839,11 +1866,7 @@ async def ask(
             # Read from the span itself, not from the ambient context: the context can
             # go missing (four command turns in the 22:38 run reported no trace id at
             # all), while the span always knows the trace it belongs to.
-            command_state["langfuse_trace_id"] = (
-                observability.span_trace_id(root_span)
-                or observability.span_trace_id(turn_root)
-                or observability.current_trace_id()
-            )
+            command_state["langfuse_trace_id"] = trace_id
         return command_state
 
     # A question that names a different admission is answered here, before the replay and
@@ -2054,6 +2077,9 @@ async def ask(
         else contextlib.nullcontext(turn_root)
     )
     with span as root_span:
+        # Taken first, before the prefetches and before the graph is awaited, so a turn
+        # the ask deadline cancels still has an id to report. See `_turn_trace_id`.
+        trace_id = _turn_trace_id(root_span, turn_root)
         # A driver question about a laboratory value reads that value's series HERE,
         # before the window is composed, so the turn can answer in one pass. With the
         # estimate and the series both in the record, `_still_bound` binds no tool at all
@@ -2173,11 +2199,7 @@ async def ask(
             [*trace_meta.get("langfuse_tags", []),
              f"tools:{len(state.get('tool_calls') or [])}"],
         )
-        state["langfuse_trace_id"] = (
-            observability.span_trace_id(root_span)
-            or observability.span_trace_id(turn_root)
-            or observability.current_trace_id()
-        )
+        state["langfuse_trace_id"] = trace_id
         # The settlement layer decides whether the answer was verified against the
         # patient record, and the manifest is one of the channels that make it so. It
         # is not a tool call and leaves no other trace on the state, so it is recorded

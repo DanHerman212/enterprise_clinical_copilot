@@ -44,7 +44,6 @@ import collections
 import copy
 import json
 import logging
-import math
 import re
 import time
 from typing import Any, Mapping
@@ -99,12 +98,11 @@ def _display(value: Any, feature: str = "") -> str:
     is not a measurement to two decimal places: the encoded row holds 42.458333333333336,
     the risk result published 42.46, and a briefing read "length of stay was 42.4583 days"
     three lines above "the recorded value was 42.46" — one number, two precisions, in one
-    answer (measured 2026-11-20, 90000069). A feature named in `COUNT_FEATURES` is stated
-    WHOLE, and length of stay is one of them: nobody is admitted for 42.46 days. Everything
-    else keeps two decimals at most, trailing zeros and a whole-number fraction dropped, so
-    the manifest, the risk projection, the guardrail and the prose all write the same
-    digits. Anything that is not a number — "Emergency (EMER)", "Home" — is returned
-    untouched.
+    answer (measured 2026-11-20, 90000069). The rule is therefore the one `clinical_value`
+    states: a value served whole is written whole, and everything else keeps two decimals
+    at most, trailing zeros and a whole-number fraction dropped. The manifest, the risk
+    projection, the guardrail and the prose then all write the same digits. Anything that
+    is not a number — "Emergency (EMER)", "Home" — is returned untouched.
     """
     if isinstance(value, bool):
         return str(value)
@@ -115,18 +113,19 @@ def _display(value: Any, feature: str = "") -> str:
 
 #: Features whose row value counts DISCRETE things rather than measuring one.
 #:
-#: `medication_order_count` was served as 4.85 (measured 2026-11-20, 90000020): the column
-#: holds an order RATE under a name that promises a tally. Two decimals on a tally reads as
-#: a formatting fault — "4.85 orders" is not a number of orders — so a feature in this set
-#: is stated whole.
+#: NO LONGER READ by the rendering rule. It is kept because it is the record of a
+#: decision that was REVERSED, and because a reader who finds `medication_order_count`
+#: beside a two-decimal value will ask why.
 #:
-#: DURATIONS ARE NOT TALLIES, and they used to be in this set. `prior_inpatient_days` is
-#: served as 4.75 and `index_los_days` as 42.458333333333336, and rounding either one to an
-#: integer makes the prose disagree with the number the model was handed: `dev_d5_slash_01`
-#: was docked for stating prior inpatient days as 5 when the result said 4.75, and the
-#: manifest had rounded it before the model ever saw it (2026-11-24). A duration is a
-#: measurement the encoder keeps a fraction of, so it keeps two decimals like any other
-#: measurement. What stays whole is the count of a thing you can count one at a time.
+#: The set used to decide precision: a feature in it was rounded to a whole number, because
+#: `medication_order_count` was served as 4.85 and "4.85 orders" is not a number of orders
+#: (measured 2026-11-20, 90000020). Then `prior_inpatient_days` and `index_los_days` were
+#: taken out, because rounding a duration made the prose disagree with the number the model
+#: was handed (2026-11-24, `dev_d5_slash_01`). What remained still rounded
+#: `medication_order_count` 13.64 to 14, and `dev_d2_risk_01` was docked for it the same
+#: day: the encoder holds an order RATE under that name, so the column is not a tally and
+#: rounding it invents one. Precision is now a property of the value, not of the feature —
+#: see `clinical_value`.
 COUNT_FEATURES: frozenset[str] = frozenset({
     "procedure_count",
     "medication_count",
@@ -142,14 +141,19 @@ def clinical_value(feature: str, value: float) -> int | float:
     The one place the rule lives, because four layers state the same number and three of
     them used to round it their own way: this module renders `<admission_metadata>`, the
     risk projection fills `top_factors[].value`, the session record repeats it, and the
-    guardrail rewrites what the model wrote. A count rounds half UP rather than to even —
-    Python's `round(4.5)` is 4, and a tally of four and a half is five — and everything
-    else keeps two decimals, which is what `prediction._clinical_value` publishes.
+    guardrail rewrites what the model wrote.
+
+    The rule is about the VALUE, not the feature. A number that was served whole is
+    written whole — `14.0` is 14 and `0.0` is 0 — and a number that was served with a
+    fraction keeps that fraction to at most two places: `13.64` stays 13.64, `4.75` stays
+    4.75, and `42.458333333333336` becomes 42.46. Anything else puts the answer at odds
+    with the risk result drawn beside it, which is what a judge docked on 2026-11-24
+    (`dev_d2_risk_01`: a medication order count served as 13.64, stated as 14).
     """
-    if feature in COUNT_FEATURES:
-        return int(math.floor(float(value) + 0.5))
-    rounded = round(float(value), 2)
-    return int(rounded) if rounded == int(rounded) else rounded
+    number = float(value)
+    if number.is_integer():
+        return int(number)
+    return round(number, 2)
 
 
 def _clinical_number(value: float, feature: str = "") -> str:

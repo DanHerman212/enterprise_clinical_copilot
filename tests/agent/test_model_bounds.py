@@ -25,6 +25,10 @@ from services.mcp.config import (  # noqa: E402
 )
 from services.mcp.runtime import timeout_chain  # noqa: E402
 
+#: The question's own wall clock, which the retry ladder has to fit inside. Read from the
+#: same chain the route reads, so a changed deadline moves both rather than one.
+ASK_TIMEOUT_SECONDS = timeout_chain().ask
+
 
 def test_the_model_call_has_a_timeout():
     llm = graph._build_llm(graph.MODEL_ID)
@@ -74,13 +78,26 @@ def test_the_allowance_covers_thinking_it_has_not_done_yet():
 # `dev_t2_03` reaching the caller as HTTP 502 because the attempts were never made.
 #
 # The policy belongs to the SDK (google-api-core backs off on 429 and 503 and not on 4xx);
-# what this file pins is that the bound is a named constant, that it is at least three, and
-# that the constructed client actually carries it.
+# what this file pins is that the bound is a NAMED constant, that it fits inside the ask
+# deadline, and that the constructed client actually carries it.
+#
+# It pinned "at least three" until 2026-11-24, and that was the wrong half of the number.
+# Three retries at a 60 s model bound is up to four minutes of ladder, and the ask deadline
+# is 110 s: on 2026-11-24 the provider answered `504 DEADLINE_EXCEEDED`, the SDK retried,
+# and three questions (`dev_d4_risk_01` turns 3-4, `dev_d5_fup_01` turn 4) were served an
+# HTTP 504 by their own retry rather than by the failure. A bound that is only ever read in
+# isolation can grow past the deadline it lives inside, so the assertion is now the
+# RELATIONSHIP: worst case (`(retries + 1) * model bound`) has to leave the deadline room.
 
 
-def test_the_retry_bound_is_named_and_at_least_three():
-    assert model_gateway.MODEL_MAX_RETRIES >= 3, (
-        "a transient 429 burst needs more than one attempt to survive")
+def test_the_retry_ladder_fits_inside_the_ask_deadline():
+    ladder = (model_gateway.MODEL_MAX_RETRIES + 1) * model_gateway.MODEL_TIMEOUT_SECONDS
+    assert model_gateway.MODEL_MAX_RETRIES >= 2, (
+        "one retry is not enough to survive a transient 429 or a single 504")
+    assert ladder <= ASK_TIMEOUT_SECONDS - 10, (
+        f"a {ladder:.0f}s retry ladder has to finish with time to spare inside the "
+        f"{ASK_TIMEOUT_SECONDS:.0f}s ask deadline, or the retry is what times the question out"
+    )
 
 
 def test_the_client_is_built_with_the_retry_bound():
@@ -92,7 +109,7 @@ def test_the_client_is_built_with_the_retry_bound():
     llm = model_gateway.build_llm(graph.MODEL_ID)
 
     assert llm.max_retries == model_gateway.MODEL_MAX_RETRIES
-    assert llm.max_retries >= 3
+    assert llm.max_retries >= 2
 
 
 def test_the_extraction_client_carries_the_same_bound():

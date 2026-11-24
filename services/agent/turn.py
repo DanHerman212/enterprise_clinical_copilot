@@ -750,6 +750,15 @@ class StageLog:
 
     def record(self, trace: str, question: str, outcome: str, **kwargs) -> dict:
         """Emit the one record for this execution."""
+        # Every exit from a request records a line, and a line that cannot be joined to
+        # its trace explains a failure to nobody. The success exits pass the id they were
+        # handed by the turn; the FAILURE exits never had a state to read it from, so on
+        # 2026-11-24 three timed-out questions wrote `"outcome": "timeout"` with
+        # `"langfuse_trace_id": ""` and the traces holding the `504 DEADLINE_EXCEEDED`
+        # that caused them were unfindable from the record. Both routes call this while
+        # the turn span is still open, so the ambient context still knows the id.
+        if not kwargs.get("langfuse_trace_id"):
+            kwargs["langfuse_trace_id"] = observability.current_trace_id()
         return chain.record_execution(
             trace=trace,
             question=question,

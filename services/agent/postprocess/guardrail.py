@@ -612,9 +612,9 @@ def _factor_values(tool_calls: list[dict]) -> list[float]:
 def _factor_entries(tool_calls: list[dict]) -> list[tuple[str, float]]:
     """Each driver's feature key beside its value.
 
-    The key is what says whether the number is a measurement or a tally, and
-    `normalise_factor_values` needs that: a count is written whole, a measurement to two
-    decimals (`admission_context.COUNT_FEATURES`).
+    The key is carried for the corpus and for the record; the PRECISION is decided from the
+    value alone, because a served number that holds a fraction keeps it
+    (`normalise_factor_values`).
     """
     entries: list[tuple[str, float]] = []
     for tc in tool_calls or []:
@@ -670,9 +670,9 @@ def _clean_number(value: float, feature: str = "") -> str:
     Two decimals, because that is what `prediction._clinical_value` publishes for the same
     row and what `<admission_metadata>` now states. One decimal was the old answer, and it
     made a rewritten sentence disagree with the payload beside it: a served `42.46`
-    corrected to `42.5` is a different number from the one the risk result shows. A count
-    is written whole instead — `medication_order_count` 4.85 is "5" — by the same rule the
-    projection and the manifest use (`admission_context.clinical_value`).
+    corrected to `42.5` is a different number from the one the risk result shows. A value
+    served whole is written whole — `14.0` is "14" — by the same rule the projection and
+    the manifest use (`admission_context.clinical_value`).
     """
     number = admission_context.clinical_value(feature, value)
     if isinstance(number, int):
@@ -716,11 +716,13 @@ def normalise_factor_values(answer: str,
     arithmetic rather than a clinical fact.
 
     Only a value the turn was actually served is rewritten, so a lab value quoted from a
-    note passage keeps its own precision. A measurement is rewritten only when it was
-    written with three or more decimals; a COUNT is rewritten at any precision, because
-    the projection states it whole and a sentence repeating the served fraction would
-    disagree with the payload beside it. Runs after the lab and risk guards so it cannot
-    make a number they have already checked disagree with them.
+    note passage keeps its own precision. A served value that HOLDS a fraction is rewritten
+    at any precision, because the projection states it to two decimals and a sentence
+    repeating the served fraction would disagree with the payload beside it. A served value
+    that is already whole is left alone: there is no fraction to correct, and its decimals
+    are the encoder's spelling of a whole number rather than a precision claim. Runs after
+    the lab and risk guards so it cannot make a number they have already checked disagree
+    with them.
     """
     flags: list[str] = []
     out = answer
@@ -729,23 +731,29 @@ def normalise_factor_values(answer: str,
         if "." not in raw:
             continue
         _, _, frac = raw.partition(".")
-        count = feature in admission_context.COUNT_FEATURES
-        if count and not frac.strip("0"):
-            # A count whose row holds no fraction at all. `0.0` is how the encoded column
+        # Decided from the VALUE, not from the feature. `COUNT_FEATURES` used to decide,
+        # and it corrected a served `medication_order_count` of 13.64 to 14 — a different
+        # number from the one the risk result shows beside the sentence, which the judge
+        # docked on 2026-11-24 (`dev_d2_risk_01`). The encoder holds an order rate under
+        # that name, so the fraction is the measurement and 14 was the invention.
+        fractional = not value.is_integer()
+        if not fractional:
+            # A value whose row holds no fraction at all. `0.0` is how the encoded column
             # spells zero, and treating it as a fraction to correct made the guard rewrite
             # every `0.0` token in the answer — on a `/labs` turn, the trajectory's own
             # timepoints — and report `factor_value_rounded:0.0` over prose that quoted no
             # factor at all (measured 2026-11-20, 90000069). There is nothing to correct:
             # the number is already the whole number the projection states.
             continue
-        if not count and len(frac.rstrip("0")) < 3:
+        if len(frac.rstrip("0")) < 3:
             # The served value is already written the way a clinician would, so there is
-            # nothing to correct and nothing a pattern could safely catch.
+            # nothing to correct and nothing a pattern could safely catch. A fraction of
+            # one or two digits IS the published precision.
             continue
-        # Any token carrying two or more decimals that names the same value. The model may
-        # copy `16.0417` whole or write `16.04`; both claim a precision the feature does
-        # not have, and both are the same served arithmetic. A count has one target — the
-        # whole number — and matches the served fraction that stands for it.
+        # Any decimal token that names the same value. The model may copy `16.0417` whole
+        # or write `16.04`; both claim a precision the feature does not have, and both are
+        # the same served arithmetic. The served fraction is the one published form, so it
+        # is the one target.
         def _replace(match: re.Match, *, _feature: str = feature,
                      _value: float = value) -> str:
             if _HOSPITAL_DAY.search(out[: match.start()]):
@@ -761,11 +769,10 @@ def normalise_factor_values(answer: str,
             return _clean_number(_value, _feature)
 
         # The `%` exclusion is why this is not the `_RISK_DECIMAL` pattern: a rate that
-        # happens to equal a served count is a percentage, not the count, and rewriting
-        # "4.85%" to "5%" would change what the sentence claims.
+        # happens to equal a served fraction is a percentage, not the factor, and rewriting
+        # "13.64%" to "13.64" would change what the sentence claims.
         rewritten = re.sub(
-            r"(?<![\d.])\d+\.\d+(?![\d])(?!\s*%)" if count
-            else r"(?<![\d.])\d+\.\d{2,}(?![\d])(?!\s*%)",
+            r"(?<![\d.])\d+\.\d+(?![\d])(?!\s*%)",
             _replace, out)
         if rewritten != out:
             flags.append(f"factor_value_rounded:{raw}")

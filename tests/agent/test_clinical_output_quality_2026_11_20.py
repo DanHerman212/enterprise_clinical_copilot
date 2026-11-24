@@ -342,35 +342,41 @@ def test_a_decimal_dose_is_not_read_as_a_dotted_abbreviation():
 
 
 # ---------------------------------------------------------------------------------------
-# 7. A count is a whole number
+# 7. Precision follows the served value, not the feature's name
 # ---------------------------------------------------------------------------------------
 
 
-def test_a_count_reaches_the_model_as_a_whole_number():
-    """`medication_order_count` is served as 4.85, and "4.85 orders" is not a count.
+def test_a_rate_in_a_count_s_column_keeps_the_served_fraction():
+    """`medication_order_count` is served as 4.85, and 4.85 is the number that is stated.
 
-    The row holds an order rate under a name that promises a tally (measured 2026-11-20,
-    90000020). The fraction is not information the reader is owed, so the projection states
-    the number a clinician would write.
+    This test pinned the opposite until 2026-11-24: the name promises a tally, so the
+    projection rounded the row whole and the answer said "5 orders". The encoder holds an
+    order RATE in that column, and the same rule rounded a served 13.64 to 14 on
+    `dev_d2_risk_01`, which the judge docked for stating a different number from the one
+    the risk result showed (2026-11-24). The name is not evidence of what is in the
+    column; the value is. So a served fraction keeps its two decimals, and only a value
+    that IS whole is written whole.
     """
     presented = _presented_factor({
         "feature": "medication_order_count", "direction": "decreases", "value": 4.85})
 
     assert presented["feature"] == "medication order count"
-    assert presented["value"] == 5
+    assert presented["value"] == 4.85
 
 
 def test_a_day_duration_keeps_the_served_fraction():
-    """`prior_inpatient_days` 4.75 is 4.75, and 4.5 is 4.5.
+    """`prior_inpatient_days` 4.75 is 4.75, and so is every other served fraction.
 
     A duration is a measurement the encoder keeps a fraction of. Rounding it whole made the
     prose disagree with the payload it was quoting (`dev_d5_slash_01`, 2026-11-24), and the
-    only number that agrees with both is the served one.
+    same is now true of a count: the only number that agrees with the payload is the served
+    one, whatever the feature is called.
     """
     assert admission_context.clinical_value("prior_inpatient_days", 4.75) == 4.75
     assert admission_context.clinical_value("prior_inpatient_days", 4.5) == 4.5
-    # A tally of countable things still rounds, and still rounds half up.
-    assert admission_context.clinical_value("prior_admission_count", 4.5) == 5
+    assert admission_context.clinical_value("prior_admission_count", 4.5) == 4.5
+    # Whole in, whole out: the rule is about the value, and 4.0 is a whole number.
+    assert admission_context.clinical_value("prior_admission_count", 4.0) == 4
 
 
 def test_a_duration_states_its_fraction_and_its_unit():
@@ -404,8 +410,14 @@ def test_the_manifest_states_the_durations_at_the_published_precision():
     assert "length_of_stay_days: 42.46" in block
 
 
-def test_the_session_record_states_the_count_whole_too():
-    """The record is read back on a later turn, so it must not restore the fraction."""
+def test_the_session_record_states_the_served_fraction_too():
+    """The record is read back on a later turn, so it must state the served number.
+
+    It stated 5 for a served 4.85 until 2026-11-24, on the argument that the record has to
+    agree with the projection — which it does, provided the projection states the served
+    value. Now both do, so a follow-up that quotes the driver quotes the same digits the
+    risk result showed.
+    """
     state = SessionEvidenceState(hadm_id=90000020)
     state.ingest_tool_output("predict_readmission", {"hadm_id": 90000020}, {
         "probability_display": "8.5%", "threshold_display": "11.0%",
@@ -415,12 +427,17 @@ def test_the_session_record_states_the_count_whole_too():
 
     rendered = state.render_for_prompt()
 
-    assert "value=5" in rendered
-    assert "4.85" not in rendered
+    assert "value=4.85" in rendered
 
 
-def test_the_guardrail_rewrites_a_served_count_to_its_whole_number():
-    """The number the model was shown is the number the guardrail now corrects toward."""
+def test_the_guardrail_leaves_a_served_fraction_alone():
+    """The number the model was shown is the number the guardrail now leaves standing.
+
+    It used to rewrite "4.85 medication orders" to "5 medication orders", which is the same
+    error as the projection's: a number the risk result does not show, stated in prose that
+    is meant to describe it. A served fraction is the published form, so there is nothing
+    to correct and no flag to raise.
+    """
     calls = [{
         "name": "predict_readmission", "args": {"hadm_id": 90000020},
         "response": {"probability": 0.085, "threshold": 0.11,
@@ -431,9 +448,26 @@ def test_the_guardrail_rewrites_a_served_count_to_its_whole_number():
     out, flags = normalise_factor_values("Her 4.85 medication orders held it down.",
                                          calls)
 
-    assert "5 medication orders" in out
-    assert "4.85" not in out
-    assert flags == ["factor_value_rounded:4.85"]
+    assert out == "Her 4.85 medication orders held it down."
+    assert flags == []
+
+
+def test_the_guardrail_corrects_a_served_fraction_written_at_full_precision():
+    """The correction that remains: the encoder's own float, trimmed to two decimals."""
+    calls = [{
+        "name": "predict_readmission", "args": {"hadm_id": 90000020},
+        "response": {"probability": 0.085, "threshold": 0.11,
+                     "top_factors": [{"feature": "index_los_days",
+                                      "direction": "increases",
+                                      "value": 42.458333333333336}]},
+    }]
+
+    out, flags = normalise_factor_values("She spent 42.458333333333336 days here.",
+                                        calls)
+
+    assert "42.46 days" in out
+    assert "42.458333333333336" not in out
+    assert flags == ["factor_value_rounded:42.458333333333336"]
 
 
 # ---------------------------------------------------------------------------------------

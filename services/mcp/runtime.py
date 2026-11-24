@@ -60,7 +60,7 @@ def timeout_chain(env: Mapping[str, str] | None = None) -> Timeouts:
     """
     values = os.environ if env is None else env
     try:
-        model = float(values.get("MODEL_TIMEOUT_SECONDS", "60"))
+        model = float(values.get("MODEL_TIMEOUT_SECONDS", "30"))
         tool = float(values.get("MCP_TOOL_TIMEOUT_SECONDS", "100"))
         ask = float(values.get("ASK_TIMEOUT_SECONDS", "110"))
     except ValueError as exc:

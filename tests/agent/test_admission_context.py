@@ -396,5 +396,12 @@ def test_a_length_of_stay_keeps_its_fraction():
 
     assert "length_of_stay_days: 4.46" in block
     assert admission_context.clinical_value("index_los_days", 42.46) == 42.46
-    # A tally still rounds: nobody leaves on four and a half medications.
-    assert admission_context.clinical_value("medication_order_count", 4.85) == 5
+    # And a feature whose NAME promises a tally keeps its fraction too, because the
+    # encoder put a rate in the column. `medication_order_count` is served as 4.85 and as
+    # 13.64; rounding either whole states a count the risk result does not hold, which is
+    # what the judge docked on 2026-11-24 (`dev_d2_risk_01`). Whole is what was served
+    # whole, not what the name suggests: 14.0 is 14, and 13.64 stays 13.64.
+    assert admission_context.clinical_value("medication_order_count", 4.85) == 4.85
+    assert admission_context.clinical_value("medication_order_count", 13.64) == 13.64
+    assert admission_context.clinical_value("medication_order_count", 14.0) == 14
+    assert admission_context.clinical_value("prior_admission_count", 0.0) == 0

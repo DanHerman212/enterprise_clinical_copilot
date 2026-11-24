@@ -220,18 +220,27 @@ def test_a_measurement_states_the_unit_it_is_measured_in(feature, value, stated)
     assert presented["value"] == stated
 
 
-@pytest.mark.parametrize("feature, value", [
-    ("prior_admission_count", 2),
-    ("recent_ed_visits", 4.75),
-    ("procedure_count", 1.0),
-    ("medication_order_count", 4.85),
+@pytest.mark.parametrize("feature, value, stated", [
+    ("prior_admission_count", 2, 2),
+    ("prior_admission_count", 4.5, 4.5),
+    ("recent_ed_visits", 4.75, 4.75),
+    ("procedure_count", 1.0, 1),
+    ("medication_order_count", 4.85, 4.85),
+    ("medication_order_count", 13.64, 13.64),
+    ("medication_order_count", 14.0, 14),
 ])
-def test_a_count_stays_a_whole_number_with_no_unit(feature, value):
-    """A tally says what it counts by its own name; a unit would be an invented word."""
+def test_a_count_states_the_value_it_was_served_and_names_no_unit(feature, value, stated):
+    """A tally says what it counts by its own name; a unit would be an invented word.
+
+    And it says the number the row holds. These cases asserted a whole number until
+    2026-11-24, when a served `medication_order_count` of 13.64 was rendered as 14 and the
+    judge docked `dev_d2_risk_01` for stating a count the risk result did not hold: the
+    encoder keeps an order RATE in that column. What is whole is what was served whole.
+    """
     presented = _presented_factor(
         {"feature": feature, "direction": "increases", "value": value})
 
-    assert isinstance(presented["value"], int)
+    assert presented["value"] == stated
 
 
 def test_the_session_record_states_the_same_number_and_unit():
@@ -360,17 +369,23 @@ def test_a_hospital_day_is_not_rewritten_as_a_served_count():
     assert flags == []
 
 
-def test_a_count_with_a_real_fraction_is_still_corrected():
-    """The rule the day exclusion must not weaken."""
+def test_a_served_fraction_is_written_at_full_precision_and_corrected():
+    """The correction that remains: the encoder's own float, trimmed to two decimals.
+
+    This test used to require the opposite for `medication_order_count` — a served 4.85
+    rewritten to "5 orders" — which is the rounding the judge docked on 2026-11-24. The
+    same path still corrects a float stating more precision than the risk result
+    publishes, which is what it was added for.
+    """
     calls = [{"name": "predict_readmission", "args": {"hadm_id": 90000069},
               "response": {"probability": 0.075, "threshold": 0.11, "top_factors": [
-                  {"feature": "medication_order_count", "direction": "increases",
-                   "value": 4.85}]}}]
+                  {"feature": "index_los_days", "direction": "increases",
+                   "value": 42.458333333333336}]}}]
 
-    out, flags = normalise_factor_values("She was given 4.85 orders.", calls)
+    out, flags = normalise_factor_values("She stayed 42.458333333333336 days.", calls)
 
-    assert "5 orders" in out
-    assert flags == ["factor_value_rounded:4.85"]
+    assert "42.46 days" in out
+    assert flags == ["factor_value_rounded:42.458333333333336"]
 
 
 def test_the_lab_check_keeps_a_timepoint_sentence_intact():

@@ -20,6 +20,9 @@ name they replace.
 """
 
 
+import asyncio
+import logging
+
 from langchain_core.messages import AIMessage, AIMessageChunk
 
 from services.agent.engine import gateway
@@ -30,6 +33,8 @@ from services.agent.telemetry.stages import emit
 # `build_llm` produces for the served path; the adapter owns the choice.
 from services.mcp.config import GEMINI_REASONING_EFFORT  # noqa: F401
 from shared import model_outcomes
+
+logger = logging.getLogger(__name__)
 
 # One model call, bounded. The bound is part of the chain `timeout_chain`
 # enforces at startup — model < tool < ask < the proxy's own limit — and it is set
@@ -222,16 +227,36 @@ async def streamed_turn(llm, messages, on_event, *, immediate: bool = False) -> 
     pieces: list[str] = []
     turn: AIMessageChunk | None = None
 
-    async for chunk in llm.astream(messages):
-        turn = chunk if turn is None else turn + chunk
-        # The chunk's own text, not its repr. Gemini answers in content blocks, and
-        # `str(chunk.content)` announced the envelope and not the prose — measured live
-        # on `/ehr`, 2026-10-14 (see `model_turn.text_of`).
-        piece = text_of(chunk.content)
-        if piece:
-            pieces.append(piece)
-            if immediate:
-                emit(on_event, stages.answer_delta_event(piece))
+    for attempt in range(2):
+        pieces = []
+        turn = None
+        try:
+            async for chunk in llm.astream(messages):
+                turn = chunk if turn is None else turn + chunk
+                # The chunk's own text, not its repr. Gemini answers in content blocks, and
+                # `str(chunk.content)` announced the envelope and not the prose — measured live
+                # on `/ehr`, 2026-10-14 (see `model_turn.text_of`).
+                piece = text_of(chunk.content)
+                if piece:
+                    pieces.append(piece)
+                    if immediate:
+                        emit(on_event, stages.answer_delta_event(piece))
+            break
+        except Exception as exc:  # noqa: BLE001 — retry only on pre-first-chunk transport/capacity failure
+            if (
+                attempt == 0
+                and turn is None
+                and not pieces
+                and gateway.classify_error(exc) in (gateway.TRANSPORT, gateway.CAPACITY)
+            ):
+                logger.warning(
+                    "streamed_turn hit transient %s before first chunk; retrying once: %s",
+                    gateway.classify_error(exc),
+                    exc,
+                )
+                await asyncio.sleep(2.0)
+                continue
+            raise
 
     if turn is None:
         raise RuntimeError("the model returned no chunks")

@@ -320,6 +320,11 @@ def medication_narrative(verified: list[dict[str, str]], returned_passages: int,
     where = ", ".join(section.replace("_", " ") for section in sections) or (
         "material that was retrieved")
     if narrative_fallback:
+        discharge_keys = {_normalise(name) for name in names}
+        inpatient_names = [
+            name for name in inpatient_names
+            if _normalise(name) not in discharge_keys
+        ]
         if not names and not inpatient_names:
             if returned_passages == 0:
                 return ("No specific discharge medication information is available for "
@@ -332,10 +337,9 @@ def medication_narrative(verified: list[dict[str, str]], returned_passages: int,
             sentences.append(
                 f"Documented to continue at discharge: {', '.join(names)}{source}.")
         if inpatient_names:
-            tail = "" if names else source
-            sentences.append(
-                "Given during the stay without a documented home prescription: "
-                f"{', '.join(inpatient_names)}{tail}.")
+            lead = ("Also documented during the hospital stay"
+                    if names else "Documented during the hospital stay")
+            sentences.append(f"{lead}: {', '.join(inpatient_names)}{source}.")
         return " ".join(sentences)
     if names:
         if dedicated:
@@ -1058,14 +1062,30 @@ def _join_list(items: list[str]) -> str:
     return f"{', '.join(items[:-1])}, and {items[-1]}"
 
 
-def _format_driver(factor: dict[str, Any]) -> str:
-    """Format one projected SHAP driver (`feature`, optional `value`) verbatim."""
+def _format_driver(
+    factor: dict[str, Any],
+    *,
+    raw_factor: dict[str, Any] | None = None,
+) -> str:
+    """Format one projected SHAP driver (`feature`, optional `value`) verbatim.
+
+    `_presented_value` intentionally omits `value` for both `None` inputs and truthy
+    binary flags (`oncology_flag == 1`). When `raw_factor` is available, distinguish a
+    genuinely null input (rendered as ``(no recorded value on the scored row)``) from a
+    positive binary indicator (rendered cleanly as the feature name alone).
+    """
     name = str(factor.get("feature") or "").strip()
     if not name:
         return ""
     if "value" in factor and factor["value"] is not None and str(factor["value"]).strip() != "":
         return f"{name} ({factor['value']})"
-    return f"{name} (no recorded value on the scored row)"
+    if isinstance(raw_factor, dict) and "value" in raw_factor:
+        if raw_factor["value"] is None:
+            return f"{name} (no recorded value on the scored row)"
+        return name
+    if "value" in factor and factor["value"] is None:
+        return f"{name} (no recorded value on the scored row)"
+    return name
 
 
 def _comparator_clause(
@@ -1124,6 +1144,7 @@ def render_readmission_section(
     raw_probability: float | None = None,
     raw_threshold: float | None = None,
     fallback_literature_prose: str = "",
+    raw_factors: list[dict[str, Any]] | None = None,
 ) -> str:
     """Deterministically render the `/ehr` **Readmission risk & trajectory.** section.
 
@@ -1169,10 +1190,16 @@ def render_readmission_section(
 
     increased: list[str] = []
     decreased: list[str] = []
-    for factor in prediction.get("top_factors") or []:
+    for idx, factor in enumerate(prediction.get("top_factors") or []):
         if not isinstance(factor, dict):
             continue
-        formatted = _format_driver(factor)
+        raw_factor = (
+            raw_factors[idx]
+            if isinstance(raw_factors, list) and idx < len(raw_factors)
+            and isinstance(raw_factors[idx], dict)
+            else None
+        )
+        formatted = _format_driver(factor, raw_factor=raw_factor)
         if not formatted:
             continue
         direction = str(factor.get("direction") or "").strip().lower()

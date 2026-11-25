@@ -719,16 +719,21 @@ EVERY ROW CARRIES A "setting", and it is how the reader is told which list they 
 at — the application separates them cleanly into discharge medications and inpatient-only \
 treatments:
 - "setting": "discharge" when the passage states the patient is going HOME on the drug, was \
-prescribed it at discharge, continues it as an outpatient, or is given remaining doses or a \
-supply to finish after leaving ("send her home with Medrol", "continued pain medication \
-coverage with Darvocet and Flexeril", "2 more doses of Zithromax at home", "discharge on ...").
+prescribed or switched to it for discharge, continues it as an outpatient, or is given \
+remaining doses or a supply to finish after leaving ("send her home with Medrol", "continued \
+pain medication coverage with Darvocet and Flexeril", "2 more doses of Zithromax at home", \
+"changed to an albuterol MDI", "switched to ... at discharge", "discharge on ...").
 - "setting": "inpatient" when the passage documents a drug started, given, or stopped during \
 the emergency room visit or hospital stay without stating that the patient continues it at \
 home (for example, IV morphine on the ward, an inpatient Decadron course, Plavix/aspirin \
 started in the ER, or Xopenex nebulizer treatments). State each one's route or context as the \
 text gives it ("IV", "oral", "inpatient") in "route".
 
-A record that names BOTH discharge medications and inpatient treatments gets BOTH in the \
+Emit AT MOST ONE row per distinct drug. If a drug given during the stay is also documented to \
+continue or finish at home (for example, Zithromax kept during the stay with remaining doses \
+at home), tag it "discharge" only — never emit a duplicate "inpatient" row for the same \
+drug. Extract specific named drugs when named in the text, rather than generic category \
+phrases like "oral pain medications" when specific named agents are already documented. A record that names BOTH discharge medications and inpatient treatments gets BOTH in the \
 array, each row tagged accurately by what its own sentence says. Never guess: a drug whose \
 passage does not explicitly state it continues after discharge takes "setting": "inpatient".
 

@@ -68,12 +68,16 @@ def test_the_extraction_request_is_semantic_and_lands_on_the_accepted_level():
     assert deterministic._STRUCTURED_CALL_PARAMS == {
         "effort": gateway.EFFORT_EXTRACTION, "json_mode": True,
     }
-    for name in ("gemini-3.8-flash", "gemini-3.1-pro"):
+    for name in ("gemini-3.8-flash", "gemini-4-hydrogen", "gemini-3.1-pro"):
         assert gateway.wire_bindings(gateway.profile(name),
                                      deterministic._STRUCTURED_CALL_PARAMS) == {
             "thinking_level": "low",
             "response_mime_type": "application/json",
         }
+        assert gateway.call_profile_parameters(
+            gateway.profile(name),
+            gateway.call_profile(gateway.CALL_PROFILE_LOW),
+        ) == {"thinking_level": "low"}
 
 
 def test_a_level_the_table_cannot_name_is_refused_rather_than_sent():

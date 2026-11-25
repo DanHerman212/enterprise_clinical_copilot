@@ -442,6 +442,12 @@ def make_task(ask: Ask, *, run_tag: str,
         # is "which turn was corrected", not "was anything corrected anywhere".
         guardrail_flags = [_guardrail_flags(response) for response in responses]
         meds_dropped = [_meds_dropped(response) for response in responses]
+        turn_statuses = [
+            int(response["status"]) if isinstance(response.get("status"), int)
+            and not isinstance(response.get("status"), bool) else None
+            for response in responses
+        ]
+        turn_errors = [str(response.get("error") or "") for response in responses]
         # The thread's tool results in the order they ran, with no numbering: the
         # per-turn `sources` list is the only place a marker's number is stated.
         tool_evidence: list[dict[str, Any]] = []
@@ -462,6 +468,8 @@ def make_task(ask: Ask, *, run_tag: str,
             turn_rendered=rendered,
             turn_guardrail_flags=guardrail_flags,
             turn_meds_dropped=meds_dropped,
+            turn_statuses=turn_statuses,
+            turn_errors=turn_errors,
             turn_1_verified=verified[0],
             tool_evidence=tool_evidence,
             session_id=session_id,

@@ -56,6 +56,17 @@ def test_a_clean_thread_reports_nothing():
     assert dependency_failure({"turn_tool_calls": [[], []]}) is None
 
 
+@pytest.mark.parametrize("status", [502, 503, 504])
+def test_gateway_http_5xx_on_any_turn_is_a_dependency_failure(status):
+    assert dependency_failure({"turn_statuses": [status], "turn_errors": ["agent_failed"]}) is not None
+    assert dependency_failure({"turn_statuses": [200, 200, 200, status], "turn_errors": ["", "", "", ""]}) is not None
+
+
+def test_gateway_http_5xx_prefix_fallback_and_400_refusal():
+    assert dependency_failure({"turn_responses": ["ok", "[HTTP 502] agent_failed: retry"]}) is not None
+    assert dependency_failure({"turn_statuses": [400], "turn_errors": ["invalid_command"]}) is None
+
+
 # --- a literal anchor is matched without regard to case -------------------------------
 
 def test_a_required_anchor_matches_in_any_capitalisation():

@@ -97,12 +97,17 @@ def test_the_narrative_writes_one_marker_per_position():
 
 def test_the_fallback_narrative_states_the_absence_and_separates_the_settings():
     text = answer_text.medication_narrative(
-        [_row("Medrol", setting="discharge"), _row("morphine", setting="inpatient")],
+        [
+            _row("Medrol", setting="discharge"),
+            _row("morphine", setting="inpatient"),
+            _row("medrol", setting="inpatient"),  # deduplicated against discharge
+        ],
         1, sections=("brief_hospital_course",))
 
     assert "No dedicated discharge medications section is documented" in text
-    assert "Documented to continue at discharge: Medrol" in text
-    assert "Given during the stay without a documented home prescription: morphine" in text
+    assert "Documented to continue at discharge: Medrol ^[1]." in text
+    assert "Also documented during the hospital stay: morphine ^[1]." in text
+    assert text.lower().count("medrol") == 1
 
 
 def test_a_discharge_instructions_section_is_never_called_absent():
@@ -400,3 +405,49 @@ def test_http_ask_retries_once_after_a_timeout(monkeypatch):
 
     assert payload["answer"] == "ok"
     assert attempts["n"] == 2
+
+
+def test_http_ask_recovers_after_two_502s_on_attempt_three(monkeypatch):
+    from evaluation.platform import runner
+
+    monkeypatch.setattr(runner, "AGENT_URL", "https://agent.example")
+    monkeypatch.setattr(runner, "validate_body", lambda body: None)
+    monkeypatch.setitem(__import__("sys").modules, "evaluation.platform.http_auth",
+                        type("M", (), {"identity_token": staticmethod(lambda url: "token")}))
+
+    attempts = {"n": 0}
+    sleeps = []
+
+    class _Response:
+        def __init__(self, status_code, body):
+            self.status_code = status_code
+            self._body = body
+            self.request = httpx.Request("POST", "https://agent.example/ask")
+
+        def json(self):
+            return self._body
+
+    class _Client:
+        def __init__(self, timeout=None):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def post(self, url, json=None, headers=None):
+            attempts["n"] += 1
+            if attempts["n"] <= 2:
+                return _Response(502, {"error": "agent_failed"})
+            return _Response(200, {"answer": "ok"})
+
+    monkeypatch.setattr(httpx, "Client", _Client)
+    monkeypatch.setattr(runner.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    payload = runner.http_ask(question="q", hadm_id=HADM, run_tag="t")
+
+    assert payload["answer"] == "ok"
+    assert attempts["n"] == 3
+    assert sleeps == [5.0, 15.0]

@@ -756,14 +756,14 @@ def resolved_thinking_level(name: str | None) -> str | None:
 
 
 def _is_gemini_3(profile_: ModelProfile) -> bool:
-    """Whether this Google profile is a Gemini 3 or newer model.
+    """Whether this Google profile is a Gemini 3 or Gemini 4 model.
 
     The generation is spelled out rather than inferred from a capability flag because the
-    wire fact is exactly this: Gemini 3 takes a level and deprecated the token budget,
-    Gemini 2.5 takes the budget and has no level. The registry holds only Gemini 3 ids
-    today, and an id added later must answer this question before it is trusted with one.
+    wire fact is exactly this: Gemini 3 and Gemini 4 take `thinking_level` and deprecate
+    the token budget, whereas Gemini 2.5 takes the budget and has no level. Keeping both
+    generations covered prevents a Gemini 4 profile from falling back to `thinking_budget`.
     """
-    return profile_.family == GOOGLE and profile_.name.startswith("gemini-3")
+    return profile_.family == GOOGLE and profile_.name.startswith(("gemini-3", "gemini-4"))
 
 
 def call_profile_parameters(profile_: ModelProfile, call_profile_: CallProfile, *,

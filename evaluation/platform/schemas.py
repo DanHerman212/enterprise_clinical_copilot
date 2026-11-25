@@ -281,6 +281,10 @@ class TaskOutput(BaseModel):
     #: refusal, which is the flag a reader sees on the card, so it is asserted rather
     #: than inferred from the prose.
     turn_verified: list[bool | None] = Field(default_factory=list)
+    #: HTTP status codes and error codes reported per turn, in turn order, so
+    #: `dependency_failure` can detect upstream 502/503/504 outages on any turn.
+    turn_statuses: list[int | None] = Field(default_factory=list)
+    turn_errors: list[str] = Field(default_factory=list)
     #: Component names rendered per turn, in turn order.
     turn_components: list[list[str]] = Field(default_factory=list)
     turn_1_verified: bool | None = None

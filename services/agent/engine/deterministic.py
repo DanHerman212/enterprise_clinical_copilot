@@ -612,6 +612,7 @@ def _build_ehr_risk_section(
         raw_probability=float(prob) if isinstance(prob, (int, float)) and not isinstance(prob, bool) else None,
         raw_threshold=float(thresh) if isinstance(thresh, (int, float)) and not isinstance(thresh, bool) else None,
         fallback_literature_prose=fallback_literature_prose,
+        raw_factors=raw.get("top_factors") if isinstance(raw.get("top_factors"), list) else None,
     )
 
 

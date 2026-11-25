@@ -24,6 +24,7 @@ def _prediction(prob: float = 0.09, thresh: float = 0.11, *, with_null_driver: b
         {"feature": "monocytes_min", "direction": "decreases", "value": 0.2},
         {"feature": "prior_inpatient_days", "direction": "decreases", "value": 4.75},
         {"feature": "recent_ed_visits", "direction": "increases", "value": 0},
+        {"feature": "oncology_flag", "direction": "increases", "value": 1},
     ]
     if with_null_driver:
         factors.append({"feature": "sodium_min", "direction": "decreases", "value": None})
@@ -46,12 +47,15 @@ def test_render_readmission_section_formats_drivers_verbatim_without_editorializ
         projected,
         raw_probability=raw["probability"],
         raw_threshold=raw["threshold"],
+        raw_factors=raw["top_factors"],
     )
 
     assert rendered.startswith("**Readmission risk & trajectory.**")
     assert "9.0%, which falls below the decision threshold of 11.0%." in rendered
     assert "4.75" in rendered
     assert "recent ED visits (0)" in rendered
+    assert "oncology history" in rendered
+    assert "oncology history (no recorded value on the scored row)" not in rendered
     assert "lowest sodium (no recorded value on the scored row)" in rendered
     for banned in ("favorable", "protective", "paradoxical", "reassuring", "contribution"):
         assert banned not in rendered.lower()

@@ -145,11 +145,12 @@ def http_ask(*, question: str | None, hadm_id: int, run_tag: str,
     validate_body(body)
     headers = {"Authorization": f"Bearer {identity_token(AGENT_URL)}"}
     timeout = httpx.Timeout(connect=15.0, read=135.0, write=30.0, pool=15.0)
-    attempts = 2
+    backoff_delays = (5.0, 15.0)
+    attempts = len(backoff_delays) + 1
     last_error: Exception | None = None
     for attempt in range(attempts):
         if attempt:
-            time.sleep(2.0)
+            time.sleep(backoff_delays[attempt - 1])
         try:
             with httpx.Client(timeout=timeout) as client:
                 response = client.post(f"{AGENT_URL}/ask", json=body, headers=headers)

@@ -241,15 +241,22 @@ def _required_dimensions(input_doc: dict[str, Any],
     return pass_dimensions_for(len(turn_questions(input_doc or {}, output or {})))
 
 
+_GATEWAY_FAILURE_STATUSES = (502, 503, 504)
+_GATEWAY_FAILURE_PREFIXES = tuple(
+    f"[HTTP {code}]" for code in _GATEWAY_FAILURE_STATUSES
+)
+
+
 def dependency_failure(output: dict[str, Any]) -> str | None:
-    """The first infrastructure error a turn's tool calls returned, if any.
+    """The first infrastructure error a turn's tool calls or gateway response returned, if any.
 
     `dev_t4_03` on 2026-11-04 asked for a readmission estimate, was told
     `{"error": "prediction_failed"}`, and the `/ehr` answer correctly omitted the risk
     section it had no estimate for — at which point the heading check failed the item for
-    a section the evidence could not support. A degraded backend is a measurement the run
-    did not obtain, so it is reported as such and kept out of the pass-rate denominator,
-    the same way a judge failure is.
+    a section the evidence could not support. Similarly, upstream Vertex `504 DEADLINE_EXCEEDED`
+    outages arrive from the Cloud Run gateway as HTTP 502/503/504 (`agent_failed`) on a turn.
+    A degraded backend is a measurement the run did not obtain, so it is reported as such
+    and kept out of the pass-rate denominator, the same way a judge failure is.
     """
     for turn_index, calls in enumerate(output.get("turn_tool_calls") or []):
         for call in calls or []:
@@ -262,6 +269,26 @@ def dependency_failure(output: dict[str, Any]) -> str | None:
             if code in INFRASTRUCTURE_ERROR_CODES:
                 return (f"{DEPENDENCY_ERROR}: {call.get('name')} returned {code} "
                         f"on turn {turn_index + 1}")
+
+    turn_errors = output.get("turn_errors") or []
+    statuses = output.get("turn_statuses")
+    if not isinstance(statuses, list) or not statuses:
+        statuses = [
+            value for value in (output.get("turn_1_status"), output.get("turn_2_status"))
+            if value is not None
+        ]
+    for turn_index, status in enumerate(statuses):
+        if status in _GATEWAY_FAILURE_STATUSES:
+            err = str(turn_errors[turn_index]).strip() if turn_index < len(turn_errors) else ""
+            suffix = f" ({err})" if err else ""
+            return f"{DEPENDENCY_ERROR}: agent returned HTTP {status}{suffix} on turn {turn_index + 1}"
+
+    for turn_index, text in enumerate(output.get("turn_responses") or []):
+        stripped = str(text or "").strip()
+        for prefix in _GATEWAY_FAILURE_PREFIXES:
+            if stripped.startswith(prefix):
+                code = prefix.strip("[]")
+                return f"{DEPENDENCY_ERROR}: agent returned {code} on turn {turn_index + 1}"
     return None
 
 

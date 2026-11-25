@@ -117,3 +117,63 @@ def test_the_extraction_client_carries_the_same_bound():
     llm = model_gateway.build_extraction_llm(graph.MODEL_ID)
 
     assert llm.max_retries == model_gateway.MODEL_MAX_RETRIES
+
+
+def test_streamed_turn_retries_once_on_pre_first_chunk_504(monkeypatch):
+    import asyncio
+    from langchain_core.messages import AIMessageChunk, HumanMessage
+
+    async def _no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(model_gateway.asyncio, "sleep", _no_sleep)
+    attempts = {"n": 0}
+
+    class _FakeLLM:
+        async def astream(self, _messages):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise RuntimeError("504 DEADLINE_EXCEEDED")
+            yield AIMessageChunk(content="Recovered answer.")
+
+    events = []
+    turn = asyncio.run(
+        model_gateway.streamed_turn(_FakeLLM(), [HumanMessage(content="q")], events.append, immediate=True)
+    )
+
+    assert attempts["n"] == 2
+    assert turn.content == "Recovered answer."
+
+
+def test_streamed_turn_does_not_retry_after_first_chunk_or_on_400(monkeypatch):
+    import asyncio
+    import pytest
+    from langchain_core.messages import AIMessageChunk, HumanMessage
+
+    async def _no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(model_gateway.asyncio, "sleep", _no_sleep)
+    mid_attempts = {"n": 0}
+
+    class _MidStreamFailLLM:
+        async def astream(self, _messages):
+            mid_attempts["n"] += 1
+            yield AIMessageChunk(content="partial")
+            raise RuntimeError("504 DEADLINE_EXCEEDED")
+
+    with pytest.raises(RuntimeError, match="504 DEADLINE_EXCEEDED"):
+        asyncio.run(model_gateway.streamed_turn(_MidStreamFailLLM(), [HumanMessage(content="q")], None))
+    assert mid_attempts["n"] == 1
+
+    bad_req_attempts = {"n": 0}
+
+    class _InvalidArgLLM:
+        async def astream(self, _messages):
+            bad_req_attempts["n"] += 1
+            raise RuntimeError("400 INVALID_ARGUMENT")
+            yield  # pragma: no cover
+
+    with pytest.raises(RuntimeError, match="400 INVALID_ARGUMENT"):
+        asyncio.run(model_gateway.streamed_turn(_InvalidArgLLM(), [HumanMessage(content="q")], None))
+    assert bad_req_attempts["n"] == 1

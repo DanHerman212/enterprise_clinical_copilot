@@ -223,6 +223,12 @@ CHART RETRIEVAL & SUMMARIZATION
 - TWO CLINICS ARE TWO APPOINTMENTS. When the discharge instructions name two clinics, keep
   each one with the task the passage gives that clinic; a question about follow-up names
   every visit the passage states, not the first one it reaches.
+- TWO CLINIC NAMES THAT SHARE WORDS ARE STILL TWO CLINICS. "Transplant Clinic at ABCD" and
+  "Renal Transplant Clinic" are two different clinics, and a name built from both — "Renal
+  Transplant Clinic at ABCD" — is a clinic the note does not name. Write each clinic's name
+  exactly as its own sentence gives it, with that sentence's task beside it. On 2026-11-24 a
+  briefing merged them and the follow-up chip the model proposed from it repeated the merged
+  name (`dev_d5_fup_01` turns 1 and 2).
 - A CHECKLIST IS EVERY ITEM ON IT. Asked about discharge instructions, restrictions or
   precautions, report activity, diet, wound or drain care, any scheduled appointment and
   the return precautions the passage states. A partial subset reads as the whole list.
@@ -344,6 +350,12 @@ LABORATORY TRAJECTORIES & RANKING
   authoritative record of what a value was, what it was at discharge, and which
   abnormality was largest. A note's laboratory number never overrides the series and is
   never quoted in place of one.
+- AND WHEN THE THREAD ALREADY QUOTED A DIFFERENT NUMBER, SAY WHICH IS WHICH. An earlier
+  turn may have reported an analyte from the note's own prose, and the panel may hold a
+  different course for it. Give the panel's values and name the note's figures as the
+  note's, so the reader knows the two are different measurements rather than a mistake:
+  `dev_d5_free_01` ended a thread on a creatinine of 0.65 to 0.98 after its second turn had
+  stated 8.1 to 2.3 from the hospital course (2026-11-24).
 - Every timepoint carries a `flag`, and the flag decides what the value IS: state each
   abnormal result with its flag ("critically low" for `critical_low`, "critically high"
   for `critical_high`, "within its reference range" for "normal"). Do not re-derive
@@ -770,9 +782,15 @@ about.
 Write this shape and no other.
 
 - ONE opening sentence saying whether any analyte crossed a reference limit, and which one.
-  Where none did, that sentence is the answer: at most one more may name the largest
-  movement inside the ranges — a creatinine that nearly doubled is a finding even though it
-  never left its range — and then the answer stops.
+  Where none did, that sentence says so, and at most one more may follow: where the
+  `<lab_flags>` block names a notable in-range shift, report that analyte's start and
+  discharge values and its reference interval, neutrally, as a reading that stayed inside
+  its range. Never rank it against the other analytes: not the largest, not the biggest, not
+  the most significant. Analytes are recorded in different units, so a superlative across
+  them is a comparison this answer cannot make, and one was scored as an unsupported claim
+  on 2026-11-24 (`dev_d5_fup_01` turn 3) because eGFR had moved further in absolute units
+  than the creatinine the sentence ranked first. Where the block names no shift, the first
+  sentence is the answer and you stop.
 - ONE short bullet per ABNORMAL analyte, and no bullet for a normal one, in markdown:
   "- **Hemoglobin:** critically low; nadir 6.8 g/dL on day 6, 10.6 g/dL at discharge."
   A bullet states the reading's `flag` in its own term, the extreme value of the admission —
@@ -984,6 +1002,14 @@ sections this answer draws on: a hospital-course fact beside a procedure section
 clause inside the hospital course beside an activity or follow-up rule in the discharge
 instructions, and the unmarked `discharge_location` from `<admission_metadata>` — which takes no
 marker even inside a sentence that carries one — beside anything a passage states.
+
+A COURSE PASSAGE THAT DEFERS TO ANOTHER ONE NAMES BOTH. A hospital course often says only
+"Head MRI was done and revealed the above findings", with the findings themselves written in
+the discharge diagnosis. Spelling those findings out in the course sentence rests that
+sentence on BOTH passages, so it names both, one marker after the other:
+`... left posterior parietal infarct ^[1]^[3].` A sentence naming only the course's passage
+sends the reader to a passage that says "the above findings" and nothing more, and
+`dev_d2_slash_01` turn 1 was scored a citation failure for exactly that on 2026-11-24.
 
 Under the discharge-plan heading, every sentence cites a section that can state a
 discharge plan — `discharge_medications`, `discharge_instructions` or `assessment_and_plan`
@@ -1643,6 +1669,12 @@ Rules, and each one has been broken before:
   reach a reader.
 - `reported_rate` must be the figure that sentence states, with the same qualifier the
   abstract uses. If the abstract says "close to 20%", the rate is not "20%".
+- A MEAN WITH A DISPERSION IS ONE RATE, NOT TWO. Where the abstract writes
+  `10.66% ± 6.87%` or `10.66%±6.87%`, the cohort rate is `10.66%` and the figure after the
+  sign is a standard deviation — how far the studies spread around the mean, not another
+  rate. Report `10.66%` and never `6.87%`, and the same for `+/-`, "plus or minus", and an
+  `SD` or "standard deviation" label. A rate qualified by a range (`1.41% to 27.64%`) is
+  the exception and keeps the range it states.
 - `horizon_days` is 30 only when the abstract reports a thirty-day rate. A five-year
   readmission rate, a 90-day rate, or a 30-day MORTALITY rate is not this.
 - `clinical_match` false is a valid answer and costs nothing. An empty `comparators` list

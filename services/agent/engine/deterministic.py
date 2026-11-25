@@ -660,9 +660,95 @@ def lab_flag_annotation(recorded: list[RecordedToolCall]) -> str:
         # different sentence from three flagged rows, and a reader cannot tell the two apart
         # by omission (`dev_d5_fup_02` turn 3, 2026-11-24).
         lines.append("- No reading in this panel carries a critical flag.")
+    elif not _panel_has_abnormal(recorded):
+        # And the other half: a panel where nothing crossed a limit still has a course, and
+        # the formatter used to be left to choose which analyte moved most with no
+        # arithmetic behind the choice. `dev_d5_fup_01` turn 3 called creatinine's rise the
+        # "largest movement" while eGFR had fallen 15 and white cells had risen 2.9 in
+        # absolute units, and the judge scored the superlative as unsupported (2026-11-24).
+        # Which analyte moved most is arithmetic over the payload, so it is computed here
+        # and stated without the adjective.
+        shift = _notable_in_range_shift(recorded)
+        if shift:
+            lines.append(shift)
     return ("<lab_flags>\nHow many readings of each analyte the panel flags abnormal, "
             "and the flag on the baseline (first) reading:\n"
             + "\n".join(lines) + "\n</lab_flags>")
+
+
+def _notable_in_range_shift(recorded: list[RecordedToolCall]) -> str:
+    """One line naming the analyte that moved most, in proportion, inside its range.
+
+    "Moved most" is defined here because it has to be defined somewhere: the largest
+    |end - start| / |start| among analytes whose every reading is inside its reference
+    interval, with a zero start skipped (a ratio against nothing is not a change) and a
+    series with two or more points required. The definition is relative change, which is
+    the one the prompt's own example used — a value that nearly doubled is a finding — and
+    the line says what the numbers were and nothing about how they compare with anything
+    else, because a superlative across analytes in different units is not a clinical
+    comparison and was scored as an unsupported claim on 2026-11-24.
+
+    Empty when no analyte moved at all, and empty when the panel has an abnormal reading:
+    that case has its own sentence, and two sentences about which value matters most is one
+    too many for a reader deciding what to do next.
+    """
+    best: tuple[float, dict[str, Any], dict[str, Any], dict[str, Any]] | None = None
+    for call in recorded or []:
+        response = call.get("response")
+        if not isinstance(response, dict):
+            continue
+        for trend in response.get("trends") or []:
+            if not isinstance(trend, dict):
+                continue
+            series = [point for point in trend.get("series") or []
+                      if isinstance(point, dict)]
+            if len(series) < 2:
+                continue
+            if any(str(point.get("flag") or "normal").strip().lower() != "normal"
+                   for point in series):
+                continue
+            start = _value_of(series[0].get("value"))
+            end = _value_of(series[-1].get("value"))
+            if start is None or end is None or start == 0:
+                continue
+            share = abs(end - start) / abs(start)
+            if share <= 0:
+                continue
+            if best is None or share > best[0]:
+                best = (share, trend, series[0], series[-1])
+    if best is None:
+        return ""
+    _, trend, first, last = best
+    label = str(trend.get("label") or trend.get("key") or "value").strip()
+    unit = str(trend.get("unit") or "").strip()
+    decimals = trend.get("decimals")
+    low = _value_of(trend.get("reference_low"))
+    high = _value_of(trend.get("reference_high"))
+    reference = ""
+    if low is not None and high is not None:
+        reference = (f" (reference {_formatted(low, decimals)}"
+                     f"\u2013{_formatted(high, decimals)}"
+                     f"{' ' + unit if unit else ''})")
+    return (f"- Notable in-range shift: {label} "
+            f"{_formatted(_value_of(first.get('value')), decimals)} -> "
+            f"{_formatted(_value_of(last.get('value')), decimals)}"
+            f"{' ' + unit if unit else ''}{reference}.")
+
+
+def _value_of(value: object) -> float | None:
+    """A payload number as a float, or None when it is absent or not a number."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _formatted(value: float | None, decimals: object) -> str:
+    """A value at the payload's own number of decimal places."""
+    if value is None:
+        return "?"
+    if isinstance(decimals, int) and not isinstance(decimals, bool):
+        return f"{value:.{decimals}f}"
+    return f"{value:g}"
 
 
 def _panel_flags(recorded: list[RecordedToolCall]) -> list[str]:
@@ -1995,6 +2081,58 @@ def _shares_a_percent_sign(figures: list[str], sentence: str) -> bool:
         re.search(rf"(?<![\d.]){re.escape(figure)}(?![\d])", sentence)
         for figure in figures
     )
+
+
+#: The signs a sentence puts in front of a spread: `10.66%±6.87%`, `10.66 % +/- 6.87 %`,
+#: `10.66% plus or minus 6.87%`. Matched against the text immediately before the figure,
+#: because in every one of those spellings the dispersion follows its sign.
+_DISPERSION_SIGN_BEFORE = re.compile(
+    r"(?:\u00b1|\+/-|\+\s*/\s*-|plus\s+or\s+minus|plus\s*/\s*minus)\s*$",
+    re.IGNORECASE,
+)
+
+#: The label form: `6.87% SD`, `6.87% (standard deviation)`, `SD 6.87%`, `standard
+#: deviation of 6.87%`. Either side of the figure, because abstracts write both.
+_DISPERSION_LABEL_AFTER = re.compile(
+    r"^[\s%]*[),;]?\s*(?:\(?\s*)?(?:SD|s\.d\.|std\.?\s*dev\.?|standard\s+deviation)\b",
+    re.IGNORECASE,
+)
+_DISPERSION_LABEL_BEFORE = re.compile(
+    r"\b(?:SD|s\.d\.|std\.?\s*dev\.?|standard\s+deviation)\s*(?:of\s*)?$",
+    re.IGNORECASE,
+)
+
+
+def _is_dispersion_figure(figure: str, sentence: str) -> bool:
+    """Whether every place this figure appears in the sentence is a spread, not a rate.
+
+    The verifier's rate check is membership — is the figure printed in the sentence — and a
+    sentence that reports a mean and its standard deviation prints both, so `6.87%` passed
+    as "the figure its own sentence states" against `"a mean value of 10.66%\u00b16.87%"`.
+    That row reached a briefing: `dev_d3_slash_01` turn 1 said a 10.1% estimate was higher
+    than "the 6.87% reported in a systematic review" of a paper whose rate was 10.66% ±
+    6.87% (2026-11-24).
+
+    Every occurrence has to be a spread before the figure is refused, because a sentence can
+    state the same digits twice — once as a rate and once inside its own dispersion — and a
+    rate the abstract really reports is not made wrong by a coincidence elsewhere in the
+    sentence.
+    """
+    text = str(sentence or "")
+    pattern = re.compile(rf"(?<![\d.]){re.escape(str(figure))}(?![\d])")
+    seen = False
+    for match in pattern.finditer(text):
+        seen = True
+        before, after = text[:match.start()], text[match.end():]
+        if _DISPERSION_SIGN_BEFORE.search(before):
+            continue
+        if _DISPERSION_LABEL_BEFORE.search(before):
+            continue
+        if _DISPERSION_LABEL_AFTER.match(after):
+            continue
+        return False
+    return seen
+
 #: A rate that is stated as a span. Kept as one verified row rather than split into two,
 #: because the abstract states it as one figure and a row is a quotation — but the surface
 #: has to know, since a cell holding "1.0% to 1.4%" is not the same object as one holding
@@ -2811,6 +2949,17 @@ def verify_comparator(row: dict | None, articles: dict[str, dict],
     figures = _NUMBER.findall(rate)
     if not figures:
         return None, f"pmid {pmid} states no numeric rate"
+    if _is_dispersion_figure(figures[0], sentence):
+        # `10.66%±6.87%` states ONE rate and a spread around it. The membership check
+        # below cannot tell them apart — both figures are printed in the sentence — so it
+        # kept a row whose rate was the standard deviation, and `dev_d3_slash_01` turn 1
+        # told a reader that a 10.1% estimate was "higher than the 6.87% reported in a
+        # systematic review" whose own abstract says the rate was 10.66% ± 6.87%
+        # (2026-11-24). A dispersion term is not a rate, whatever it is printed next to.
+        return None, (
+            f"pmid {pmid} rate {rate} is the dispersion term of its own sentence, not "
+            f"the cohort rate"
+        )
     if figures[0] not in _PERCENT_IN_TEXT.findall(sentence):
         # A zero stated in words is a real result and publishes no numeral to match.
         # `38504222` reports that no patient was readmitted within 30 days; the check

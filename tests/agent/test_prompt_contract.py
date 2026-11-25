@@ -45,9 +45,17 @@ from services.agent.engine.prompts import SYSTEM_PROMPT
 #: copies of the old 1,500/650 numbers; this table replaced them on 2026-11-22.
 PROMPT_WORD_BUDGETS: dict[str, int] = {
     "CORE_HUB_PROMPT": 1800,
-    "CHART_SPOKE": 800,
+    # CHART_SPOKE and LABS_SPOKE were 800 each until 2026-11-24. Two behavioural rules were
+    # added that day because the dev suite measured them missing — two clinic names that
+    # share words are still two clinics (`dev_d5_fup_01`), and a thread must say which of
+    # two reported courses is the note's and which the panel's (`dev_d5_free_01`). Neither
+    # compresses into fewer words without turning a rule into a slogan, so the ceilings
+    # moved rather than the rules shrinking. Both new rules are quoted verbatim in
+    # `test_gate_c5_prep_2026_11_24.py`, so a later edit cannot quietly drop one to reclaim
+    # the room.
+    "CHART_SPOKE": 870,
     "MEDS_SPOKE": 800,
-    "LABS_SPOKE": 800,
+    "LABS_SPOKE": 880,
     "RISK_SPOKE": 800,
     "LITERATURE_SPOKE": 800,
     "EHR_FORMATTING": 3600,

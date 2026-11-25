@@ -2552,6 +2552,7 @@ def _settle(state: dict, *, prose: str | None) -> None:
         # two passes must agree or the earlier one deletes what the later one permits
         # (90000069 and 90000015, 2026-11-03).
         comparators=state.get("comparators") or [],
+        fallback_literature=state.get("fallback_literature") or [],
         # And the published records an earlier turn of this thread cited, for the same
         # reason one layer out: settlement runs before the guardrail, so an allowance
         # that knew only this turn's evidence would delete a follow-up's citation of the
@@ -2581,6 +2582,9 @@ def _settle(state: dict, *, prose: str | None) -> None:
     if settled.flags:
         state["guardrail_flags"] = [*(state.get("guardrail_flags") or []),
                                     *settled.flags]
+    # Settlement has already enforced citation bounds and PMID allowances once; mark state
+    # so `guard_answer` does not run a duplicate `enforce_citations` pass on live turns.
+    state["citations_settled"] = True
 
 
 def final_message(state: dict) -> AIMessage | None:

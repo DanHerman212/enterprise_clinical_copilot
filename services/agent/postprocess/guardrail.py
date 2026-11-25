@@ -1876,46 +1876,25 @@ def guard_answer(
     answer, f = normalise_factor_values(answer, evidence)
     flags += f
     flags += flag_invented_dates(answer, corpus_passages)
-    # Slots are the numbering the MODEL was shown, which since TF-10 runs across the
-    # replayed turns and this one: the renderer numbers every citable unit in the
-    # conversation continuously, and `a2ui.compose_presentation` resolves against the
-    # same concatenation. Counting this turn alone deleted the markers a follow-up
-    # legitimately placed in an earlier turn's passage — observed live on
-    # `agent-00175-ttr`, 2026-10-24, where a chip answer citing `^[6]` against six
-    # passages (five replayed, one fresh) was served as `chart_synthesis_without_citations`
-    # with `citation_out_of_range:^6`. The marker was correct; the count was not.
-    #
-    # Both the count and the enforcement are `citations`': one definition of what a unit
-    # is, one definition of when a marker dies (see `citations.enforce_citations`). This
-    # module owns the clinical checks, not the citation arithmetic.
-    answer, f = citations.enforce_citations(
-        answer,
-        citations.citation_bound(tool_calls, conversation_calls,
-                                 evidence_state=evidence_state),
-        # The badge allowance, from the one function that defines it — the SAME call
-        # `answer.settle_answer` makes, so the two passes cannot disagree about which
-        # identifiers are real. They did: settlement ran first with a three-channel union
-        # that did not know the records a zero-cohort turn had just published, deleted
-        # their badges, and this pass was never shown them (`90000069`, `90000020`,
-        # 2026-11-08).
-        citations.allowed_literature_pmids(
-            tool_calls,
-            conversation_calls=conversation_calls if literature_replay else None,
-            replay=literature_replay,
-            # The cohorts the comparison table published: the rows that were DRAWN, not the
-            # retrieval pool, so a PMID the table refused is still an identifier nobody
-            # verified.
-            comparators=(state or {}).get("comparators"),
-            # And the studies a turn with no verified cohort retrieved and published
-            # anyway, which its risk section summarises and cites.
-            fallback_literature=(state or {}).get("fallback_literature"),
-            # And the published records an earlier turn of this thread cited: the thread
-            # retrieved them and its answer rested on them, so a follow-up naming one is
-            # quoting the thread rather than inventing an identifier (2026-11-04).
-            thread_literature=(state or {}).get("thread_literature"),
-        ),
-    )
-    flags += f
+    # When `graph._settle` has already run `settle_answer`, citation bounds and PMID
+    # allowances were enforced once against the authoritative source set (and markers were
+    # compacted to 1..K). Avoid running a duplicate `enforce_citations` pass on live turns,
+    # while keeping full standalone enforcement for direct `guard_answer` callers/tests.
+    if not (state or {}).get("citations_settled"):
+        answer, f = citations.enforce_citations(
+            answer,
+            citations.citation_bound(tool_calls, conversation_calls,
+                                     evidence_state=evidence_state),
+            citations.allowed_literature_pmids(
+                tool_calls,
+                conversation_calls=conversation_calls if literature_replay else None,
+                replay=literature_replay,
+                comparators=(state or {}).get("comparators"),
+                fallback_literature=(state or {}).get("fallback_literature"),
+                thread_literature=(state or {}).get("thread_literature"),
+            ),
+        )
+        flags += f
 
     # Whether each marker points at the KIND of evidence its sentence is about. The pass
     # above decides that a marker resolves; it cannot decide that it resolves to the right

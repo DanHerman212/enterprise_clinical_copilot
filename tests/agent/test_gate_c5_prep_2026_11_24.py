@@ -174,6 +174,10 @@ def test_the_standard_deviation_is_refused_and_the_mean_is_kept():
     "10.66% plus or minus 6.87%",  # spelled out
     "10.66% (SD 6.87%)",           # labelled after the figure
     "10.66% \u00b1 6.87%",         # the same sign with whitespace
+    "10.66% (SE 6.87%)",           # standard error
+    "10.66% (SEM 6.87%)",          # standard error of mean
+    "10.66% (IQR 6.87%)",          # interquartile range
+    "10.66%, standard error of 6.87%",
 ])
 def test_every_spelling_of_a_dispersion_is_refused(written):
     articles = {"34763470": _article(written)}
@@ -182,6 +186,17 @@ def test_every_spelling_of_a_dispersion_is_refused(written):
     kept, reason = deterministic.verify_comparator(row, articles, _target())
 
     assert kept is None, written
+    assert "dispersion" in reason
+
+
+def test_a_two_figure_rate_carrying_a_dispersion_term_is_refused():
+    sentence = "The 30-day readmission rate was 10.66% \u00b1 6.87% across cohorts."
+    articles = {"34763470": _article(sentence)}
+    row = {**_row("10.66% to 6.87%"), "rate_sentence": sentence}
+
+    kept, reason = deterministic.verify_comparator(row, articles, _target())
+
+    assert kept is None
     assert "dispersion" in reason
 
 
@@ -241,11 +256,11 @@ def test_the_sections_the_workaround_served_are_in_the_index_itself():
 
 
 def test_the_hub_says_which_course_is_the_panels_and_which_the_notes():
-    """`dev_d5_free_01` stated 8.1 -> 2.3 in turn 2 and 0.65 -> 0.98 in turn 5, unreconciled."""
+    """When structured lab series are unanchored synthetic curves, say which is which."""
     text = " ".join(prompts.LABS_SPOKE.split())
 
     assert "AND WHEN THE THREAD ALREADY QUOTED A DIFFERENT NUMBER, SAY WHICH IS WHICH" in text
-    assert "dev_d5_free_01" in text
+    assert "unanchored_analytes" in text
     # And the authority rule it qualifies is still there, unweakened.
     assert "STRUCTURED DATA OUTRANKS NOTE PROSE" in text
     assert "A note's laboratory number never overrides the series" in text
@@ -264,14 +279,12 @@ def test_the_chart_spoke_forbids_a_hybrid_clinic_name():
 
 
 def test_the_briefing_rule_requires_both_markers_on_a_deferred_finding():
-    """A course passage that says "the above findings" does not state them."""
+    """A course passage that defers to diagnosis findings carries both markers."""
     text = " ".join(prompts.EHR_FORMATTING.split())
 
-    assert "A COURSE PASSAGE THAT DEFERS TO ANOTHER ONE NAMES BOTH" in text
-    assert "revealed the above findings" in text
+    assert "Prefer one passage per sentence" in text
+    assert "attach BOTH markers before the period" in text
     assert "^[1]^[3]" in text
-    # And the general rule it specialises is untouched.
-    assert "ONE PASSAGE PER SENTENCE, PREFERABLY" in text
 
 
 # --------------------------------------------- 6. the two answer keys match the product rules
@@ -287,11 +300,11 @@ def _dataset() -> dict[str, dict]:
     return items
 
 
-def test_the_meds_key_no_longer_requires_ward_treatment_to_be_named():
-    """`MEDS_FALLBACK_FORMATTING` refuses those rows, so the key cannot demand them."""
+def test_the_meds_key_records_both_discharge_and_inpatient_treatments():
+    """Narrative fallback extracts both take-home and inpatient treatments, separated by setting."""
     turn_2 = _dataset()["dev_d3_slash_01"]["expected_output"]["turn_2"]["facts"]
 
-    assert "inpatient_treatment_named" not in turn_2
+    assert turn_2["inpatient_treatment_named"] == ["Plavix", "baby aspirin", "Xopenex"]
     assert turn_2["discharge_medication"] == [
         "albuterol metered dose inhaler",
         "two remaining Zithromax doses to finish at home",

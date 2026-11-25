@@ -351,11 +351,12 @@ LABORATORY TRAJECTORIES & RANKING
   abnormality was largest. A note's laboratory number never overrides the series and is
   never quoted in place of one.
 - AND WHEN THE THREAD ALREADY QUOTED A DIFFERENT NUMBER, SAY WHICH IS WHICH. An earlier
-  turn may have reported an analyte from the note's own prose, and the panel may hold a
-  different course for it. Give the panel's values and name the note's figures as the
-  note's, so the reader knows the two are different measurements rather than a mistake:
-  `dev_d5_free_01` ended a thread on a creatinine of 0.65 to 0.98 after its second turn had
-  stated 8.1 to 2.3 from the hospital course (2026-11-24).
+  turn may have reported an analyte from the note's own prose, while `get_lab_trends`
+  returns a synthetic panel (check `unanchored_analytes` for curves generated from reference
+  intervals rather than scored patient features). Give the panel's values and explicitly
+  name the note's figures as the note's—noting when the structured panel is unanchored or
+  differs from the narrative—so the reader sees both sources transparently rather than a
+  silent contradiction.
 - Every timepoint carries a `flag`, and the flag decides what the value IS: state each
   abnormal result with its flag ("critically low" for `critical_low`, "critically high"
   for `critical_high`, "within its reference range" for "normal"). Do not re-derive
@@ -705,41 +706,31 @@ Return only the JSON object, with no prose before or after it."""
 #: That is the honest reading of a narrative: a clinical course names what it gave, and a
 #: discharge clause names what it prescribed, and a row that mixes them is a prescription
 #: the patient does not have.
-MEDS_FALLBACK_FORMATTING = """Extract the medications this record documents for DISCHARGE, from the \
-retrieved passage or passages. Return a JSON object with one key, "medications", holding an \
-array of objects with exactly these fields: "medication", "dosage", "frequency", "route", \
-"setting".
+MEDS_FALLBACK_FORMATTING = """Extract the medications documented in the retrieved passage or \
+passages. Return a JSON object with one key, "medications", holding an array of objects with \
+exactly these fields: "medication", "dosage", "frequency", "route", "setting".
 
 The note you were given has no dedicated discharge medications section, so the passages are \
 narrative ones — the hospital course, the assessment and plan, the discharge instructions, \
-the history. The prescription is usually a clause rather than a list, so read for it.
+the history. Prescriptions and inpatient treatments are usually clauses rather than a list, \
+so read carefully for both.
 
-FIRST, find what the patient is going HOME on. A drug is a discharge medication when the \
-passage says the patient is being sent home with it, was prescribed it at discharge, \
-continues it as an outpatient, or is given a supply or a prescription to take after leaving: \
-"send her home with Medrol", "continued pain medication coverage with Darvocet and \
-Flexeril", "discharge on ...", "we will prescribe ... at discharge".
+EVERY ROW CARRIES A "setting", and it is how the reader is told which list they are looking \
+at — the application separates them cleanly into discharge medications and inpatient-only \
+treatments:
+- "setting": "discharge" when the passage states the patient is going HOME on the drug, was \
+prescribed it at discharge, continues it as an outpatient, or is given remaining doses or a \
+supply to finish after leaving ("send her home with Medrol", "continued pain medication \
+coverage with Darvocet and Flexeril", "2 more doses of Zithromax at home", "discharge on ...").
+- "setting": "inpatient" when the passage documents a drug started, given, or stopped during \
+the emergency room visit or hospital stay without stating that the patient continues it at \
+home (for example, IV morphine on the ward, an inpatient Decadron course, Plavix/aspirin \
+started in the ER, or Xopenex nebulizer treatments). State each one's route or context as the \
+text gives it ("IV", "oral", "inpatient") in "route".
 
-IF the passage names any discharge or take-home medications, extract ONLY those. Do NOT \
-include an inpatient-only administration in the table: IV morphine given postoperatively on \
-the ward, a single intraoperative dose, an inpatient Decadron course, a drug started and \
-stopped during the stay. Those are what the hospital gave, not what the patient takes at \
-home, and a ward administration listed beside a take-home prescription reads as a \
-prescription.
-
-ONLY IF the passage names no discharge or take-home medication at all — the record \
-documents solely what was given during the stay — extract the inpatient medications instead, \
-and state each one's route or context as the text gives it ("IV", "oral", "inpatient") in \
-"route". An empty "route" on every row of such a list tells the reader the record says \
-nothing about how the drug was given, which is usually false.
-
-EVERY ROW CARRIES A "setting", and it is how the reader is told which list they are \
-looking at: "discharge" when the passage says the patient continues, is prescribed or is \
-sent home with the drug, and "inpatient" when the passage documents it being given during \
-the stay without any statement that it goes home with the patient. A record that names \
-both gets both, each row labelled by what its own sentence says. Never guess: a row whose \
-passage does not say which it is takes "setting": "inpatient", because that is the \
-statement the passage actually supports.
+A record that names BOTH discharge medications and inpatient treatments gets BOTH in the \
+array, each row tagged accurately by what its own sentence says. Never guess: a drug whose \
+passage does not explicitly state it continues after discharge takes "setting": "inpatient".
 
 STATE WHAT THE TEXT SAYS, compactly, in the field it belongs to. "frequency" holds a \
 dosing schedule or timing and nothing else — "daily", "b.i.d.", "at bedtime", "q6h PRN" — \
@@ -883,343 +874,45 @@ def labs_formatting_for(*, abnormal: bool = False, critical: bool = False) -> st
         return f"{LABS_FORMATTING}\n\n{LABS_NO_CRITICAL}"
     return LABS_FORMATTING
 
-_EHR_FORMATTING_BASE = """Summarise the note sections you were given, for a clinician.
-Write flowing prose with these section labels, in this order:
+_EHR_FORMATTING_BASE = """Summarise the inpatient discharge note passages you were given for a clinician.
+Write concise, flowing clinical prose using bold section labels followed by a period at the START of each paragraph (never use markdown `#`/`##` headings, and use bold for nothing else):
 
-- **Presentation & diagnosis.** for an inpatient admission, in two moves: the presenting
-  symptoms and the history that led to admission — onset, duration, prior treatment — from
-  `history_of_present_illness`, in a sentence carrying that passage's marker, with a
-  `chief_complaint` sentence of its own only where you use it; then the admission and
-  discharge diagnoses from the diagnosis passage. Only when `history_of_present_illness` is
-  absent from the passages you were given — a sparse note carrying only
-  `brief_hospital_course`, or an unsectioned `discharge_summary` — take the presentation from
-  the one passage that states those symptoms, carrying that passage's marker, and never from
-  the diagnosis passage. Name the condition ONCE, where the diagnoses are stated, and let the
-  narrative sentence describe the presentation instead of naming it in advance. Every /ehr
-  turn reaches this prompt on an inpatient stay: an outpatient record is answered by the
-  encounter notice in code, before any model call, so no other heading is written here.
-
-  KEEP THE PASSAGE'S OWN TENSE. A sentence you write in the past tense asserts that the
-  event happened. Where a passage states what was PLANNED — the patient "was to be
-  admitted", "was scheduled for" the procedure, or presented "in anticipation of" it — and
-  the record shows something else took over, report it as planned or scheduled: "he was to
-  be admitted for the procedure" is not "he was admitted for the procedure", and the
-  difference is the whole of what the record says happened.
-- **Hospital course & procedures.** only if the passages describe the hospital course, procedures,
-  or inpatient treatment: every operative or invasive procedure performed, the complications or
-  the documented absence of complications, the treatments and medications given during the stay,
-  and how the patient's symptoms progressed. A medication, or a post-procedure medication
-  instruction, that `brief_hospital_course` states belongs here, cited to that passage: it is
-  something that happened during the stay, not a discharge prescription.
+- **Presentation & diagnosis.** Combine all relevant presenting and background passages:
+  `chief_complaint` (in its own sentence if used), `history_of_present_illness` (onset, duration, prior treatment), `past_medical_history`, `past_surgical_history`, `allergies`, and the formal `admission_diagnosis` / `discharge_diagnosis` passages. Only when `history_of_present_illness` is absent (e.g., a sparse note with only `brief_hospital_course` or unsectioned `discharge_summary`), take the presentation from the one passage that states those symptoms, never from the diagnosis passage. State the formal diagnoses once from the diagnosis passage. Preserve the passage's own tense (if a procedure or admission was planned/scheduled rather than performed, report it as planned).
+- **Hospital course & procedures.** Include only if the passages describe the stay or procedures:
+  operative/invasive procedures (`major_procedure`), key admission or preoperative vitals/exam findings (`physical_exam`) and notable admission/preoperative lab results (`pertinent_results`), inpatient course (`brief_hospital_course`), complications (or documented absence), consults (`consults`), inpatient treatments/medications, and symptom progression. A drug or post-procedure instruction stated inside `brief_hospital_course` belongs here, cited to that passage—never under Discharge plan & medications.
 <<DISCHARGE_PLAN>>
-- **Discharge plan & medications.** only if the passages contain discharge medications, a
-  disposition, restrictions, or follow-up instructions: where the patient went, what they were
-  prescribed, what they were told not to do, and who follows them. A medication list and an
-  instruction list are two passages, and they say two different things: what the patient takes
-  at home comes from the discharge medications section, and what they were told about activity,
-  diet or follow-up comes from the discharge instructions section. Those two sections are the
-  only sources for a discharge medication: a drug named inside `brief_hospital_course` is a
-  hospital-course fact and is reported under **Hospital course & procedures.**, cited to that
-  passage, never here. Where neither section lists a medication, this label reports the
-  disposition and the non-medication instructions only, and no sentence under it opens "the
-  patient was prescribed". Write the two as separate sentences, each carrying the marker of
-  the passage that states it. One sentence never holds
-  both: a medication clause from the medication list and an activity, diet or follow-up rule
-  from the instructions are two sentences, one marker each, because a reader who opens a
-  single marker must be shown everything that sentence claims.
-
-  WHAT THE PATIENT GOES HOME ON IS NOT WHAT THEY ARRIVED ON. A section headed "On transfer",
-  "On admission" or "Medications on transfer" is the list the patient was taking when this
-  record begins — the arrival list, not the discharge regimen — and presenting it as the
-  discharge medications states a regimen this record never prescribed. Report as the discharge
-  regimen only what the record continues or prescribes for discharge, and say which passage
-  says so: `discharge_medications` or `discharge_instructions`. Where a transfer or inpatient
-  drug is not carried forward, it may be
-  named as such — "listed on the transfer list and discontinued before discharge" — and it must
-  not be presented as something the patient is taking at home: an arrival-list anticoagulant or
-  an inpatient-only agent the record does not continue is reported as discontinued, never as a
-  home prescription. Where the record states a reconciliation rather than a list, keep its
-  qualifier exactly: prescriptions left in the chart beside a medication reconciliation entry
-  stating the patient leaves on no home medications is a record that prescribed nothing to
-  take, and flattening it into "she was prescribed that drug" is a claim the section does not
-  make.
+- **Discharge plan & medications.** Include only if the passages document discharge medications, disposition, restrictions, or follow-up:
+  state the discharge disposition from `<admission_metadata>` (`discharge_location`) with NO citation marker (do not contradict it with a historical facility from an earlier encounter). Report home medications ONLY from `discharge_medications` or `discharge_instructions` (never present an arrival/transfer list such as "On transfer" or "Medications on admission" as the discharge regimen; if a drug was discontinued before discharge, state that plainly; if medication reconciliation states no home medications beside scripts left in the chart, preserve that qualifier). Above ~4 drugs, summarise by clinical class and state specific doses only where critical (tapers, anticoagulation, insulin). Keep schedules/frequencies and "as needed" (`PRN`) strictly attached to the individual drug whose sig states them. Keep separate follow-up clinics and appointments distinct with each clinic's specific task (never merge two clinics into one visit), and include activity, diet, wound/drain care, and return precautions from `discharge_instructions` / `followup_instructions`.
 <<END_DISCHARGE_PLAN>>
-- **Readmission risk & trajectory.** only where a readmission-risk estimate was given to you.
-
-NO SPECIALTY THE PASSAGE DOES NOT NAME. A clinician's name is not a service and an order is
-not a consultation: "Dr. A started an insulin drip" does not license "evaluated by
-endocrinology", and a surgeon performing a procedure does not license "seen by cardiology".
-Name a specialty only where the passage names that specialty or its consult service.
-
-TWO CLINICS ARE TWO APPOINTMENTS, AND A CHECKLIST IS EVERY ITEM ON IT. When the discharge
-instructions name two clinics, keep each with the task the passage gives that clinic
-(laboratory rechecks at one and a drug-level check at the other are not one visit), and when
-they list activity, diet, wound or drain care, an office reappointment and return precautions,
-report each one. A follow-up question is answered in full or the reader is sent to a clinic
-that will not do what they were told it would.
-
-STATE THAT A DRUG WAS NOT CONTINUED ONLY FROM THE PASSAGE THAT SAYS WHAT WAS. "Heparin and the
-PCA were not continued" is a claim about the home regimen, so it cites the instructions or
-medication list that states what the regimen IS — never `brief_hospital_course`, which states
-what was given and cannot say what was stopped.
-
-A label the passages do not support is a label you omit. Omitting a section is the correct
-answer; inventing one to satisfy the format is a clinical error, and a fabricated discharge plan
-is the worst version of it. Never write a label and then fill it with a claim the passages do
-not contain, and never write a placeholder such as "not documented" under a label of your own
-choosing.
-
-Two rules on where a citation goes, and no others:
-
-- `history_of_present_illness`, `chief_complaint` and `brief_hospital_course` are separate
-  passages and separate numbers, and no two of them are ever merged into one sentence.
-  Write the presenting history — onset, duration, prior treatment — from
-  `history_of_present_illness` in its own sentence, carrying that passage's marker; where
-  `chief_complaint` is also used, it takes a sentence of its own with its own marker. A
-  pre-operative or inpatient finding that appears only in `brief_hospital_course` — a
-  consultation, an EKG, an imaging result, how the stay unfolded — is written under
-  **Hospital course & procedures.**, or in a separate sentence carrying
-  `brief_hospital_course`'s marker. Never merge a finding from `brief_hospital_course` into a
-  sentence cited only to `history_of_present_illness`: the reader who opens that one marker
-  is shown a passage the sentence's claim is not in. Where `history_of_present_illness` is
-  absent from the passages you were given, the presentation comes from the one passage that
-  states those symptoms, cited to that passage — never from the diagnosis passage, and never
-  split across two. It describes what happened; it does not name the diagnosis.
-- The formal diagnoses come from the diagnosis passage. A diagnosis list states diagnoses and
-  nothing else, so it is never the source for a finding or a symptom. The diagnosis is stated
-  once: if the diagnosis passage has named the condition, no earlier sentence names it again.
-
-ONE PASSAGE PER SENTENCE, PREFERABLY. Keep one note passage's facts in one sentence, and prefer
-splitting facts that come from different sections into separate sentences, each carrying the
-marker of the passage that states everything it claims. Where a single sentence does state a
-claim from each of two passages, it MUST carry a marker for BOTH, before the full stop: a
-sentence saying the patient was transferred to a named clinician who will manage his diabetes
-and his hypertension needs the history's marker for the first clause AND the medication list's
-marker for the second, because the reader who opens only the first is shown a passage that
-does not mention the hypertension management. Do not merge and cite only the first: that leaves
-half the sentence resting on a passage that says nothing about it. This holds for every pair of
-sections this answer draws on: a hospital-course fact beside a procedure section, a medication
-clause inside the hospital course beside an activity or follow-up rule in the discharge
-instructions, and the unmarked `discharge_location` from `<admission_metadata>` — which takes no
-marker even inside a sentence that carries one — beside anything a passage states.
-
-A COURSE PASSAGE THAT DEFERS TO ANOTHER ONE NAMES BOTH. A hospital course often says only
-"Head MRI was done and revealed the above findings", with the findings themselves written in
-the discharge diagnosis. Spelling those findings out in the course sentence rests that
-sentence on BOTH passages, so it names both, one marker after the other:
-`... left posterior parietal infarct ^[1]^[3].` A sentence naming only the course's passage
-sends the reader to a passage that says "the above findings" and nothing more, and
-`dev_d2_slash_01` turn 1 was scored a citation failure for exactly that on 2026-11-24.
-
-Under the discharge-plan heading, every sentence cites a section that can state a
-discharge plan — `discharge_medications`, `discharge_instructions` or `assessment_and_plan`
-— and never carries a `history_of_present_illness` or `brief_hospital_course` marker
-beside it. Inpatient management belongs under **Hospital course & procedures.** with that
-passage's marker, and what the medication list itself records about a home agent the
-patient is not continuing is stated in a sentence citing `discharge_medications` alone.
-
-The section you name in the prose must be the section you cite. If a sentence says "the
-discharge instructions state …" or "the brief hospital course notes …", the passage behind its
-marker must be that section: a sentence that names one section and cites another sends the
-reader to a place the fact is not, and reads as a claim invented for the section named. Where a
-fact lives in the hospital course, write "the hospital course" — never the section a reader
-would expect such a fact to live in.
-
-Where the input carries an `<admission_metadata>` block, it is the authority for this
-admission's ADMINISTRATIVE fields, and the discharge disposition is one of them. A note passage
-may name a facility from an EARLIER encounter — an infirmary, a referring hospital, a previous
-admission — and that is a fact about the past, not this discharge. When the block states
-`discharge_location`, that is where this patient went: state it as the disposition, put no
-marker on that sentence (the block is not a passage and carries no `cite`), and name the
-historical facility only if the reader asked about the history — and then say plainly which
-encounter it belongs to. Two statements that contradict each other in one section — "transferred
-to a rehabilitation facility" beside a block saying the patient went home — is the failure this
-paragraph exists to prevent: the reader has no way to tell which one to act on.
-
-Open each section with its label in bold, followed by a period, at the START of its own
-paragraph — exactly `**Presentation & diagnosis.**`, `**Hospital course & procedures.**` and
-so on — then the prose of that section on the same line. The interface sets the bold
-run as the section's heading, which is why it must be the first thing in the paragraph and must
-end with the period: a label buried mid-sentence cannot be found, and markdown heading syntax
-(`##`) is not used anywhere in this answer — it reaches the reader as literal characters while
-the answer is being written.
-
-WHEN THE LIST IS LONG, WRITE THE PLAN AND NOT THE PRESCRIPTION SHEET. The medication card
-draws every row and `/meds` enumerates them; this section summarises them. Above about four
-drugs, group them by class in at most two sentences (anticoagulation, analgesia and its taper,
-cardiac and antihypertensive agents, supplements and bowel regimen), and give a dose only
-where the dose itself is the decision — an anticoagulant being titrated, a taper, insulin.
-Never write eleven prescriptions with eleven doses into one sentence: it reads as a
-prescription sheet pasted into prose, and it repeats the card the reader can already see.
-
-A SCHEDULE BELONGS TO THE ONE DRUG THE PASSAGE GIVES IT TO. A frequency, a duration or an
-"as needed" qualifier is a property of a single prescription, so it may never be stated
-across two drugs joined by "and", "plus" or a comma: "as-needed Ativan and trazodone" gives
-both drugs a schedule the record gives neither, and "metoprolol and lisinopril twice daily"
-states one drug's schedule for two. Where two drugs genuinely share a schedule, give each
-its own clause and its own qualifier. Where you are summarising a class, name the class and
-what the plan is, and leave the schedule to the card: a clinician reads the schedule you
-wrote as the instruction to act on, and nothing beside it says which drug it belonged to.
-
-NEVER ADD AN "AS NEEDED" THE PASSAGE DOES NOT STATE. The qualifier belongs to that
-medication's own sig, so write it only where the sig for that drug carries `p.r.n.`,
-`PRN` or "as needed". A dose range and a symptom are not a schedule: "25-50 mg for
-pruritus" is a fixed four-times-daily dose, and reading the range as a choice, or the
-symptom as permission to take it when needed, states a regimen the record never gave.
-
-Use bold for nothing else in this answer, and never wrap a whole section in a single bold run.
-
-KEEP THE CHART'S OWN CLINICAL ABBREVIATIONS. A discharge summary is written for people who
-work in this specialty, and a standard acronym — `CHF`, `CKD`, `CABG`, `LAD` — is shorter and
-more precise for that reader than the words it stands for. Where a passage defines one in
-parentheses, keep the parenthetical on first mention: write "congestive heart failure (CHF)"
-and then `CHF`, not the expansion alone every time. Where the passage uses only the acronym,
-use the acronym, and do not expand it into words the record never wrote.
-
-The note sections summarise the passages you were given, and a section is written only where the
-passages contain what it names.
-
-Cite with an inline marker, and there are exactly two legal forms of one. `^[3]` cites a
-note passage, using the `cite` value that passage carries. `^[PMID: 24108298]` cites a
-published record the <verified_comparators> block gives you. Any other marker — a section
-name, a tool name, a number you composed — is deleted before the answer is published, which
-leaves the sentence it was attached to resting on nothing.
-
-A tool result that carries no `cite` value is not citable, and the readmission estimate is
-one: it is this answer's own calculation rather than evidence a reader can open. State it
-with the `probability_display` and `threshold_display` strings it gives you, and put no
-marker on it.
-
-Each sentence takes the number of the passage that supports it, and that number is not the
-position of the section you are writing. The two match only by coincidence otherwise, and a
-marker that resolves to another section is a citation the reader cannot trust — a discharge
-diagnosis cited as the discharge instructions is the failure this sentence exists to prevent.
-
-Put a note passage's marker at the END of the sentence it supports and BEFORE the full stop:
-`… with stenosis ^[1].`, never `… with stenosis. ^[1]`. A badge after the stop reads as a mark
-on the paragraph rather than on the claim, and the sentence it was written for has already
-ended. This rule and the one-number-per-claim rule above are about note passages. A published
-cohort's badge follows the rule in the readmission section below, which is different: it goes
-immediately after that study's own rate, mid-sentence if that is where the rate is.
-
-Report what the record documents and stop there. Do not close with clinical advice, a vigilance
-or monitoring recommendation, a follow-up plan of your own, or any statement about what the
-clinician should do: those are orders this answer does not give, and a closing "clinical
-vigilance ... remains appropriate" is exactly that (TF-8, 2026-10-23). A management step the
-note itself states is reported as the note's, with its citation — "she was advised to follow up
-with her surgeon on the date the passage states" — so the only action in this answer is one a
-passage states first.
-
-The final section applies only where a readmission-risk estimate was also given, and it reports
-that estimate for THIS patient: the probability against the threshold, and the leading drivers
-with what the model attributed to each. Name each driver exactly as the risk result names it,
-so the sentence and the bar beside it describe one factor one way.
-
-REPORT THE MODEL'S ATTRIBUTION AND STOP. The section is a description of what the model
-scored, not an interpretation of it:
-
-- state `probability_display` and say which side of `threshold_display` it falls on;
-- name the leading drivers, and for each state the direction the model attributed (`increased`
-  or `decreased` the estimate) and its recorded `value` when the result gives one. The model's
-  own weights are not in your input and are not yours to state — no decimal, no "contribution";
-- then stop. No clinical reading of the drivers, no advice, no statement about what the reader
-  or the patient should do, and no commentary on adherence or follow-up beyond what the note
-  itself states.
-
-Never rationalise a counterintuitive result. A tree model can raise an estimate for a feature
-whose recorded value is zero, and the honest report says both facts side by side and leaves them
-as the model's: "recent ED visits increased the estimate; the recorded value is 0". Do NOT call
-such a factor "favorable", "protective", "reassuring" or "paradoxical", do not explain why a
-value of zero might raise risk, and do not attribute the direction to the patient's own numbers.
-The same applies in the other direction: a factor the model scored as decreasing the estimate is
-"decreased the estimate", not a reason for reassurance.
-
 <<LITERATURE>>
 
-State the readmission risk using ONLY the `probability_display` and `threshold_display` strings
-the risk result gives you, or describe the risk qualitatively. Never write an unrounded
-floating-point number, and never write a figure of your own: the raw values are not in the
-result you were given, so a decimal you produce was not read from anywhere. Do not round a
-number, do not re-derive one, and do not compute a percentage, a count or a score of your own —
-the widget prints the score to a precision this prose cannot reproduce, and a number here that
-disagrees with the number beside it is worse than no number at all.
+CLINICAL & CITATION RULES:
+- Omit any heading that the passages do not support; never invent claims or write "not documented" placeholders.
+- Keep the chart's own clinical abbreviations (`CHF`, `CKD`, `CABG`, `LAD`); do not expand acronyms the record never expanded.
+- Name a clinical specialty or consult service ONLY if the passage explicitly names it (a physician's name or order is not a specialty consult).
+- Report only what the record documents—never add clinical advice, monitoring recommendations, or prescriptive orders.
+- Cite every chart claim with `^[n]` using the passage's `cite` value, placed at the end of the sentence BEFORE the period (`... with stenosis ^[1].`). Never write raw passage IDs into prose.
+- Prefer one passage per sentence (`history_of_present_illness`, `chief_complaint`, `brief_hospital_course`, `discharge_medications`, and `discharge_instructions` are distinct passages). When a single sentence combines facts from two passages (for example, a hospital course sentence that spells out imaging findings defined in `discharge_diagnosis`), attach BOTH markers before the period (`... ^[1]^[3].`). Never merge two passages and cite only one.
+- Match section names in prose to the cited passage (never say "discharge instructions state" if the citation points to `brief_hospital_course`).
+- Append no disclaimer about missing information."""
 
-The drivers carry a direction and, for a clinical feature, the patient's own `value`. State
-which led and in which direction; where the result gives a value, quote it as written — a
-decimal is quoted with its decimal, so `4.75` is never written `5` and `3.67` is never `4`.
-A
-factor
-that carries no value was scored without one, and saying it has none is the whole of what can
-be said about it.
-
-Never write a passage identifier into the prose. The result gives each passage an id such as
-the note and section it came from; that id is a machine name for the passage, not a citation,
-and it must not appear in an answer a clinician reads. A marker of one of the two forms above
-is the only form of citation, and it is what the interface turns into the numbered source the
-reader can open.
-
-Append no disclaimer about missing information."""
-
-#: The three mutually exclusive instructions for the readmission section's comparison.
+#: Readmission risk & trajectory instructions by literature state.
 #:
-#: Exactly one of them applies to a given turn, and the two that do not apply used to sit in
-#: `EHR_FORMATTING` beside it — 500 words of instructions about blocks this turn was never
-#: given. A model reading "where the input instead carries a <retrieved_readmission_literature>
-#: block …" while holding no such block has been told about evidence it does not have, and the
-#: cost is paid on every `/ehr` turn that carries none. `ehr_formatting_for` chooses one.
-#:
-#: Which one is decided by what the turn actually retrieved, never by the prose: the verified
-#: comparators arrive from the comparator call, the fallback literature from the graded search
-#: that runs when no cohort verified, and a turn with neither gets the omission instruction.
+#: For both verified-comparator and chart-only turns, Python deterministically renders and
+#: appends **Readmission risk & trajectory.** directly from the structured prediction and
+#: verified comparator payloads, so the LLM only writes the clinical chart sections above.
+#: Only in the fallback-literature state (abstracts retrieved, no verified 30-day cohort
+#: rate) does the LLM contribute 1-2 sentences summarizing those abstracts under the heading,
+#: which Python prepends with the deterministic score, drivers, and no-benchmark statement.
 EHR_LITERATURE_COMPARATORS = """\
-Where the input also carries a <verified_comparators> block, this section places that estimate
-against the published cohorts in one or two sentences, and the comparison is the point of the
-section. State the patient's own estimate with `probability_display` as it is given, state the
-published rate or rates the block states, and say in the same breath that a published cohort is
-a population benchmark and not a prediction about this patient. A two-arm row is two figures:
-quote both, in the order the block states them, and never average them or quote a difference
-the block does not state. Keep each arm with its own group: "6% in the intervention arm vs. 9%
-in the control arm", never "a 6% to 9% range", which is a finding the study did not
-report and reads as a single cohort's spread.
+Do NOT write a **Readmission risk & trajectory.** section — it is rendered deterministically from the prediction and verified comparators after your clinical summary."""
 
-Each row also carries a `relation:` line, which states the direction of that comparison — this
-patient's estimate higher than, lower than, at, or within the published figure or span. That
-line is arithmetic and it has already been done: use its wording, and do not decide the
-direction yourself from the two numbers. A briefing that wrote "below" where the estimate was
-higher stated the opposite of what its own table drew, and a word connecting two figures is the
-one part of the comparison the prose is not free to get wrong.
-
-EVERY published rate you state carries its own badge, immediately after that study's rate or
-clause — mid-sentence if that is where the rate sits, and before the full stop if the rate ends
-the sentence. `the 4.1% reported after total knee arthroplasty ^[PMID: 35186616]` is the shape.
-The badge names one record and only one: two cohorts are two badges, side by side, never
-`^[PMID: 35186616, 37028984]` and never one badge for a sentence about both. A cohort rate
-without its badge reads as this patient's own figure, which is the confusion the table beside
-this paragraph exists to prevent."""
-
-#: The turn where no cohort block was retrieved: the section ends after the drivers.
 EHR_LITERATURE_NONE = """\
-Where an input block of published cohorts is NOT given, the section ends after the drivers.
-Do not reach for a rate you know from training, do not describe "the literature" in general,
-do not announce that there is nothing to compare, and do not write a sentence about the
-comparison at all — an instruction to omit something is not a sentence to print."""
+Do NOT write a **Readmission risk & trajectory.** section — it is rendered deterministically from the prediction payload after your clinical summary."""
 
-#: The turn where the fallback search retrieved abstracts but no comparable cohort.
 EHR_LITERATURE_RETRIEVED = """\
-Where the input instead carries a <retrieved_readmission_literature> block, those studies
-were retrieved for this admission and none of them states a 30-day readmission rate for a
-cohort this patient belongs to, so there is no comparable benchmark to place this estimate
-against. Say exactly that: that no directly comparable 30-day cohort benchmark was verified
-for this admission. Do NOT say the abstracts state no readmission rate at all — many of them
-do, for other cohorts. Still write the section, and in it: state the patient's estimate and
-the drivers the model named, then summarise in one or two sentences what those studies report
-about readmission risk, post-discharge outcomes or clinical trajectory — describing the risk
-factors or findings they report, and never stating a readmission rate of any kind as this
-patient's own benchmark: the estimate above is the only rate the answer gives. Cite each
-study you draw on with its PMID, written
-^[PMID: <pmid>], immediately after the claim. A study you did not use takes no badge, and a
-badge you write that is not one of the block's PMIDs is deleted before the answer is
-published."""
+- **Readmission risk & trajectory.** The patient's risk score, drivers, and no-benchmark notice are prepended automatically; under this heading, write ONLY one or two concise sentences summarizing what the `<retrieved_readmission_literature>` abstracts report about readmission risk factors or post-discharge clinical trajectory. Never state any readmission rate as a benchmark for this patient, and cite each study you use immediately after its claim as `^[PMID: <pmid>]`."""
 
 #: The slot `ehr_formatting_for` fills. A sentinel rather than `str.format`, because the
 #: formatting prompt is full of clinical braces-free prose that must survive verbatim and a

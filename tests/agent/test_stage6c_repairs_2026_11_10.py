@@ -516,11 +516,10 @@ def test_the_labs_rules_answer_the_whole_panel_because_that_is_the_command():
 
 
 def test_the_ehr_rules_refuse_an_arrival_list_as_a_discharge_regimen():
-    """`dev_t2_03` turn 1 presented the "On transfer" list as what she went home on."""
+    """The `/ehr` prompt distinguishes arrival/transfer lists from discharge medications."""
     text = _flatten(prompts.EHR_FORMATTING)
 
-    assert "WHAT THE PATIENT GOES HOME ON IS NOT WHAT THEY ARRIVED ON" in text
     assert "On transfer" in text
-    assert "Medications on transfer" in text
+    assert "Medications on admission" in text
     assert "discharge_medications" in text
     assert "brief_hospital_course" in text

@@ -1077,3 +1077,69 @@ def test_the_lookup_is_not_consulted_when_there_is_something_to_return():
 
     assert result["returned"] == 1
     assert fake.asked == [], "a successful retrieval must not call the lookup at all"
+
+
+
+def test_sections_for_query_recognises_expanded_clinical_sections():
+    """Direct questions about surgical history, procedures, allergies, etc. map cleanly."""
+    assert "past_surgical_history" in rs._sections_for_query(
+        "Why was this 46-year-old man admitted and what was his prior transplant and surgical history?"
+    )
+    assert "major_procedure" in rs._sections_for_query(
+        "Why was this 46-year-old man admitted and what was his prior transplant and surgical history?"
+    )
+    assert "allergies" in rs._sections_for_query("dc meds + allergies?")
+    assert "discharge_medications" in rs._sections_for_query("dc meds + allergies?")
+    assert rs._sections_for_query("what did the nurse chart say") == ()
+
+
+def test_multi_section_query_anchors_missing_surgical_history_and_procedure():
+    """A multi-section free-text query missing targeted sections anchors them via the index."""
+    note = (
+        "Major Surgical or Invasive Procedure:\nCadaveric renal transplant.\n\n"
+        "History of Present Illness:\n46-year-old man with ESRD.\n\n"
+        "Past Medical History:\nDiabetes mellitus, hypertension.\n\n"
+        "Past Surgical History:\nCoronary artery bypass graft x5 in 1995.\n\n"
+        "Physical Exam:\nBP 166/106, HR 83.\n\n"
+        "Brief Hospital Course:\nCreatinine fell from 8.1 to 2.3.\n\n"
+        "Discharge Instructions:\nFollow up in clinic.\n"
+    )
+    initial_hits = [
+        _FakeNeighbor("MT-2771-DS_past_medical_history_1", 0.24),
+        _FakeNeighbor("MT-2771-DS_brief_hospital_course_1", 0.23),
+        _FakeNeighbor("MT-2771-DS_discharge_instructions_1", 0.23),
+        _FakeNeighbor("MT-2771-DS_physical_exam_1", 0.23),
+        _FakeNeighbor("MT-2771-DS_history_of_present_illness_1", 0.22),
+    ]
+    psh_hits = [_FakeNeighbor("MT-2771-DS_past_surgical_history_1", 0.05)]
+    proc_hits = [_FakeNeighbor("MT-2771-DS_major_procedure_1", 0.04)]
+
+    class _MultiRecorder:
+        def __init__(self, responses):
+            self._responses = list(responses)
+            self.calls = 0
+
+        def find_neighbors(self, *, deployed_index_id, queries, num_neighbors, filter=None):
+            idx = min(self.calls, len(self._responses) - 1)
+            self.calls += 1
+            return [self._responses[idx]]
+
+    endpoint = _MultiRecorder([initial_hits, psh_hits, proc_hits])
+    embed = _FakeEmbedClient()
+
+    with patch.object(rs, "_index_endpoint", lambda: endpoint), \
+         patch.object(rs, "_embed_client", lambda: embed), \
+         patch.object(rs, "_fetch_texts", lambda ids, hadm: {nid: note for nid in ids}), \
+         patch.object(rs, "_fetch_note", lambda hadm: note):
+        result = _run(rs.rag_search(
+            hadm_id=90000103,
+            query="Why was this 46-year-old man admitted and what was his prior transplant and surgical history?",
+            top_k=5,
+        ))
+
+    sections = [p["section"] for p in result["passages"]]
+    assert result["returned"] == 5
+    assert "past_surgical_history" in sections
+    assert "major_procedure" in sections
+    assert any("Coronary artery bypass graft" in p["text"] for p in result["passages"])
+    assert endpoint.calls == 3  # 1 original + 2 missing anchored sections

@@ -305,3 +305,26 @@ def test_a_failed_lab_call_draws_no_card():
     )
 
     assert "LabTrendCard" not in [c["component"] for c in _components(out)]
+
+
+
+def test_presented_lab_trends_exposes_unanchored_analytes_for_model_only():
+    """Model projection summarizes anchored vs. unanchored synthetic curves without mutating wire payload."""
+    from services.agent.engine.mcp_client import _presented_for_model
+
+    wire = {
+        "hadm_id": 90000103,
+        "returned": 2,
+        "synthetic": True,
+        "trends": [
+            {"key": "hemoglobin", "label": "Hemoglobin", "anchored": ["hgb_min"], "series": []},
+            {"key": "creatinine", "label": "Creatinine", "anchored": [], "series": []},
+        ],
+    }
+    projected = _presented_for_model("get_lab_trends", wire)
+
+    assert projected["anchored_analytes"] == ["Hemoglobin"]
+    assert projected["unanchored_analytes"] == ["Creatinine"]
+    # Wire payload stays invariant.
+    assert "unanchored_analytes" not in wire
+    assert "anchored_analytes" not in wire

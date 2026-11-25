@@ -50,12 +50,6 @@ from dataclasses import dataclass, field
 # container at startup and the deploy silently served the previous revision.
 from services.agent.routing.admission_context import PREFLIGHT_TOOLS
 from services.agent.routing import encounter
-# `admission_phenotypes` is no longer imported here. It was used by the pre-flight
-# condition lock, which existed to stop `/pubmed` requesting an estimate the surface would
-# then decline to compare — and that command no longer requests one at all (Phase F.1,
-# 2026-10-26). What decides the comparison now is `a2ui`/`risk_canvas`, from the chart the
-# turn read; this module answers only "which tools run".
-from services.mcp.retrieval.sections import SUMMARY_SECTIONS
 # The analyte vocabulary is a shared label map, not a routing predicate: the presentation
 # layer needs the same answer and may not import this module (Charter 13 §5). Re-exported
 # through this namespace because this is where the tests and `graph` have always read it.
@@ -144,8 +138,6 @@ class Command:
     #: day after it stopped being true, which is the failure a comment of this kind is
     #: meant to prevent.
     supplementary: tuple[ToolSpec, ...] = ()
-    #: Sections this command may cite, when it is a section command.
-    sections: tuple[str, ...] = ()
     #: Whether this command's answer is prose at all. `/risk` sets this False: the
     #: widget prints the score, the band and the threshold, so a sentence beneath it
     #: said the same thing a second time. Composing that sentence was also the only
@@ -248,7 +240,6 @@ COMMANDS: tuple[Command, ...] = (
         # tool `/pubmed` uses. Every other command's tool is still refused here.
         forbidden=frozenset({"rag_search", "discharge_medications",
                              "get_lab_trends"}) | PREFLIGHT_TOOLS,
-        sections=SUMMARY_SECTIONS,
         # The model's cited summary is the answer, so it is announced as it is written.
         # Its markers are resolved after the turn, so what a caller watches arrive is
         # provisional until the citation layer has finished with it.

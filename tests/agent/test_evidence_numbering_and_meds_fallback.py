@@ -106,15 +106,12 @@ def test_a_fallback_retrieval_is_asked_what_the_sections_name():
 
 
 def test_the_fallback_instruction_asks_the_discharge_question_first():
-    """It asks what the patient goes home on, and refuses a ward administration."""
-    lowered = MEDS_FALLBACK_FORMATTING.lower()
+    """It extracts both take-home and inpatient drugs, separated strictly by setting."""
+    lowered = " ".join(MEDS_FALLBACK_FORMATTING.split()).lower()
     assert "going home on" in lowered
-    assert "do not include an inpatient-only administration" in lowered
-    assert "if the passage names any discharge or take-home medications, extract only those" \
-        in lowered
-    # The escape hatch is deliberate: with no take-home drug anywhere, the inpatient list
-    # is what the record has, and it is reported as such rather than as nothing.
-    assert "only if the passage names no discharge or take-home medication" in lowered
+    assert '"setting": "discharge"' in lowered
+    assert '"setting": "inpatient"' in lowered
+    assert "names both discharge medications and inpatient treatments gets both" in lowered
 
 
 # ---------------------------------------------------------------- the narrative's wording

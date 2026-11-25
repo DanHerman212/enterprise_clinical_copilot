@@ -402,40 +402,57 @@ def _search(hadm_id: int, query: str, top_k: int, *,
 
     neighbors = res[0] if res else []
 
-    # A query that clearly targets one note section (medications, instructions,
-    # hospital course, diagnoses) can still rank a sibling section first — the
-    # near-tie chunk embeddings. When the intended section did NOT win rank 1,
-    # retry ONCE with the section's ACTUAL text as the query so the matching
-    # chunk ranks first. This generalizes the zero-hit query-side-drift
-    # fallback below to wrong-rank results (2026-08-24, recall@1 82% -> ~100%).
-    anchor = None if is_retry else _section_for_query(query)
-    if neighbors and anchor is not None:
-        if _parse_datapoint_id(neighbors[0].id)[1] != anchor:
-            body = _section_bodies(hadm_id).get(anchor)
-            if body:
-                retried = _search(hadm_id, body, top_k, is_retry=True)
-                # Keep the original hits unless the retry actually improved on
-                # them — an empty or failed retry must not destroy real recall.
-                if not retried.get("error") and retried.get("returned", 0) > 0:
-                    return {**retried, "query": query}
+    # A query that clearly targets one or more note sections (medications, surgical
+    # history, allergies, procedures, instructions, etc.) can miss or under-rank those
+    # sections under raw vector similarity. Check the initial neighbors FIRST so a
+    # BigQuery note read is never paid when the index already returned the right section;
+    # only anchor missing/under-ranked sections through the same `hadm_id`-restricted
+    # index (single-shot, never recursive).
+    anchors = () if is_retry else _sections_for_query(query)
+    if anchors:
+        if len(anchors) == 1:
+            anchor = anchors[0]
+            needs_anchor = (not neighbors) or (
+                _parse_datapoint_id(neighbors[0].id)[1] != anchor
+            )
+            if needs_anchor:
+                body = _section_bodies(hadm_id).get(anchor)
+                if body:
+                    retried = _search(hadm_id, body, top_k, is_retry=True)
+                    if not neighbors:
+                        if retried.get("error"):
+                            return retried
+                        return {**retried, "query": query}
+                    if not retried.get("error") and retried.get("returned", 0) > 0:
+                        return {**retried, "query": query}
+        else:
+            seen_sections = {_parse_datapoint_id(nb.id)[1] for nb in neighbors}
+            missing_anchors = [sec for sec in anchors if sec not in seen_sections]
+            if missing_anchors:
+                bodies = _section_bodies(hadm_id)
+                missing_present = [sec for sec in missing_anchors if bodies.get(sec)]
+                anchored_neighbors: list[Any] = []
+                for sec in missing_present[:2]:
+                    try:
+                        a_resp = _embed_with_retry(bodies[sec])
+                        a_vec = [float(v) for v in a_resp.embeddings[0].values]
+                        a_res = _find_neighbors_with_retry(a_vec, 2, hadm_id)
+                    except Exception:
+                        continue
+                    for cand in (a_res[0] if a_res else []):
+                        if _parse_datapoint_id(cand.id)[1] == sec:
+                            anchored_neighbors.append(cand)
+                            break
+                if anchored_neighbors:
+                    merged: list[Any] = []
+                    seen_ids: set[str] = set()
+                    for nb in [*anchored_neighbors, *neighbors]:
+                        if nb.id not in seen_ids:
+                            seen_ids.add(nb.id)
+                            merged.append(nb)
+                    neighbors = merged[:top_k]
 
     if not neighbors:
-        # Free-text queries embed far from the stored chunks for some patients
-        # (query-side drift, root-caused 2026-08-17 on hadm 23613002: the meds
-        # chip's "discharge medications" query returned 0 though the chunks are
-        # indexed). When the query clearly targets a discharge-note section, retry
-        # with that section's ACTUAL text as the query — the section body embeds
-        # next to the chunk it came from, so retrieval no longer depends on query
-        # luck. Keeps the hadm restrict and the same index (RAG intact). The
-        # returned `query` stays the caller's original phrase (the UI shows it as
-        # the source-card title), not the section body used internally.
-        if anchor is not None:
-            body = _section_bodies(hadm_id).get(anchor)
-            if body:
-                res = _search(hadm_id, body, top_k, is_retry=True)
-                if res.get("error"):
-                    return res
-                return {**res, "query": query}
         return _nothing_retrieved(hadm_id, query)
 
     # Resolve text by note_id in one batched query, re-checking that every
@@ -580,23 +597,71 @@ def _section_bodies(hadm_id: int) -> dict[str, str]:
     return {s.name: s.body for s in parsed.sections}
 
 
-def _section_for_query(query: str) -> str | None:
-    """Map a free-text query to the discharge-note section it clearly targets.
+#: Clinical section names mapped to explicit query phrases that target them.
+#: Used by `_sections_for_query` to anchor section-specific free-text questions
+#: against the patient's own indexed section chunks without bypassing Vertex
+#: Vector Search or `hadm_id` isolation.
+_SECTION_QUERY_TARGETS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("discharge_medications", (
+        "discharge medication", "medication", "discharged on", "meds",
+    )),
+    ("discharge_diagnosis", ("discharge diagnosis", "diagnoses", "final diagnosis")),
+    ("admission_diagnosis", ("admission diagnosis", "admitting diagnosis")),
+    ("discharge_instructions", (
+        "discharge instruction", "instruction", "follow-up", "follow up",
+        "followup", "activity restriction",
+    )),
+    ("brief_hospital_course", ("hospital course", "admission course")),
+    ("past_surgical_history", (
+        "surgical history", "past surgical", "prior surgery", "prior surgeries",
+        "past surgeries", "prior operation", "previous surgery",
+        "previous operation", "prior transplant",
+    )),
+    ("past_medical_history", (
+        "past medical history", "medical history", "pmh", "comorbidit",
+    )),
+    ("major_procedure", (
+        "major procedure", "operative procedure", "procedures performed",
+        "procedure", "operation",
+    )),
+    ("allergies", ("allerg",)),
+    ("physical_exam", ("physical exam", "vital signs", "vitals")),
+    ("pertinent_results", (
+        "pertinent result", "admission lab", "preoperative lab", "pre-op lab",
+    )),
+    ("social_history", ("social history", "smoking", "tobacco", "alcohol", "ethanol")),
+    ("family_history", ("family history",)),
+    ("chief_complaint", ("chief complaint", "reason for admission")),
+    ("history_of_present_illness", ("history of present illness", "presenting symptom")),
+    ("complications", ("complication",)),
+    ("consults", ("consult",)),
+)
 
-    Used as a retrieval fallback: when the raw query embedding misses, retry
-    with the section's actual body text. Only matches unambiguous intent so the
-    free-text path is unchanged for open-ended questions.
+
+def _sections_for_query(query: str) -> tuple[str, ...]:
+    """Map a free-text query to all discharge-note sections it clearly targets.
+
+    Returns canonical section names in priority order, deduplicated. Open-ended
+    clinical questions that do not name a specific section return an empty tuple,
+    leaving standard vector similarity untouched.
     """
     q = query.lower().strip()
-    if "medication" in q or "discharged on" in q or "meds" in q:
-        return "discharge_medications"
-    if "discharge diagnosis" in q or "diagnoses" in q:
-        return "discharge_diagnosis"
-    if "instruction" in q:
-        return "discharge_instructions"
-    if "hospital course" in q or "admission course" in q:
-        return "brief_hospital_course"
-    return None
+    matched: list[str] = []
+    for section, phrases in _SECTION_QUERY_TARGETS:
+        if any(phrase in q for phrase in phrases):
+            matched.append(section)
+    # A query asking "why was ... admitted" alongside surgical/transplant history
+    # often relies on `major_procedure` even without saying the word "procedure".
+    if ("admitted" in q and ("why was" in q or "why were" in q)
+            and "major_procedure" not in matched):
+        matched.append("major_procedure")
+    return tuple(matched)
+
+
+def _section_for_query(query: str) -> str | None:
+    """First discharge-note section a free-text query clearly targets, or None."""
+    sections = _sections_for_query(query)
+    return sections[0] if sections else None
 
 
 def _norm_body(text: str) -> str:

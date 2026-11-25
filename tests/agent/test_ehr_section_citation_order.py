@@ -167,30 +167,17 @@ def test_no_command_re_orders_its_passages():
 
 
 def test_the_formatter_is_told_to_cite_the_passage_not_the_section_position():
-    # One assertion per line of the instruction, because the prose wraps and a
-    # substring that spans a wrap asserts nothing. The wording of the attribution rule
-    # changed on 2026-11-03 (two rules rather than one long paragraph); what is pinned
-    # here is the requirement it states — the passage's own `cite` value, not the
-    # position of the section being written.
-    assert "position of the section you are writing" in prompts.EHR_FORMATTING
-    assert "the `cite` value that passage carries" in prompts.EHR_FORMATTING
+    text = " ".join(prompts.EHR_FORMATTING.split())
+    assert "using the passage's `cite` value" in text
+    assert "Match section names in prose to the cited passage" in text
 
 
 def test_the_instruction_states_only_the_two_legal_marker_forms():
-    """`^[predict_readmission]` was invented because the rule never said what a marker is.
-
-    The model was told to cite the passage a detail comes from, and a tool result with no
-    cite value gave it nothing to cite — so it wrote the tool's name into a marker, which
-    settlement deletes, leaving the sentence unattributed (2026-11-03). The instruction now
-    names both legal forms and says plainly that a result without a `cite` value takes no
-    marker.
-    """
     text = " ".join(prompts.EHR_FORMATTING.split())
 
-    assert "^[PMID: 24108298]" in text
-    assert "exactly two legal forms" in text
-    assert "carries no `cite` value is not citable" in text
-    assert "put no marker on it" in text
+    assert "^[n]" in text
+    assert "Never write raw passage IDs into prose" in text
+    assert "NO citation marker" in text
 
 
 def test_each_passage_carries_the_number_its_marker_must_use():
@@ -238,5 +225,5 @@ def test_the_re_ordering_hook_is_gone():
 
 
 def test_tf8_prohibits_a_closing_vigilance_sentence():
-    assert "Do not close with clinical advice" in prompts.EHR_FORMATTING
-    assert "vigilance" in prompts.EHR_FORMATTING
+    text = " ".join(prompts.EHR_FORMATTING.split())
+    assert "never add clinical advice, monitoring recommendations, or prescriptive orders" in text

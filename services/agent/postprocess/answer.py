@@ -1033,3 +1033,210 @@ def _session_holds_chart_evidence(evidence_state: Any, question: str = "") -> bo
                          or getattr(evidence_state, "checked_labs", None)):
         return True
     return getattr(evidence_state, "prediction", None) is not None
+
+
+# ---------------------------------------------------------------------------
+# Deterministic /ehr "Readmission risk & trajectory." rendering
+# ---------------------------------------------------------------------------
+
+READMISSION_HEADING = "**Readmission risk & trajectory.**"
+_READMISSION_SECTION_RE = re.compile(
+    r"(?:^|\n\n)\*\*Readmission risk & trajectory\.\*\*.*",
+    re.DOTALL,
+)
+_RATE_NUM_RE = re.compile(r"\d+(?:\.\d+)?")
+
+
+def _join_list(items: list[str]) -> str:
+    """Format a natural English list (`a`, `a and b`, `a, b, and c`)."""
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f"{items[0]} and {items[1]}"
+    return f"{', '.join(items[:-1])}, and {items[-1]}"
+
+
+def _format_driver(factor: dict[str, Any]) -> str:
+    """Format one projected SHAP driver (`feature`, optional `value`) verbatim."""
+    name = str(factor.get("feature") or "").strip()
+    if not name:
+        return ""
+    if "value" in factor and factor["value"] is not None and str(factor["value"]).strip() != "":
+        return f"{name} ({factor['value']})"
+    return f"{name} (no recorded value on the scored row)"
+
+
+def _comparator_clause(
+    patient_prob: float | None,
+    row: dict[str, Any],
+) -> str:
+    """One verified published cohort comparison clause with its own PMID badge."""
+    pmid = str(row.get("pmid") or "").strip()
+    rate = " ".join(str(row.get("reported_rate") or "").split())
+    if not pmid or not rate:
+        return ""
+    badge = f"^[PMID: {pmid}]"
+    kind = str(row.get("rate_kind") or "").strip()
+    cohort = " ".join(str(row.get("cohort_summary") or "").split()).rstrip(".")
+    cohort_phrase = f" reported for {cohort}" if cohort else ""
+
+    tokens = _RATE_NUM_RE.findall(rate)
+    figures = [float(t) for t in tokens]
+    if patient_prob is None or not figures:
+        return f"the {rate} {badge}{cohort_phrase}"
+
+    est = round(patient_prob * 100.0, 1)
+    low, high = min(figures), max(figures)
+
+    if kind == "comparison" and len(tokens) >= 2:
+        if est > high:
+            rel = "above both published rates"
+        elif est < low:
+            rel = "below both published rates"
+        else:
+            rel = "between the two published rates"
+        return f"{rel} ({rate}) {badge}{cohort_phrase}"
+
+    if kind == "range" and len(figures) > 1:
+        if est > high:
+            rel = "above the published range of"
+        elif est < low:
+            rel = "below the published range of"
+        else:
+            rel = "within the published range of"
+        return f"{rel} {rate} {badge}{cohort_phrase}"
+
+    if est > low:
+        rel = "higher than"
+    elif est < low:
+        rel = "lower than"
+    else:
+        rel = "equal to"
+    return f"{rel} the {rate} {badge}{cohort_phrase}"
+
+
+def render_readmission_section(
+    prediction: dict[str, Any] | None,
+    comparators: list[dict[str, Any]] | None = None,
+    *,
+    raw_probability: float | None = None,
+    raw_threshold: float | None = None,
+    fallback_literature_prose: str = "",
+) -> str:
+    """Deterministically render the `/ehr` **Readmission risk & trajectory.** section.
+
+    Every number, driver label/direction/value, comparator rate, comparison direction, and
+    `^[PMID: ...]` badge is constructed directly from structured tool payloads—never
+    paraphrased by an LLM—eliminating float rounding drift, SHAP rationalizations, and
+    flipped higher/lower comparisons by construction.
+    """
+    if not isinstance(prediction, dict):
+        return ""
+    prob_display = str(prediction.get("probability_display") or "").strip()
+    thresh_display = str(prediction.get("threshold_display") or "").strip()
+    if not prob_display or not thresh_display:
+        return ""
+
+    prob_num = raw_probability
+    thresh_num = raw_threshold
+    if prob_num is None:
+        m = _RATE_NUM_RE.search(prob_display)
+        prob_num = float(m.group(0)) / 100.0 if m else None
+    if thresh_num is None:
+        m = _RATE_NUM_RE.search(thresh_display)
+        thresh_num = float(m.group(0)) / 100.0 if m else None
+
+    if prob_num is not None and thresh_num is not None:
+        if round(prob_num * 100.0, 1) > round(thresh_num * 100.0, 1):
+            side = "above"
+        elif round(prob_num * 100.0, 1) < round(thresh_num * 100.0, 1):
+            side = "below"
+        else:
+            side = "at"
+        risk_sentence = (
+            f"The patient's estimated 30-day readmission risk is {prob_display}, "
+            f"which falls {side} the decision threshold of {thresh_display}."
+        )
+    else:
+        risk_sentence = (
+            f"The patient's estimated 30-day readmission risk is {prob_display} "
+            f"against a decision threshold of {thresh_display}."
+        )
+
+    sentences: list[str] = [risk_sentence]
+
+    increased: list[str] = []
+    decreased: list[str] = []
+    for factor in prediction.get("top_factors") or []:
+        if not isinstance(factor, dict):
+            continue
+        formatted = _format_driver(factor)
+        if not formatted:
+            continue
+        direction = str(factor.get("direction") or "").strip().lower()
+        if direction == "increases":
+            increased.append(formatted)
+        elif direction == "decreases":
+            decreased.append(formatted)
+
+    driver_clauses: list[str] = []
+    if increased:
+        driver_clauses.append(
+            f"factors that increased the estimate were {_join_list(increased)}"
+        )
+    if decreased:
+        driver_clauses.append(
+            f"factors that decreased the estimate were {_join_list(decreased)}"
+        )
+    if driver_clauses:
+        joined = "; ".join(driver_clauses)
+        sentences.append(f"The model scored {joined}.")
+
+    valid_comparators = [
+        row for row in (comparators or [])
+        if isinstance(row, dict) and str(row.get("pmid") or "").strip()
+        and str(row.get("reported_rate") or "").strip()
+    ]
+    if valid_comparators:
+        clauses = [
+            clause for row in valid_comparators
+            if (clause := _comparator_clause(prob_num, row))
+        ]
+        if clauses:
+            sentences.append(
+                f"Against published 30-day population benchmarks (rather than individual "
+                f"predictions), this patient's {prob_display} estimate is "
+                f"{_join_list(clauses)}."
+            )
+    elif fallback_literature_prose.strip():
+        clean_fallback = fallback_literature_prose.strip()
+        if "no directly comparable 30-day cohort benchmark" not in clean_fallback.lower():
+            sentences.append(
+                "No directly comparable 30-day cohort benchmark was verified for this admission."
+            )
+        sentences.append(clean_fallback)
+
+    return f"{READMISSION_HEADING} {' '.join(sentences)}"
+
+
+def extract_readmission_body(prose: str) -> str:
+    """Return the body under `**Readmission risk & trajectory.**` if present, else ''."""
+    match = _READMISSION_SECTION_RE.search(prose or "")
+    if not match:
+        return ""
+    body = match.group(0).strip()
+    if body.startswith(READMISSION_HEADING):
+        body = body[len(READMISSION_HEADING):].strip()
+    return body
+
+
+def attach_readmission_section(prose: str, risk_section: str) -> str:
+    """Replace any model-written readmission heading or append the deterministic one."""
+    base = _READMISSION_SECTION_RE.sub("", prose or "").rstrip()
+    if not risk_section.strip():
+        return base
+    if not base:
+        return risk_section.strip()
+    return f"{base}\n\n{risk_section.strip()}"

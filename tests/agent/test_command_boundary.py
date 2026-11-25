@@ -206,21 +206,11 @@ def test_a_command_that_needs_an_admission_refuses_to_run_without_one():
             routing.tool_arguments(command, None)
 
 
-def test_the_summary_command_carries_the_storage_spellings_of_its_sections():
-    """Four sections, spelled as the index spells them.
-
-    The document names `hospital_course` and `discharge_diagnoses`; storage calls
-    them `brief_hospital_course` and `discharge_diagnosis`. A section name is part
-    of every chunk id, so the document's spelling would retrieve nothing without
-    a re-index — hence the storage spelling, pinned here so a future edit that
-    "corrects" it fails loudly instead.
-    """
+def test_the_summary_command_is_not_restricted_to_four_sections():
+    """`/ehr` returns every parsed section in document order rather than filtering to 4."""
     summary = routing.command_for("summarize")
-    assert summary.sections == (
-        "history_of_present_illness", "brief_hospital_course",
-        "discharge_diagnosis", "discharge_instructions")
-    assert "discharge_medications" not in summary.sections
-    assert "discharge_summary" not in summary.sections
+    assert summary.tool == "rag_search_sections"
+    assert not hasattr(summary, "sections")
 
 
 def test_an_unknown_wire_value_is_not_a_command():
@@ -428,23 +418,22 @@ def test_the_execution_record_keeps_the_numbers_the_model_never_saw():
     assert served["top_factors"][0]["contribution"] == 0.316788
 
 
-def test_the_summary_prompt_names_the_strings_the_payload_carries():
-    """The instruction and the projection move together.
+def test_the_summary_prompt_delegates_risk_strings_to_deterministic_renderer():
+    """`/ehr` renders probability_display and threshold_display deterministically in Python."""
+    from services.agent.postprocess.answer import render_readmission_section
 
-    A prompt that names a field the payload no longer has is an instruction to invent it,
-    which is the failure this pair exists to prevent — so the two are asserted against each
-    other rather than separately.
-    """
     formatting = prompts.formatting_for("summarize")
     projected = _presented_prediction("predict_readmission", dict(SERVED_RISK))
 
     for field in ("probability_display", "threshold_display"):
-        assert field in formatting, f"the summary prompt does not name {field!r}"
         assert field in projected, f"the payload does not carry {field!r}"
-
-    # Stated as a prohibition as well as a substitution: the strings are what to write,
-    # and an unrounded decimal is what not to.
-    assert "unrounded" in formatting
+    assert "rendered deterministically" in formatting
+    rendered = render_readmission_section(
+        projected, raw_probability=SERVED_RISK["probability"],
+        raw_threshold=SERVED_RISK["threshold"],
+    )
+    assert projected["probability_display"] in rendered
+    assert projected["threshold_display"] in rendered
 
 
 def test_the_summary_prompt_makes_sections_conditional_on_the_evidence():

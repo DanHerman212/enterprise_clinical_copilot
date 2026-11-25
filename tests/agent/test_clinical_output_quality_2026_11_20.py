@@ -223,10 +223,18 @@ def test_the_risk_spoke_no_longer_asks_for_a_contribution():
 
 
 def test_the_ehr_risk_section_no_longer_asks_for_a_contribution():
-    formatting = _flat(prompts.EHR_FORMATTING)
+    from services.agent.postprocess.answer import render_readmission_section
 
+    formatting = _flat(prompts.EHR_FORMATTING)
     assert "its `contribution`" not in formatting
-    assert "no \"contribution\"" in formatting
+    rendered = render_readmission_section(
+        {"probability_display": "9.0%", "threshold_display": "11.0%",
+         "top_factors": [{"feature": "rdw_max", "direction": "increases",
+                          "value": 15.6, "contribution": 0.3246}]},
+        raw_probability=0.09, raw_threshold=0.11,
+    )
+    assert "contribution" not in rendered.lower()
+    assert "0.3246" not in rendered
 
 
 def test_no_prompt_asks_for_the_mandatory_no_mechanism_sentence():

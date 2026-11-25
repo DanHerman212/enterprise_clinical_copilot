@@ -382,21 +382,21 @@ def test_the_literature_spoke_maps_each_arm_to_its_group():
 
 
 def test_the_ehr_formatter_reports_the_attribution_without_editorialising():
-    # The two-arm example lives in the comparator instruction, which is composed into the
-    # `/ehr` prompt only on a turn that has verified cohort rows (Gate C4a).
+    from services.agent.postprocess.answer import render_readmission_section
+
     text = " ".join(prompts.ehr_formatting_for(comparators=True).split())
-    assert "REPORT THE MODEL'S ATTRIBUTION AND STOP" in text
-    for editorial in (
-        "what the named drivers mean clinically",
-        "Stop after saying what this patient's drivers mean for the follow-up",
-        "what the drivers mean for the follow-up plan",
-    ):
-        assert editorial not in text, editorial
-    assert 'Do NOT call\nsuch a factor "favorable"' not in text  # newlines were joined
-    assert '"favorable"' in text
-    assert "never \"favorable\"" not in text
-    assert "a 6% to 9% range" in text
-    assert "KEEP THE CHART'S OWN CLINICAL ABBREVIATIONS" in text
+    assert "rendered deterministically" in text
+    assert "Keep the chart's own clinical abbreviations" in text
+    rendered = render_readmission_section(
+        {"probability_display": "9.0%", "threshold_display": "11.0%",
+         "top_factors": [{"feature": "Recent ED Visits", "direction": "increases", "value": 0}]},
+        [{"pmid": "40000000", "reported_rate": "6% in the intervention arm vs. 9% in the control arm",
+          "rate_kind": "comparison", "cohort_summary": "cohort"}],
+        raw_probability=0.09, raw_threshold=0.11,
+    )
+    for editorial in ("favorable", "protective", "reassuring", "paradoxical"):
+        assert editorial not in rendered.lower()
+    assert "6% in the intervention arm vs. 9% in the control arm" in rendered
 
 
 # --------------------------------------------------------- the anti-leakage guard

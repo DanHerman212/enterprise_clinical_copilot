@@ -151,42 +151,59 @@ def _ehr_prompt() -> str:
 
 
 def test_the_prompt_places_the_estimate_against_the_cohorts():
-    text = _ehr_prompt()
+    from services.agent.postprocess.answer import render_readmission_section
 
-    assert "<verified_comparators> block" in text
-    assert "population benchmark and not a prediction about this patient" in text
-    assert "^[PMID: 35186616]" in text
+    text = _ehr_prompt()
+    assert "rendered deterministically" in text
+    rendered = render_readmission_section(
+        {"probability_display": "9.0%", "threshold_display": "11.0%"},
+        [{"pmid": "35186616", "reported_rate": "4.1%", "rate_kind": "point",
+          "cohort_summary": "patients undergoing total knee arthroplasty"}],
+        raw_probability=0.09, raw_threshold=0.11,
+    )
+    assert "population benchmark" in rendered
+    assert "^[PMID: 35186616]" in rendered
 
 
 def test_every_cohort_rate_carries_its_own_badge_and_never_a_combined_one():
-    """The risk paragraph lost both badges when two cohorts shared a sentence.
+    from services.agent.postprocess.answer import render_readmission_section
 
-    Measured 2026-11-03: the placement rule ("before the full stop") and the
-    one-number-per-claim rule were written for note passages, and the model applied them
-    to published cohorts too — either dropping the badges or merging two records into
-    `^[PMID: 111, 222]`, which settlement could not draw. The instruction now scopes the
-    old rules to note passages and states the comparator rule on its own.
-    """
-    text = " ".join(_ehr_prompt().split())
-
-    assert "EVERY published rate you state carries its own badge" in text
-    assert "This rule and the one-number-per-claim rule above are about note passages" in text
-    assert "never `^[PMID: 35186616, 37028984]`" in text
+    rendered = render_readmission_section(
+        {"probability_display": "9.0%", "threshold_display": "11.0%"},
+        [
+            {"pmid": "35186616", "reported_rate": "4.1%", "rate_kind": "point",
+             "cohort_summary": "TKA cohort"},
+            {"pmid": "37028984", "reported_rate": "6.2%", "rate_kind": "point",
+             "cohort_summary": "arthroplasty cohort"},
+        ],
+        raw_probability=0.09, raw_threshold=0.11,
+    )
+    assert "^[PMID: 35186616]" in rendered
+    assert "^[PMID: 37028984]" in rendered
+    assert "35186616, 37028984" not in rendered
 
 
 def test_the_prompt_forbids_a_comparison_when_there_is_no_block():
-    # The turn that retrieved no cohort at all is the one this instruction is composed for.
-    text = " ".join(prompts.ehr_formatting_for().split())
+    from services.agent.postprocess.answer import render_readmission_section
 
-    assert "Where an input block of published cohorts is NOT given" in text
-    assert "do not write a sentence about the comparison at all" in text
-    assert "Do not reach for a rate you know from training" in text
-    assert "<verified_comparators> block, this section places" not in text
-    assert "<retrieved_readmission_literature>" not in text
+    text = " ".join(prompts.ehr_formatting_for().split())
+    assert "rendered deterministically" in text
+    rendered = render_readmission_section(
+        {"probability_display": "9.0%", "threshold_display": "11.0%"},
+        [],
+        raw_probability=0.09, raw_threshold=0.11,
+    )
+    assert "benchmark" not in rendered.lower()
 
 
 def test_the_prompt_keeps_a_two_arm_row_two_figures():
-    text = _ehr_prompt()
+    from services.agent.postprocess.answer import render_readmission_section
 
-    assert "A two-arm row is two figures" in text
-    assert "never average them" in text
+    rendered = render_readmission_section(
+        {"probability_display": "9.0%", "threshold_display": "11.0%"},
+        [{"pmid": "40000000", "reported_rate": "6% in the intervention arm vs. 9% in the control arm",
+          "rate_kind": "comparison", "cohort_summary": "surgical cohort"}],
+        raw_probability=0.09, raw_threshold=0.11,
+    )
+    assert "6% in the intervention arm vs. 9% in the control arm" in rendered
+    assert "between the two published rates" in rendered

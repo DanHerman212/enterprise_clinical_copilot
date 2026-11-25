@@ -580,6 +580,48 @@ def _context_block(admission_context: str, hadm_id: int | None = None) -> str:
     return f"\n\n{text}" if text else ""
 
 
+def _raw_prediction(recorded: list[RecordedToolCall] | None) -> dict[str, Any] | None:
+    """The raw `predict_readmission` payload from this turn's calls, or None."""
+    for call in recorded or []:
+        if call.get("name") != "predict_readmission":
+            continue
+        response = call.get("response")
+        if isinstance(response, dict) and not response.get("error"):
+            return response
+    return None
+
+
+def _build_ehr_risk_section(
+    recorded: list[RecordedToolCall],
+    comparators: list[dict[str, Any]] | None,
+    admission_context: str,
+    *,
+    fallback_literature_prose: str = "",
+) -> str:
+    """Deterministically build `/ehr`'s `**Readmission risk & trajectory.**` paragraph."""
+    raw = _raw_prediction(recorded)
+    if raw is None:
+        return ""
+    administrative = admission_block.administrative_values(admission_context)
+    projected = _presented_prediction("predict_readmission", raw, administrative)
+    prob = raw.get("probability")
+    thresh = raw.get("threshold")
+    return answer_text.render_readmission_section(
+        projected,
+        comparators,
+        raw_probability=float(prob) if isinstance(prob, (int, float)) and not isinstance(prob, bool) else None,
+        raw_threshold=float(thresh) if isinstance(thresh, (int, float)) and not isinstance(thresh, bool) else None,
+        fallback_literature_prose=fallback_literature_prose,
+    )
+
+
+def _with_response_text(response: Any, new_text: str) -> Any:
+    """Return `response` with updated text while preserving metadata and usage."""
+    if isinstance(response, AIMessage):
+        return response.model_copy(update={"content": new_text})
+    return response
+
+
 def _patient_estimate(recorded: list[RecordedToolCall] | None) -> float | None:
     """The probability `predict_readmission` returned for this admission, or None.
 
@@ -1850,10 +1892,35 @@ async def run_command(
     # The heading is withheld from the instruction when the turn retrieved no section that
     # states a discharge plan, and this is the second control on the same decision. A model
     # that writes it anyway would put a label over the hospital-course facts the passages
-    # already put under their own heading, which is what `dev_d5_fup_02` turn 1 did on
-    # 2026-11-24. Folded rather than left: the sentence is kept, the unsupported label goes.
+    # already put under their own heading. Folded rather than left: the sentence is kept,
+    # the unsupported label goes.
     if command.wire == "summarize" and not command_extras.get("has_discharge_section"):
         text = answer_text.fold_unsupported_plan_heading(text)
+
+    # For `/ehr`, Section 4 (`**Readmission risk & trajectory.**`) is rendered
+    # deterministically in Python from the structured prediction + verified comparator
+    # payloads so scores, SHAP drivers, comparison directions, and PMID badges never rely
+    # on LLM transcription. When fallback literature was retrieved (no verified 30-day
+    # cohort), the LLM's 1-2 sentence abstract takeaway is preserved after Python's
+    # deterministic score/drivers/benchmark-absence lead-in.
+    if command.wire == "summarize" and str(text).strip():
+        fallback_body = (
+            answer_text.extract_readmission_body(text)
+            if command_extras.get("fallback_literature") and not command_extras.get("comparators")
+            else ""
+        )
+        risk_section = _build_ehr_risk_section(
+            recorded,
+            command_extras.get("comparators"),
+            admission_context,
+            fallback_literature_prose=fallback_body,
+        )
+        if risk_section:
+            had_model_risk = bool(answer_text.extract_readmission_body(text))
+            text = answer_text.attach_readmission_section(text, risk_section)
+            response = _with_response_text(response, text)
+            if streams and command.prose_is_model_output and not had_model_risk:
+                _announce(f"\n\n{risk_section}")
 
     state: dict[str, Any] = {
         "messages": [
@@ -2091,14 +2158,20 @@ _DISPERSION_SIGN_BEFORE = re.compile(
     re.IGNORECASE,
 )
 
-#: The label form: `6.87% SD`, `6.87% (standard deviation)`, `SD 6.87%`, `standard
-#: deviation of 6.87%`. Either side of the figure, because abstracts write both.
+#: The label form: `6.87% SD`, `6.87% (standard deviation)`, `SD 6.87%`, `SE 1.2%`,
+#: `IQR 4.5%`, `standard error of 1.2%`. Either side of the figure, because abstracts
+#: write both.
 _DISPERSION_LABEL_AFTER = re.compile(
-    r"^[\s%]*[),;]?\s*(?:\(?\s*)?(?:SD|s\.d\.|std\.?\s*dev\.?|standard\s+deviation)\b",
+    r"^[\s%]*[),;]?\s*(?:\(?\s*)?"
+    r"(?:SD|s\.d\.|std\.?\s*dev\.?|standard\s+deviation|"
+    r"SEM|SE|s\.e\.m?\.?|standard\s+error|"
+    r"IQR|interquartile\s+range)\b",
     re.IGNORECASE,
 )
 _DISPERSION_LABEL_BEFORE = re.compile(
-    r"\b(?:SD|s\.d\.|std\.?\s*dev\.?|standard\s+deviation)\s*(?:of\s*)?$",
+    r"\b(?:SD|s\.d\.|std\.?\s*dev\.?|standard\s+deviation|"
+    r"SEM|SE|s\.e\.m?\.?|standard\s+error|"
+    r"IQR|interquartile\s+range)\s*(?:[:=]|of\s*)?\s*$",
     re.IGNORECASE,
 )
 
@@ -2949,7 +3022,7 @@ def verify_comparator(row: dict | None, articles: dict[str, dict],
     figures = _NUMBER.findall(rate)
     if not figures:
         return None, f"pmid {pmid} states no numeric rate"
-    if _is_dispersion_figure(figures[0], sentence):
+    if any(_is_dispersion_figure(fig, sentence) for fig in figures):
         # `10.66%±6.87%` states ONE rate and a spread around it. The membership check
         # below cannot tell them apart — both figures are printed in the sentence — so it
         # kept a row whose rate was the standard deviation, and `dev_d3_slash_01` turn 1

@@ -686,7 +686,7 @@ async def toolbox(transport: str | None = None, url: str | None = None):
 # come with it, which is also what stops the engine importing ingress.
 # ===========================================================================
 
-MAX_PASSAGE_CHARS = 4000
+MAX_PASSAGE_CHARS = 12000
 
 
 
@@ -1172,6 +1172,39 @@ def _presented_prediction(name: str, payload: Any,
 
 
 
+def _presented_lab_trends(name: str, payload: Any) -> Any:
+    """Summarize which lab curves are feature-anchored vs. unanchored synthetic curves.
+
+    Added ONLY on the model's projected copy so the wire payload returned to the client
+    and A2UI widgets stays invariant. When a patient has unanchored analytes (`anchored == []`),
+    naming them explicitly at top level lets the model distinguish synthetic reference-interval
+    series from values quoted out of the EHR discharge note.
+    """
+    if name != "get_lab_trends" or not isinstance(payload, dict):
+        return payload
+    trends = payload.get("trends")
+    if not isinstance(trends, list):
+        return payload
+    if not any(isinstance(t, dict) and "anchored" in t for t in trends):
+        return payload
+    anchored: list[str] = []
+    unanchored: list[str] = []
+    for trend in trends:
+        if not isinstance(trend, dict):
+            continue
+        label = str(trend.get("label") or trend.get("key") or "").strip()
+        if not label:
+            continue
+        if trend.get("anchored"):
+            anchored.append(label)
+        else:
+            unanchored.append(label)
+    projected = dict(payload)
+    projected["anchored_analytes"] = anchored
+    projected["unanchored_analytes"] = unanchored
+    return projected
+
+
 def _presented_for_model(name: str, payload: Any,
                          administrative: Mapping[str, str] | None = None) -> Any:
     """The tool result in the form the MODEL reads. Never the form the caller records.
@@ -1180,20 +1213,17 @@ def _presented_for_model(name: str, payload: Any,
     score and threshold floats are replaced by the display strings the widget prints.
     Each factor's contribution and recorded value travel with the factor, because the risk
     spoke names them and a payload the prose cannot quote is a payload the prose has to
-    talk around. Everything else — note passages, medication lists, lab
-    series — passes through exactly as the tool returned it.
-
-    The lab series used to be rewritten here, carrying an ordinal
-    `_abnormality_rank` computed from how far each analyte sat outside its reference
-    interval. That is gone: the panel reaches the model as the tool wrote it, and the
-    prompt asks for the comparison in prose. Nothing is cross-referenced against the
-    patient either, so the same call renders the same way whichever route asked for it.
+    talk around. For `get_lab_trends`, a top-level summary of anchored vs. unanchored
+    analytes makes synthetic provenance unmistakable to the model without changing the
+    wire payload. Everything else passes through as the tool returned it.
 
     `administrative` is the block's own values, keyed by feature name
     (`admission_context.administrative_values`). It is how a one-hot parent gets a value
     and how `gender` gets a word, and it is empty on a turn whose block is empty — which
     is why the parameter is optional rather than required.
     """
+    if name == "get_lab_trends":
+        return _presented_lab_trends(name, payload)
     return _presented_prediction(name, payload, administrative)
 
 

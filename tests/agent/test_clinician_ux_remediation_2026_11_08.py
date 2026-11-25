@@ -255,11 +255,11 @@ def test_the_fallback_instruction_asks_for_take_home_drugs_first():
     lowered = " ".join(prompts.MEDS_FALLBACK_FORMATTING.split()).lower()
 
     assert "going home on" in lowered
-    # The exclusion is stated as a prohibition rather than left to inference.
-    assert "do not include an inpatient-only administration" in lowered
+    # Both discharge and inpatient medications are extracted, clearly separated by setting.
+    assert '"setting": "discharge"' in lowered
+    assert '"setting": "inpatient"' in lowered
     assert "iv morphine" in lowered and "decadron" in lowered
-    # And the inpatient list is still reachable when the record holds nothing else.
-    assert "only if the passage names no discharge or take-home medication" in lowered
+    assert "names both discharge medications and inpatient treatments gets both" in lowered
 
 
 def test_the_fallback_narrative_states_the_absence_and_names_the_drugs():

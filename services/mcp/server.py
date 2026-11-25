@@ -105,6 +105,7 @@ async def health(request: Request) -> JSONResponse:
         "project": PROJECT,
         "location": LOCATION,
         "feature_source": FEATURE_SOURCE,
+        "code_revision": os.getenv("CODE_REVISION") or os.getenv("K_REVISION") or "local",
     })
 
 

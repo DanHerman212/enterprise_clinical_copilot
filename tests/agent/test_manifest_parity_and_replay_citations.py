@@ -290,7 +290,7 @@ def test_the_prompt_carries_the_rule_that_resolves_the_two_statements():
     instruction = deterministic.formatting_for("summarize")
 
     assert "discharge_location" in instruction
-    assert "EARLIER encounter" in instruction
+    assert "earlier encounter" in instruction.lower()
 
 
 def test_the_block_is_rendered_by_the_same_function_the_free_text_path_uses():

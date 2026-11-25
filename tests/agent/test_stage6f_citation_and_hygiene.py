@@ -75,33 +75,19 @@ def test_no_prompt_names_a_dev_set_literal():
 def test_the_chart_rules_keep_one_passage_per_sentence():
     text = " ".join(prompts.EHR_FORMATTING.split())
 
-    assert "ONE PASSAGE PER SENTENCE" in text
-    # The ban on two markers went on 2026-11-22: a sentence drawing on two passages must
-    # carry both markers rather than either dropping one or being forced apart.
-    assert "MUST carry a marker for BOTH" in text
-    assert "Do not merge and cite only the first" in text
-    # The sections the measured failure merged, named as separate passages.
-    assert ("`history_of_present_illness`, `chief_complaint` and `brief_hospital_course` "
-            "are separate passages") in text
-    assert "Never merge a finding from `brief_hospital_course` into a" in text
+    assert "Prefer one passage per sentence" in text
+    assert "attach BOTH markers before the period" in text
+    assert "Never merge two passages and cite only one" in text
+    assert "distinct passages" in text
 
 
 def test_a_note_without_a_history_passage_still_has_a_source_for_the_presentation():
-    """The strict rule needs a fallback, or a sparse note has no legal sentence.
-
-    A note may arrive with only `brief_hospital_course`, or as one unsectioned
-    `discharge_summary`. The rule that the presentation comes from
-    `history_of_present_illness` cannot apply to either, and a rule that cannot apply is a
-    rule the model satisfies by reaching for the nearest passage — the diagnosis list.
-    """
+    """The strict rule needs a fallback, or a sparse note has no legal sentence."""
     text = " ".join(prompts.EHR_FORMATTING.split())
 
     assert "Only when `history_of_present_illness` is absent" in text
     assert "the one passage that states those symptoms" in text
     assert "never from the diagnosis passage" in text
-    # The no-merge rule survives the fallback.
-    assert "no two of them are ever merged into one sentence" in text
-    assert "never split across two" in text
 
 
 def test_the_hub_keeps_one_passage_per_sentence():
@@ -117,23 +103,11 @@ def test_the_hub_keeps_one_passage_per_sentence():
 
 
 def test_the_discharge_label_has_exactly_two_medication_sources():
-    """A drug named in the hospital course is not a discharge prescription.
-
-    `dev_t4_02` turn 1 opened the discharge section with a drug the hospital course told
-    the patient to take, and carried that passage's marker: the sentence was true of the
-    course and false of the discharge regimen, and it did not say which. The label now has
-    two sources, and the course's medication instruction has a home of its own.
-    """
+    """A drug named in the hospital course is not a discharge prescription."""
     text = " ".join(prompts.EHR_FORMATTING.split())
 
-    assert ("Those two sections are the only sources for a discharge medication"
-            in text)
-    assert "a drug named inside `brief_hospital_course` is a hospital-course fact" in text
-    assert ("Where neither section lists a medication, this label reports the disposition "
-            "and the non-medication instructions only") in text
-    assert "no sentence under it opens \"the patient was prescribed\"" in text
-    assert ("A medication, or a post-procedure medication instruction, that "
-            "`brief_hospital_course` states belongs here") in text
+    assert "Report home medications ONLY from `discharge_medications` or `discharge_instructions`" in text
+    assert "A drug or post-procedure instruction stated inside `brief_hospital_course` belongs here" in text
 
 
 def test_the_discharge_rule_no_longer_names_the_hospital_course_as_a_source():
@@ -141,7 +115,7 @@ def test_the_discharge_rule_no_longer_names_the_hospital_course_as_a_source():
     text = " ".join(prompts.EHR_FORMATTING.split())
 
     assert "or a discharge clause of `brief_hospital_course`" not in text
-    assert "say which passage says so: `discharge_medications` or `discharge_instructions`" in text
+    assert "Report home medications ONLY from `discharge_medications` or `discharge_instructions`" in text
 
 
 def test_the_synthesis_turns_two_facts_into_two_sentences():

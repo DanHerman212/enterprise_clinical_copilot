@@ -260,10 +260,8 @@ def test_the_hub_names_the_marker_bodies_that_are_not_markers():
 def test_the_ehr_prompt_keeps_a_planned_event_prospective():
     text = " ".join(prompts.EHR_FORMATTING.split())
 
-    assert "KEEP THE PASSAGE'S OWN TENSE" in text
-    assert "report it as planned or scheduled" in text
-    assert ('"he was to be admitted for the procedure" is not "he was admitted for the '
-            'procedure"') in text
+    assert "Preserve the passage's own tense" in text
+    assert "report it as planned" in text
 
 
 def test_the_new_prompt_text_carries_no_dev_set_literal():

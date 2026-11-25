@@ -217,9 +217,8 @@ def test_no_prompt_still_prescribes_a_risk_band_word():
     assert not hasattr(prompts, "RISK_FORMATTING")
     for band in ("high", "low", "borderline"):
         assert f'label the risk "{band}"' not in prompts.EHR_FORMATTING
-    # The formatting that DOES carry the score states the same rule, so a `/ehr` answer
-    # cannot invent a band either.
-    assert "probability_display" in prompts.EHR_FORMATTING
+    # `/ehr` risk prose is now rendered deterministically rather than written by the LLM.
+    assert "rendered deterministically" in prompts.EHR_FORMATTING
 
 
 @pytest.mark.parametrize("rule,marker", RULE_MARKERS)

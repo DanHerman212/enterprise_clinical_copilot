@@ -398,7 +398,8 @@ def _build_registry(google_location: str, anthropic_location: str,
 #: Moved from `gemini-3.1-flash-lite` to `gemini-3.8-flash` on 2026-11-13, when the
 #: retirement directive promoted the baseline to the pin. A retired id must not be the
 #: default, because a default is what an unconfigured deployment silently gets.
-DEFAULT_PROFILE_NAME = "gemini-3.8-flash"
+#: Moved from `gemini-3.8-flash` to `gemini-4-hydrogen` on 2026-11-25.
+DEFAULT_PROFILE_NAME = "gemini-4-hydrogen"
 
 
 def _load_registry() -> None:

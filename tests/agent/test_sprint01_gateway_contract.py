@@ -30,7 +30,7 @@ from shared import model_outcomes  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 
-PIN = "gemini-3.8-flash"
+PIN = "gemini-4-hydrogen"
 FLASH_CANDIDATE = "gemini-3.8-flash"
 HYDROGEN_CANDIDATE = "gemini-4-hydrogen"
 PRO_CANDIDATE = "gemini-3.1-pro"
@@ -39,7 +39,7 @@ MUSE = "muse-spark-1.3"
 
 #: The five ids the programme can serve. `gemini-3.1-flash-lite` was
 #: retired on 2026-11-13 and is deliberately absent from the registry, so it is not here.
-ALL_FIVE = (PIN, HYDROGEN_CANDIDATE, PRO_CANDIDATE, CLAUDE, MUSE)
+ALL_FIVE = (PIN, FLASH_CANDIDATE, PRO_CANDIDATE, CLAUDE, MUSE)
 
 
 def _turn(text="", **metadata):

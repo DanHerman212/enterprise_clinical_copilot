@@ -24,10 +24,10 @@ STRUCTURED = {"thinking_level": "minimal", "response_mime_type": "application/js
 
 
 def test_the_default_profile_is_the_baseline_and_not_the_retired_pin():
-    assert config.GEMINI_MODEL == "gemini-3.8-flash"
-    assert config.AGENT_MODEL == "gemini-3.8-flash"
-    assert gateway.DEFAULT_PROFILE_NAME == "gemini-3.8-flash"
-    assert gateway.profile_for(object()).name == "gemini-3.8-flash"
+    assert config.GEMINI_MODEL == "gemini-4-hydrogen"
+    assert config.AGENT_MODEL == "gemini-4-hydrogen"
+    assert gateway.DEFAULT_PROFILE_NAME == "gemini-4-hydrogen"
+    assert gateway.profile_for(object()).name == "gemini-4-hydrogen"
 
 
 def test_the_retired_pin_is_gone_from_the_registry():
@@ -95,8 +95,8 @@ def test_the_output_ceiling_is_the_clients_and_it_is_16384():
 
 def test_the_record_names_the_pin_and_the_model_it_replaced():
     record = config.MODEL_CHOICE
-    assert record["model"] == "gemini-3.8-flash"
-    assert record["previous"] == "gemini-3.1-flash-lite"
-    assert record["previous_retired"] == "2027-05-07"
-    assert record["retires"] == "2027-09-02"
-    assert record["decided"] == "2026-11-13"
+    assert record["model"] == "gemini-4-hydrogen"
+    assert record["previous"] == "gemini-3.8-flash"
+    assert record["previous_retired"] == "2027-09-02"
+    assert record["retires"] == "2027-11-12"
+    assert record["decided"] == "2026-11-25"

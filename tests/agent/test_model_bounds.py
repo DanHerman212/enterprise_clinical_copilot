@@ -52,7 +52,7 @@ def test_the_thinking_parameter_matches_the_pinned_model_family():
     # and this is what stops them drifting apart — swapping the model without swapping
     # this is a broken call, not a wrong answer.
     llm = graph._build_llm(graph.MODEL_ID)
-    if "gemini-3" in graph.MODEL_ID:
+    if "gemini-3" in graph.MODEL_ID or "gemini-4" in graph.MODEL_ID:
         assert llm.reasoning_effort == GEMINI_REASONING_EFFORT
         assert llm.thinking_budget is None
     else:

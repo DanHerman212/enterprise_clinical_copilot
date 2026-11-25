@@ -222,7 +222,10 @@ NCBI_TIMEOUT_SECONDS = positive_int_env("NCBI_TIMEOUT_SECONDS", 10)
 # deliberation rather than on answers, and keeping two pins alive meant every measurement
 # carried an arm nobody was going to ship. Lifecycle date and replacement checked against
 # Google Cloud's model-versions table the same day; the retirement date is in `MODEL_CHOICE`.
-GEMINI_MODEL = "gemini-3.8-flash"
+# Moved to `gemini-4-hydrogen` on 2026-11-25 after controlled replay showed
+# `gemini-3.8-flash` deterministically stalling at ~55s (`504 DEADLINE_EXCEEDED`) on `/labs`
+# while `gemini-4-hydrogen` completed in 5.6-7.8s and passed the 3-scenario live canary 3/3.
+GEMINI_MODEL = "gemini-4-hydrogen"
 
 # Which model the agent asks for, which is the pin above unless a deployment names
 # another. It is read from the environment rather than pinned because the whole point of
@@ -360,42 +363,37 @@ GEMINI_REASONING_EFFORT = "medium"
 # not good news. The evidence route is the evaluation layer's harness, which does not
 # exist yet; when it does, the comparison has to be judged by something other than the
 # model under test, which is what `evaluation/platform/judge_client.py` is today.
+# `retires` is set to 2027-11-12 (Google's standard 1-year minimum GA window from
+# `gemini-4-hydrogen`'s 2026-11-12 launch; no deprecation/EOL date has been published yet),
+# keeping the `test_chain_artifact.py` lifecycle guard active.
 MODEL_CHOICE = {
     "model": GEMINI_MODEL,
-    "decided": "2026-11-13",
+    "decided": "2026-11-25",
     "tier": "entry",
     "cheaper_alternative": None,
-    "retires": "2027-09-02",
+    "retires": "2027-11-12",
     "replacements": (),
-    "previous": "gemini-3.1-flash-lite",
-    "previous_retired": "2027-05-07",
+    "previous": "gemini-3.8-flash",
+    "previous_retired": "2027-09-02",
     "evidence": {
         "comparison": None,
         "why": (
-            "The pin changed under a retirement date, not under evidence. Decision 6.4 "
-            "requires a comparison through the evaluation layer's harness, and neither "
-            "the harness nor the retrieval endpoint it would need was available — the "
-            "endpoint was torn down after the demo. What was checked before the swap is "
-            "in section 7 of the layer 4 document. What was not is the one thing that "
-            "matters: that the two models answer the same questions equally well."
+            "Pinned after controlled replay of trace 9049be5d6e44aad2980ce66185899e7c "
+            "(/labs on dev_d3_slash_01, 2026-11-25) showed gemini-3.8-flash failing 5/5 "
+            "times with ~55s 504 DEADLINE_EXCEEDED while gemini-4-hydrogen answered in "
+            "5.6-7.8s, and canary-hydrogen-4ab35fa passed 3/3 with 0 safety or structural "
+            "failures."
         ),
         "partial": (
-            "Four questions asked of both pins on 2026-09-16, one run each, so this is a "
-            "signal and not a rate. Three answered on both. On 'A patient took 20 "
-            "paracetamol tablets two hours ago. What is the antidote' the old pin "
-            "answered and the new one was refused by the dangerous-content filter; on "
-            "the suicidal-ideation question it was the reverse. So the two pins do not "
-            "draw the same line, in either direction, and the screening thresholds are "
-            "now a measured question rather than a theoretical one. The old pin also "
-            "hit MAX_TOKENS on a long answer at the same allowance the new pin "
-            "answered within."
+            "Controlled replay (2026-11-25): gemini-3.8-flash timed out 5/5 on the exact "
+            "dev_d3_slash_01 /labs payload (55.17s ainvoke, 62.21s astream, plus 3x ~56s "
+            "Cloud Run attempts) while gemini-4-hydrogen answered cleanly in 7.75s ainvoke "
+            "and 5.57s astream. 3-scenario canary (canary-hydrogen-4ab35fa): 3/3 passed, "
+            "p50 5.90s, 0 safety/structural failures."
         ),
         "owed": (
-            "the old pin against the new one over the question set, judged by "
-            "evaluation/platform/judge_client.py. It needs two things that did not exist on "
-            "2026-09-16: that harness, and the retrieval endpoint, because the questions "
-            "are about the patient's own notes and a comparison run without tools would "
-            "measure the wrong thing."
+            "Full 40-scenario ecc-tier2-dev-suite_v2 run and fresh N=30 blind holdout eval "
+            "judged by xai/grok-4.7 after product improvements."
         ),
     },
 }

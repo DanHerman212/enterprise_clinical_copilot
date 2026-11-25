@@ -1078,6 +1078,8 @@ def make_assertions_evaluator() -> Callable[..., list[Evaluation]]:
 
     def evaluator(*, input, output, expected_output=None, metadata=None,
                   **_kwargs) -> list[Evaluation]:
+        if dependency_failure(output or {}):
+            return []
         ok, failures = structural_check(input or {}, output or {})
         return [_score(STRUCTURAL, 1.0 if ok else 0.0,
                        comment="ok" if ok else "; ".join(failures))]

@@ -19,8 +19,10 @@ from __future__ import annotations
 import pytest
 
 from evaluation.platform.evaluators import (
+    STRUCTURAL,
     _dev_suite_failures,
     dependency_failure,
+    make_assertions_evaluator,
 )
 
 
@@ -65,6 +67,39 @@ def test_gateway_http_5xx_on_any_turn_is_a_dependency_failure(status):
 def test_gateway_http_5xx_prefix_fallback_and_400_refusal():
     assert dependency_failure({"turn_responses": ["ok", "[HTTP 502] agent_failed: retry"]}) is not None
     assert dependency_failure({"turn_statuses": [400], "turn_errors": ["invalid_command"]}) is None
+
+
+def test_assertions_evaluator_skips_structural_on_dependency_failure():
+    evaluator = make_assertions_evaluator()
+    assert evaluator(
+        input={"turns": ["/labs"]},
+        output={
+            "turn_1_response": "[HTTP 502] agent_failed",
+            "turn_statuses": [502],
+            "turn_verified": [None],
+        },
+    ) == []
+    assert evaluator(
+        input={"turns": ["/labs"]},
+        output={
+            "turn_1_response": "Unable to retrieve notes.",
+            "turn_statuses": [200],
+            "turn_verified": [None],
+            "turn_tool_calls": [[{"name": "rag_search", "response": {"error": "search_failed"}}]],
+        },
+    ) == []
+    normal_fail = evaluator(
+        input={"turns": ["/labs"]},
+        output={
+            "turn_1_response": "Labs looked normal.",
+            "turn_prompts": ["/labs"],
+            "turn_statuses": [200],
+            "turn_verified": [None],
+        },
+    )
+    assert len(normal_fail) == 1
+    assert normal_fail[0].name == STRUCTURAL
+    assert normal_fail[0].value == 0.0
 
 
 # --- a literal anchor is matched without regard to case -------------------------------

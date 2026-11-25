@@ -605,3 +605,139 @@ def test_a_literature_turn_ignores_the_chart_even_when_it_is_in_the_same_turn():
                               state=state)
 
     assert all("published literature" in chip for chip in chips)
+
+
+# -------------------------------------------------- Hybrid synthesis & safety gates
+
+
+def test_followup_plan_sections_and_prompt_contract():
+    from services.agent.engine import prompts
+
+    assert "followup_instructions" in followups._PLAN_SECTIONS
+    for domain in followups.FOLLOWUP_TAXONOMY_DOMAINS:
+        assert domain in prompts.FOLLOWUP_SYNTHESIS_PROMPT
+    assert "<admission_metadata>" in prompts.EHR_FORMATTING
+
+
+def test_signal_packet_respects_ehr_vs_labs_synthetic_boundary():
+    ehr_state = {
+        "command": "summarize",
+        "admission_context": "age: 61, gender: female, prior_inpatient_days: 4.75",
+        "tool_calls": [
+            {"name": "rag_search_sections", "response": {
+                "passages": [{"section": "discharge_instructions", "text": "Follow up in ortho clinic."}]
+            }},
+            {"name": "predict_readmission", "response": {
+                "probability_display": "16.0%", "threshold_display": "11.0%", "decision": "above",
+                "top_factors": [{"feature": "rdw_max", "direction": "increases", "value": 15.6}],
+            }},
+            {"name": "get_lab_trends", "response": {
+                "trends": [_trend("Potassium", 6.2, 3.5, 5.1, unit="mmol/L")]
+            }},
+        ],
+    }
+    pkt = followups.build_signal_packet(
+        question="/ehr", answer="Summary prose.", state=ehr_state, outpatient=False,
+        asked=("older q",),
+    )
+    assert "PATIENT_MANIFEST:" in pkt
+    assert "red cell distribution width (RDW) (increases, value=15.6)" in pkt
+    assert "[discharge_instructions] Follow up in ortho clinic." in pkt
+    assert "ALREADY_ASKED:" in pkt and "older q" in pkt
+    assert "LAB_TRENDS:" not in pkt
+
+    labs_state = {**ehr_state, "command": "labs"}
+    labs_pkt = followups.build_signal_packet(
+        question="/labs", answer="Labs prose.", state=labs_state, outpatient=False,
+    )
+    assert "LAB_TRENDS:" in labs_pkt
+    assert "Potassium" in labs_pkt
+
+
+def test_parse_proposed_questions_enforces_distinct_domains_and_handles_fences():
+    fenced = """```json
+    {"follow_ups": [
+      {"domain": "risk_driver_bridge", "question": "What explains her elevated RDW in the chart?"},
+      {"domain": "risk_driver_bridge", "question": "Duplicate domain should be dropped."},
+      {"domain": "medication_safety", "question": "What bleed precautions were documented for warfarin?"},
+      {"domain": "care_transition", "question": "When is her cardiology clinic appointment?"}
+    ]}
+    ```"""
+    parsed = followups.parse_proposed_questions(fenced)
+    assert parsed == [
+        "What explains her elevated RDW in the chart?",
+        "What bleed precautions were documented for warfarin?",
+        "When is her cardiology clinic appointment?",
+    ]
+    assert followups.parse_proposed_questions("not json at all") == []
+
+
+def test_suggest_async_filters_unsafe_chips_and_backfills_deterministically():
+    import asyncio
+
+    state = _note_state({
+        "discharge_medications": "Coumadin 5 mg daily, INR every Monday and Thursday.",
+        "discharge_instructions": "Return for bleeding. Follow up with anticoagulation clinic in 1 week.",
+    })
+
+    async def bad_and_good_proposer(_packet: str) -> str:
+        return (
+            '{"follow_ups": ['
+            '{"domain": "lit", "question": "What do published studies say about warfarin?"},'
+            '{"domain": "pii", "question": "What is his full legal name and date of birth?"},'
+            '{"domain": "risk_driver_bridge", "question": "Already asked question?"},'
+            '{"domain": "care_transition", "question": "Which clinic is managing his INR monitoring after discharge?"}'
+            ']}'
+        )
+
+    chips = asyncio.run(followups.suggest_async(
+        "/ehr",
+        "Briefing answer.",
+        state=state,
+        outpatient=False,
+        asked=("Already asked question?",),
+        proposer=bad_and_good_proposer,
+    ))
+    assert len(chips) == 3
+    assert chips[0] == "Which clinic is managing his INR monitoring after discharge?"
+    _assert_routable(chips)
+    assert "Already asked question?" not in chips
+
+
+def test_suggest_async_outpatient_blocks_inpatient_framing_and_falls_back_on_error():
+    import asyncio
+
+    state = _note_state({
+        "discharge_summary": "Outpatient physical therapy progress note; gait training continues.",
+    })
+
+    async def failing_or_leaky_proposer(_packet: str) -> str:
+        return (
+            '{"follow_ups": ['
+            '{"domain": "risk_driver_bridge", "question": "What drove her 30-day readmission risk score?"},'
+            '{"domain": "care_transition", "question": "What functional gait goals were noted at this visit?"}'
+            ']}'
+        )
+
+    chips = asyncio.run(followups.suggest_async(
+        "Summarize this note",
+        "Outpatient visit summary.",
+        state=state,
+        outpatient=True,
+        proposer=failing_or_leaky_proposer,
+    ))
+    assert chips[0] == "What functional gait goals were noted at this visit?"
+    assert not any("readmission risk" in c.lower() for c in chips)
+
+    async def exploding_proposer(_packet: str) -> str:
+        raise RuntimeError("boom")
+
+    fallback_chips = asyncio.run(followups.suggest_async(
+        "/meds",
+        ANSWER,
+        state=_med_state("Coumadin 5 mg daily. Follow up with Dr. A.", rows=["Coumadin"], returned=1),
+        outpatient=False,
+        proposer=exploding_proposer,
+    ))
+    assert len(fallback_chips) >= 1
+    assert any("Coumadin" in c for c in fallback_chips)

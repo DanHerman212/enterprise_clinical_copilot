@@ -879,16 +879,15 @@ def labs_formatting_for(*, abnormal: bool = False, critical: bool = False) -> st
         return f"{LABS_FORMATTING}\n\n{LABS_NO_CRITICAL}"
     return LABS_FORMATTING
 
-_EHR_FORMATTING_BASE = """Summarise the inpatient discharge note passages you were given for a clinician.
-Write concise, flowing clinical prose using bold section labels followed by a period at the START of each paragraph (never use markdown `#`/`##` headings, and use bold for nothing else):
+_EHR_FORMATTING_BASE = """Summarise the inpatient discharge note passages you were given for a clinician reviewing 30-day unplanned readmission risk.
+Write tight, flowing narrative clinical prose—never bullet lists—using bold section labels followed by a period at the START of each paragraph (never use markdown `#`/`##` headings, and use bold for nothing else):
 
-- **Presentation & diagnosis.** Combine all relevant presenting and background passages:
-  `chief_complaint` (in its own sentence if used), `history_of_present_illness` (onset, duration, prior treatment), `past_medical_history`, `past_surgical_history`, `allergies`, and the formal `admission_diagnosis` / `discharge_diagnosis` passages. Only when `history_of_present_illness` is absent (e.g., a sparse note with only `brief_hospital_course` or unsectioned `discharge_summary`), take the presentation from the one passage that states those symptoms, never from the diagnosis passage. State the formal diagnoses once from the diagnosis passage. Preserve the passage's own tense (if a procedure or admission was planned/scheduled rather than performed, report it as planned).
+- **Presentation & diagnosis.** Open with a dense clinical snapshot pairing `<admission_metadata>` context (age, sex, admission type, index length of stay, and prior inpatient days or recent ED visits when > 0, with NO citation marker because it rests on the manifest) with the presenting `chief_complaint` / `history_of_present_illness` (onset, duration, prior treatment), formal `admission_diagnosis` / `discharge_diagnosis` passages, and readmission-relevant background (`past_medical_history`, `past_surgical_history`, `allergies`, `social_history`), cited to each supporting passage. Only when `history_of_present_illness` is absent (e.g., a sparse note with only `brief_hospital_course` or unsectioned `discharge_summary`), take the presentation from the one passage that states those symptoms, never from the diagnosis passage. State the formal diagnoses once from the diagnosis passage. Preserve the passage's own tense (if a procedure or admission was planned/scheduled rather than performed, report it as planned).
 - **Hospital course & procedures.** Include only if the passages describe the stay or procedures:
-  operative/invasive procedures (`major_procedure`), key admission or preoperative vitals/exam findings (`physical_exam`) and notable admission/preoperative lab results (`pertinent_results`), inpatient course (`brief_hospital_course`), complications (or documented absence), consults (`consults`), inpatient treatments/medications, and symptom progression. A drug or post-procedure instruction stated inside `brief_hospital_course` belongs here, cited to that passage—never under Discharge plan & medications.
+  highlight index operative/invasive procedures (`major_procedure`), clinical trajectory (`brief_hospital_course`), inpatient treatments, complications (or documented absence, `complications`), consults (`consults`), notable admission/preoperative/discharge exam findings (`physical_exam`) and real chart lab results (`pertinent_results` or course labs), and symptom status at discharge. A drug or post-procedure instruction stated inside `brief_hospital_course` belongs here, cited to that passage—never under Discharge plan & medications.
 <<DISCHARGE_PLAN>>
 - **Discharge plan & medications.** Include only if the passages document discharge medications, disposition, restrictions, or follow-up:
-  state the discharge disposition from `<admission_metadata>` (`discharge_location`) with NO citation marker (do not contradict it with a historical facility from an earlier encounter). Report home medications ONLY from `discharge_medications` or `discharge_instructions` (never present an arrival/transfer list such as "On transfer" or "Medications on admission" as the discharge regimen; if a drug was discontinued before discharge, state that plainly; if medication reconciliation states no home medications beside scripts left in the chart, preserve that qualifier). Above ~4 drugs, summarise by clinical class and state specific doses only where critical (tapers, anticoagulation, insulin). Keep schedules/frequencies and "as needed" (`PRN`) strictly attached to the individual drug whose sig states them. Keep separate follow-up clinics and appointments distinct with each clinic's specific task (never merge two clinics into one visit), and include activity, diet, wound/drain care, and return precautions from `discharge_instructions` / `followup_instructions`.
+  state the discharge disposition from `<admission_metadata>` (`discharge_location`) with NO citation marker (do not contradict it with a historical facility from an earlier encounter). Report home medications ONLY from `discharge_medications` or `discharge_instructions` (never present an arrival/transfer list such as "On transfer" or "Medications on admission" as the discharge regimen; if a drug was held or discontinued before discharge, state that plainly; if medication reconciliation states no home medications beside scripts left in the chart, preserve that qualifier). Above ~4 drugs, summarise by clinical class and state specific doses only where critical (tapers, anticoagulation, insulin). Keep schedules/frequencies and "as needed" (`PRN`) strictly attached to the individual drug whose sig states them. Keep separate follow-up clinics and appointments distinct with each clinic's specific task (never merge two clinics into one visit), and surface activity, diet, wound/drain care, and return precautions from `discharge_instructions` / `followup_instructions`.
 <<END_DISCHARGE_PLAN>>
 <<LITERATURE>>
 
@@ -1491,3 +1490,28 @@ def literature_comparator_input(target: Any, articles: list[dict]) -> str:
             "</record>"
         )
     return "\n".join(lines)
+
+
+FOLLOWUP_SYNTHESIS_PROMPT = """\
+You are a clinical decision-support copilot helping a discharging physician evaluate 30-day unplanned readmission risk for the patient in front of them.
+
+Given the turn's verified clinical record (manifest, risk drivers, medications, chart passages, already-asked questions, and current answer), propose up to 3 high-signal follow-up questions the physician would want to click next.
+
+Choose each question from a DIFFERENT domain in this unplanned-readmission taxonomy:
+1. `risk_driver_bridge` — connect a top readmission risk driver to what the chart documents (diagnoses, inpatient course, comorbidities, or medications).
+2. `medication_safety` — high-risk discharge regimens (anticoagulants, insulin/hypoglycemics, opioids/tapers, steroids, remaining outpatient antibiotics), held/discontinued drugs, or allergy/bleed precautions.
+3. `unresolved_clinical_labs` — abnormal lab findings documented in the EHR note, pending workups/pathology, or unresolved symptoms before discharge.
+4. `procedural_red_flags` — documented return precautions, drain/wound/stent/implant warning signs, or post-procedure monitoring.
+5. `care_transition` — discharge destination handoffs (home health, SNF, rehab, infirmary), pending follow-up appointments, or documented functional/social barriers.
+6. `utilization_comorbidity` — prior inpatient days, recent ED visits, or chronic comorbidity burden affecting post-discharge vulnerability.
+
+STRICT CONTRACT & SAFETY RULES:
+- Return ONLY a JSON object with shape:
+  {"follow_ups": [{"domain": "<domain>", "question": "<concise question>"}]}
+- At most 3 items, each from a DISTINCT taxonomy domain, prioritizing the highest clinical readmission signals not already answered in full.
+- ANSWERABILITY: Ask ONLY about facts, drugs, procedures, labs, clinics, or conditions explicitly present in the provided patient record. Never invent or imply a drug, lab, clinic, or complication absent from the input.
+- CHART ROUTING ONLY: Never use literature cue words (`literature`, `PubMed`, `studies`, `study`, `evidence`, `published`, `guidelines`, `benchmark`, `articles`, `meta-analysis`, `trial`) so clicked questions stay scoped to the patient chart.
+- NO REPEATS: Never repeat or lightly paraphrase any question in `already_asked`.
+- NO PII OR PATIENT SWITCHES: Never ask for full legal name, date of birth, MRN, SSN, or another admission/patient.
+- OUTPATIENT SCOPE: If `encounter` is `outpatient`, ask ONLY about that documented outpatient visit—never mention readmission risk, an inpatient stay, hospital course, or discharge medications.
+- STYLE: Write each question as one direct, physician-facing sentence under 180 characters."""

@@ -30,6 +30,7 @@ from services.agent.telemetry import observability as chain
 from services.agent.postprocess import followups
 from services.agent.postprocess import citations
 from services.agent.engine import model as model_turn
+from services.agent.engine import prompts
 from services.agent.telemetry import observability
 from services.agent.routing import routing
 from services.agent.presentation.a2ui import compose_presentation
@@ -246,6 +247,15 @@ def _signal_tags(signals: dict) -> list[str]:
     if signals["meds_dropped_count"] > 0:
         tags.append("meds:dropped")
     return tags
+
+
+async def _propose_followups(signal_packet: str) -> str:
+    """Generate bespoke readmission-risk follow-up JSON on the pinned model."""
+    return await model_turn.propose_followups(
+        prompts.FOLLOWUP_SYNTHESIS_PROMPT,
+        signal_packet,
+        model=chain.MODEL_ID,
+    )
 
 
 async def compose_success(
@@ -527,7 +537,7 @@ async def compose_success(
     # free and always present, so the shape of a payload does not depend on this flag —
     # only whether the list has anything in it.
     follow_ups = (
-        followups.suggest(
+        await followups.suggest_async(
             question,
             presentation["answer"],
             model=chain.MODEL_ID,
@@ -542,6 +552,8 @@ async def compose_success(
             # Every question already asked in this thread, so a chip the reader has
             # just clicked is consumed rather than offered back.
             asked=asked,
+            admission_context=str(state.get("admission_context") or ""),
+            proposer=_propose_followups,
         )
         if want_follow_ups
         else []

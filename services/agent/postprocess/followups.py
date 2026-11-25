@@ -42,9 +42,10 @@ Two invariants are contractual rather than stylistic:
 
 from __future__ import annotations
 
+import json
 import logging
 import re
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
 from services.agent.postprocess.citations import literature_calls
@@ -113,7 +114,28 @@ _FOLLOW_UP_CUES = re.compile(
 #: medications; `90000106`'s course documents "Dr. X saw him in consultation", which
 #: produced an outpatient follow-up chip.
 _PLAN_SECTIONS = frozenset({"discharge_medications", "discharge_instructions",
-                            "discharge_disposition", "medications_on_transfer"})
+                            "discharge_disposition", "medications_on_transfer",
+                            "followup_instructions"})
+
+FOLLOWUP_TAXONOMY_DOMAINS: tuple[str, ...] = (
+    "risk_driver_bridge",
+    "medication_safety",
+    "unresolved_clinical_labs",
+    "procedural_red_flags",
+    "care_transition",
+    "utilization_comorbidity",
+)
+
+_DISALLOWED_PII_OR_SWITCH_RE = re.compile(
+    r"\b(?:full\s+legal\s+name|date\s+of\s+birth|medical\s+record\s+number|mrn|ssn|"
+    r"social\s+security|hadm_id|switch\s+to\s+(?:admission|patient)|another\s+patient)\b",
+    re.I,
+)
+_INPATIENT_ONLY_RE = re.compile(
+    r"\b(?:readmission\s+risk|hospital\s+course|discharge\s+medication|"
+    r"inpatient\s+stay|inpatient\s+admission)\b",
+    re.I,
+)
 
 #: Anything that makes "monitoring" a documented fact rather than a guess.
 _MONITORING_CUES = re.compile(
@@ -835,4 +857,208 @@ def suggest(
         chips = _fit(_candidates(state=_view(state, replayed=True), scope=scope,
                                  question=question, outpatient=outpatient),
                      asked=asks, scope=scope, taken=chips)
+    return chips
+
+
+def build_signal_packet(
+    *,
+    question: str,
+    answer: str,
+    state: dict[str, Any],
+    outpatient: bool,
+    asked: Sequence[str] = (),
+    admission_context: str = "",
+) -> str:
+    """Assemble a grounded, in-memory signal packet for readmission-risk follow-up synthesis.
+
+    Reads only evidence already present on the turn (`tool_calls`, `replayed_tool_calls`,
+    `command_payload`, and `admission_context`). Synthetic `get_lab_trends` payloads are
+    included ONLY when the turn itself ran `/labs` so `/ehr` and chart threads stay
+    strictly anchored to real EHR passages, the manifest, and scored risk drivers.
+    """
+    lines: list[str] = [
+        f"encounter: {'outpatient' if outpatient else 'inpatient'}",
+        f"command: {state.get('command') or 'free_text'}",
+    ]
+    manifest = str(admission_context or state.get("admission_context") or "").strip()
+    if manifest:
+        lines.extend(["", "PATIENT_MANIFEST:", manifest[:1500]])
+
+    risk = _risk(state)
+    if risk and not outpatient:
+        prob = str(risk.get("probability_display") or "").strip()
+        thresh = str(risk.get("threshold_display") or "").strip()
+        decision = str(risk.get("decision") or "").strip()
+        lines.extend(["", f"READMISSION_RISK: {prob} (threshold {thresh}, {decision})"])
+        for factor in (risk.get("top_factors") or [])[:6]:
+            if not isinstance(factor, dict):
+                continue
+            feat = humanize(str(factor.get("feature") or "").strip())
+            direction = str(factor.get("direction") or "").strip()
+            val = factor.get("value")
+            if feat:
+                detail = f"{feat} ({direction}" + (f", value={val})" if val is not None and str(val) != "" else ")")
+                lines.append(f"- {detail}")
+
+    meds = _medication_rows(state)
+    if meds:
+        lines.extend(["", "VERIFIED_MEDICATIONS: " + ", ".join(meds[:20])])
+
+    if state.get("command") == "labs":
+        labs = _labs(state)
+        if labs:
+            lines.extend(["", "LAB_TRENDS:"])
+            for trend in labs[:10]:
+                label = str(trend.get("label") or "").strip()
+                val = _formatted_value(trend)
+                unit = str(trend.get("unit") or "").strip()
+                exc = _excursion(trend)
+                crit = _has_critical_flag(trend)
+                status = "critical" if crit else ("abnormal" if exc > 0 else "normal")
+                if label:
+                    lines.append(f"- {label}: discharge={val} {unit} ({status})".strip())
+
+    passages = _passages(state)
+    if passages:
+        lines.extend(["", "RETRIEVED_NOTE_SECTIONS:"])
+        budget = 7500
+        seen_sections: set[tuple[str, str]] = set()
+        for psg in passages:
+            sec = str(psg.get("section") or "note").strip()
+            body = " ".join(str(psg.get("text") or "").split())
+            if not body:
+                continue
+            key = (sec, body[:120])
+            if key in seen_sections:
+                continue
+            seen_sections.add(key)
+            snippet = body[:1500]
+            if len(snippet) > budget:
+                break
+            lines.append(f"[{sec}] {snippet}")
+            budget -= len(snippet)
+
+    asked_clean: list[str] = []
+    seen_fp: set[str] = set()
+    for item in (*asked, question):
+        text = " ".join(str(item or "").split())
+        fp = _fingerprint(text)
+        if text and fp not in seen_fp:
+            seen_fp.add(fp)
+            asked_clean.append(text)
+    if asked_clean:
+        lines.extend(["", "ALREADY_ASKED:"])
+        lines.extend(f"- {item}" for item in asked_clean)
+
+    ans_excerpt = " ".join(str(answer or "").split())[:1200]
+    if ans_excerpt:
+        lines.extend(["", "CURRENT_ANSWER_EXCERPT:", ans_excerpt])
+
+    return "\n".join(lines)
+
+
+def parse_proposed_questions(raw: str) -> list[str]:
+    """Extract ordered, distinct-domain follow-up questions from a JSON reply."""
+    stripped = str(raw or "").strip()
+    if not stripped:
+        return []
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```[a-zA-Z]*\s*", "", stripped)
+        stripped = re.sub(r"\s*```$", "", stripped)
+    try:
+        parsed = json.loads(stripped)
+    except ValueError:
+        start, end = stripped.find("{"), stripped.rfind("}")
+        if start == -1 or end <= start:
+            return []
+        try:
+            parsed = json.loads(stripped[start:end + 1])
+        except ValueError:
+            return []
+    if not isinstance(parsed, dict):
+        return []
+    items = parsed.get("follow_ups")
+    if not isinstance(items, list):
+        return []
+    questions: list[str] = []
+    seen_domains: set[str] = set()
+    for entry in items:
+        if isinstance(entry, dict):
+            domain = str(entry.get("domain") or "").strip().lower()
+            text = " ".join(str(entry.get("question") or "").split())
+            if domain and domain in seen_domains:
+                continue
+            if domain:
+                seen_domains.add(domain)
+        elif isinstance(entry, str):
+            text = " ".join(entry.split())
+        else:
+            continue
+        if text:
+            questions.append(text)
+    return questions
+
+
+def _passes_safety_gates(chip: str, *, outpatient: bool) -> bool:
+    """Reject empty, oversized, PII/switch-probing, or outpatient-invalid follow-ups."""
+    text = str(chip or "").strip()
+    if not text or len(text) > _MAX_QUESTION_CHARS:
+        return False
+    if _DISALLOWED_PII_OR_SWITCH_RE.search(text):
+        return False
+    if outpatient and _INPATIENT_ONLY_RE.search(text):
+        return False
+    return True
+
+
+async def suggest_async(
+    question: str,
+    answer: str,
+    *,
+    model: str | None = None,
+    scope: str | None = None,
+    state: dict[str, Any] | None = None,
+    outpatient: bool = False,
+    asked: Sequence[str] = (),
+    literature: bool = False,
+    admission_context: str = "",
+    proposer: Callable[[str], Awaitable[str]] | None = None,
+) -> list[str]:
+    """Hybrid follow-up selector: grounded LLM synthesis + deterministic gates & fallback."""
+    if not str(answer or "").strip() or not state:
+        return []
+    on_literature = literature or scope == "literature"
+    if on_literature or (outpatient and not _chart_text(state)):
+        return suggest(
+            question, answer, model=model, scope=scope, state=state,
+            outpatient=outpatient, asked=asked, literature=literature,
+        )
+
+    asks = {_fingerprint(item) for item in (*asked, question) if str(item or "").strip()}
+    chips: list[str] = []
+    if proposer is not None:
+        packet = build_signal_packet(
+            question=question,
+            answer=answer,
+            state=state,
+            outpatient=outpatient,
+            asked=asked,
+            admission_context=admission_context,
+        )
+        try:
+            raw = await proposer(packet)
+            proposed = [
+                cand for cand in parse_proposed_questions(raw)
+                if _passes_safety_gates(cand, outpatient=outpatient)
+            ]
+            chips = _fit(proposed, asked=asks, scope=scope, taken=[], literature=False)
+        except Exception as exc:  # noqa: BLE001 — fall back deterministically
+            logger.warning("hybrid follow-up proposer failed; falling back: %s", exc)
+
+    if len(chips) < FOLLOW_UP_COUNT:
+        fallback = suggest(
+            question, answer, model=model, scope=scope, state=state,
+            outpatient=outpatient, asked=asked, literature=False,
+        )
+        chips = _fit(fallback, asked=asks, scope=scope, taken=chips, literature=False)
     return chips

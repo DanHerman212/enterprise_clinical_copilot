@@ -23,7 +23,7 @@ name they replace.
 import asyncio
 import logging
 
-from langchain_core.messages import AIMessage, AIMessageChunk
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage
 
 from services.agent.engine import gateway
 from services.agent.postprocess import answer
@@ -276,6 +276,39 @@ async def streamed_turn(llm, messages, on_event, *, immediate: bool = False) -> 
             emit(on_event, stages.answer_delta_event(piece))
 
     return turn
+
+
+async def propose_followups(
+    system_prompt: str,
+    signal_packet: str,
+    *,
+    model: str,
+    timeout: float = 12.0,
+) -> str:
+    """Propose readmission-risk follow-up questions as a bounded JSON helper call.
+
+    Runs on `EFFORT_EXTRACTION` + `CALL_PROFILE_LOW` with `json_mode=True` and returns
+    `""` on any timeout or provider error so a turn is never delayed past its bound.
+    """
+    try:
+        llm = gateway.chat_model(
+            model,
+            safety_profile=gateway.SAFETY_EXTRACTION,
+            effort=gateway.EFFORT_EXTRACTION,
+            call_profile_name=gateway.CALL_PROFILE_LOW,
+        )
+        bound = gateway.bind(llm, {"json_mode": True, "max_output_tokens": 1024})
+        reply = await asyncio.wait_for(
+            bound.ainvoke([
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=signal_packet),
+            ]),
+            timeout=timeout,
+        )
+        return text_of(getattr(reply, "content", None))
+    except Exception as exc:  # noqa: BLE001 — non-blocking helper; deterministic fallback covers empty
+        logger.warning("propose_followups failed cleanly: %s", exc)
+        return ""
 
 
 # ===========================================================================

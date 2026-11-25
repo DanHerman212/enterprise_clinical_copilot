@@ -38,6 +38,7 @@ def test_every_roster_model_has_a_rate():
     ("muse-spark-1.3", "muse-spark-1.3"),
     ("gemini-3.1-pro-preview", "gemini-3.1-pro"),
     ("gemini-3.1-pro", "gemini-3.1-pro"),
+    ("gemini-4-hydrogen", "gemini-4-hydrogen"),
     ("  GEMINI-3.8-FLASH  ", "gemini-3.8-flash"),
 ])
 def test_a_served_alias_prices_as_its_canonical_id(alias, canonical):
@@ -59,6 +60,7 @@ def test_the_published_rate_table_is_what_the_code_says():
     """The six rows a report prints, transcribed once and asserted once."""
     expected = {
         "gemini-3.8-flash": (0.75, 0.075, 0.0, 3.75),
+        "gemini-4-hydrogen": (1.50, 0.075, 0.0, 7.50),
         "gemini-3.1-pro": (2.00, 0.20, 0.0, 12.00),
         "muse-spark-1.3": (1.25, 0.15, 0.0, 4.25),
         "claude-sonnet-5-5": (2.00, 0.20, 2.50, 10.00),

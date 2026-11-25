@@ -33,7 +33,8 @@ def test_the_default_profile_is_the_baseline_and_not_the_retired_pin():
 def test_the_retired_pin_is_gone_from_the_registry():
     assert "gemini-3.1-flash-lite" not in gateway.PROFILES
     assert set(gateway.PROFILES) == {
-        "gemini-3.8-flash", "gemini-3.1-pro", "claude-sonnet-5-5", "muse-spark-1.3",
+        "gemini-3.8-flash", "gemini-4-hydrogen", "gemini-3.1-pro",
+        "claude-sonnet-5-5", "muse-spark-1.3",
     }
 
 

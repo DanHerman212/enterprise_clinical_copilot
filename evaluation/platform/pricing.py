@@ -74,6 +74,10 @@ _BASELINE = Rate("gemini-3.8-flash", "active baseline",
                  input=0.75, cached_read=0.075, cache_write=0.0, output=3.75)
 _register(_BASELINE)
 
+_HYDROGEN = Rate("gemini-4-hydrogen", "candidate",
+                 input=1.50, cached_read=0.075, cache_write=0.0, output=7.50)
+_register(_HYDROGEN)
+
 _PRO = Rate("gemini-3.1-pro", "candidate",
             input=2.00, cached_read=0.20, cache_write=0.0, output=12.00)
 _register(_PRO, "gemini-3.1-pro-preview")
@@ -98,6 +102,7 @@ _register(_LEGACY_JUDGE)
 #: table in a report does not reorder itself when an alias is added.
 ROSTER: tuple[str, ...] = (
     "gemini-3.8-flash",
+    "gemini-4-hydrogen",
     "gemini-3.1-pro",
     "muse-spark-1.3",
     "claude-sonnet-5-5",

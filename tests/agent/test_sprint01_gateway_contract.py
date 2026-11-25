@@ -32,13 +32,14 @@ REPO = Path(__file__).resolve().parents[2]
 
 PIN = "gemini-3.8-flash"
 FLASH_CANDIDATE = "gemini-3.8-flash"
+HYDROGEN_CANDIDATE = "gemini-4-hydrogen"
 PRO_CANDIDATE = "gemini-3.1-pro"
 CLAUDE = "claude-sonnet-5-5"
 MUSE = "muse-spark-1.3"
 
-#: The four ids the programme can serve as of Sprint 04b. `gemini-3.1-flash-lite` was
+#: The five ids the programme can serve. `gemini-3.1-flash-lite` was
 #: retired on 2026-11-13 and is deliberately absent from the registry, so it is not here.
-ALL_FIVE = (PIN, PRO_CANDIDATE, CLAUDE, MUSE)
+ALL_FIVE = (PIN, HYDROGEN_CANDIDATE, PRO_CANDIDATE, CLAUDE, MUSE)
 
 
 def _turn(text="", **metadata):
@@ -60,6 +61,7 @@ def test_a_canonical_id_and_its_wire_id_are_both_recorded():
     # answered, or ask for a model that does not exist.
     assert gateway.profile(PRO_CANDIDATE).wire_model == "gemini-3.1-pro-preview"
     assert gateway.profile(PRO_CANDIDATE).name == PRO_CANDIDATE
+    assert gateway.wire_model_name(HYDROGEN_CANDIDATE) == HYDROGEN_CANDIDATE
     assert gateway.wire_model_name(PIN) == PIN
 
 
@@ -112,7 +114,7 @@ def test_a_candidate_that_rejects_minimal_gets_the_lowest_level_it_accepts():
     # `gemini-3.8-flash` and `gemini-3.1-pro-preview` answer a `minimal` level with an API
     # validation error. The registry is where that difference is held, so no call site has
     # to know which model it is talking to.
-    for name in (FLASH_CANDIDATE, PRO_CANDIDATE):
+    for name in (FLASH_CANDIDATE, HYDROGEN_CANDIDATE, PRO_CANDIDATE):
         profile = gateway.profile(name)
         assert gateway.call_parameters(profile, gateway.EFFORT_EXTRACTION) == {
             "thinking_level": "low",

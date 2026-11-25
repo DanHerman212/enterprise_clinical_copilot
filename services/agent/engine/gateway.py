@@ -332,7 +332,7 @@ def _build_registry(google_location: str, anthropic_location: str,
     # the one profile whose per-call level was `minimal`, and it is deliberately absent from
     # this table, so asking for it raises the unknown-model error below rather than being
     # served by a profile that no longer has a maintenance window.
-    for name in ("gemini-3.8-flash", "gemini-3.1-pro"):
+    for name in ("gemini-3.8-flash", "gemini-4-hydrogen", "gemini-3.1-pro"):
         construction, per_call = _google_thinking(
             served_effort, extraction_effort, call="low")
         add(ModelProfile(

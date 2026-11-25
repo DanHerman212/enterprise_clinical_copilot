@@ -30,7 +30,7 @@ corpus:
     notes_table_ref: "trim-icon-498815-a0.readmission.hybrid_notes"
     split_table_ref: "trim-icon-498815-a0.readmission.hybrid_split"
     split_name: "test"
-    # 87 MTSamples notes -> 582 section chunks (deterministic, recomputed
+    # 87 MTSamples notes -> 595 section chunks (deterministic, recomputed
     # locally with the same chunk_note(pack_to=700) path the pipeline runs:
     # scripts/agent/count_hybrid_chunks.py). Two notes were removed as
     # inclusion violations on 2026-10-08, which took this from 454.
@@ -42,7 +42,15 @@ corpus:
     # (major_procedure, complications, consults, assessment_and_plan,
     # followup_instructions, chief_complaint, allergies, review_of_systems,
     # admission_diagnosis).
-    expected_vectors: 582
+    #
+    # 582 -> 595 on 2026-11-24, with the six sections the partition had been
+    # silently omitting: past_surgical_history (5 chunks across the 87 notes),
+    # medications_on_transfer (1), indications (1), infections (2), pathology (2)
+    # and transfusions (2). The count is not the point — `past_surgical_history`
+    # is where 90000103's 1995 CABG and 1996 transplant are written, and no
+    # free-text question could retrieve them because there was no chunk to rank
+    # (`dev_d5_free_01` turn 1).
+    expected_vectors: 595
     shard_size: "SHARD_SIZE_SMALL"
     deploy_machine_type: "e2-standard-2"
 

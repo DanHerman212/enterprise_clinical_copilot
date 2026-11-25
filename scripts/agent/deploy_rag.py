@@ -42,6 +42,7 @@ from google.cloud.aiplatform_v1 import (
 )
 from google.api_core.exceptions import (
     DeadlineExceeded,
+    FailedPrecondition,
     InternalServerError,
     ServiceUnavailable,
     TooManyRequests,
@@ -66,6 +67,15 @@ from _deploy_guard import assert_synthetic_scale  # noqa: E402
 
 PARENT = f"projects/{PROJECT}/locations/{LOCATION}"
 STAGING_ID = "rag_tree_ah_staging"
+
+#: How long the endpoint may keep an undeployed id reserved before this gives up.
+#:
+#: `undeploy_index` returns as soon as the deployment starts coming down, and Vertex keeps
+#: the id unclaimed-able for a while afterwards — "There exists a DeployedIndex with same ID
+#: … either in failed state or being undeployed". On 2026-11-24 that window was longer than
+#: a minute and the promotion asked for the id far too early. Thirty minutes is generous on
+#: purpose: the alternative to waiting is an endpoint serving nothing under the live id.
+RELEASE_WAIT_SECONDS = 1800
 
 
 def _client() -> IndexEndpointServiceClient:
@@ -114,12 +124,36 @@ def _deploy(c: IndexEndpointServiceClient, ep_name: str, index_name: str,
         ),
     )
     print(f"deploying {deployed_id} -> {index_name.split('/')[-1]} ({machine})…")
-    op = _retrying(lambda: c.deploy_index(index_endpoint=ep_name, deployed_index=di),
-                   f"deploy {deployed_id}")
+    # A promotion asks for the id the outgoing deployment held, so the request can arrive
+    # while the endpoint is still releasing it. That refusal is a `FailedPrecondition` the
+    # caller cannot act on and must simply outlast; anything else is an answer.
+    deadline = time.time() + RELEASE_WAIT_SECONDS
+    while True:
+        try:
+            op = _retrying(
+                lambda: c.deploy_index(index_endpoint=ep_name, deployed_index=di),
+                f"deploy {deployed_id}")
+            break
+        except FailedPrecondition as exc:
+            if time.time() >= deadline:
+                raise SystemExit(
+                    f"deploy {deployed_id} was still refused after "
+                    f"{RELEASE_WAIT_SECONDS}s: {exc}")
+            print(f"  {deployed_id} is still being released by the endpoint; "
+                  f"retrying in 30s")
+            time.sleep(30)
+    _wait(op, f"deploy {deployed_id}")
+
+
+def _wait(op, what: str, timeout_s: float = 3600.0) -> None:
+    """Block until an operation finishes, and raise if it finished badly."""
+    deadline = time.time() + timeout_s
     while not op.done():
+        if time.time() > deadline:
+            raise SystemExit(f"{what} did not finish within {timeout_s:.0f}s")
         time.sleep(5)
     if op.exception() is not None:
-        raise SystemExit(f"deploy failed: {op.exception()}")
+        raise SystemExit(f"{what} failed: {op.exception()}")
 
 
 # Transient and retryable: the API says "try again", and a deploy that gives up
@@ -143,10 +177,32 @@ def _retrying(call, what: str, attempts: int = 3, pause: int = 15):
 
 
 def _undeploy(c: IndexEndpointServiceClient, ep_name: str, deployed_id: str) -> None:
+    """Undeploy, and do not return until the id is actually free again.
+
+    This used to fire the delete and move on: `undeploy_index` returns an operation, the
+    operation was never waited on, and the caller went straight to deploying the new index
+    under the same id. Vertex refuses that — "There exists a DeployedIndex with same ID …
+    either in failed state or being undeployed" — so a promotion took the live index down and
+    then failed to put the new one up. On 2026-11-24 the endpoint was left with no
+    `rag_tree_ah` at all and every `rag_search` call failed, while the new index sat there
+    under the staging id doing nothing.
+
+    Both halves of the wait are needed: the operation completing, and the endpoint's own list
+    no longer naming the id, because the reservation outlives the operation.
+    """
     print(f"undeploying {deployed_id}…")
-    _retrying(lambda: c.undeploy_index(index_endpoint=ep_name,
-                                       deployed_index_id=deployed_id),
-              f"undeploy {deployed_id}")
+    op = _retrying(lambda: c.undeploy_index(index_endpoint=ep_name,
+                                            deployed_index_id=deployed_id),
+                   f"undeploy {deployed_id}")
+    _wait(op, f"undeploy {deployed_id}")
+    deadline = time.time() + RELEASE_WAIT_SECONDS
+    while deployed_id in _deployed(c, ep_name):
+        if time.time() > deadline:
+            raise SystemExit(
+                f"{deployed_id} is still listed on {ep_name} "
+                f"{RELEASE_WAIT_SECONDS}s after its undeploy completed")
+        time.sleep(5)
+    print(f"{deployed_id} released")
 
 
 def _deployed(c: IndexEndpointServiceClient, ep_name: str) -> dict[str, str]:

@@ -58,11 +58,18 @@ DEFAULT_PACK_TO = 700
 # carry a `major_procedure` section the index could not return, and 10 carry an
 # `assessment_and_plan` (measured 2026-11-03).
 #
-# `pertinent_results` stays out. It is a line-per-analyte block whose embedding buys
-# nothing the structured lab tool does not answer better.
+# Six more joined on 2026-11-24, and the reason is the same one all over again: the parser
+# names 38 headings, this tuple carried 22, and the 10 the excluded list did not account for
+# were simply forgotten. The cost was measured on 90000103, whose 1995 CABG and 1996
+# transplant are written only under `past_surgical_history`: a free-text question about the
+# patient's surgical history could not retrieve them at any `top_k`, because there was no
+# chunk to rank, and the answer said the record documented no other operations
+# (`dev_d5_free_01` turn 1). `PARTITION` below is the guard that stops a heading falling
+# through again.
 INDEX_SECTIONS = (
     "history_of_present_illness",
     "past_medical_history",
+    "past_surgical_history",
     "family_history",
     "social_history",
     "review_of_systems",
@@ -71,7 +78,11 @@ INDEX_SECTIONS = (
     "physical_exam",
     "brief_hospital_course",
     "major_procedure",
+    "indications",
     "complications",
+    "infections",
+    "transfusions",
+    "pathology",
     "consults",
     "assessment_and_plan",
     "discharge_condition",
@@ -79,10 +90,33 @@ INDEX_SECTIONS = (
     "discharge_diagnosis",
     "discharge_medications",
     "medications_on_admission",
+    "medications_on_transfer",
     "discharge_disposition",
     "discharge_instructions",
     "followup_instructions",
     "discharge_summary",
+)
+
+#: The headings a note can carry that are deliberately NOT indexed, each for a stated
+#: reason. Named as a set rather than left implicit, because an implicit exclusion is what
+#: the six sections above fell into: `INDEX_SECTIONS` simply never listed them and nothing
+#: said whether that was a decision or an oversight.
+EXCLUDED_SECTIONS = (
+    # Administrative identifiers and dates. Embedding them buys nothing a lookup answers
+    # exactly, and a name chunk is a patient identifier in a vector index.
+    "name",
+    "unit_no",
+    "date_of_birth",
+    "sex",
+    "admission_date",
+    "discharge_date",
+    "attending",
+    "service",
+    "facility",
+    # A line-per-analyte block. The structured laboratory tool answers every question this
+    # could, with reference intervals and flags, and a chunk per lab line is the most
+    # expensive text in the note.
+    "pertinent_results",
 )
 
 _unknown = set(INDEX_SECTIONS) - set(KNOWN_HEADINGS)
@@ -92,6 +126,25 @@ if _unknown:  # a typo here would silently index nothing for that section
         f"{sorted(_unknown)}"
     )
 del _unknown
+
+#: Every parsed heading is in exactly one of the two sets. Checked at import, because the
+#: failure it prevents is silent in both directions: a heading in neither list is a section
+#: the index cannot return and no test was asking about (the six added on 2026-11-24), and a
+#: heading in both is a contradiction about whether it should be embedded.
+_overlap = set(INDEX_SECTIONS) & set(EXCLUDED_SECTIONS)
+if _overlap:
+    raise ValueError(
+        f"sections both indexed and excluded: {sorted(_overlap)}"
+    )
+del _overlap
+
+_unclassified = set(KNOWN_HEADINGS) - set(INDEX_SECTIONS) - set(EXCLUDED_SECTIONS)
+if _unclassified:
+    raise ValueError(
+        "rag.sections.KNOWN_HEADINGS parses these headings but neither INDEX_SECTIONS nor "
+        f"EXCLUDED_SECTIONS lists them: {sorted(_unclassified)}"
+    )
+del _unclassified
 
 # SUMMARY_SECTIONS lives in `sections.py` now, with the rest of the vocabulary. This
 # module is the chunker, and the agent's image ships the vocabulary but not the

@@ -358,6 +358,40 @@ def test_index_sections_are_canonical_section_names():
     assert set(INDEX_SECTIONS) <= set(KNOWN_HEADINGS)
 
 
+def test_every_parsed_heading_is_indexed_or_explicitly_excluded():
+    """The partition has to be complete, and this is the test that says so.
+
+    `INDEX_SECTIONS` is a hand-written tuple and `parse_note` names 38 headings. Until
+    2026-11-24 the tuple carried 22 and nothing accounted for the other 16: ten were
+    excluded by intent and six by oversight, and the six were invisible because no list
+    said they were absent. The cost was a question about a patient's surgical history that
+    could not retrieve the section holding it (`dev_d5_free_01` turn 1).
+
+    Asserted as three properties, because a partition can fail in three ways: a heading in
+    neither list (the oversight), a heading in both (a contradiction about embedding it),
+    and a member that is not a heading at all (a typo, which indexes nothing).
+    """
+    from services.mcp.retrieval import chunking
+    from services.mcp.retrieval.sections import KNOWN_HEADINGS
+
+    indexed = set(INDEX_SECTIONS)
+    excluded = set(chunking.EXCLUDED_SECTIONS)
+    known = set(KNOWN_HEADINGS)
+
+    assert not indexed & excluded, f"both indexed and excluded: {sorted(indexed & excluded)}"
+    assert not (indexed | excluded) - known, (
+        f"not parsed headings at all: {sorted((indexed | excluded) - known)}")
+    assert indexed | excluded == known, (
+        f"headings in neither list: {sorted(known - indexed - excluded)}")
+
+
+def test_the_six_sections_the_index_used_to_omit_are_indexed():
+    """Named individually so a later edit has to disagree with this line on purpose."""
+    for section in ("past_surgical_history", "medications_on_transfer", "indications",
+                    "infections", "pathology", "transfusions"):
+        assert section in INDEX_SECTIONS, section
+
+
 def test_chunks_are_frozen_and_typed():
     chunk = chunk_note(NOTE)[0]
     assert isinstance(chunk, Chunk)

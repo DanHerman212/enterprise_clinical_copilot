@@ -44,12 +44,14 @@ prose and the widget cannot describe one factor two ways.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import contextvars
 import json
 import logging
 import random
 import re
 from dataclasses import dataclass, field, replace
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
@@ -104,6 +106,53 @@ logger = logging.getLogger(__name__)
 #: and every later turn that quoted them (2026-11-24). A chart-only `/ehr` is a complete
 #: answer, so the budget degrades rather than retrying.
 COMPARATOR_BUDGET_S = 30.0
+
+#: Request-scoped hook allowing the root turn layer (`turn.py`) to propose
+#: readmission-risk follow-up questions concurrently once initial chart retrieval
+#: finishes, without importing `postprocess.followups` inside `engine/`.
+_PREFLIGHT_FOLLOWUPS: contextvars.ContextVar[
+    Callable[[dict[str, Any]], Awaitable[str]] | None
+] = contextvars.ContextVar("preflight_followups", default=None)
+
+
+@contextlib.contextmanager
+def with_followup_proposer(
+    proposer: Callable[[dict[str, Any]], Awaitable[str]] | None,
+):
+    """Bind a request-scoped concurrent follow-up proposer for the duration of a turn."""
+    token = _PREFLIGHT_FOLLOWUPS.set(proposer)
+    try:
+        yield
+    finally:
+        _PREFLIGHT_FOLLOWUPS.reset(token)
+
+
+def _deterministic_fallback_literature_prose(
+    articles: list[dict[str, Any]] | None,
+) -> str:
+    """Format fallback PubMed articles into cited prose when no 30-day cohort verified."""
+    citations_out: list[str] = []
+    for article in articles or []:
+        if not isinstance(article, dict):
+            continue
+        pmid = str(article.get("pmid") or "").strip()
+        title = " ".join(str(article.get("title") or "").split()).rstrip(".")
+        if not pmid or not title:
+            continue
+        journal = " ".join(str(article.get("journal") or "").split())
+        year = " ".join(str(article.get("pub_date") or "").split())
+        meta = ", ".join(part for part in (journal, year) if part)
+        venue = f" ({meta})" if meta else ""
+        citations_out.append(f"{title}{venue} ^[PMID: {pmid}]")
+        if len(citations_out) >= MAX_FALLBACK_LITERATURE:
+            break
+    if not citations_out:
+        return ""
+    if len(citations_out) == 1:
+        joined = citations_out[0]
+    else:
+        joined = " and ".join(citations_out)
+    return f"Related published literature retrieved for this condition includes {joined}."
 
 
 # A medication line's dose, as it appears in note text: a number followed by a
@@ -1682,32 +1731,21 @@ async def run_command(
     # held two positions and the merged payload held one, so the marker named the first
     # passage while the model had extracted from both.
 
-    # The published cohorts this admission's estimate is compared against, retrieved live
-    # and recorded as tool calls like every other piece of evidence this turn rests on.
-    command_extras: dict[str, Any] = {}
-    if command.wire == "summarize" and not outpatient_record:
-        # The benchmark step is four model calls and a network search on top of the
-        # retrieval the turn already did, and it is the only part of `/ehr` whose length
-        # is not bounded by anything this service controls. On `dev_d5_slash_01` turn 1
-        # the whole turn passed the request ceiling and answered `[HTTP 504] timeout`,
-        # losing the briefing, the estimate that turn would have scored, and the thread's
-        # later risk sentence with it (2026-11-24).
-        #
-        # A budget rather than a retry: the comparison is the part of the briefing a
-        # reader can live without, and a chart-only `/ehr` is a complete answer. The
-        # outcome says so — `extraction_degraded` is the word the surface already uses for
-        # a benchmark that did not complete, so nothing downstream needs a new case.
+    async def _run_comparators_bounded() -> tuple[
+        list[dict], dict | None, list[RecordedToolCall], list[dict], str, list[dict]
+    ]:
         try:
-            (comparators, target_payload, literature_recorded, passes, outcome,
-             fallback_literature) = await asyncio.wait_for(
+            return await asyncio.wait_for(
                 _readmission_comparators(
-                    toolbox, model, recorded, on_event, extraction_llm=extraction_llm,
+                    toolbox, model, list(recorded), None,
+                    extraction_llm=extraction_llm,
                     evidence_state=evidence_state,
                     admission_context=admission_context,
                     # The turn's tracing callbacks, so the target and comparator
                     # extractions are generations in the trace rather than gaps between
                     # stage events.
-                    callbacks=callbacks),
+                    callbacks=callbacks,
+                ),
                 timeout=COMPARATOR_BUDGET_S,
             )
         except asyncio.TimeoutError:
@@ -1715,75 +1753,24 @@ async def run_command(
                 "comparator step exceeded its %.0fs budget; serving chart-only /ehr",
                 COMPARATOR_BUDGET_S,
             )
-            (comparators, target_payload, literature_recorded, passes, outcome,
-             fallback_literature) = (
-                [], None, [], [], routing.OUTCOME_EXTRACTION_DEGRADED, [])
-        recorded += literature_recorded
-        command_extras["comparators"] = comparators
-        command_extras["clinical_target"] = target_payload
-        command_extras["comparator_passes"] = passes
-        # The studies this turn retrieved and could not reduce to a 30-day rate. Read by
-        # the formatter (so the risk section can say what they report), by the guardrail
-        # (so their PMIDs survive `enforce_citations`) and by the composer (so they reach
-        # the reader's pills and references drawer). One array, three readers.
-        command_extras["fallback_literature"] = fallback_literature
-        # What the benchmark step came to, as a word rather than as a length. `[]` rows is
-        # a real answer and the surface has to know WHICH real answer: the orchestrator
-        # turns this into the one bit `presentation` is given, so the table can say the
-        # abstracts offered no cohort when that is what happened, and that the extraction
-        # did not complete when that is what happened.
-        command_extras["comparator_outcome"] = outcome
+            return [], None, [], [], routing.OUTCOME_EXTRACTION_DEGRADED, []
 
-    # Every result this turn produced goes to the formatting turn, supplementary calls
-    # included.
-    #
-    # This reverses the withholding that stood here earlier the same day, and the reason
-    # is what the withholding actually bought. It did not stop the model writing about
-    # risk; it stopped the model *explaining* risk. The reader got a chart summary and a
-    # score side by side with nothing joining them — two artifacts stacked, which is what
-    # a reader notices first. What replaces it is a division of labour rather than a
-    # shared number: the widget owns the quantitative score and the driver bars, and the
-    # narrative's fourth section owns how those drivers relate to this patient's course.
-    # `routing.OUTPATIENT_EHR_NOTICE` is the sentence served for an outpatient record
-    # with no readable content; it lives in `postprocess.answer` now (`00d7` Row 4).
-    # records the rule, so the three cannot drift apart quietly.
-    _emit(on_event, stages.reviewing_event())
+    async def _run_preflight_followups(
+        proposer: Callable[[dict[str, Any]], Awaitable[str]],
+        snapshot: dict[str, Any],
+    ) -> str:
+        try:
+            return str(await proposer(snapshot) or "").strip()
+        except Exception as exc:  # noqa: BLE001 — non-blocking concurrent helper
+            logger.warning("preflight follow-up synthesis failed: %s", exc)
+            return ""
 
-    if not command.prose:
-        # No formatting turn, and therefore no LLM call at all: this command's answer
-        # IS its surface. Everything downstream — the guardrails, the citation layer,
-        # the envelope composer — reads the same state shape it always did, so the
-        # command stays subject to the same checks as any other; the difference is
-        # that there is no prose for them to inspect.
-        return {
-            "messages": [
-                SystemMessage(content=SYSTEM_PROMPT),
-                HumanMessage(content=question),
-                *tool_messages,
-            ],
-            "tool_calls": recorded,
-            "replayed_tool_calls": replayed_calls or [],
-            "command": command.wire,
-            # Empty, and declared as such: `_compose_success` treats an empty answer
-            # as a failed turn unless the state says the surface carries it.
-            "deterministic_answer": "",
-            "answer_in_surface": True,
-            **{"hadm_id": hadm_id, "evidence_state": _session_evidence(),
-               "replay_positions": replay_positions},
-            **command_extras,
-        }
-
-    # The manifest, for the one command whose prose is graded against it. `/ehr` is the
-    # briefing: it states where the patient went and on what regimen, and both of those are
-    # administrative facts the block holds and the notes only sometimes state. Rendered
-    # here rather than passed in pre-rendered so that the block and the free-text path's
-    # block are one function's output — the outpatient notice included.
+    command_extras: dict[str, Any] = {}
     context_block = (
         _context_block(admission_context, hadm_id)
         if command.wire == "summarize" and not outpatient_record
         else ""
     )
-
     llm = _formatting_client(command, model)  # no bind_tools: cannot call anything
     config = {"callbacks": list(callbacks)} if callbacks else {}
     if trace_metadata:
@@ -1797,89 +1784,118 @@ async def run_command(
     def _announce(piece: str) -> None:
         _emit(on_event, stages.answer_delta_event(piece))
 
-    # Two prose sources, and the turn streams for one of them.
-    #
-    # `/meds`'s model reply is the extraction JSON — announcing it would put
-    # `{"medications": …}` on a clinician's screen — so its answer is the narrative
-    # written in code from verified rows and this turn is not asked to stream.
-    #
-    # `/ehr` and `/pubmed` are the other way round: the model's reply IS the answer, so
-    # the turn streams and each chunk is announced on arrival.
-    #
-    # Which instruction the turn receives is decided BEFORE it runs, and for `/meds` that
-    # decision is the record's: a dedicated medication section is asked for the regimen to
-    # continue at home, a fallback narrative is asked what those sections name. Asking the
-    # discharge question of a record with no discharge list discarded most of the evidence
-    # and left the narrative counting what survived (2026-11-04).
     sections = _medication_sections(recorded)
-    instruction = formatting_for(command.wire)
-    if command.wire == "meds":
-        instruction = meds_formatting_for(sections)
-    elif command.wire == "summarize":
-        # `/ehr` carries one of three mutually exclusive comparison instructions. Sending the
-        # whole set described blocks the turn had not retrieved — a paragraph about a
-        # `<retrieved_readmission_literature>` block on a turn holding none is an invitation
-        # to write about evidence that is not there (2026-11-24).
-        #
-        # And it carries a discharge-plan heading only when a section that exists to state
-        # one came back. The decision is the retrieval's, not the model's, for the reason
-        # `_DISCHARGE_PLAN_SECTIONS` records.
+
+    if command.wire == "summarize" and not outpatient_record and command.prose:
+        # Sections 1–3 only need the chart passages + manifest already retrieved above,
+        # while PubMed cohort comparators and follow-up question synthesis run in
+        # parallel without blocking first-token streaming. Passing `on_event=None` to
+        # `_readmission_comparators` avoids emitting background `tool` frames that
+        # would race with live `answer_delta` streaming.
         command_extras["has_discharge_section"] = _has_discharge_section(recorded)
+        _emit(on_event, stages.reviewing_event())
         instruction = prompts.ehr_formatting_for(
-            comparators=bool(command_extras.get("comparators")),
-            literature=bool(command_extras.get("fallback_literature")),
+            comparators=False,
+            literature=False,
             has_discharge_section=command_extras["has_discharge_section"],
         )
-    elif command.wire == "labs":
-        # A panel with abnormal readings and no critical one says so, because a reader
-        # looking at three flagged rows has to be told whether any of them was critical and
-        # the panel cannot say it by omission (`dev_d5_fup_02` turn 3, 2026-11-24).
-        instruction = prompts.labs_formatting_for(
-            abnormal=_panel_has_abnormal(recorded),
-            critical=_panel_has_critical(recorded),
-        )
-    response = await _formatting_turn(
-        llm,
-        [
+        format_messages = [
             SystemMessage(content=f"{FORMATTER_PREAMBLE}\n\n{instruction}"),
             HumanMessage(content=_formatter_input(
                 tool_messages, outpatient, question,
-                command_extras.get("comparators"),
-                # Only `/ehr` is shown the manifest. The command whose prose is graded
-                # against the block is the one that has to read it, and giving `/meds`
-                # or `/labs` an administrative header they have no use for is evidence
-                # in the window that no sentence may rest on.
+                None,
                 context_block=context_block,
-                # What the thread held before this command ran, so a follow-up command
-                # can answer from evidence an earlier turn retrieved instead of reporting
-                # the record as undocumented.
-                #
-                # Never for a literature turn. `/pubmed` binds no chart tool
-                # (`Command(wire="literature")`), and the block is the only route by which
-                # this thread's risk estimate and note passages reach that formatting
-                # call. Given them, a literature summary compared this patient against the
-                # cohorts it had just retrieved, read the previous turn's drivers back as
-                # its own, and addressed a male patient as "her" (`v2_d3_slash_01`,
-                # 2026-11-21). A literature turn answers from the records it retrieved and
-                # from nothing else.
-                session_block=(prior_session_block
-                               if command.wire != "literature" else ""),
-                # The model's own estimate for this admission, so the comparison's
-                # DIRECTION is computed here rather than inferred by the prose. A section
-                # that states two figures and the wrong word between them is the defect
-                # this argument closes.
+                session_block=prior_session_block,
                 patient_estimate=_patient_estimate(recorded),
-                # And, when no cohort verified, the studies that were retrieved anyway.
-                fallback_literature=command_extras.get("fallback_literature"),
-                # `/labs` only: the count of flagged readings per analyte and the flag on
-                # its baseline, counted here rather than left to the prose.
-                lab_flags=(lab_flag_annotation(recorded)
-                           if command.wire == "labs" else ""),
+                fallback_literature=None,
+                lab_flags="",
             )),
-        ],
-        config=config,
-        announce=_announce if streams and command.prose_is_model_output else None,
-    )
+        ]
+        proposer = _PREFLIGHT_FOLLOWUPS.get()
+        format_task = asyncio.create_task(_formatting_turn(
+            llm,
+            format_messages,
+            config=config,
+            announce=_announce if streams and command.prose_is_model_output else None,
+        ))
+        comp_task = asyncio.create_task(_run_comparators_bounded())
+        followup_task: asyncio.Task[str] | None = None
+        if proposer is not None:
+            snapshot = {
+                "command": command.wire,
+                "tool_calls": list(recorded),
+                "replayed_tool_calls": list(replayed_calls or []),
+                "admission_context": admission_context,
+            }
+            followup_task = asyncio.create_task(_run_preflight_followups(proposer, snapshot))
+
+        try:
+            response = await format_task
+            (comparators, target_payload, literature_recorded, passes, outcome,
+             fallback_literature) = await comp_task
+            preflight_raw = await followup_task if followup_task is not None else ""
+        finally:
+            for pending in (format_task, comp_task, followup_task):
+                if pending is not None and not pending.done():
+                    pending.cancel()
+
+        recorded += literature_recorded
+        command_extras["comparators"] = comparators
+        command_extras["clinical_target"] = target_payload
+        command_extras["comparator_passes"] = passes
+        command_extras["fallback_literature"] = fallback_literature
+        command_extras["comparator_outcome"] = outcome
+        if preflight_raw:
+            command_extras["preflight_followups_raw"] = preflight_raw
+    else:
+        _emit(on_event, stages.reviewing_event())
+
+        if not command.prose:
+            # No formatting turn, and therefore no LLM call at all: this command's answer
+            # IS its surface. Everything downstream — the guardrails, the citation layer,
+            # the envelope composer — reads the same state shape it always did, so the
+            # command stays subject to the same checks as any other; the difference is
+            # that there is no prose for them to inspect.
+            return {
+                "messages": [
+                    SystemMessage(content=SYSTEM_PROMPT),
+                    HumanMessage(content=question),
+                    *tool_messages,
+                ],
+                "tool_calls": recorded,
+                "replayed_tool_calls": replayed_calls or [],
+                "command": command.wire,
+                # Empty, and declared as such: `_compose_success` treats an empty answer
+                # as a failed turn unless the state says the surface carries it.
+                "deterministic_answer": "",
+                "answer_in_surface": True,
+                **{"hadm_id": hadm_id, "evidence_state": _session_evidence(),
+                   "replay_positions": replay_positions},
+                **command_extras,
+            }
+
+        instruction = formatting_for(command.wire)
+        if command.wire == "meds":
+            instruction = meds_formatting_for(sections)
+        response = await _formatting_turn(
+            llm,
+            [
+                SystemMessage(content=f"{FORMATTER_PREAMBLE}\n\n{instruction}"),
+                HumanMessage(content=_formatter_input(
+                    tool_messages, outpatient, question,
+                    command_extras.get("comparators"),
+                    context_block=context_block,
+                    session_block=(prior_session_block
+                                   if command.wire != "literature" else ""),
+                    patient_estimate=_patient_estimate(recorded),
+                    fallback_literature=command_extras.get("fallback_literature"),
+                    lab_flags=(lab_flag_annotation(recorded)
+                               if command.wire == "labs" else ""),
+                )),
+            ],
+            config=config,
+            announce=_announce if streams and command.prose_is_model_output else None,
+        )
     text = response.text() if hasattr(response, "text") else str(response.content)
 
     # `/labs` publishes no citations, so it carries no markers (2026-11-03). Its evidence
@@ -1902,11 +1918,12 @@ async def run_command(
     # deterministically in Python from the structured prediction + verified comparator
     # payloads so scores, SHAP drivers, comparison directions, and PMID badges never rely
     # on LLM transcription. When fallback literature was retrieved (no verified 30-day
-    # cohort), the LLM's 1-2 sentence abstract takeaway is preserved after Python's
-    # deterministic score/drivers/benchmark-absence lead-in.
+    # cohort), deterministic cited prose is generated from the ranked abstracts so
+    # Sections 1–3 never have to block on literature extraction.
     if command.wire == "summarize" and str(text).strip():
         fallback_body = (
             answer_text.extract_readmission_body(text)
+            or _deterministic_fallback_literature_prose(command_extras.get("fallback_literature"))
             if command_extras.get("fallback_literature") and not command_extras.get("comparators")
             else ""
         )

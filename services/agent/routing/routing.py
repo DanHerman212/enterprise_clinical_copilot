@@ -152,18 +152,18 @@ class Command:
     #: narrative, written in code from verified rows — and buffered `/ehr` on the
     #: grounds that its `^[n]` markers are resolved after the turn has finished.
     #: `/labs` carries no citations and streams its trajectory summary directly.
-    #: `/ehr` and `/pubmed` buffer prose until citation/guardrail settlement and
-    #: deterministic Section 4 attachment so the client never renders a provisional
-    #: draft only to evaporate and swap it after settlement.
+    #: `/ehr` streams Sections 1–3 as they are written while comparators and follow-ups
+    #: run concurrently, and the client preserves the draft across `verify` until
+    #: `settle()` cross-fades the settled surface (and deterministic Section 4) in place.
     streams_prose: bool = False
 
     #: Whether the announced prose is the formatting turn's own output.
     #:
     #: This is about what there is to announce, not whether to announce. `/meds`'s model
     #: reply is the extraction JSON, so its prose is written in code and this is False.
-    #: `/labs` writes citation-free prose directly so its `prose_is_model_output` is
-    #: True; `/ehr` and `/pubmed` buffer until settled (`streams_prose=False`), so they
-    #: invoke the model once rather than streaming provisional deltas.
+    #: `/ehr`, `/pubmed`, and `/labs` summarize retrieved material directly, so the
+    #: formatting turn's reply IS the answer and this is True — allowing immediate
+    #: chunk-by-chunk streaming (`streams_prose=True`).
     prose_is_model_output: bool = False
 
     @property
@@ -235,11 +235,11 @@ COMMANDS: tuple[Command, ...] = (
         # tool `/pubmed` uses. Every other command's tool is still refused here.
         forbidden=frozenset({"rag_search", "discharge_medications",
                              "get_lab_trends"}) | PREFLIGHT_TOOLS,
-        # Buffer `/ehr` until citation/guardrail settlement and deterministic Section 4
-        # attachment complete, so the client receives live progress stages and reveals
-        # the single settled response once without a provisional-draft swap.
-        streams_prose=False,
-        prose_is_model_output=False,
+        # Stream `/ehr` Sections 1–3 as they are written while comparators and follow-ups
+        # execute concurrently; deterministic Section 4 and citation markers cross-fade in
+        # smoothly on settlement without clearing the streamed draft across `verify`.
+        streams_prose=True,
+        prose_is_model_output=True,
     ),
     Command(
         wire="literature",
@@ -269,10 +269,10 @@ COMMANDS: tuple[Command, ...] = (
         forbidden=frozenset({"rag_search", "rag_search_sections",
                              "discharge_medications", "get_lab_trends",
                              "predict_readmission"}) | PREFLIGHT_TOOLS,
-        # Buffer `/pubmed` until `^[PMID: ...]` markers settle after the turn so the
-        # client renders one settled response without a provisional-draft swap.
-        streams_prose=False,
-        prose_is_model_output=False,
+        # Stream `/pubmed` synthesis as it is written; `^[PMID: ...]` markers resolve on
+        # settlement while the client preserves the draft across `verify`.
+        streams_prose=True,
+        prose_is_model_output=True,
     ),
 )
 

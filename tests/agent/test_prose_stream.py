@@ -120,20 +120,19 @@ def test_the_streaming_set_is_exactly_the_commands_that_asked_for_it():
     """Written as a set rather than as flags read off each entry, so a command
     added later has to decide and this fails until it does.
 
-    Only `/meds` (code-composed narrative) and `/labs` (citation-free trajectory prose)
-    stream provisional deltas; `/ehr` and `/pubmed` buffer until citation settlement
-    and guardrail checks complete so the client renders a single settled answer without
-    evaporating and swapping a draft. `/risk` is retired.
+    Four commands stream: `/meds` (code-composed narrative), `/labs` (citation-free
+    trajectory prose), and `/ehr` + `/pubmed` (model prose whose client keeps the
+    streamed draft across `verify` until `settle()` cross-fades the settled surface).
     """
     assert {c.wire for c in routing.COMMANDS if c.streams_prose} == {
-        "meds", "labs",
+        "meds", "summarize", "literature", "labs",
     }
 
 
 def test_the_two_prose_sources_are_declared_per_command():
     """`streams_prose` says there is prose to announce; `prose_is_model_output`
-    says whose prose it is. `/meds` announces code output, `/labs` streams its own
-    citation-free prose, and `/ehr` / `/pubmed` buffer until settled."""
+    says whose prose it is. `/meds` announces code output and `/ehr`, `/pubmed`,
+    `/labs` announce the model's own reply."""
     meds = routing.command_for("meds")
     labs = routing.command_for("labs")
     ehr = routing.command_for("summarize")
@@ -143,10 +142,10 @@ def test_the_two_prose_sources_are_declared_per_command():
     assert meds.prose_is_model_output is False
     assert labs.streams_prose is True
     assert labs.prose_is_model_output is True
-    assert ehr.streams_prose is False
-    assert ehr.prose_is_model_output is False
-    assert pubmed.streams_prose is False
-    assert pubmed.prose_is_model_output is False
+    assert ehr.streams_prose is True
+    assert ehr.prose_is_model_output is True
+    assert pubmed.streams_prose is True
+    assert pubmed.prose_is_model_output is True
 
 
 def test_no_command_is_a_widget_only_turn_any_more():
@@ -204,20 +203,20 @@ def test_nothing_is_announced_unless_the_caller_asks():
     assert model.used == ["ainvoke"]
 
 
-def test_the_summary_is_buffered_until_settled():
-    """`/ehr` buffers its model reply until citation settlement and Section 4 attachment."""
+def test_the_summary_streams_its_own_model_prose():
+    """`/ehr` streams Sections 1–3 as the model writes them while Section 4 attaches after."""
     _, model, deltas = _run("summarize", prose_stream=True, payload=SECTIONS)
 
-    assert deltas == []
-    assert model.used == ["ainvoke"]
+    assert "".join(d["text"] for d in deltas) == "".join(RISK_PIECES)
+    assert model.used == ["astream"]
 
 
-def test_the_literature_synthesis_is_buffered_until_settled():
-    """`/pubmed` buffers its synthesis until `^[PMID: ...]` markers settle after the turn."""
+def test_the_literature_synthesis_streams_too():
+    """`/pubmed` streams its synthesis live while PMID markers settle on completion."""
     _, model, deltas = _run("literature", prose_stream=True, payload=SECTIONS)
 
-    assert deltas == []
-    assert model.used == ["ainvoke"]
+    assert "".join(d["text"] for d in deltas) == "".join(RISK_PIECES)
+    assert model.used == ["astream"]
 
 
 # --- the swap, decided here ----------------------------------------------------

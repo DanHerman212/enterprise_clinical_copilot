@@ -29,6 +29,7 @@ from services.agent.routing import encounter
 from services.agent.telemetry import observability as chain
 from services.agent.postprocess import followups
 from services.agent.postprocess import citations
+from services.agent.engine import deterministic
 from services.agent.engine import model as model_turn
 from services.agent.engine import prompts
 from services.agent.telemetry import observability
@@ -536,6 +537,11 @@ async def compose_success(
     # Only when the caller asked for it. The two derived fields below the payload are
     # free and always present, so the shape of a payload does not depend on this flag —
     # only whether the list has anything in it.
+    preflight_raw = str(state.get("preflight_followups_raw") or "").strip()
+    async def _preflight_proposer(_packet: str) -> str:
+        return preflight_raw
+    followup_proposer = _preflight_proposer if preflight_raw else _propose_followups
+
     follow_ups = (
         await followups.suggest_async(
             question,
@@ -553,7 +559,7 @@ async def compose_success(
             # just clicked is consumed rather than offered back.
             asked=asked,
             admission_context=str(state.get("admission_context") or ""),
-            proposer=_propose_followups,
+            proposer=followup_proposer,
         )
         if want_follow_ups
         else []
@@ -888,7 +894,31 @@ async def run_chain(
                 # the call it always was, which is what keeps hydration an
                 # addition rather than a required new dependency of every turn.
                 options["admission_context"] = context
-            state = await ask(box, parsed["question"], **options)
+
+            preflight_proposer = None
+            if parsed.get("follow_ups") is True and parsed.get("kind") == "summarize":
+                asked_qs = [
+                    str(item.get("question") or "")
+                    for item in (parsed.get("turns") or [])
+                    if isinstance(item, dict) and str(item.get("question") or "").strip()
+                ]
+                is_outpatient = encounter.current_is_outpatient() is True
+
+                async def _preflight_followups(snapshot: dict) -> str:
+                    packet = followups.build_signal_packet(
+                        question=parsed["question"],
+                        answer="",
+                        state=snapshot,
+                        outpatient=is_outpatient,
+                        asked=asked_qs,
+                        admission_context=context or "",
+                    )
+                    return await _propose_followups(packet)
+
+                preflight_proposer = _preflight_followups
+
+            with deterministic.with_followup_proposer(preflight_proposer):
+                state = await ask(box, parsed["question"], **options)
             # The manifest travels WITH the turn from here on. It is evidence the model
             # was shown and no tool returned, and the guardrails judge a disposition
             # against the evidence — so a state that does not carry it makes every

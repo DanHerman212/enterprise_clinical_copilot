@@ -110,7 +110,7 @@ def test_render_readmission_section_fallback_literature_prepends_notice():
     assert "^[PMID: 12345678]" in rendered
 
 
-def test_ehr_run_command_attaches_deterministic_risk_section_without_provisional_stream():
+def test_ehr_run_command_streams_sections_and_attaches_deterministic_risk_section():
     class _FakeToolbox:
         async def call(self, name, args):
             if name == "rag_search_sections":
@@ -181,7 +181,11 @@ def test_ehr_run_command_attaches_deterministic_risk_section_without_provisional
     assert "**Readmission risk & trajectory.**" in text
     assert "9.0%, which falls below the decision threshold of 11.0%." in text
     assert "^[PMID: 39165878]" in text
-    assert [ev for ev in events if ev.get("stage") == "answer_delta"] == []
+    streamed = "".join(
+        ev.get("text", "") for ev in events if ev.get("stage") == "answer_delta"
+    )
+    assert "Presentation & diagnosis" in streamed
+    assert "^[PMID:" not in streamed
 
     graph._settle(state, prose=text)
     assert state.get("citations_settled") is True
@@ -231,3 +235,96 @@ def test_ehr_prompt_diet_and_expanded_sections():
     for sec in ("past_medical_history", "past_surgical_history", "allergies",
                 "physical_exam", "pertinent_results"):
         assert sec in text
+
+
+def test_deterministic_fallback_literature_prose_formats_cited_records():
+    rendered = deterministic._deterministic_fallback_literature_prose([
+        {
+            "pmid": "12345678",
+            "title": "Readmission after total knee arthroplasty.",
+            "journal": "J Arthroplasty",
+            "pub_date": "2024",
+        },
+        {
+            "pmid": "87654321",
+            "title": "Post-discharge anticoagulation monitoring",
+            "journal": "",
+            "pub_date": "2023",
+        },
+    ])
+    assert "Readmission after total knee arthroplasty (J Arthroplasty, 2024) ^[PMID: 12345678]" in rendered
+    assert "Post-discharge anticoagulation monitoring (2023) ^[PMID: 87654321]" in rendered
+    assert deterministic._deterministic_fallback_literature_prose([]) == ""
+
+
+def test_ehr_runs_formatting_comparators_and_followups_concurrently():
+    class _FakeToolbox:
+        async def call(self, name, args):
+            if name == "rag_search_sections":
+                return {
+                    "hadm_id": 90000015,
+                    "returned": 1,
+                    "passages": [
+                        {"id": "n1", "section": "history_of_present_illness",
+                         "text": "61-year-old female admitted after right total knee replacement."},
+                    ],
+                }
+            if name == "predict_readmission":
+                return _prediction(0.09, 0.11)
+            return {}
+
+    from langchain_core.messages import AIMessageChunk
+
+    started = {"format": False, "comp": False, "followup": False}
+    both_entered = asyncio.Event()
+    all_entered = asyncio.Event()
+
+    def _maybe_set():
+        if started["format"] and started["comp"] and started["followup"]:
+            all_entered.set()
+        if started["format"] and started["comp"]:
+            both_entered.set()
+
+    class _ConcurrentLLM:
+        async def astream(self, messages, **kwargs):
+            started["format"] = True
+            _maybe_set()
+            await asyncio.wait_for(all_entered.wait(), timeout=2.0)
+            yield AIMessageChunk(
+                content="**Presentation & diagnosis.** Admitted after right TKA ^[1]."
+            )
+
+        async def ainvoke(self, messages, **kwargs):
+            return AIMessage(content="**Presentation & diagnosis.** Admitted after right TKA ^[1].")
+
+    async def _concurrent_comparators(*args, **kwargs):
+        started["comp"] = True
+        _maybe_set()
+        await asyncio.wait_for(all_entered.wait(), timeout=2.0)
+        return [], None, [], [], "no_cohorts", []
+
+    async def _concurrent_followup(snapshot):
+        assert snapshot["command"] == "summarize"
+        assert len(snapshot["tool_calls"]) == 2
+        started["followup"] = True
+        _maybe_set()
+        await asyncio.wait_for(all_entered.wait(), timeout=2.0)
+        return '{"follow_ups": [{"domain": "medications", "question": "What anticoagulation monitoring is planned?"}]}'
+
+    events: list[dict] = []
+    from services.agent.engine import model as model_gateway
+    from services.agent.routing import routing
+
+    cmd = routing.command_for("summarize")
+    with patch.object(deterministic, "_readmission_comparators", _concurrent_comparators), \
+         patch.object(model_gateway, "build_llm", lambda *a, **kw: _ConcurrentLLM()), \
+         deterministic.with_followup_proposer(_concurrent_followup):
+        state = asyncio.run(deterministic.run_command(
+            _FakeToolbox(), cmd, 90000015,
+            question="/ehr", model="test",
+            on_event=events.append, prose_stream=True,
+        ))
+
+    assert all_entered.is_set()
+    assert "What anticoagulation monitoring is planned?" in state.get("preflight_followups_raw", "")
+    assert "**Readmission risk & trajectory.**" in graph.final_text(state)

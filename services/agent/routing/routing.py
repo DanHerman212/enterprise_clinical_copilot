@@ -151,24 +151,19 @@ class Command:
     #: granted this only where the text was pre-validated by construction — `/meds`'s
     #: narrative, written in code from verified rows — and buffered `/ehr` on the
     #: grounds that its `^[n]` markers are resolved after the turn has finished.
-    #:
-    #: UX Phase 4 grants it to the model-prose commands as well. What carries the risk
-    #: is no longer withholding the text, it is the swap protocol: a caller may be shown
-    #: prose the guardrails then correct, and that correction is reported as it happens
-    #: instead of prevented (`http._prose_settled`, and the swap the client performs
-    #: when the terminal frame says the settled answer differs). The Phase 2 wording is
-    #: kept above rather than deleted because the risk it names has not gone away — it is
-    #: paid differently now, and the cost is a clinician reading a number the system then
-    #: withdraws.
+    #: `/labs` carries no citations and streams its trajectory summary directly.
+    #: `/ehr` and `/pubmed` buffer prose until citation/guardrail settlement and
+    #: deterministic Section 4 attachment so the client never renders a provisional
+    #: draft only to evaporate and swap it after settlement.
     streams_prose: bool = False
 
     #: Whether the announced prose is the formatting turn's own output.
     #:
     #: This is about what there is to announce, not whether to announce. `/meds`'s model
     #: reply is the extraction JSON, so its prose is written in code and this is False.
-    #: `/ehr` and `/pubmed` summarize retrieved material, where the model's reply IS the
-    #: answer and this is True — so the formatting turn streams, and it is asked to stream
-    #: only when this says the reply is what the caller wants to read.
+    #: `/labs` writes citation-free prose directly so its `prose_is_model_output` is
+    #: True; `/ehr` and `/pubmed` buffer until settled (`streams_prose=False`), so they
+    #: invoke the model once rather than streaming provisional deltas.
     prose_is_model_output: bool = False
 
     @property
@@ -240,11 +235,11 @@ COMMANDS: tuple[Command, ...] = (
         # tool `/pubmed` uses. Every other command's tool is still refused here.
         forbidden=frozenset({"rag_search", "discharge_medications",
                              "get_lab_trends"}) | PREFLIGHT_TOOLS,
-        # The model's cited summary is the answer, so it is announced as it is written.
-        # Its markers are resolved after the turn, so what a caller watches arrive is
-        # provisional until the citation layer has finished with it.
-        streams_prose=True,
-        prose_is_model_output=True,
+        # Buffer `/ehr` until citation/guardrail settlement and deterministic Section 4
+        # attachment complete, so the client receives live progress stages and reveals
+        # the single settled response once without a provisional-draft swap.
+        streams_prose=False,
+        prose_is_model_output=False,
     ),
     Command(
         wire="literature",
@@ -274,10 +269,10 @@ COMMANDS: tuple[Command, ...] = (
         forbidden=frozenset({"rag_search", "rag_search_sections",
                              "discharge_medications", "get_lab_trends",
                              "predict_readmission"}) | PREFLIGHT_TOOLS,
-        # The synthesis is the answer, and it cites PMIDs the citation layer resolves
-        # after the turn: same swap protocol as `/ehr`.
-        streams_prose=True,
-        prose_is_model_output=True,
+        # Buffer `/pubmed` until `^[PMID: ...]` markers settle after the turn so the
+        # client renders one settled response without a provisional-draft swap.
+        streams_prose=False,
+        prose_is_model_output=False,
     ),
 )
 

@@ -283,7 +283,7 @@ async def propose_followups(
     signal_packet: str,
     *,
     model: str,
-    timeout: float = 12.0,
+    timeout: float = 20.0,
 ) -> str:
     """Propose readmission-risk follow-up questions as a bounded JSON helper call.
 
@@ -297,7 +297,7 @@ async def propose_followups(
             effort=gateway.EFFORT_EXTRACTION,
             call_profile_name=gateway.CALL_PROFILE_LOW,
         )
-        bound = gateway.bind(llm, {"json_mode": True, "max_output_tokens": 1024})
+        bound = gateway.bind(llm, {"json_mode": True, "max_output_tokens": 4096})
         reply = await asyncio.wait_for(
             bound.ainvoke([
                 SystemMessage(content=system_prompt),

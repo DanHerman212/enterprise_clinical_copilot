@@ -110,7 +110,7 @@ def test_render_readmission_section_fallback_literature_prepends_notice():
     assert "^[PMID: 12345678]" in rendered
 
 
-def test_ehr_run_command_attaches_deterministic_risk_section_and_announces_stream():
+def test_ehr_run_command_attaches_deterministic_risk_section_without_provisional_stream():
     class _FakeToolbox:
         async def call(self, name, args):
             if name == "rag_search_sections":
@@ -181,7 +181,7 @@ def test_ehr_run_command_attaches_deterministic_risk_section_and_announces_strea
     assert "**Readmission risk & trajectory.**" in text
     assert "9.0%, which falls below the decision threshold of 11.0%." in text
     assert "^[PMID: 39165878]" in text
-    assert any("**Readmission risk & trajectory.**" in ev.get("text", "") for ev in events)
+    assert [ev for ev in events if ev.get("stage") == "answer_delta"] == []
 
     graph._settle(state, prose=text)
     assert state.get("citations_settled") is True

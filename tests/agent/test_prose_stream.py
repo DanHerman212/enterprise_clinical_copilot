@@ -120,29 +120,33 @@ def test_the_streaming_set_is_exactly_the_commands_that_asked_for_it():
     """Written as a set rather than as flags read off each entry, so a command
     added later has to decide and this fails until it does.
 
-    Four now, and the two model-prose commands are the Phase 4 change: they were
-    buffered while withholding the text was what carried the risk. `/risk` is still
-    absent, having no prose at all (UX ruling 2026-10-13). `/labs` joined in Phase 4B
-    and is model prose: the description of a course is written, and the card draws the
-    values it describes.
+    Only `/meds` (code-composed narrative) and `/labs` (citation-free trajectory prose)
+    stream provisional deltas; `/ehr` and `/pubmed` buffer until citation settlement
+    and guardrail checks complete so the client renders a single settled answer without
+    evaporating and swapping a draft. `/risk` is retired.
     """
     assert {c.wire for c in routing.COMMANDS if c.streams_prose} == {
-        "meds", "summarize", "literature", "labs",
+        "meds", "labs",
     }
 
 
 def test_the_two_prose_sources_are_declared_per_command():
     """`streams_prose` says there is prose to announce; `prose_is_model_output`
-    says whose prose it is. `/meds` announces code output and `/ehr` announces the
-    model's own reply, and the second flag is what keeps the extraction JSON off a
-    clinician's screen."""
+    says whose prose it is. `/meds` announces code output, `/labs` streams its own
+    citation-free prose, and `/ehr` / `/pubmed` buffer until settled."""
     meds = routing.command_for("meds")
+    labs = routing.command_for("labs")
     ehr = routing.command_for("summarize")
+    pubmed = routing.command_for("literature")
 
     assert meds.streams_prose is True
     assert meds.prose_is_model_output is False
-    assert ehr.streams_prose is True
-    assert ehr.prose_is_model_output is True
+    assert labs.streams_prose is True
+    assert labs.prose_is_model_output is True
+    assert ehr.streams_prose is False
+    assert ehr.prose_is_model_output is False
+    assert pubmed.streams_prose is False
+    assert pubmed.prose_is_model_output is False
 
 
 def test_no_command_is_a_widget_only_turn_any_more():
@@ -200,29 +204,20 @@ def test_nothing_is_announced_unless_the_caller_asks():
     assert model.used == ["ainvoke"]
 
 
-def test_the_summary_streams_its_own_model_prose():
-    """`/ehr`'s model reply IS the answer, so it is announced as it is written.
-
-    This is the Phase 4 reversal. Under the Phase 2 policy this test asserted the
-    opposite — that `/ehr` was buffered because its markers are resolved after the
-    turn — and the risk it named is still real: what a caller watches arrive carries
-    citations that are unresolved until the citation layer has run, and the settled
-    answer may differ. What changed is where that is handled: not by withholding the
-    text, but by the swap the terminal frame drives when the two disagree.
-    """
+def test_the_summary_is_buffered_until_settled():
+    """`/ehr` buffers its model reply until citation settlement and Section 4 attachment."""
     _, model, deltas = _run("summarize", prose_stream=True, payload=SECTIONS)
 
-    assert "".join(d["text"] for d in deltas) == "".join(RISK_PIECES)
-    assert model.used == ["astream"]
+    assert deltas == []
+    assert model.used == ["ainvoke"]
 
 
-def test_the_literature_synthesis_streams_too():
-    """`/pubmed` is the same case as `/ehr`: the synthesis is the answer, and the
-    PMIDs it cites are resolved after the turn."""
+def test_the_literature_synthesis_is_buffered_until_settled():
+    """`/pubmed` buffers its synthesis until `^[PMID: ...]` markers settle after the turn."""
     _, model, deltas = _run("literature", prose_stream=True, payload=SECTIONS)
 
-    assert "".join(d["text"] for d in deltas) == "".join(RISK_PIECES)
-    assert model.used == ["astream"]
+    assert deltas == []
+    assert model.used == ["ainvoke"]
 
 
 # --- the swap, decided here ----------------------------------------------------

@@ -1917,11 +1917,8 @@ async def run_command(
             fallback_literature_prose=fallback_body,
         )
         if risk_section:
-            had_model_risk = bool(answer_text.extract_readmission_body(text))
             text = answer_text.attach_readmission_section(text, risk_section)
             response = _with_response_text(response, text)
-            if streams and command.prose_is_model_output and not had_model_risk:
-                _announce(f"\n\n{risk_section}")
 
     state: dict[str, Any] = {
         "messages": [

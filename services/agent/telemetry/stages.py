@@ -181,9 +181,12 @@ def planning_event(kind: str | None = None) -> dict[str, Any]:
     return {"stage": STAGE_PLANNING, "label": planning_label(kind)}
 
 
-def reviewing_event() -> dict[str, Any]:
+def reviewing_event(cite_labels: dict[str, str] | None = None) -> dict[str, Any]:
     """A later model turn: tool evidence has come back and is being read."""
-    return {"stage": STAGE_REVIEWING, "label": LABEL_REVIEWING}
+    event: dict[str, Any] = {"stage": STAGE_REVIEWING, "label": LABEL_REVIEWING}
+    if cite_labels:
+        event["cite_labels"] = dict(cite_labels)
+    return event
 
 
 def tool_event(name: str) -> dict[str, Any]:

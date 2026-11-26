@@ -186,6 +186,10 @@ def test_ehr_run_command_streams_sections_and_attaches_deterministic_risk_sectio
     )
     assert "Presentation & diagnosis" in streamed
     assert "^[PMID:" not in streamed
+    reviewing = [ev for ev in events if ev.get("stage") == "reviewing"]
+    assert reviewing
+    assert reviewing[-1]["cite_labels"]["1"] == "History of Present Illness"
+    assert reviewing[-1]["cite_labels"]["2"] == "Discharge Diagnosis"
 
     graph._settle(state, prose=text)
     assert state.get("citations_settled") is True

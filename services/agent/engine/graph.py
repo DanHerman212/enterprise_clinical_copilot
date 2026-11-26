@@ -97,6 +97,7 @@ from services.agent.engine.model import (
     has_tool_call as _has_tool_call,  # noqa: F401 — re-exported; used in
     streamed_turn as _streamed_turn,  #    `model_runtime.streamed_turn`.
 )
+from shared.labels import cite_labels_from
 from services.agent.telemetry.stages import emit as _emit
 from services.agent.postprocess import answer as answer_text
 from services.agent.postprocess import citations
@@ -1232,7 +1233,11 @@ def build_graph(
         )
         _emit(
             on_event,
-            stages.reviewing_event()
+            stages.reviewing_event(
+                cite_labels=cite_labels_from(
+                    state.get("evidence_state"), state.get("tool_calls"),
+                ),
+            )
             if seen_a_model_turn
             else stages.planning_event(question_kind),
         )

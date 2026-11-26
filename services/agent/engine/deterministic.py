@@ -62,7 +62,7 @@ from services.agent.telemetry import stages
 from services.agent.postprocess import citations
 from services.agent.postprocess import answer as answer_text
 from services.agent.postprocess import evidence_state as session_evidence
-from shared.labels import humanize
+from shared.labels import cite_labels_from, humanize
 from services.agent.engine.model import text_of
 from services.agent.engine import gateway
 from services.agent.engine import model as model_gateway
@@ -1793,7 +1793,9 @@ async def run_command(
         # `_readmission_comparators` avoids emitting background `tool` frames that
         # would race with live `answer_delta` streaming.
         command_extras["has_discharge_section"] = _has_discharge_section(recorded)
-        _emit(on_event, stages.reviewing_event())
+        _emit(on_event, stages.reviewing_event(
+            cite_labels=cite_labels_from(evidence_state, recorded),
+        ))
         instruction = prompts.ehr_formatting_for(
             comparators=False,
             literature=False,
@@ -1848,7 +1850,9 @@ async def run_command(
         if preflight_raw:
             command_extras["preflight_followups_raw"] = preflight_raw
     else:
-        _emit(on_event, stages.reviewing_event())
+        _emit(on_event, stages.reviewing_event(
+            cite_labels=cite_labels_from(evidence_state, recorded),
+        ))
 
         if not command.prose:
             # No formatting turn, and therefore no LLM call at all: this command's answer

@@ -683,10 +683,10 @@ def test_suggest_async_filters_unsafe_chips_and_backfills_deterministically():
     async def bad_and_good_proposer(_packet: str) -> str:
         return (
             '{"follow_ups": ['
-            '{"domain": "lit", "question": "What do published studies say about warfarin?"},'
-            '{"domain": "pii", "question": "What is his full legal name and date of birth?"},'
-            '{"domain": "risk_driver_bridge", "question": "Already asked question?"},'
-            '{"domain": "care_transition", "question": "Which clinic is managing his INR monitoring after discharge?"}'
+            '{"domain": "lit", "evidence_quote": "Follow up with anticoagulation clinic in 1 week.", "question": "What do published studies say about warfarin?"},'
+            '{"domain": "pii", "evidence_quote": "Follow up with anticoagulation clinic in 1 week.", "question": "What is his full legal name and date of birth?"},'
+            '{"domain": "risk_driver_bridge", "evidence_quote": "Follow up with anticoagulation clinic in 1 week.", "question": "Already asked question?"},'
+            '{"domain": "care_transition", "evidence_quote": "Follow up with anticoagulation clinic in 1 week.", "question": "Which clinic is managing his INR monitoring after discharge?"}'
             ']}'
         )
 
@@ -714,8 +714,8 @@ def test_suggest_async_outpatient_blocks_inpatient_framing_and_falls_back_on_err
     async def failing_or_leaky_proposer(_packet: str) -> str:
         return (
             '{"follow_ups": ['
-            '{"domain": "risk_driver_bridge", "question": "What drove her 30-day readmission risk score?"},'
-            '{"domain": "care_transition", "question": "What functional gait goals were noted at this visit?"}'
+            '{"domain": "risk_driver_bridge", "evidence_quote": "Outpatient physical therapy progress note; gait training continues.", "question": "What drove her 30-day readmission risk score?"},'
+            '{"domain": "care_transition", "evidence_quote": "Outpatient physical therapy progress note; gait training continues.", "question": "What functional gait goals were noted at this visit?"}'
             ']}'
         )
 
@@ -741,3 +741,62 @@ def test_suggest_async_outpatient_blocks_inpatient_framing_and_falls_back_on_err
     ))
     assert len(fallback_chips) >= 1
     assert any("Coumadin" in c for c in fallback_chips)
+
+
+def test_suggest_async_drops_unverified_quotes_gap_fishing_and_shap_only_labs():
+    import asyncio
+
+    state = {
+        "command": "summarize",
+        "tool_calls": [
+            {
+                "name": "rag_search_sections",
+                "response": {
+                    "passages": [
+                        {
+                            "section": "discharge_medications",
+                            "text": "Coumadin 7 mg PO daily with INR checks Monday and Thursday.",
+                        },
+                        {
+                            "section": "discharge_instructions",
+                            "text": "Ambulate as tolerated with posterior hip precautions and follow up with Dr. Smith in 2 weeks.",
+                        },
+                    ]
+                },
+            },
+            {
+                "name": "predict_readmission",
+                "response": {
+                    "probability_display": "19.0%",
+                    "threshold_display": "11.0%",
+                    "decision": "above",
+                    "top_factors": [
+                        {"feature": "rdw_max", "direction": "increases", "value": 17.4},
+                        {"feature": "index_los_days", "direction": "increases", "value": 42.46},
+                    ],
+                },
+            },
+        ],
+    }
+
+    async def noisy_proposer(_packet: str) -> str:
+        return (
+            '{"follow_ups": ['
+            '{"domain": "risk_driver_bridge", "evidence_quote": "elevated RDW of 17.4 due to iron deficiency anemia", "question": "What anemia etiology explains his RDW?"},'
+            '{"domain": "procedural_red_flags", "evidence_quote": "Ambulate as tolerated with posterior hip precautions", "question": "Does the chart document return precautions for his hip?"},'
+            '{"domain": "unresolved_clinical_labs", "evidence_quote": "Coumadin 7 mg PO daily with INR checks Monday and Thursday.", "question": "What were the peak white blood cell count values post-operatively?"},'
+            '{"domain": "medication_safety", "evidence_quote": "Coumadin 7 mg PO daily with INR checks Monday and Thursday.", "question": "What INR monitoring schedule is specified for his discharge Coumadin?"}'
+            ']}'
+        )
+
+    chips = asyncio.run(followups.suggest_async(
+        "/ehr",
+        "Summary prose.",
+        state=state,
+        outpatient=False,
+        proposer=noisy_proposer,
+    ))
+    assert chips[0] == "What INR monitoring schedule is specified for his discharge Coumadin?"
+    assert not any("RDW" in c for c in chips)
+    assert not any("white blood cell" in c.lower() for c in chips)
+    assert not any(c.startswith("Does the chart") for c in chips)

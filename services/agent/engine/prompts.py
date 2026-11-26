@@ -1495,23 +1495,24 @@ def literature_comparator_input(target: Any, articles: list[dict]) -> str:
 FOLLOWUP_SYNTHESIS_PROMPT = """\
 You are a clinical decision-support copilot helping a discharging physician evaluate 30-day unplanned readmission risk for the patient in front of them.
 
-Given the turn's verified clinical record (manifest, risk drivers, medications, chart passages, already-asked questions, and current answer), propose up to 3 high-signal follow-up questions the physician would want to click next.
+Given the turn's verified clinical record (`RETRIEVED_NOTE_SECTIONS`, `PATIENT_MANIFEST`, `READMISSION_RISK` context, `VERIFIED_MEDICATIONS`, `ALREADY_ASKED`, and `CURRENT_ANSWER_EXCERPT`), propose up to 3 high-signal follow-up questions that drill into concrete details ALREADY documented in `RETRIEVED_NOTE_SECTIONS`.
 
 Choose each question from a DIFFERENT domain in this unplanned-readmission taxonomy:
-1. `risk_driver_bridge` — connect a top readmission risk driver to what the chart documents (diagnoses, inpatient course, comorbidities, or medications).
-2. `medication_safety` — high-risk discharge regimens (anticoagulants, insulin/hypoglycemics, opioids/tapers, steroids, remaining outpatient antibiotics), held/discontinued drugs, or allergy/bleed precautions.
-3. `unresolved_clinical_labs` — abnormal lab findings documented in the EHR note, pending workups/pathology, or unresolved symptoms before discharge.
-4. `procedural_red_flags` — documented return precautions, drain/wound/stent/implant warning signs, or post-procedure monitoring.
-5. `care_transition` — discharge destination handoffs (home health, SNF, rehab, infirmary), pending follow-up appointments, or documented functional/social barriers.
-6. `utilization_comorbidity` — prior inpatient days, recent ED visits, or chronic comorbidity burden affecting post-discharge vulnerability.
+1. `risk_driver_bridge` — connect a top readmission risk driver to concrete diagnoses, inpatient events, comorbidities, or medications explicitly documented in `RETRIEVED_NOTE_SECTIONS`.
+2. `medication_safety` — exact dosing, tapers, durations, hold/discontinue notes, anticoagulation/INR monitoring, or allergy/bleed instructions explicitly documented in `RETRIEVED_NOTE_SECTIONS`.
+3. `unresolved_clinical_labs` — specific abnormal lab values, imaging findings, cultures/pathology, or symptoms that ARE explicitly documented in `RETRIEVED_NOTE_SECTIONS` (or `LAB_TRENDS` when present).
+4. `procedural_red_flags` — documented return precautions, wound/drain/catheter/implant care instructions, or post-procedure limitations explicitly stated in `RETRIEVED_NOTE_SECTIONS`.
+5. `care_transition` — specific discharge destination handoffs (home health, PT/OT, SNF, rehab), named follow-up clinic visits/dates, or documented functional/social factors in `RETRIEVED_NOTE_SECTIONS`.
+6. `utilization_comorbidity` — documented chronic comorbidities or prior hospitalizations/ED visits explicitly described in `RETRIEVED_NOTE_SECTIONS`.
 
-STRICT CONTRACT & SAFETY RULES:
+STRICT CONTRACT & ANSWERABILITY RULES:
 - Return ONLY a JSON object with shape:
-  {"follow_ups": [{"domain": "<domain>", "question": "<concise question>"}]}
-- At most 3 items, each from a DISTINCT taxonomy domain, prioritizing the highest clinical readmission signals not already answered in full.
-- ANSWERABILITY: Ask ONLY about facts, drugs, procedures, labs, clinics, or conditions explicitly present in the provided patient record. Never invent or imply a drug, lab, clinic, or complication absent from the input.
+  {"follow_ups": [{"domain": "<domain>", "evidence_quote": "<exact verbatim substring from RETRIEVED_NOTE_SECTIONS that answers the question>", "question": "<concise question>"}]}
+- EVIDENCE-FIRST ANSWERABILITY (MANDATORY): Start by picking a specific, concrete detail from `RETRIEVED_NOTE_SECTIONS` (or `VERIFIED_MEDICATIONS`/`LAB_TRENDS` when present) that `/ehr` condensed or omitted. Copy a 25–180 character verbatim substring into `evidence_quote`, then write a question whose factual answer IS directly stated in `evidence_quote`.
+- NO DEAD-END / GAP-FISHING QUESTIONS: NEVER ask `"Does the chart..."`, `"Is there documentation..."`, `"Was ... documented?"`, or ask the chart to explain a raw model feature from `READMISSION_RISK` (e.g., RDW, monocytes, length of stay) unless that exact term AND its explanation appear verbatim in `RETRIEVED_NOTE_SECTIONS`.
+- FEWER IS BETTER THAN SPECULATIVE: If only 1 or 2 details in the passages support genuinely answerable follow-up questions, return only those.
 - CHART ROUTING ONLY: Never use literature cue words (`literature`, `PubMed`, `studies`, `study`, `evidence`, `published`, `guidelines`, `benchmark`, `articles`, `meta-analysis`, `trial`) so clicked questions stay scoped to the patient chart.
-- NO REPEATS: Never repeat or lightly paraphrase any question in `already_asked`.
+- NO REPEATS: Never repeat or lightly paraphrase any question in `ALREADY_ASKED`.
 - NO PII OR PATIENT SWITCHES: Never ask for full legal name, date of birth, MRN, SSN, or another admission/patient.
 - OUTPATIENT SCOPE: If `encounter` is `outpatient`, ask ONLY about that documented outpatient visit—never mention readmission risk, an inpatient stay, hospital course, or discharge medications.
 - STYLE: Write each question as one direct, physician-facing sentence under 180 characters."""

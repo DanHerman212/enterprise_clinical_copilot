@@ -51,7 +51,7 @@ from typing import Any
 from services.agent.postprocess.citations import literature_calls
 from services.agent.routing import routing
 from shared import labels
-from shared.labels import driver_question, humanize
+from shared.labels import analytes_named, driver_question, humanize
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +136,33 @@ _INPATIENT_ONLY_RE = re.compile(
     r"inpatient\s+stay|inpatient\s+admission)\b",
     re.I,
 )
+_GAP_FISHING_RE = re.compile(
+    r"(?:^\s*(?:does|do|did)\s+(?:the\s+)?(?:chart|record|note|notes|discharge\s+(?:summary|note))\b|"
+    r"^\s*(?:is|are|was|were)\s+(?:there\s+)?(?:any\s+)?(?:documentation|explanation|mention|evidence|details?)\b|"
+    r"\bexplain(?:s|ing)?\s+(?:the\s+)?(?:elevated|prolonged|low|high|abnormal)\b)",
+    re.I,
+)
+_UNGND_LAB_CUE_RE = re.compile(
+    r"\b(?:rdw|red\s+cell\s+distribution\s+width|monocytes?|rbc|red\s+blood\s+cells?|"
+    r"hemoglobin|hgb|sodium|wbc|white\s+blood\s+cell(?:\s+count)?s?|creatinine|potassium|platelet|bun|inr)\b",
+    re.I,
+)
+_LAB_SYNONYMS: dict[str, tuple[str, ...]] = {
+    "rdw": ("rdw", "red cell distribution width"),
+    "red cell distribution width": ("rdw", "red cell distribution width"),
+    "monocyte": ("monocyte", "monocytes"),
+    "monocytes": ("monocyte", "monocytes"),
+    "rbc": ("rbc", "red blood cell", "red blood cells"),
+    "red blood cell": ("rbc", "red blood cell", "red blood cells"),
+    "red blood cells": ("rbc", "red blood cell", "red blood cells"),
+    "hemoglobin": ("hemoglobin", "hgb", "hb"),
+    "hgb": ("hemoglobin", "hgb", "hb"),
+    "hb": ("hemoglobin", "hgb", "hb"),
+    "wbc": ("wbc", "white blood cell", "white blood cells", "white blood cell count"),
+    "white blood cell": ("wbc", "white blood cell", "white blood cells", "white blood cell count"),
+    "white blood cells": ("wbc", "white blood cell", "white blood cells", "white blood cell count"),
+    "white blood cell count": ("wbc", "white blood cell", "white blood cells", "white blood cell count"),
+}
 
 #: Anything that makes "monitoring" a documented fact rather than a guess.
 _MONITORING_CUES = re.compile(
@@ -880,6 +907,26 @@ def build_signal_packet(
         f"encounter: {'outpatient' if outpatient else 'inpatient'}",
         f"command: {state.get('command') or 'free_text'}",
     ]
+    passages = _passages(state)
+    if passages:
+        lines.extend(["", "RETRIEVED_NOTE_SECTIONS (quote evidence_quote verbatim from here):"])
+        budget = 7500
+        seen_sections: set[tuple[str, str]] = set()
+        for psg in passages:
+            sec = str(psg.get("section") or "note").strip()
+            body = " ".join(str(psg.get("text") or "").split())
+            if not body:
+                continue
+            key = (sec, body[:120])
+            if key in seen_sections:
+                continue
+            seen_sections.add(key)
+            snippet = body[:1500]
+            if len(snippet) > budget:
+                break
+            lines.append(f"[{sec}] {snippet}")
+            budget -= len(snippet)
+
     manifest = str(admission_context or state.get("admission_context") or "").strip()
     if manifest:
         lines.extend(["", "PATIENT_MANIFEST:", manifest[:1500]])
@@ -889,7 +936,11 @@ def build_signal_packet(
         prob = str(risk.get("probability_display") or "").strip()
         thresh = str(risk.get("threshold_display") or "").strip()
         decision = str(risk.get("decision") or "").strip()
-        lines.extend(["", f"READMISSION_RISK: {prob} (threshold {thresh}, {decision})"])
+        lines.extend([
+            "",
+            f"READMISSION_RISK: {prob} (threshold {thresh}, {decision}) "
+            "[prioritization context only — NEVER cite or ask about drivers absent from RETRIEVED_NOTE_SECTIONS]",
+        ])
         for factor in (risk.get("top_factors") or [])[:6]:
             if not isinstance(factor, dict):
                 continue
@@ -918,26 +969,6 @@ def build_signal_packet(
                 if label:
                     lines.append(f"- {label}: discharge={val} {unit} ({status})".strip())
 
-    passages = _passages(state)
-    if passages:
-        lines.extend(["", "RETRIEVED_NOTE_SECTIONS:"])
-        budget = 7500
-        seen_sections: set[tuple[str, str]] = set()
-        for psg in passages:
-            sec = str(psg.get("section") or "note").strip()
-            body = " ".join(str(psg.get("text") or "").split())
-            if not body:
-                continue
-            key = (sec, body[:120])
-            if key in seen_sections:
-                continue
-            seen_sections.add(key)
-            snippet = body[:1500]
-            if len(snippet) > budget:
-                break
-            lines.append(f"[{sec}] {snippet}")
-            budget -= len(snippet)
-
     asked_clean: list[str] = []
     seen_fp: set[str] = set()
     for item in (*asked, question):
@@ -957,8 +988,63 @@ def build_signal_packet(
     return "\n".join(lines)
 
 
-def parse_proposed_questions(raw: str) -> list[str]:
-    """Extract ordered, distinct-domain follow-up questions from a JSON reply."""
+def _norm_alnum(text: str) -> str:
+    """Normalize text for punctuation-insensitive verbatim quote matching."""
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).split())
+
+
+def _grounded_corpus(state: dict[str, Any]) -> str:
+    """Only verified note text, medications, and `/labs` series when active."""
+    parts: list[str] = []
+    chart = _chart_text(state)
+    if chart:
+        parts.append(chart)
+    meds = _medication_rows(state)
+    if meds:
+        parts.append(" ".join(meds))
+    if state.get("command") == "labs":
+        for trend in _labs(state):
+            label = str(trend.get("label") or "").strip()
+            val = _formatted_value(trend)
+            if label:
+                parts.append(f"{label} {val}".strip())
+    return "\n".join(parts)
+
+
+def _quote_grounded_in_evidence(quote: str, *, state: dict[str, Any]) -> bool:
+    """Verify the LLM's supporting `evidence_quote` appears verbatim in retrieved records."""
+    corpus_norm = _norm_alnum(_grounded_corpus(state))
+    if not corpus_norm:
+        return True
+    quote_norm = _norm_alnum(quote)
+    if len(quote_norm) < 16 or len(quote_norm.split()) < 3:
+        return False
+    return quote_norm in corpus_norm
+
+
+def _has_ungrounded_lab_term(chip: str, *, state: dict[str, Any]) -> bool:
+    """Block SHAP lab analytes absent from chart text so follow-ups don't hit dead ends."""
+    if state.get("command") == "labs":
+        return False
+    chart_norm = _norm_alnum(_chart_text(state))
+    if not chart_norm:
+        return False
+    matched_terms = [
+        *[t.lower() for t in analytes_named(chip)],
+        *[m.group(0).lower() for m in _UNGND_LAB_CUE_RE.finditer(chip or "")],
+    ]
+    for term in matched_terms:
+        norm_term = _norm_alnum(term)
+        if not norm_term:
+            continue
+        aliases = _LAB_SYNONYMS.get(norm_term, (norm_term,))
+        if not any(re.search(rf"\b{re.escape(alias)}\b", chart_norm) for alias in aliases):
+            return True
+    return False
+
+
+def parse_proposed_items(raw: str) -> list[dict[str, str]]:
+    """Extract ordered, distinct-domain follow-up items with optional `evidence_quote`."""
     stripped = str(raw or "").strip()
     if not stripped:
         return []
@@ -980,33 +1066,50 @@ def parse_proposed_questions(raw: str) -> list[str]:
     items = parsed.get("follow_ups")
     if not isinstance(items, list):
         return []
-    questions: list[str] = []
+    out: list[dict[str, str]] = []
     seen_domains: set[str] = set()
     for entry in items:
         if isinstance(entry, dict):
             domain = str(entry.get("domain") or "").strip().lower()
             text = " ".join(str(entry.get("question") or "").split())
+            quote = " ".join(str(entry.get("evidence_quote") or "").split())
             if domain and domain in seen_domains:
                 continue
             if domain:
                 seen_domains.add(domain)
         elif isinstance(entry, str):
+            domain = ""
             text = " ".join(entry.split())
+            quote = ""
         else:
             continue
         if text:
-            questions.append(text)
-    return questions
+            out.append({"domain": domain, "question": text, "evidence_quote": quote})
+    return out
 
 
-def _passes_safety_gates(chip: str, *, outpatient: bool) -> bool:
-    """Reject empty, oversized, PII/switch-probing, or outpatient-invalid follow-ups."""
+def parse_proposed_questions(raw: str) -> list[str]:
+    """Extract ordered, distinct-domain follow-up questions from a JSON reply."""
+    return [item["question"] for item in parse_proposed_items(raw)]
+
+
+def _passes_safety_gates(
+    chip: str,
+    *,
+    outpatient: bool,
+    state: dict[str, Any] | None = None,
+) -> bool:
+    """Reject empty, oversized, PII/gap-fishing, ungrounded-lab, or outpatient-invalid chips."""
     text = str(chip or "").strip()
     if not text or len(text) > _MAX_QUESTION_CHARS:
         return False
     if _DISALLOWED_PII_OR_SWITCH_RE.search(text):
         return False
+    if _GAP_FISHING_RE.search(text):
+        return False
     if outpatient and _INPATIENT_ONLY_RE.search(text):
+        return False
+    if state is not None and _has_ungrounded_lab_term(text, state=state):
         return False
     return True
 
@@ -1024,7 +1127,7 @@ async def suggest_async(
     admission_context: str = "",
     proposer: Callable[[str], Awaitable[str]] | None = None,
 ) -> list[str]:
-    """Hybrid follow-up selector: grounded LLM synthesis + deterministic gates & fallback."""
+    """Hybrid follow-up selector: quote-verified LLM synthesis + deterministic gates."""
     if not str(answer or "").strip() or not state:
         return []
     on_literature = literature or scope == "literature"
@@ -1047,10 +1150,16 @@ async def suggest_async(
         )
         try:
             raw = await proposer(packet)
-            proposed = [
-                cand for cand in parse_proposed_questions(raw)
-                if _passes_safety_gates(cand, outpatient=outpatient)
-            ]
+            proposed: list[str] = []
+            for item in parse_proposed_items(raw):
+                cand = item["question"]
+                if not _quote_grounded_in_evidence(item.get("evidence_quote", ""), state=state):
+                    logger.info("follow-up chip dropped: unverified evidence_quote")
+                    continue
+                if not _passes_safety_gates(cand, outpatient=outpatient, state=state):
+                    logger.info("follow-up chip dropped: safety/grounding gate")
+                    continue
+                proposed.append(cand)
             chips = _fit(proposed, asked=asks, scope=scope, taken=[], literature=False)
         except Exception as exc:  # noqa: BLE001 — fall back deterministically
             logger.warning("hybrid follow-up proposer failed; falling back: %s", exc)

@@ -75,7 +75,17 @@ from services.agent.presentation.domain import (
 # The analyte vocabulary, from the shared leaf rather than from `routing/`: this layer
 # may not import the routing package (Charter 13 §5), and the answer it needs — "did the
 # question name a measurement?" — is a label question, not a routing decision.
-from shared.labels import analytes_canonical, asks_about_labs, names_an_analyte
+from shared.labels import (
+    PILL_SECTION_LABELS as _PILL_SECTION_LABELS,
+    SECTION_LABELS as _SECTION_LABELS,
+    analytes_canonical,
+    asks_about_labs,
+    names_an_analyte,
+    pill_journal_label as _pill_journal,
+    pill_section_label as _pill_section_label,
+    section_label as _section_label,
+    title_case as _title_case,
+)
 
 # The citation records live in `note_presentation`. Imported by name here because
 # this is where the rest of the package — and the tests — reach for them:
@@ -1370,147 +1380,9 @@ def resolve_sources(answer: str, citation_map: dict[str, int],
 # unmapped section is not a crash but a citation labelled "admission diagnosis" in lower
 # case beside ones that are capitalised, which is the sort of detail a reader sees and a
 # test does not. `tests/agent/test_section_labels.py` holds the two maps to the registry.
-_SECTION_LABELS = {
-    "name": "Patient name",
-    "unit_no": "Unit number",
-    "admission_date": "Admission date",
-    "discharge_date": "Discharge date",
-    "date_of_birth": "Date of birth",
-    "sex": "Sex",
-    "service": "Service",
-    "allergies": "Allergies",
-    "attending": "Attending physician",
-    "chief_complaint": "Chief complaint",
-    "major_procedure": "Major surgical or invasive procedure",
-    "history_of_present_illness": "History of present illness",
-    "review_of_systems": "Review of systems",
-    "past_medical_history": "Past medical history",
-    "past_surgical_history": "Past surgical history",
-    "social_history": "Social history",
-    "family_history": "Family history",
-    "physical_exam": "Physical exam",
-    "pertinent_results": "Pertinent results",
-    "brief_hospital_course": "Brief hospital course",
-    "medications_on_admission": "Medications on admission",
-    "medications_on_transfer": "Medications on transfer",
-    "discharge_medications": "Discharge medications",
-    "discharge_disposition": "Discharge disposition",
-    "admission_diagnosis": "Admission diagnosis",
-    "discharge_diagnosis": "Discharge diagnosis",
-    "discharge_condition": "Discharge condition",
-    "discharge_instructions": "Discharge instructions",
-    "discharge_summary": "Discharge summary",
-    "followup_instructions": "Follow-up instructions",
-    "facility": "Facility",
-    "complications": "Complications",
-    "consults": "Consultations",
-    "assessment_and_plan": "Assessment and plan",
-    "pathology": "Pathology",
-    "infections": "Infections",
-    "transfusions": "Blood transfusions",
-    "indications": "Indications for the surgery",
-    # Not a note heading: a laboratory trajectory, the other channel a chart answer can
-    # rest on. It is here because this map is where a section key becomes words a reader
-    # sees, and a lab citation that fell through to the generic branch would read
-    # "laboratory trends" in lower case beside "Discharge diagnosis".
-    "laboratory_trends": "Laboratory trends",
-}
-
-
-def _section_label(section: object) -> str:
-    name = str(section or "")
-    return _SECTION_LABELS.get(name, name.replace("_", " ") or "Note passage")
-
-
-#: What a chart section's INLINE pill says, as opposed to what the references list calls it.
-#:
-#: What a note section's INLINE pill says, as opposed to what the references list calls it.
-#:
-#: The pill is the section's own name in Title Case. It was abbreviated for a while — `HPI`,
-#: `Discharge dx` — to keep a printed `/ehr` from being a paragraph of badges, and a reader
-#: reported the opposite defect: `dx` is a chart shorthand, `HPI` is a ward shorthand, and
-#: neither is what the section is called (2026-11-02). The pill is now the heading itself,
-#: compacted by its styling rather than by its vocabulary, so the words on the badge and
-#: the words in the note agree.
-#:
-#: A section this map has not caught falls back to `_section_label`, title-cased, because a
-#: new section arriving as an empty pill is worse than one arriving long.
-_PILL_SECTION_LABELS = {
-    "name": "Patient Name",
-    "unit_no": "Unit Number",
-    "admission_date": "Admission Date",
-    "discharge_date": "Discharge Date",
-    "date_of_birth": "Date of Birth",
-    "sex": "Sex",
-    "service": "Service",
-    "allergies": "Allergies",
-    "attending": "Attending Physician",
-    "chief_complaint": "Chief Complaint",
-    "major_procedure": "Major Procedure",
-    "history_of_present_illness": "History of Present Illness",
-    "review_of_systems": "Review of Systems",
-    "past_medical_history": "Past Medical History",
-    "past_surgical_history": "Past Surgical History",
-    "social_history": "Social History",
-    "family_history": "Family History",
-    "physical_exam": "Physical Exam",
-    "pertinent_results": "Pertinent Results",
-    "brief_hospital_course": "Brief Hospital Course",
-    "medications_on_admission": "Medications on Admission",
-    "medications_on_transfer": "Medications on Transfer",
-    "discharge_medications": "Discharge Medications",
-    "discharge_disposition": "Discharge Disposition",
-    "admission_diagnosis": "Admission Diagnosis",
-    "discharge_diagnosis": "Discharge Diagnosis",
-    "discharge_condition": "Discharge Condition",
-    "discharge_instructions": "Discharge Instructions",
-    "discharge_summary": "Discharge Summary",
-    "followup_instructions": "Follow-up Instructions",
-    "facility": "Facility",
-    "complications": "Complications",
-    "consults": "Consultations",
-    "assessment_and_plan": "Assessment and Plan",
-    "pathology": "Pathology",
-    "infections": "Infections",
-    "transfusions": "Blood Transfusions",
-    "indications": "Indications for the Surgery",
-    "laboratory_trends": "Laboratory Trends",
-}
-
-
-#: Joining words a Title Case phrase lower-cases unless they open or close it.
-_TITLE_CASE_MINOR = frozenset({
-    "of", "and", "the", "in", "on", "at", "to", "a", "an", "for", "with", "by",
-})
-
-
-def _title_case(text: object) -> str:
-    """A phrase in Title Case, leaving words that already carry capitals alone.
-
-    The second rule is what keeps this usable on journal names: `JAMA`, `PLoS` and
-    `eClinicalMedicine` are spelled by their publishers, and a cased-every-word pass would
-    produce `Jama`, `Plos` and `Eclinicalmedicine`. A word with a capital anywhere but its
-    first letter is a name, so it is passed through untouched; everything else is cased.
-    """
-    words = " ".join(str(text or "").split()).split(" ")
-    cased: list[str] = []
-    for position, word in enumerate(words):
-        if not word:
-            continue
-        if word.isupper() or any(character.isupper() for character in word[1:]):
-            cased.append(word)
-            continue
-        lowered = word.lower()
-        if 0 < position < len(words) - 1 and lowered in _TITLE_CASE_MINOR:
-            cased.append(lowered)
-            continue
-        cased.append(word[:1].upper() + word[1:])
-    return " ".join(cased)
-
-
-def _pill_section_label(section: object) -> str:
-    name = str(section or "")
-    return _PILL_SECTION_LABELS.get(name) or _title_case(_section_label(section))
+# Canonical `_SECTION_LABELS`, `_PILL_SECTION_LABELS`, `_section_label`,
+# `_title_case`, and `_pill_section_label` live in `shared.labels` and are imported at
+# module top so engine streaming stages and settled A2UI surfaces share one source of truth.
 
 
 
@@ -1631,25 +1503,7 @@ def _year_of(pub_date: object) -> str:
     return ""
 
 
-def _pill_journal(name: object, abbreviation: object = "") -> str:
-    """A journal as an inline pill spells it: the compact name, Title Case, no year.
-
-    A pill sits inside a sentence, so it carries the journal and nothing else. Not the
-    record number, which belongs to the bibliography a line below, and not the year —
-    `Spine · 2020` is a second citation line rather than a marker, and beside a rate cell
-    it was wide enough to stretch the comparison table's source column (2026-11-02).
-
-    The compact form is the record's own ISO abbreviation: `JAMA Netw Open`, `N Engl J
-    Med`, `Spine`. A clinician cites a paper by that string and recognises it faster than
-    a title. Truncating the full title instead, which is what this used to do, produced
-    `Journal of the American…` — a fragment of a title rather than the name of a journal.
-
-    A record that states neither is `PubMed`, which is true and short rather than blank.
-    """
-    full = " ".join(str(name or "").split())
-    short = " ".join(str(abbreviation or "").split())
-    chosen = short or full
-    return _title_case(chosen) if chosen else "PubMed"
+# `_pill_journal` is imported from `shared.labels` as `pill_journal_label`.
 
 
 #: How much of an abstract a hover card carries.

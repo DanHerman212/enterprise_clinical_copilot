@@ -14,6 +14,8 @@ depend on it and the dependency graph stays one-way.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 #: The curated map. A key absent from it is title-cased by `humanize`, and reported
 #: unchanged by `label_for` — two different fallbacks, both deliberate: display wants
@@ -337,4 +339,181 @@ def is_equipment_or_supply(name: str) -> bool:
         return True
     words = re.split(r"[^a-z0-9]+", text)
     return any(word in EQUIPMENT_OR_SUPPLY_WORDS for word in words if word)
+
+
+# --- Inline citation pill & section labels ---------------------------------
+# Shared across presentation (`a2ui.py`) and engine/telemetry streaming (`stages.py`,
+# `deterministic.py`, `graph.py`) so live SSE drafts can paint exact section/journal
+# pill names from the first token rather than numbered `[1]`/`[7]` placeholders.
+
+SECTION_LABELS: dict[str, str] = {
+    "name": "Patient name",
+    "unit_no": "Unit number",
+    "admission_date": "Admission date",
+    "discharge_date": "Discharge date",
+    "date_of_birth": "Date of birth",
+    "sex": "Sex",
+    "service": "Service",
+    "allergies": "Allergies",
+    "attending": "Attending physician",
+    "chief_complaint": "Chief complaint",
+    "major_procedure": "Major surgical or invasive procedure",
+    "history_of_present_illness": "History of present illness",
+    "review_of_systems": "Review of systems",
+    "past_medical_history": "Past medical history",
+    "past_surgical_history": "Past surgical history",
+    "social_history": "Social history",
+    "family_history": "Family history",
+    "physical_exam": "Physical exam",
+    "pertinent_results": "Pertinent results",
+    "brief_hospital_course": "Brief hospital course",
+    "medications_on_admission": "Medications on admission",
+    "medications_on_transfer": "Medications on transfer",
+    "discharge_medications": "Discharge medications",
+    "discharge_disposition": "Discharge disposition",
+    "admission_diagnosis": "Admission diagnosis",
+    "discharge_diagnosis": "Discharge diagnosis",
+    "discharge_condition": "Discharge condition",
+    "discharge_instructions": "Discharge instructions",
+    "discharge_summary": "Discharge summary",
+    "followup_instructions": "Follow-up instructions",
+    "facility": "Facility",
+    "complications": "Complications",
+    "consults": "Consultations",
+    "assessment_and_plan": "Assessment and plan",
+    "pathology": "Pathology",
+    "infections": "Infections",
+    "transfusions": "Blood transfusions",
+    "indications": "Indications for the surgery",
+    "laboratory_trends": "Laboratory trends",
+}
+
+PILL_SECTION_LABELS: dict[str, str] = {
+    "name": "Patient Name",
+    "unit_no": "Unit Number",
+    "admission_date": "Admission Date",
+    "discharge_date": "Discharge Date",
+    "date_of_birth": "Date of Birth",
+    "sex": "Sex",
+    "service": "Service",
+    "allergies": "Allergies",
+    "attending": "Attending Physician",
+    "chief_complaint": "Chief Complaint",
+    "major_procedure": "Major Procedure",
+    "history_of_present_illness": "History of Present Illness",
+    "review_of_systems": "Review of Systems",
+    "past_medical_history": "Past Medical History",
+    "past_surgical_history": "Past Surgical History",
+    "social_history": "Social History",
+    "family_history": "Family History",
+    "physical_exam": "Physical Exam",
+    "pertinent_results": "Pertinent Results",
+    "brief_hospital_course": "Brief Hospital Course",
+    "medications_on_admission": "Medications on Admission",
+    "medications_on_transfer": "Medications on Transfer",
+    "discharge_medications": "Discharge Medications",
+    "discharge_disposition": "Discharge Disposition",
+    "admission_diagnosis": "Admission Diagnosis",
+    "discharge_diagnosis": "Discharge Diagnosis",
+    "discharge_condition": "Discharge Condition",
+    "discharge_instructions": "Discharge Instructions",
+    "discharge_summary": "Discharge Summary",
+    "followup_instructions": "Follow-up Instructions",
+    "facility": "Facility",
+    "complications": "Complications",
+    "consults": "Consultations",
+    "assessment_and_plan": "Assessment and Plan",
+    "pathology": "Pathology",
+    "infections": "Infections",
+    "transfusions": "Blood Transfusions",
+    "indications": "Indications for the Surgery",
+    "laboratory_trends": "Laboratory Trends",
+}
+
+_TITLE_CASE_MINOR = frozenset({
+    "of", "and", "the", "in", "on", "at", "to", "a", "an", "for", "with", "by",
+})
+
+
+def section_label(section: object) -> str:
+    """Human heading for a chart section key."""
+    name = str(section or "")
+    return SECTION_LABELS.get(name, name.replace("_", " ") or "Note passage")
+
+
+def title_case(text: object) -> str:
+    """Phrase in Title Case, preserving words that already carry internal capitals."""
+    words = " ".join(str(text or "").split()).split(" ")
+    cased: list[str] = []
+    for position, word in enumerate(words):
+        if not word:
+            continue
+        if word.isupper() or any(character.isupper() for character in word[1:]):
+            cased.append(word)
+            continue
+        lowered = word.lower()
+        if 0 < position < len(words) - 1 and lowered in _TITLE_CASE_MINOR:
+            cased.append(lowered)
+            continue
+        cased.append(word[:1].upper() + word[1:])
+    return " ".join(cased)
+
+
+def pill_section_label(section: object) -> str:
+    """Title-cased inline pill label for a chart section key."""
+    name = str(section or "")
+    return PILL_SECTION_LABELS.get(name) or title_case(section_label(section))
+
+
+def pill_journal_label(name: object, abbreviation: object = "") -> str:
+    """Compact Title Case inline pill label for a PubMed record."""
+    full = " ".join(str(name or "").split())
+    short = " ".join(str(abbreviation or "").split())
+    chosen = short or full
+    return title_case(chosen) if chosen else "PubMed"
+
+
+def cite_labels_from(
+    evidence_state: Any = None,
+    tool_calls: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, str]:
+    """Map current citation indices (`'1'`, `'2'`) and PMIDs to inline pill labels."""
+    out: dict[str, str] = {}
+    if evidence_state is not None:
+        items = getattr(evidence_state, "items", None)
+        if isinstance(items, Mapping):
+            for ref_id, item in items.items():
+                sec = getattr(item, "section", None)
+                if sec:
+                    out[str(ref_id)] = pill_section_label(sec)
+        literature = getattr(evidence_state, "literature", None)
+        if isinstance(literature, Mapping):
+            for pmid, item in literature.items():
+                meta = getattr(item, "metadata", None) or {}
+                out[str(pmid)] = pill_journal_label(
+                    meta.get("journal"), meta.get("journal_abbrev"),
+                )
+    for call in tool_calls or ():
+        if not isinstance(call, Mapping):
+            continue
+        response = call.get("response")
+        if not isinstance(response, Mapping):
+            continue
+        for passage in response.get("passages") or ():
+            if not isinstance(passage, Mapping):
+                continue
+            cite = passage.get("cite")
+            sec = passage.get("section")
+            if isinstance(cite, int) and not isinstance(cite, bool) and sec:
+                out.setdefault(str(cite), pill_section_label(sec))
+        for article in response.get("articles") or ():
+            if not isinstance(article, Mapping):
+                continue
+            pmid = str(article.get("pmid") or "").strip()
+            if pmid:
+                out.setdefault(
+                    pmid,
+                    pill_journal_label(article.get("journal"), article.get("journal_abbrev")),
+                )
+    return out
 

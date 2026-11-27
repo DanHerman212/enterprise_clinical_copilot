@@ -141,9 +141,21 @@ _CLOSE_MODEL_SCHEMA = False
 
 
 def _clean_schema(node: Any) -> Any:
-    """Recursively drop schema keys Gemini does not accept."""
+    """Recursively drop schema keys Gemini does not accept, unwrapping nullable anyOf."""
     if not isinstance(node, dict):
         return node
+    # Pydantic encodes `T | None` as `{"anyOf": [{"type": ...}, {"type": "null"}], ...}`.
+    # Unwrap to the non-null branch with `nullable: True` before dropping `anyOf`, so
+    # array fields like `search_literature.synonyms` retain their `type` and `items`.
+    if "type" not in node and isinstance(node.get("anyOf"), list):
+        branches = [b for b in node["anyOf"] if isinstance(b, dict)]
+        non_null = [b for b in branches if b.get("type") != "null"]
+        has_null = any(b.get("type") == "null" for b in branches)
+        if non_null:
+            merged = {**non_null[0], **{k: v for k, v in node.items() if k != "anyOf"}}
+            if has_null:
+                merged.setdefault("nullable", True)
+            node = merged
     cleaned: dict[str, Any] = {}
     for key, value in node.items():
         if key not in _ALLOWED_SCHEMA_KEYS:

@@ -150,6 +150,22 @@ def test_the_advertised_schema_declares_the_one_bound():
         assert prop.get("maximum") == TOP_K_MAX, f"{name} does not declare the upper bound"
 
 
+def test_nullable_anyof_array_schema_unwraps_for_gemini():
+    """Pydantic `list[str] | None` unwraps cleanly so Gemini receives `type` and `items`."""
+    import asyncio
+
+    from services.agent.engine.mcp_client import _clean_schema
+    from services.mcp.server import server
+
+    tools = {t.name: t for t in asyncio.run(server.list_tools())}
+    lit = _clean_schema(tools["search_literature"].input_schema)
+    syn = lit["properties"]["synonyms"]
+    assert syn["type"] == "array"
+    assert syn["items"] == {"type": "string"}
+    assert syn["nullable"] is True
+    assert "description" in syn
+
+
 def test_retrieval_contract_rejects_inconsistent_count():
     payload = {
         "hadm_id": 90000009,

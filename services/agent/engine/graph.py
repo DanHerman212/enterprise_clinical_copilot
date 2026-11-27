@@ -82,6 +82,7 @@ from services.agent.engine.mcp_client import (  # noqa: F401 — re-exported
 # branch and `tests/agent/test_prompt_contract.py` both read it from here.
 from services.agent.engine.deterministic import (  # noqa: E402
     _context_block,
+    collect_preflight_followups,
     preflight_followup_proposer,
     run_command,
 )
@@ -1280,16 +1281,47 @@ def build_graph(
         overlay = _working_memory(state, allowed)
         if overlay:
             conversation = _with_overlay(conversation, overlay)
-        if prose_stream and on_event is not None:
-            # Announced as it arrives when nothing is bound: with zero tools the model
-            # cannot emit a tool call, so there is no deliberation to hold back and the
-            # reader sees the answer being written rather than after the turn ends.
-            response = await _streamed_turn(
-                answering_llm, conversation, on_event,
-                immediate=answering_llm is chat_model,
+        async def _call_model(client: Any, msgs: list[BaseMessage]) -> AIMessage:
+            if prose_stream and on_event is not None:
+                # Announced as it arrives when nothing is bound: with zero tools the model
+                # cannot emit a tool call, so there is no deliberation to hold back and the
+                # reader sees the answer being written rather than after the turn ends.
+                return await _streamed_turn(
+                    client, msgs, on_event, immediate=client is chat_model,
+                )
+            return await client.ainvoke(msgs)
+
+        def _is_malformed_tool_call(msg: Any) -> bool:
+            return (
+                model_gateway.finish_reason(msg) == "MALFORMED_FUNCTION_CALL"
+                and not getattr(msg, "tool_calls", None)
+                and not _has_tool_call(msg)
+                and not text_of(getattr(msg, "content", "")).strip()
             )
-        else:
-            response = await answering_llm.ainvoke(conversation)
+
+        response = await _call_model(answering_llm, conversation)
+        if _is_malformed_tool_call(response):
+            logger.warning(
+                "agent_node hit MALFORMED_FUNCTION_CALL; retrying once with valid-JSON tool guidance"
+            )
+            retry_conversation = [
+                *conversation,
+                HumanMessage(
+                    content=(
+                        "Your previous tool call was rejected as a malformed function call. "
+                        "Retry using simple, valid JSON arguments matching the tool schema "
+                        "(for search_literature, pass only {\"query\": \"<2 to 5 clinical keywords>\", "
+                        "\"max_results\": 5}), or answer directly from the session evidence if no "
+                        "new tool call is needed."
+                    )
+                ),
+            ]
+            response = await _call_model(answering_llm, retry_conversation)
+            if _is_malformed_tool_call(response) and answering_llm is not chat_model:
+                logger.warning(
+                    "agent_node retry still hit MALFORMED_FUNCTION_CALL; falling back to unbound model"
+                )
+                response = await _call_model(chat_model, retry_conversation)
         if spent >= MAX_TOOL_CALLS_PER_TURN:
             # This turn has no tools left and no further round to spend them in, so
             # whatever it asked for cannot happen. Settle it as an answer now: the
@@ -2224,12 +2256,15 @@ async def ask(
         }
         try:
             state = await graph.ainvoke(graph_payload, config=config)
-            preflight_raw = await followup_task if followup_task is not None else ""
+            preflight_raw = await collect_preflight_followups(followup_task)
         finally:
             if followup_task is not None and not followup_task.done():
                 followup_task.cancel()
-        if preflight_raw and isinstance(state, dict):
-            state["preflight_followups_raw"] = preflight_raw
+        if isinstance(state, dict):
+            if proposer is not None:
+                state["preflight_followups_attempted"] = True
+            if preflight_raw:
+                state["preflight_followups_raw"] = preflight_raw
         observability.stamp_trace_tags(
             turn_root if turn_root is not None else root_span,
             [*trace_meta.get("langfuse_tags", []),

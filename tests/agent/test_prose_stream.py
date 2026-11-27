@@ -391,6 +391,25 @@ def test_meds_command_runs_preflight_followups_in_parallel():
     assert "preflight_followups_raw" in state
 
 
+def test_collect_preflight_followups_bounds_slow_task() -> None:
+    """Slow background follow-up generation is cancelled promptly after grace_s."""
+    from services.agent.engine import deterministic
+
+    async def _run() -> tuple[str, bool]:
+        async def _slow() -> str:
+            await asyncio.sleep(5.0)
+            return '{"suggestions": []}'
+
+        task = asyncio.create_task(_slow())
+        raw = await deterministic.collect_preflight_followups(task, grace_s=0.05)
+        await asyncio.sleep(0)
+        return raw, task.cancelled()
+
+    raw, was_cancelled = asyncio.run(_run())
+    assert raw == ""
+    assert was_cancelled is True
+
+
 # --- the swap, decided here ----------------------------------------------------
 
 def test_a_settled_verdict_names_the_swap_the_client_owes():

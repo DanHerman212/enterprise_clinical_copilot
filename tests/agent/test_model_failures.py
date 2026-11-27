@@ -348,3 +348,64 @@ def test_a_cancelled_turn_is_not_retried():
         asyncio.run(_toolbox(session).call("rag_search", {"query": "q"}))
 
     assert session.calls == 1
+
+
+def test_agent_node_recovers_from_malformed_function_call(monkeypatch):
+    """If Gemini rejects its own tool call with MALFORMED_FUNCTION_CALL, retry once and fall back."""
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    from services.agent.engine import graph as ag
+    from services.agent.engine.mcp_client import MCPToolbox
+
+    class _StubBound:
+        def __init__(self, responses):
+            self._responses = list(responses)
+            self.calls = 0
+
+        async def ainvoke(self, messages, **_kw):
+            idx = min(self.calls, len(self._responses) - 1)
+            self.calls += 1
+            return self._responses[idx]
+
+    class _ScriptedBaseLLM:
+        def __init__(self, bound_responses, unbound_response):
+            self.bound = _StubBound(bound_responses)
+            self.unbound_calls = 0
+            self.unbound_response = unbound_response
+
+        def bind_tools(self, tools, tool_choice=None):
+            return self.bound
+
+        async def ainvoke(self, messages, **_kw):
+            self.unbound_calls += 1
+            return self.unbound_response
+
+    malformed = AIMessage(content="", response_metadata={"finish_reason": "MALFORMED_FUNCTION_CALL"})
+    recovered = AIMessage(content="Additional studies evaluate hemiarthroplasty outcomes.")
+    box = MCPToolbox(session=object(), _tools={})
+
+    # Case 1: retry on bound model succeeds
+    llm_retry_ok = _ScriptedBaseLLM([malformed, recovered], recovered)
+    monkeypatch.setattr(model_gateway, "build_llm", lambda *_a, **_kw: llm_retry_ok)
+    compiled = ag.build_graph(box, wants_literature=True, follow_up_declared=True, question="What else?")
+    state_ok = asyncio.run(compiled.ainvoke({
+        "messages": [HumanMessage(content="What else does literature report?")],
+        "tool_calls": [], "replayed_tool_calls": [], "tool_attempts": 0,
+        "thread_literature": [], "retrieval_demanded": True, "wants_literature": True,
+    }))
+    assert llm_retry_ok.bound.calls == 2
+    assert llm_retry_ok.unbound_calls == 0
+    assert "hemiarthroplasty" in ag.final_text(state_ok)
+
+    # Case 2: bound retry ALSO hits MALFORMED_FUNCTION_CALL -> falls back to unbound base model
+    llm_fallback = _ScriptedBaseLLM([malformed, malformed], recovered)
+    monkeypatch.setattr(model_gateway, "build_llm", lambda *_a, **_kw: llm_fallback)
+    compiled2 = ag.build_graph(box, wants_literature=True, follow_up_declared=True, question="What else?")
+    state_fb = asyncio.run(compiled2.ainvoke({
+        "messages": [HumanMessage(content="What else does literature report?")],
+        "tool_calls": [], "replayed_tool_calls": [], "tool_attempts": 0,
+        "thread_literature": [], "retrieval_demanded": True, "wants_literature": True,
+    }))
+    assert llm_fallback.bound.calls == 2
+    assert llm_fallback.unbound_calls == 1
+    assert "hemiarthroplasty" in ag.final_text(state_fb)

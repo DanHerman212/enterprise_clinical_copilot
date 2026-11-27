@@ -548,14 +548,9 @@ async def compose_success(
     preflight_raw = str(state.get("preflight_followups_raw") or "").strip()
     async def _preflight_proposer(_packet: str) -> str:
         return preflight_raw
-    if preflight_raw:
-        followup_proposer = _preflight_proposer
-    elif state.get("command") is None:
-        # Cold free-text turns with no preflight chart evidence use instant deterministic chips
-        # instead of adding a serial 2-5s LLM pause after prose has finished streaming.
-        followup_proposer = None
-    else:
-        followup_proposer = _propose_followups
+    # Never run a blocking serial LLM follow-up call after the clinical answer has streamed;
+    # use the concurrent preflight result when it arrived in time, otherwise fall back cleanly.
+    followup_proposer = _preflight_proposer if preflight_raw else None
 
     follow_ups = (
         await followups.suggest_async(

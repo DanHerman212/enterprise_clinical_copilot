@@ -106,7 +106,37 @@ logger = logging.getLogger(__name__)
 #: ceiling is 110 s and one run's turn exceeded it, which cost the briefing, the estimate
 #: and every later turn that quoted them (2026-11-24). A chart-only `/ehr` is a complete
 #: answer, so the budget degrades rather than retrying.
-COMPARATOR_BUDGET_S = 30.0
+COMPARATOR_BUDGET_S = 15.0
+
+#: Maximum extra time a turn will wait for optional background follow-up chip
+#: generation after the clinical answer itself is ready. Any longer stalls
+#: streaming or delays completion, so we cancel and fall back deterministically.
+FOLLOWUP_GRACE_SECONDS = 0.5
+
+
+async def collect_preflight_followups(
+    task: asyncio.Task[str] | None,
+    *,
+    grace_s: float = FOLLOWUP_GRACE_SECONDS,
+) -> str:
+    """Await a background follow-up chip task up to ``grace_s``, returning ``""`` on timeout."""
+    if task is None:
+        return ""
+    try:
+        return await asyncio.wait_for(task, timeout=grace_s)
+    except asyncio.TimeoutError:
+        if not task.done():
+            task.cancel()
+        logger.warning(
+            "Preflight follow-ups exceeded %.2fs post-answer grace; falling back deterministically",
+            grace_s,
+        )
+        return ""
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — optional auxiliary helper
+        logger.warning("Preflight follow-ups failed cleanly: %s", exc)
+        return ""
 
 #: Request-scoped hook allowing the root turn layer (`turn.py`) to propose
 #: readmission-risk follow-up questions concurrently once initial chart retrieval
@@ -1887,7 +1917,7 @@ async def run_command(
             response = await format_task
             (comparators, target_payload, literature_recorded, passes, outcome,
              fallback_literature) = await comp_task
-            preflight_raw = await followup_task if followup_task is not None else ""
+            preflight_raw = await collect_preflight_followups(followup_task)
         finally:
             for pending in (format_task, comp_task, followup_task):
                 if pending is not None and not pending.done():
@@ -1899,6 +1929,8 @@ async def run_command(
         command_extras["comparator_passes"] = passes
         command_extras["fallback_literature"] = fallback_literature
         command_extras["comparator_outcome"] = outcome
+        if proposer is not None:
+            command_extras["preflight_followups_attempted"] = True
         if preflight_raw:
             command_extras["preflight_followups_raw"] = preflight_raw
     else:
@@ -1964,11 +1996,12 @@ async def run_command(
             followup_task = asyncio.create_task(_run_preflight_followups(proposer, snapshot))
             try:
                 response = await format_task
-                preflight_raw = await followup_task
+                preflight_raw = await collect_preflight_followups(followup_task)
             finally:
                 for pending in (format_task, followup_task):
                     if not pending.done():
                         pending.cancel()
+            command_extras["preflight_followups_attempted"] = True
             if preflight_raw:
                 command_extras["preflight_followups_raw"] = preflight_raw
         else:

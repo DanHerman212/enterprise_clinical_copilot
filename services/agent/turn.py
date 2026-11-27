@@ -548,7 +548,14 @@ async def compose_success(
     preflight_raw = str(state.get("preflight_followups_raw") or "").strip()
     async def _preflight_proposer(_packet: str) -> str:
         return preflight_raw
-    followup_proposer = _preflight_proposer if preflight_raw else _propose_followups
+    if preflight_raw:
+        followup_proposer = _preflight_proposer
+    elif state.get("command") is None:
+        # Cold free-text turns with no preflight chart evidence use instant deterministic chips
+        # instead of adding a serial 2-5s LLM pause after prose has finished streaming.
+        followup_proposer = None
+    else:
+        followup_proposer = _propose_followups
 
     follow_ups = (
         await followups.suggest_async(
@@ -904,7 +911,7 @@ async def run_chain(
                 options["admission_context"] = context
 
             preflight_proposer = None
-            if parsed.get("follow_ups") is True and parsed.get("kind") == "summarize":
+            if parsed.get("follow_ups") is True and parsed.get("kind") in ("summarize", "meds", None):
                 asked_qs = [
                     str(item.get("question") or "")
                     for item in (parsed.get("turns") or [])

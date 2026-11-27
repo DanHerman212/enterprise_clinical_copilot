@@ -44,7 +44,9 @@ from services.agent.engine.prompts import SYSTEM_PROMPT
 #: is clinically right is never trimmed to fit one. Six sprint suites enforce their own
 #: copies of the old 1,500/650 numbers; this table replaced them on 2026-11-22.
 PROMPT_WORD_BUDGETS: dict[str, int] = {
-    "CORE_HUB_PROMPT": 1800,
+    # Raised 1800 -> 1900 on 2026-11-27 for the plain-English clinical `STYLE` rule
+    # (banning leaked snake_case section/feature keys, backticks, and stacked parentheticals).
+    "CORE_HUB_PROMPT": 1900,
     # CHART_SPOKE and LABS_SPOKE were 800 each until 2026-11-24. Two behavioural rules were
     # added that day because the dev suite measured them missing — two clinic names that
     # share words are still two clinics (`dev_d5_fup_01`), and a thread must say which of

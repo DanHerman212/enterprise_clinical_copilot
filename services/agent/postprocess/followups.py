@@ -1131,7 +1131,8 @@ async def suggest_async(
     if not str(answer or "").strip() or not state:
         return []
     on_literature = literature or scope == "literature"
-    if on_literature or (outpatient and not _chart_text(state)):
+    on_labs = state.get("command") == "labs"
+    if on_literature or on_labs or (outpatient and not _chart_text(state)):
         return suggest(
             question, answer, model=model, scope=scope, state=state,
             outpatient=outpatient, asked=asked, literature=literature,

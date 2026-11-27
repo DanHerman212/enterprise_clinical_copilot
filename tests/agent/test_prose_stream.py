@@ -307,6 +307,90 @@ def test_formatting_turn_does_not_fall_back_after_emitting_a_chunk():
     assert announced == ["First sentence. "]
 
 
+def test_free_text_streamed_turn_falls_back_to_ainvoke_on_timeout(monkeypatch):
+    """If free-text `astream` stalls past timeout before first chunk, fall back once to `ainvoke`."""
+    class _StalledFreeTextLLM:
+        def __init__(self) -> None:
+            self.used: list[str] = []
+
+        async def astream(self, messages):
+            self.used.append("astream")
+            await asyncio.sleep(1.0)
+            yield AIMessageChunk(content="never")
+
+        async def ainvoke(self, messages):
+            self.used.append("ainvoke")
+            return AIMessage(content="Free-text fallback prose.")
+
+    monkeypatch.setattr(model_gateway, "STREAM_FIRST_TOKEN_TIMEOUT_S", 0.05)
+    llm = _StalledFreeTextLLM()
+    events: list[dict] = []
+
+    reply = asyncio.run(model_gateway.streamed_turn(
+        llm, [], events.append, immediate=True,
+    ))
+
+    assert llm.used == ["astream", "ainvoke"]
+    assert [e["text"] for e in events if e["stage"] == stages.STAGE_ANSWER_DELTA] == [
+        "Free-text fallback prose."
+    ]
+    assert text_of(reply.content) == "Free-text fallback prose."
+
+
+def test_free_text_streamed_turn_does_not_fall_back_after_first_chunk():
+    """Never duplicate or fall back if `astream` fails after emitting a chunk."""
+    class _PartialFreeTextLLM:
+        def __init__(self) -> None:
+            self.used: list[str] = []
+
+        async def astream(self, messages):
+            self.used.append("astream")
+            yield AIMessageChunk(content="Opening clause. ")
+            raise TimeoutError("mid-stream ReadTimeout")
+
+        async def ainvoke(self, messages):
+            self.used.append("ainvoke")
+            return AIMessage(content="Should never run")
+
+    llm = _PartialFreeTextLLM()
+    events: list[dict] = []
+
+    with pytest.raises(TimeoutError):
+        asyncio.run(model_gateway.streamed_turn(
+            llm, [], events.append, immediate=True,
+        ))
+
+    assert llm.used == ["astream"]
+    assert [e["text"] for e in events if e["stage"] == stages.STAGE_ANSWER_DELTA] == [
+        "Opening clause. "
+    ]
+
+
+def test_meds_command_runs_preflight_followups_in_parallel():
+    """`/meds` invokes the active preflight follow-up proposer in parallel with formatting."""
+    from services.agent.engine import deterministic
+
+    called = 0
+
+    async def _proposer(snapshot):
+        nonlocal called
+        called += 1
+        assert snapshot["command"] == "meds"
+        return '{"follow_ups": [{"domain": "medication_safety", "question": "What?", "evidence_quote": "abc"}]}'
+
+    box = _RecordingToolbox({"returned": 0, "passages": []})
+    llm = _RecordingModel(('{"medications": []}',))
+    with patch.object(model_gateway, "build_llm", lambda name, **_kw: llm):
+        with deterministic.with_followup_proposer(_proposer):
+            state = asyncio.run(run_command(
+                box, routing.command_for("meds"), 90000015,
+                question="/meds", model="test-model", prose_stream=True,
+            ))
+
+    assert called == 1
+    assert "preflight_followups_raw" in state
+
+
 # --- the swap, decided here ----------------------------------------------------
 
 def test_a_settled_verdict_names_the_swap_the_client_owes():

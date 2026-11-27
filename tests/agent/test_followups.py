@@ -800,3 +800,38 @@ def test_suggest_async_drops_unverified_quotes_gap_fishing_and_shap_only_labs():
     assert not any("RDW" in c for c in chips)
     assert not any("white blood cell" in c.lower() for c in chips)
     assert not any(c.startswith("Does the chart") for c in chips)
+
+
+def test_suggest_async_skips_llm_proposer_on_labs_command():
+    """`/labs` skips the wasted serial LLM chip call and returns deterministic lab chips."""
+    import asyncio
+
+    called = 0
+
+    async def _should_not_run(_packet: str) -> str:
+        nonlocal called
+        called += 1
+        return '{"follow_ups": []}'
+
+    state = {
+        "command": "labs",
+        "tool_calls": [
+            {
+                "name": "get_lab_trends",
+                "response": {
+                    "trends": [
+                        _trend("Hemoglobin", 10.7, 12.0, 16.0, unit="g/dL", decimals=1),
+                    ]
+                },
+            }
+        ],
+    }
+    chips = asyncio.run(followups.suggest_async(
+        "/labs",
+        "Hemoglobin was low.",
+        state=state,
+        outpatient=False,
+        proposer=_should_not_run,
+    ))
+    assert called == 0
+    assert any("Hemoglobin" in chip for chip in chips)

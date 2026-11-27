@@ -191,6 +191,10 @@ def has_tool_call(chunk: AIMessageChunk) -> bool:
     return bool(getattr(chunk, "tool_call_chunks", None))
 
 
+#: Guard against a stalled SSE stream (`astream` hanging past first token).
+STREAM_FIRST_TOKEN_TIMEOUT_S = 18.0
+
+
 async def streamed_turn(llm, messages, on_event, *, immediate: bool = False) -> AIMessage:
     """One model turn, announced once it has turned out to be the answer.
 
@@ -232,31 +236,61 @@ async def streamed_turn(llm, messages, on_event, *, immediate: bool = False) -> 
         pieces = []
         turn = None
         try:
-            async for chunk in llm.astream(messages):
-                turn = chunk if turn is None else turn + chunk
-                # The chunk's own text, not its repr. Gemini answers in content blocks, and
-                # `str(chunk.content)` announced the envelope and not the prose — measured live
-                # on `/ehr`, 2026-10-14 (see `model_turn.text_of`).
-                piece = text_of(chunk.content)
-                if piece:
-                    pieces.append(piece)
-                    if immediate:
-                        emit(on_event, stages.answer_delta_event(piece))
+            stream = llm.astream(messages).__aiter__()
+            try:
+                while True:
+                    try:
+                        coro = stream.__anext__()
+                        chunk = await (
+                            asyncio.wait_for(coro, timeout=STREAM_FIRST_TOKEN_TIMEOUT_S)
+                            if turn is None
+                            else coro
+                        )
+                    except StopAsyncIteration:
+                        break
+                    turn = chunk if turn is None else turn + chunk
+                    # The chunk's own text, not its repr. Gemini answers in content blocks, and
+                    # `str(chunk.content)` announced the envelope and not the prose — measured live
+                    # on `/ehr`, 2026-10-14 (see `model_turn.text_of`).
+                    piece = text_of(chunk.content)
+                    if piece:
+                        pieces.append(piece)
+                        if immediate:
+                            emit(on_event, stages.answer_delta_event(piece))
+            finally:
+                aclose = getattr(stream, "aclose", None)
+                if callable(aclose):
+                    try:
+                        await aclose()
+                    except Exception:  # noqa: BLE001 — ignore stream close errors
+                        pass
             break
-        except Exception as exc:  # noqa: BLE001 — retry only on pre-first-chunk transport/capacity failure
-            if (
-                attempt == 0
-                and turn is None
-                and not pieces
-                and gateway.classify_error(exc) in (gateway.TRANSPORT, gateway.CAPACITY)
-            ):
+        except Exception as exc:  # noqa: BLE001 — retry/fallback only before first chunk
+            if turn is not None or pieces:
+                raise
+            kind = gateway.classify_error(exc)
+            timed_out = isinstance(exc, (TimeoutError, asyncio.TimeoutError))
+            if attempt == 0 and not timed_out and kind in (gateway.TRANSPORT, gateway.CAPACITY):
                 logger.warning(
                     "streamed_turn hit transient %s before first chunk; retrying once: %s",
-                    gateway.classify_error(exc),
+                    kind,
                     exc,
                 )
                 await asyncio.sleep(2.0)
                 continue
+            if (timed_out or kind == gateway.TRANSPORT) and callable(getattr(llm, "ainvoke", None)):
+                logger.warning(
+                    "streamed_turn stalled or hit transport error before first chunk (%s); "
+                    "falling back once to non-streaming ainvoke",
+                    exc,
+                )
+                reply = await llm.ainvoke(messages)
+                gateway.stamp(reply)
+                if not has_tool_call(reply):
+                    piece = text_of(getattr(reply, "content", None))
+                    if piece:
+                        emit(on_event, stages.answer_delta_event(piece))
+                return reply
             raise
 
     if turn is None:

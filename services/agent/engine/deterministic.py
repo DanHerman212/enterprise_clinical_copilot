@@ -1545,20 +1545,27 @@ async def _readmission_comparators(
 _FORMATTING_PROFILE = model_gateway.FORMATTING_PROFILES
 
 
+def preflight_followup_proposer():
+    """Return the active request-scoped preflight follow-up proposer, or None."""
+    return _PREFLIGHT_FOLLOWUPS.get()
+
+
 def _formatting_client(command: Command, model: str) -> Any:
     """The client this command's formatting turn runs on.
 
     One table, two readers, so the profile a turn runs on and the profile the trace records
     cannot disagree (see `model.FORMATTING_PROFILES`).
 
-    A command with no entry is built exactly as it always was — `build_llm(model)` with no
-    keyword — so a command added later is untouched down to the call signature until
-    someone decides what it should spend. Every command in the table today names the low
-    profile: `/meds` is there because its formatting turn is its extraction and the reply
-    is a JSON row list that has to parse, `/ehr` because it writes four named sections,
-    `/labs` because it describes a panel, and `/pubmed` because it compares published
-    records.
+    On the default pin (`GEMINI_MODEL`), `/meds` runs its structured JSON medication
+    extraction on `HELPER_MODEL` with `CALL_PROFILE_MINIMAL` (~2-4s instead of 14-26s,
+    100% verified parity across dedicated and fallback admissions). Non-default models
+    (multi-model eval arms and test doubles) keep their own model on `CALL_PROFILE_LOW`.
     """
+    if str(command.wire) == "meds" and model == mcp_config.GEMINI_MODEL:
+        return model_gateway.build_llm(
+            mcp_config.HELPER_MODEL,
+            call_profile=model_gateway.CALL_PROFILE_MINIMAL,
+        )
     profile = _FORMATTING_PROFILE.get(str(command.wire))
     if profile is None:
         return model_gateway.build_llm(model)
@@ -1926,25 +1933,51 @@ async def run_command(
         instruction = formatting_for(command.wire)
         if command.wire == "meds":
             instruction = meds_formatting_for(sections)
-        response = await _formatting_turn(
-            llm,
-            [
-                SystemMessage(content=f"{FORMATTER_PREAMBLE}\n\n{instruction}"),
-                HumanMessage(content=_formatter_input(
-                    tool_messages, outpatient, question,
-                    command_extras.get("comparators"),
-                    context_block=context_block,
-                    session_block=(prior_session_block
-                                   if command.wire != "literature" else ""),
-                    patient_estimate=_patient_estimate(recorded),
-                    fallback_literature=command_extras.get("fallback_literature"),
-                    lab_flags=(lab_flag_annotation(recorded)
-                               if command.wire == "labs" else ""),
-                )),
-            ],
-            config=config,
-            announce=_announce if streams and command.prose_is_model_output else None,
-        )
+        format_messages = [
+            SystemMessage(content=f"{FORMATTER_PREAMBLE}\n\n{instruction}"),
+            HumanMessage(content=_formatter_input(
+                tool_messages, outpatient, question,
+                command_extras.get("comparators"),
+                context_block=context_block,
+                session_block=(prior_session_block
+                               if command.wire != "literature" else ""),
+                patient_estimate=_patient_estimate(recorded),
+                fallback_literature=command_extras.get("fallback_literature"),
+                lab_flags=(lab_flag_annotation(recorded)
+                           if command.wire == "labs" else ""),
+            )),
+        ]
+        proposer = _PREFLIGHT_FOLLOWUPS.get() if command.wire == "meds" else None
+        if proposer is not None:
+            snapshot = {
+                "command": command.wire,
+                "tool_calls": list(recorded),
+                "replayed_tool_calls": list(replayed_calls or []),
+                "admission_context": admission_context,
+            }
+            format_task = asyncio.create_task(_formatting_turn(
+                llm,
+                format_messages,
+                config=config,
+                announce=_announce if streams and command.prose_is_model_output else None,
+            ))
+            followup_task = asyncio.create_task(_run_preflight_followups(proposer, snapshot))
+            try:
+                response = await format_task
+                preflight_raw = await followup_task
+            finally:
+                for pending in (format_task, followup_task):
+                    if not pending.done():
+                        pending.cancel()
+            if preflight_raw:
+                command_extras["preflight_followups_raw"] = preflight_raw
+        else:
+            response = await _formatting_turn(
+                llm,
+                format_messages,
+                config=config,
+                announce=_announce if streams and command.prose_is_model_output else None,
+            )
     text = response.text() if hasattr(response, "text") else str(response.content)
 
     # `/labs` publishes no citations, so it carries no markers (2026-11-03). Its evidence

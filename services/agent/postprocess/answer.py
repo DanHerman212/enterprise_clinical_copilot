@@ -857,8 +857,77 @@ def settle_answer(
             # prose's numbering and drew the wrong passage behind every marker.
             display = deterministic_map or display
 
+    if settled_prose:
+        settled_prose = polish_clinical_prose(settled_prose)
+
     return Settlement(prose=settled_prose, deterministic=settled_deterministic,
                       display=display, flags=tuple(flags))
+
+
+_BACKTICK_SPAN_RE = re.compile(r"`([^`\n]+)`")
+_SECTION_RAW_KEYS = {k: v for k, v in labels.SECTION_LABELS.items() if "_" in k}
+_FEATURE_RAW_KEYS = {k: v for k, v in labels.FEATURE_LABELS.items() if "_" in k}
+_RAW_IDENTIFIER_LABELS = {**_SECTION_RAW_KEYS, **_FEATURE_RAW_KEYS}
+_RAW_IDENTIFIER_RE = re.compile(
+    r"\b("
+    + "|".join(re.escape(k) for k in sorted(_RAW_IDENTIFIER_LABELS, key=len, reverse=True))
+    + r")\b"
+)
+_PREPOSITION_NEEDS_THE_RE = re.compile(
+    r"(?:^|[\s(])(?:in|from|per|under|within|on|see)\s+$",
+    re.IGNORECASE,
+)
+
+
+def _strip_clinical_backtick(match: re.Match[str]) -> str:
+    """Drop stray inline code formatting unless preserving a command or structured token."""
+    inner = match.group(1)
+    stripped = inner.strip()
+    if stripped.startswith(("/", "{", "<")):
+        return match.group(0)
+    return inner
+
+
+def _lower_prose_label(label: str) -> str:
+    if len(label) >= 2 and label[:2].isupper():
+        return label
+    return label[:1].lower() + label[1:] if label else label
+
+
+def _sentence_start(prefix: str) -> bool:
+    trimmed = prefix.rstrip()
+    if not trimmed:
+        return True
+    return trimmed[-1] in ".!?\n"
+
+
+def polish_clinical_prose(text: str) -> str:
+    """Replace leaked snake_case section/feature keys and stray backticks in clinical prose."""
+    if not text or not text.strip():
+        return text
+    if text.lstrip().startswith("{"):
+        return text
+
+    polished = _BACKTICK_SPAN_RE.sub(_strip_clinical_backtick, text)
+    if "_" not in polished:
+        return polished
+    parts: list[str] = []
+    cursor = 0
+    for m in _RAW_IDENTIFIER_RE.finditer(polished):
+        key = m.group(1)
+        raw_label = _RAW_IDENTIFIER_LABELS[key]
+        preceding_full = "".join(parts) + polished[cursor:m.start()]
+        if _sentence_start(preceding_full):
+            replacement = raw_label[:1].upper() + raw_label[1:]
+        else:
+            replacement = _lower_prose_label(raw_label)
+            if key in _SECTION_RAW_KEYS and _PREPOSITION_NEEDS_THE_RE.search(preceding_full):
+                replacement = f"the {replacement}"
+        parts.append(polished[cursor:m.start()])
+        parts.append(replacement)
+        cursor = m.end()
+    parts.append(polished[cursor:])
+    return "".join(parts)
 
 
 def sanitize_answer_markers(state: dict, text: str | None = None) -> None:

@@ -82,6 +82,7 @@ from services.agent.engine.mcp_client import (  # noqa: F401 — re-exported
 # branch and `tests/agent/test_prompt_contract.py` both read it from here.
 from services.agent.engine.deterministic import (  # noqa: E402
     _context_block,
+    preflight_followup_proposer,
     run_command,
 )
 
@@ -2127,78 +2128,108 @@ async def ask(
             # turns they can apply to (see `prompts.compose_system_prompt`).
             domains=question_domains,
         )
-        state = await graph.ainvoke(
-            {
-                "messages": [
-                    SystemMessage(
-                        content=system_prompt + _context_block(admission_context, hadm_id)),
-                    *replayed,
-                    # The MODEL's copy of the question, which is the caller's words and
-                    # not the wire string. `compose_question` appends
-                    # `For admission <hadm_id>.` so that a caller never has to say which
-                    # patient it means; the model does not need telling — every tool is
-                    # bound to the admission by the session — and giving it the number
-                    # gave it a record id it could mistake for somebody else's, which is
-                    # how turn 2 of `dev_t3_03` came to refuse a question about the
-                    # patient in front of it (2026-11-10). `state["question"]` keeps the
-                    # composed text: routing, the settlement and the chip comparison all
-                    # read the wire value off the state.
-                    HumanMessage(content=routing.strip_admission_suffix(question, hadm_id)),
-                ],
-                "tool_calls": list(prefetched),
-                # The other half of the tool budget (Sprint 2.2): what the turn asked
-                # for, which is what bounds the loop, where `tool_calls` holds only what
-                # ran. Seeded per run like `retrieval_demanded`.
-                "tool_attempts": 0,
-                # The replayed turns' calls travel with the run so the answer can be
-                # guarded against the evidence it was actually given. Without them a
-                # follow-up reusing the stored score is served with the score
-                # stripped as unsupported, which is a correct answer destroyed by a
-                # guardrail that could only see this turn.
-                "replayed_tool_calls": replayed_calls,
-                # The published records earlier turns of this thread rested on. Passed to
-                # the citation layer and the composer as DATA, so a follow-up can cite a
-                # record the thread already verified instead of being told the notes do
-                # not document the literature. Empty for a first turn, and empty for a
-                # thread whose answers cited none.
-                "thread_literature": thread_literature,
-                # Cleared per run, so the demand below is made at most once per question
-                # rather than once per conversation.
-                "retrieval_demanded": False,
-                # Stamped rather than re-derived downstream. The citation layer and the
-                # composer need the same answer this line used to decide the replay, and
-                # a second `asks_for_literature` call further down would be a second
-                # opinion about one question (`turn_is_about_literature` explains why
-                # the three readers must agree).
-                "wants_literature": wants_literature,
-                # The notice about what the replay already holds is not a message: it is
-                # rebuilt from the record before every model round (`agent_node`), so it is
-                # current rather than one-shot, and it is never persisted into `messages`.
-                #
-                # The admission this turn is about, and the evidence record scoped to it.
-                # The record is hydrated from the replay above, so a follow-up starts
-                # knowing what the thread has already read instead of re-deriving it.
-                "hadm_id": hadm_id,
-                "evidence_state": session,
-                # How many positions the replay already registered. Stamped here, where
-                # the record is built, because `turn.py` republishes this turn's
-                # `citation_map` measured from it and may not hydrate a record of its own.
-                "replay_positions": replayed_positions,
-                # The question, and the tools it may call. Both are carried on the state
-                # because the per-round overlay is rebuilt from the state between rounds:
-                # a question that named two analytes and a turn that read one of them has
-                # something to say to the next round, and saying it needs the question.
-                "question": question,
-                "allowed_tools": allowed_for_prompt,
-                # The two declarations `_still_bound` reads to withdraw a retrieval whose
-                # result the record already holds. They are the same facts that chose the
-                # bound set, carried on the state because the bound set is recomputed
-                # between rounds and the declaration does not change mid-turn.
-                "follow_up_declared": follow_up_declared,
-                "risk_driver_question": risk_driver_question,
-            },
-            config=config,
+        async def _run_preflight_followups(proposer_fn, snapshot: dict[str, Any]) -> str:
+            try:
+                return str(await proposer_fn(snapshot) or "").strip()
+            except Exception as exc:  # noqa: BLE001 — non-blocking concurrent helper
+                logger.warning("preflight follow-up synthesis failed on free text: %s", exc)
+                return ""
+
+        proposer = preflight_followup_proposer()
+        has_replayed_chart = any(
+            isinstance(call, dict)
+            and (call.get("name") in routing.PASSAGE_TOOLS
+                 or call.get("name") == "discharge_medications")
+            for call in (replayed_calls or [])
         )
+        followup_task: asyncio.Task[str] | None = None
+        if proposer is not None and has_replayed_chart and not wants_literature:
+            snapshot = {
+                "command": None,
+                "tool_calls": list(prefetched),
+                "replayed_tool_calls": list(replayed_calls or []),
+                "admission_context": admission_context,
+            }
+            followup_task = asyncio.create_task(_run_preflight_followups(proposer, snapshot))
+
+        graph_payload = {
+            "messages": [
+                SystemMessage(
+                    content=system_prompt + _context_block(admission_context, hadm_id)),
+                *replayed,
+                # The MODEL's copy of the question, which is the caller's words and
+                # not the wire string. `compose_question` appends
+                # `For admission <hadm_id>.` so that a caller never has to say which
+                # patient it means; the model does not need telling — every tool is
+                # bound to the admission by the session — and giving it the number
+                # gave it a record id it could mistake for somebody else's, which is
+                # how turn 2 of `dev_t3_03` came to refuse a question about the
+                # patient in front of it (2026-11-10). `state["question"]` keeps the
+                # composed text: routing, the settlement and the chip comparison all
+                # read the wire value off the state.
+                HumanMessage(content=routing.strip_admission_suffix(question, hadm_id)),
+            ],
+            "tool_calls": list(prefetched),
+            # The other half of the tool budget (Sprint 2.2): what the turn asked
+            # for, which is what bounds the loop, where `tool_calls` holds only what
+            # ran. Seeded per run like `retrieval_demanded`.
+            "tool_attempts": 0,
+            # The replayed turns' calls travel with the run so the answer can be
+            # guarded against the evidence it was actually given. Without them a
+            # follow-up reusing the stored score is served with the score
+            # stripped as unsupported, which is a correct answer destroyed by a
+            # guardrail that could only see this turn.
+            "replayed_tool_calls": replayed_calls,
+            # The published records earlier turns of this thread rested on. Passed to
+            # the citation layer and the composer as DATA, so a follow-up can cite a
+            # record the thread already verified instead of being told the notes do
+            # not document the literature. Empty for a first turn, and empty for a
+            # thread whose answers cited none.
+            "thread_literature": thread_literature,
+            # Cleared per run, so the demand below is made at most once per question
+            # rather than once per conversation.
+            "retrieval_demanded": False,
+            # Stamped rather than re-derived downstream. The citation layer and the
+            # composer need the same answer this line used to decide the replay, and
+            # a second `asks_for_literature` call further down would be a second
+            # opinion about one question (`turn_is_about_literature` explains why
+            # the three readers must agree).
+            "wants_literature": wants_literature,
+            # The notice about what the replay already holds is not a message: it is
+            # rebuilt from the record before every model round (`agent_node`), so it is
+            # rebuilt from the record before every model round (`agent_node`), so it is
+            # current rather than one-shot, and it is never persisted into `messages`.
+            #
+            # The admission this turn is about, and the evidence record scoped to it.
+            # The record is hydrated from the replay above, so a follow-up starts
+            # knowing what the thread has already read instead of re-deriving it.
+            "hadm_id": hadm_id,
+            "evidence_state": session,
+            # How many positions the replay already registered. Stamped here, where
+            # the record is built, because `turn.py` republishes this turn's
+            # `citation_map` measured from it and may not hydrate a record of its own.
+            "replay_positions": replayed_positions,
+            # The question, and the tools it may call. Both are carried on the state
+            # because the per-round overlay is rebuilt from the state between rounds:
+            # a question that named two analytes and a turn that read one of them has
+            # something to say to the next round, and saying it needs the question.
+            "question": question,
+            "allowed_tools": allowed_for_prompt,
+            # The two declarations `_still_bound` reads to withdraw a retrieval whose
+            # result the record already holds. They are the same facts that chose the
+            # bound set, carried on the state because the bound set is recomputed
+            # between rounds and the declaration does not change mid-turn.
+            "follow_up_declared": follow_up_declared,
+            "risk_driver_question": risk_driver_question,
+        }
+        try:
+            state = await graph.ainvoke(graph_payload, config=config)
+            preflight_raw = await followup_task if followup_task is not None else ""
+        finally:
+            if followup_task is not None and not followup_task.done():
+                followup_task.cancel()
+        if preflight_raw and isinstance(state, dict):
+            state["preflight_followups_raw"] = preflight_raw
         observability.stamp_trace_tags(
             turn_root if turn_root is not None else root_span,
             [*trace_meta.get("langfuse_tags", []),

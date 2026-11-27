@@ -704,3 +704,27 @@ def test_the_ehr_helper_steps_route_default_pin_to_fast_helper_model(monkeypatch
         "model": config.HELPER_MODEL,
         "call_profile": gateway.CALL_PROFILE_MINIMAL,
     }
+
+
+def test_meds_command_routes_default_pin_to_fast_helper_model(monkeypatch):
+    """On `GEMINI_MODEL`, `/meds` extraction uses `HELPER_MODEL` at `CALL_PROFILE_MINIMAL`."""
+    seen: dict = {}
+
+    def _build(model, **kwargs):
+        seen["model"] = model
+        seen.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(model_gateway, "build_llm", _build)
+    deterministic._formatting_client(routing.command_for("meds"), config.GEMINI_MODEL)
+    assert seen == {
+        "model": config.HELPER_MODEL,
+        "call_profile": gateway.CALL_PROFILE_MINIMAL,
+    }
+
+    seen.clear()
+    deterministic._formatting_client(routing.command_for("meds"), "test-model")
+    assert seen == {
+        "model": "test-model",
+        "call_profile": gateway.CALL_PROFILE_LOW,
+    }

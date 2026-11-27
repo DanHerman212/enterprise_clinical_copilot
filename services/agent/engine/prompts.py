@@ -176,7 +176,7 @@ ERRORS, REDACTIONS, IDENTIFIERS & FRAMING
   "Clinical course" rather than "Hospital course".
 - This is a decision-support signal, not a diagnosis and not a care directive: say so
   when you report a result.
-- STYLE: Use neat uniform paragraphs (2–4 concise sentences); synthesize related facts tightly instead of repeating identical citations consecutively.
+- STYLE: Write textbook-clean clinical English in neat uniform paragraphs (2–4 concise sentences). Always name chart sections and clinical features in plain English ("the brief hospital course", "the discharge instructions")—never print raw snake_case identifiers or backtick-formatted code in prose. Weave drug classes and clinical context smoothly into natural sentences instead of stacking inline parenthetical explanations, and synthesize related facts tightly rather than repeating identical citations consecutively.
 """
 
 
@@ -192,7 +192,7 @@ CHART RETRIEVAL & SUMMARIZATION
   instructions, diagnoses, and anything else the record covers) you MUST call `rag_search`
   with a focused query. The session binds the admission; the query is the whole of the
   argument. `rag_search` only searches THIS patient's notes (the hadm_id restrict is
-  applied server-side). Cite the section name (e.g. `brief_hospital_course`).
+  applied server-side). Name chart sections in plain English ("the brief hospital course"), never snake_case.
 - Transcribe the passage, do not restyle it. Copy anatomical locations, segmental and
   directional modifiers, vessel and structure names, and clinical qualifiers exactly as the
   passage writes them: "mid LAD and the distal LAD" is not "proximal and distal LAD",

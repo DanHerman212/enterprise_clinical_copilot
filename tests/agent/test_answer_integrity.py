@@ -296,3 +296,20 @@ def test_the_ceiling_sits_above_anything_the_chunker_produces():
         f"the longest real chunk is {longest} characters, at or over the "
         f"{gr.MAX_PASSAGE_CHARS}-character ceiling: a legitimate passage would be refused"
     )
+
+
+def test_polish_clinical_prose_removes_snake_case_and_backticks_preserving_markers():
+    """Raw section/feature identifiers and stray code ticks turn into clean clinical prose."""
+    from services.agent.postprocess import answer as answer_text
+
+    raw = (
+        "In `brief_hospital_course`, the note documents `Medrol` and `prior_inpatient_days` ^[1]. "
+        "**Hospital course & procedures.** Cohort findings match ^[PMID: 12345]."
+    )
+    polished = answer_text.polish_clinical_prose(raw)
+    assert polished == (
+        "In the brief hospital course, the note documents Medrol and prior inpatient days ^[1]. "
+        "**Hospital course & procedures.** Cohort findings match ^[PMID: 12345]."
+    )
+    assert answer_text.polish_clinical_prose('{"evidence_found": false}') == '{"evidence_found": false}'
+    assert answer_text.polish_clinical_prose("Run `/ehr` for details.") == "Run `/ehr` for details."

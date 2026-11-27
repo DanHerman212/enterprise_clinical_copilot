@@ -703,7 +703,11 @@ def _redundant_on_declared_turn(name: str, state: AgentState) -> bool:
     if name == "predict_readmission":
         return getattr(record, "prediction", None) is not None
     if name == "search_literature":
-        return bool(getattr(record, "literature", {}) or {})
+        # "What else does the published literature report on {topic}?" explicitly asks
+        # for additional PubMed studies beyond what the thread already holds, and
+        # `_freetext_allowed` already withholds `search_literature` on every non-literature
+        # follow-up chip. Never withdraw it here simply because prior literature exists.
+        return False
     if name in routing.NOTE_SEARCH_TOOLS:
         return _record_holds(record, *routing.NOTE_SEARCH_TOOLS)
     return False
@@ -1299,29 +1303,46 @@ def build_graph(
                 and not text_of(getattr(msg, "content", "")).strip()
             )
 
+        unbound_retry_msg = (
+            "No tools are available for this response. Do not attempt a function or tool call; "
+            "answer directly in plain clinical prose using only the evidence already present "
+            "in the session."
+        )
         response = await _call_model(answering_llm, conversation)
         if _is_malformed_tool_call(response):
-            logger.warning(
-                "agent_node hit MALFORMED_FUNCTION_CALL; retrying once with valid-JSON tool guidance"
-            )
-            retry_conversation = [
-                *conversation,
-                HumanMessage(
-                    content=(
-                        "Your previous tool call was rejected as a malformed function call. "
-                        "Retry using simple, valid JSON arguments matching the tool schema "
-                        "(for search_literature, pass only {\"query\": \"<2 to 5 clinical keywords>\", "
-                        "\"max_results\": 5}), or answer directly from the session evidence if no "
-                        "new tool call is needed."
-                    )
-                ),
-            ]
-            response = await _call_model(answering_llm, retry_conversation)
-            if _is_malformed_tool_call(response) and answering_llm is not chat_model:
+            if answering_llm is chat_model:
                 logger.warning(
-                    "agent_node retry still hit MALFORMED_FUNCTION_CALL; falling back to unbound model"
+                    "agent_node hit MALFORMED_FUNCTION_CALL on unbound model; retrying with prose-only guidance"
                 )
-                response = await _call_model(chat_model, retry_conversation)
+                response = await _call_model(
+                    chat_model,
+                    [*conversation, HumanMessage(content=unbound_retry_msg)],
+                )
+            else:
+                logger.warning(
+                    "agent_node hit MALFORMED_FUNCTION_CALL; retrying once with valid-JSON tool guidance"
+                )
+                retry_conversation = [
+                    *conversation,
+                    HumanMessage(
+                        content=(
+                            "Your previous tool call was rejected as a malformed function call. "
+                            "Retry using simple, valid JSON arguments matching the tool schema "
+                            "(for search_literature, pass only {\"query\": \"<2 to 5 clinical keywords>\", "
+                            "\"max_results\": 5}), or answer directly from the session evidence if no "
+                            "new tool call is needed."
+                        )
+                    ),
+                ]
+                response = await _call_model(answering_llm, retry_conversation)
+                if _is_malformed_tool_call(response):
+                    logger.warning(
+                        "agent_node retry still hit MALFORMED_FUNCTION_CALL; falling back to unbound model"
+                    )
+                    response = await _call_model(
+                        chat_model,
+                        [*conversation, HumanMessage(content=unbound_retry_msg)],
+                    )
         if spent >= MAX_TOOL_CALLS_PER_TURN:
             # This turn has no tools left and no further round to spend them in, so
             # whatever it asked for cannot happen. Settle it as an answer now: the

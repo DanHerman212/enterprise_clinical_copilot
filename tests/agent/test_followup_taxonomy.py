@@ -432,3 +432,35 @@ def test_the_risk_chip_sentence_typed_now_reaches_the_attribution():
     clicked = _Model()
     _run(risk_case, clicked, turns=_replay(risk_case), intent="follow_up")
     assert "predict_readmission" not in clicked.bound[0]
+
+
+def test_declared_literature_chip_keeps_search_even_when_record_has_literature():
+    """Production replay populates `record.literature` before the chip is clicked;
+    clicking "What else does the published literature report..." must keep `search_literature`.
+    """
+    from services.agent.postprocess.evidence_state import SessionEvidenceState
+
+    question = "What else does the published literature report on femoral neck fracture?"
+    record = SessionEvidenceState(hadm_id=90000090)
+    record.ingest_tool_output(
+        "search_literature",
+        {"query": "femoral neck fracture"},
+        {"articles": [{"pmid": "12345678", "title": "Prior study", "abstract": "Summary"}]},
+    )
+    allowed = graph._freetext_allowed(
+        False,
+        True,
+        declared_follow_up=True,
+        question=question,
+        intent="follow_up",
+    )
+    state = {
+        "question": question,
+        "tool_calls": [],
+        "replayed_tool_calls": [],
+        "evidence_state": record,
+        "follow_up_declared": True,
+        "risk_driver_question": False,
+    }
+    assert graph._redundant_on_declared_turn("search_literature", state) is False
+    assert "search_literature" in graph._still_bound(allowed, state)

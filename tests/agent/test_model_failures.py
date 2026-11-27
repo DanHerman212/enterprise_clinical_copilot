@@ -368,17 +368,24 @@ def test_agent_node_recovers_from_malformed_function_call(monkeypatch):
             return self._responses[idx]
 
     class _ScriptedBaseLLM:
-        def __init__(self, bound_responses, unbound_response):
+        def __init__(self, bound_responses, unbound_responses):
             self.bound = _StubBound(bound_responses)
             self.unbound_calls = 0
-            self.unbound_response = unbound_response
+            self.unbound_messages = []
+            self._unbound_responses = (
+                list(unbound_responses)
+                if isinstance(unbound_responses, list)
+                else [unbound_responses]
+            )
 
         def bind_tools(self, tools, tool_choice=None):
             return self.bound
 
         async def ainvoke(self, messages, **_kw):
+            idx = min(self.unbound_calls, len(self._unbound_responses) - 1)
             self.unbound_calls += 1
-            return self.unbound_response
+            self.unbound_messages.append(messages)
+            return self._unbound_responses[idx]
 
     malformed = AIMessage(content="", response_metadata={"finish_reason": "MALFORMED_FUNCTION_CALL"})
     recovered = AIMessage(content="Additional studies evaluate hemiarthroplasty outcomes.")
@@ -398,6 +405,7 @@ def test_agent_node_recovers_from_malformed_function_call(monkeypatch):
     assert "hemiarthroplasty" in ag.final_text(state_ok)
 
     # Case 2: bound retry ALSO hits MALFORMED_FUNCTION_CALL -> falls back to unbound base model
+    # with prose-only instructions (never telling an unbound model to call search_literature).
     llm_fallback = _ScriptedBaseLLM([malformed, malformed], recovered)
     monkeypatch.setattr(model_gateway, "build_llm", lambda *_a, **_kw: llm_fallback)
     compiled2 = ag.build_graph(box, wants_literature=True, follow_up_declared=True, question="What else?")
@@ -408,4 +416,20 @@ def test_agent_node_recovers_from_malformed_function_call(monkeypatch):
     }))
     assert llm_fallback.bound.calls == 2
     assert llm_fallback.unbound_calls == 1
+    assert "No tools are available" in llm_fallback.unbound_messages[0][-1].content
+    assert "search_literature" not in llm_fallback.unbound_messages[0][-1].content
     assert "hemiarthroplasty" in ag.final_text(state_fb)
+
+    # Case 3: answering_llm is already unbound (tool budget spent) and hits MALFORMED_FUNCTION_CALL
+    # -> retries unbound once with prose-only guidance instead of failing.
+    llm_unbound = _ScriptedBaseLLM([], [malformed, recovered])
+    monkeypatch.setattr(model_gateway, "build_llm", lambda *_a, **_kw: llm_unbound)
+    compiled3 = ag.build_graph(box, wants_literature=True, follow_up_declared=True, question="What else?")
+    state_unbound = asyncio.run(compiled3.ainvoke({
+        "messages": [HumanMessage(content="What else does literature report?")],
+        "tool_calls": [], "replayed_tool_calls": [], "tool_attempts": ag.MAX_TOOL_CALLS_PER_TURN,
+        "thread_literature": [], "retrieval_demanded": True, "wants_literature": True,
+    }))
+    assert llm_unbound.unbound_calls == 2
+    assert "No tools are available" in llm_unbound.unbound_messages[1][-1].content
+    assert "hemiarthroplasty" in ag.final_text(state_unbound)

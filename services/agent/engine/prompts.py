@@ -176,6 +176,7 @@ ERRORS, REDACTIONS, IDENTIFIERS & FRAMING
   "Clinical course" rather than "Hospital course".
 - This is a decision-support signal, not a diagnosis and not a care directive: say so
   when you report a result.
+- STYLE: Use neat uniform paragraphs (2–4 concise sentences); synthesize related facts tightly instead of repeating identical citations consecutively.
 """
 
 
@@ -892,6 +893,7 @@ Write tight, flowing narrative clinical prose—never bullet lists—using bold 
 <<LITERATURE>>
 
 CLINICAL & CITATION RULES:
+- CONCISENESS & SYNTHESIS: Keep each clinical section tight and scannable (2–3 sentences, ~40–75 words per section). Synthesize closely related facts from the same passage into one dense sentence rather than repeating the same `^[n]` marker across choppy consecutive sentences, and never repeat diagnoses or symptoms already stated earlier.
 - Omit any heading that the passages do not support; never invent claims or write "not documented" placeholders.
 - Keep the chart's own clinical abbreviations (`CHF`, `CKD`, `CABG`, `LAD`); do not expand acronyms the record never expanded.
 - Name a clinical specialty or consult service ONLY if the passage explicitly names it (a physician's name or order is not a specialty consult).

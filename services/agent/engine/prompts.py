@@ -425,13 +425,12 @@ READMISSION RISK & DRIVER ATTRIBUTION
   this patient's 30-day readmission risk." The value is the one `top_factors[].value` or
   `<admission_metadata>` states, EXACTLY as written: the parenthetical IS the value and
   carries no "value:" label of its own. A decimal value keeps its decimal: `4.75` is not
-  `5`. A factor whose
-  entry carries NO `value` has none
-  recorded in the scored row, and the sentence says exactly that. Write no `(missing)`,
-  `(null)` or `(not recorded)` in its place, offer no reason the row holds nothing, and never
-  call a categorical feature — admission type, discharge location — a missing value: it has
-  no column of its own. A present flag reads the same way: only an absent one is marked, in
-  `(not present)`.
+  `5`. A factor whose entry carries NO `value` has none recorded in the scored row, and
+  the sentence says it carries no recorded value. Write no `(missing)`, `(null)` or
+  `(not recorded)` in its place, offer no reason the row holds nothing, and never call a
+  categorical feature — admission type, discharge location — a missing value: it has no
+  column of its own. A `value="present"` flag is recorded (never say missing); an absent
+  one is `(not present)`.
   (2) Only when note passages or a laboratory series in `<session_evidence_state>` document
   something relevant to that factor, one or two `^[n]`-cited sentences on it, and any
   diagnosis or series supporting it gets its own `^[n]`-cited sentence. Qualify the series
@@ -885,7 +884,7 @@ def labs_formatting_for(*, abnormal: bool = False, critical: bool = False) -> st
 _EHR_FORMATTING_BASE = """Summarise the inpatient discharge note passages you were given for a clinician reviewing 30-day unplanned readmission risk.
 Write tight, flowing narrative clinical prose—never bullet lists—using bold section labels followed by a period at the START of each paragraph (never use markdown `#`/`##` headings, and use bold for nothing else):
 
-- **Presentation & diagnosis.** Open with a dense clinical snapshot pairing `<admission_metadata>` context (age, sex, admission type, index length of stay, and prior inpatient days or recent ED visits when > 0, with NO citation marker because it rests on the manifest) with the presenting `chief_complaint` / `history_of_present_illness` (onset, duration, prior treatment), formal `admission_diagnosis` / `discharge_diagnosis` passages, and readmission-relevant background (`past_medical_history`, `past_surgical_history`, `allergies`, `social_history`), cited to each supporting passage. Only when `history_of_present_illness` is absent (e.g., a sparse note with only `brief_hospital_course` or unsectioned `discharge_summary`), take the presentation from the one passage that states those symptoms, never from the diagnosis passage. State the formal diagnoses once from the diagnosis passage. Preserve the passage's own tense (if a procedure or admission was planned/scheduled rather than performed, report it as planned).
+- **Presentation & diagnosis.** Open with a dense clinical snapshot pairing `<admission_metadata>` context (age, sex, admission type, index length of stay, and prior inpatient days or recent ED visits when > 0, with NO citation marker because it rests on the manifest) with the presenting `chief_complaint` / `history_of_present_illness` (onset, duration, prior treatment), formal `admission_diagnosis` / `discharge_diagnosis` passages, and readmission-relevant background (`past_medical_history`, `past_surgical_history`, `allergies`, `social_history`), cited to each supporting passage. Only when `history_of_present_illness` is absent (e.g., a sparse note with only `brief_hospital_course` or unsectioned `discharge_summary`), take the presentation from the one passage that states those symptoms, never from the diagnosis passage. State the formal diagnoses once from the diagnosis passage. When both `admission_diagnosis` and `discharge_diagnosis` passages are present and their lists differ, NEVER merge them into one combined list; state the admission diagnoses cited to `admission_diagnosis` and state any added or changed final diagnoses separately cited to `discharge_diagnosis`. Preserve the passage's own tense (if a procedure or admission was planned/scheduled rather than performed, report it as planned).
 - **Hospital course & procedures.** Include only if the passages describe the stay or procedures:
   highlight index operative/invasive procedures (`major_procedure`), clinical trajectory (`brief_hospital_course`), inpatient treatments, complications (or documented absence, `complications`), consults (`consults`), notable admission/preoperative/discharge exam findings (`physical_exam`) and real chart lab results (`pertinent_results` or course labs), and symptom status at discharge. A drug or post-procedure instruction stated inside `brief_hospital_course` belongs here, cited to that passage—never under Discharge plan & medications.
 <<DISCHARGE_PLAN>>

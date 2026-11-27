@@ -77,9 +77,13 @@ def test_the_seven_trajectories_keep_their_stratification(rows):
     assert counts["t4_cross_domain_synthesis"] == (11 if rows is DEV else 2)
 
 
-@pytest.mark.parametrize("rows", [DEV, HOLDOUT], ids=["dev", "holdout"])
-def test_every_row_is_stamped_v8(rows):
-    assert {row["metadata"]["rubric_version"] for row in rows} == {"v8"}
+@pytest.mark.parametrize(
+    ("rows", "expected_version"),
+    [(DEV, "v9"), (HOLDOUT, "v8")],
+    ids=["dev", "holdout"],
+)
+def test_every_row_is_stamped_with_its_expected_rubric_version(rows, expected_version):
+    assert {row["metadata"]["rubric_version"] for row in rows} == {expected_version}
 
 
 def test_the_turn_depth_distribution_is_what_the_phase_deepened_to():

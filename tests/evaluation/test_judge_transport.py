@@ -193,14 +193,49 @@ class TestTheEndpoint:
         url = judge_call.endpoint_url("a-project", location)
 
         assert url == (f"{host}/v1/projects/a-project/locations/{location}"
-                       "/endpoints/openapi")
+                       "/publishers/meta/v1")
+        grok_url = judge_call.endpoint_url("a-project", location, model="xai/grok-4.7")
+        assert grok_url == (f"{host}/v1/projects/a-project/locations/{location}"
+                            "/endpoints/openapi")
 
     def test_the_configured_location_is_used_when_none_is_given(self):
         assert f"/locations/{judge_call.JUDGE_LOCATION}/" in judge_call.endpoint_url()
 
     def test_the_judge_pin_is_the_independent_vendor(self):
-        assert judge_client.JUDGE_MODEL == "xai/grok-4.7"
+        assert judge_client.JUDGE_MODEL == "meta/muse-spark-1.3"
         assert judge_client.JUDGE_LOCATION in ("global", "us", "eu", "us-central1")
+
+
+def test_http_auth_identity_token_caches_and_clears(monkeypatch):
+    from evaluation.platform import http_auth
+
+    calls = {"n": 0}
+
+    def fake_fetch(audience: str) -> str:
+        calls["n"] += 1
+        return f"tok-{audience}-{calls['n']}"
+
+    http_auth.clear_token_cache()
+    monkeypatch.setattr(http_auth, "_fetch_identity_token", fake_fetch)
+
+    first = http_auth.identity_token("https://agent.example")
+    second = http_auth.identity_token("https://agent.example")
+    assert first == second == "tok-https://agent.example-1"
+    assert calls["n"] == 1
+
+    http_auth.clear_token_cache()
+    third = http_auth.identity_token("https://agent.example")
+    assert third == "tok-https://agent.example-2"
+    assert calls["n"] == 2
+
+
+def test_run_evals_default_concurrency_is_six(monkeypatch):
+    import importlib
+    from evaluation.platform import run_evals
+
+    monkeypatch.delenv("EVAL_MAX_CONCURRENCY", raising=False)
+    importlib.reload(run_evals)
+    assert run_evals.MAX_CONCURRENCY == 6
 
 
 class _Credentials:
@@ -259,4 +294,4 @@ class TestTheToken:
         assert callable(captured["api_key"])
         assert captured["api_key"] is judge_call.access_token
         assert captured["max_retries"] == 0
-        assert captured["base_url"].endswith("/endpoints/openapi")
+        assert captured["base_url"].endswith("/publishers/meta/v1")

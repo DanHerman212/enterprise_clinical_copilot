@@ -405,3 +405,10 @@ def test_a_length_of_stay_keeps_its_fraction():
     assert admission_context.clinical_value("medication_order_count", 13.64) == 13.64
     assert admission_context.clinical_value("medication_order_count", 14.0) == 14
     assert admission_context.clinical_value("prior_admission_count", 0.0) == 0
+
+
+def test_recent_ed_visits_renders_without_ungrounded_prior_year_window():
+    block = admission_context.render(90000023, {"recent_ed_visits": "3"})
+
+    assert "- recent_ed_visits: 3" in block
+    assert "ed_visits_prior_year" not in block

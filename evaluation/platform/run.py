@@ -27,6 +27,7 @@ import httpx  # noqa: E402
 
 from evaluation.platform import evaluators as ev  # noqa: E402
 from evaluation.platform.judge_call import make_judge_fn  # noqa: E402
+from evaluation.platform.schemas import MIN_PASS_RATE  # noqa: E402
 from evaluation.platform.task import make_task  # noqa: E402
 
 DEFAULT_AGENT = "https://agent-jamycsjjzq-ue.a.run.app"
@@ -88,8 +89,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--concurrency", type=int, default=2,
                     help="judge-call concurrency; 2 is the ceiling the pro model's "
                          "regional quota sustains (5 produced 429s on 2026-10-21)")
-    ap.add_argument("--rubric-version", default="v4")
-    ap.add_argument("--min-pass-rate", type=float, default=0.85)
+    ap.add_argument("--rubric-version", default="v9")
+    ap.add_argument("--min-pass-rate", type=float, default=MIN_PASS_RATE)
     args = ap.parse_args(argv)
 
     from langfuse import Langfuse  # noqa: PLC0415

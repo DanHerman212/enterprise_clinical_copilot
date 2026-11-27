@@ -1,22 +1,13 @@
-"""Audit the selection slice before anyone is allowed to run it.
+"""Audit an evaluation suite before anyone is allowed to run it.
 
-Two checks, deliberately different in kind.
-
-The first is deterministic and free: it looks for rules that contradict each other or the
-product. Both defects found in production so far were of that shape — an item forbidding a
-word its own question required the answer to say, and an item demanding prose the command
-never writes — and neither needed a model to see.
-
-The second is an independent reviewer, `xai/grok-4.7`, which reads each item and answers
-four questions: could a correct answer pass, would a wrong answer fail, does the item match
-how the agent actually behaves, and does it belong in the cell it claims. It is read-only by
-construction: this module takes its `PASS`/`DEFECT` words and nothing else, and every edit
-to the dataset is made here, from the chart facts, by the coding agent.
+Deterministic and free: it looks for rules that contradict each other or the product,
+checks matrix stratification, and verifies literal tokens and chip affordances against
+the cohort's fact sheet and affordance matrix. Deeper adversarial data-integrity review
+is performed out-of-band by an independent reviewer subagent before locking an attestation.
 
 Usage:
-    python -m evaluation.platform.dataset_audit                # deterministic only
-    python -m evaluation.platform.dataset_audit --critic       # plus the reviewer
-    python -m evaluation.platform.dataset_audit --critic --write-audit
+    python -m evaluation.platform.dataset_audit --suite dev --write-audit
+    python -m evaluation.platform.dataset_audit --suite selection --write-audit
 """
 
 from __future__ import annotations
@@ -430,190 +421,6 @@ def audit_guard(suite: str = "selection") -> None:
                          f"to publish: {failed}")
 
 
-CRITIC_SYSTEM = """You audit evaluation items for a clinical decision-support agent.
-You never rewrite anything. You answer with JSON only.
-
-For the item you are given, answer four questions:
-satisfiability   - could an accurate, chart-grounded agent answer pass BOTH the
-                   deterministic assertions (must_contain, must_not_disclose,
-                   forbidden_claims) AND expected_output.behaviour, without contradiction?
-discrimination   - would a hallucinated, ungrounded, or non-refuting answer properly fail?
-product_fidelity - does expected_output match how the agent actually behaves: slash commands
-                   render a structured component plus short cited prose, /meds lists its
-                   extracted drugs in a deterministic sentence and puts doses and
-                   frequencies in rendered rows, granular drill-downs belong to follow-up
-                   chips, /labs publishes no citations, and the judge sees answer text, the
-                   rendered medication rows, cited passages and raw tool evidence?
-matrix_authenticity - does the item genuinely exercise its stated depth_tier,
-                   modality_axis and perturbation_type?
-
-Reply exactly:
-{"status": "PASS" | "DEFECT", "defects": ["..."]}
-A DEFECT must name the specific contradiction or mismatch. Do not list style preferences.
-"""
-
-
-def critic_prompt(row: dict[str, Any], rules: str) -> str:
-    payload = {
-        "id": row.get("id"),
-        "hadm_id": row.get("hadm_id"),
-        "command": row.get("command"),
-        "turns": row.get("turns"),
-        "metadata": row.get("metadata"),
-        "expected_output": row.get("expected_output"),
-    }
-    return (f"{rules}\n\nITEM:\n{json.dumps(payload, indent=1, default=str)}")
-
-
-RULES = """PRODUCT RULES (verified against the runtime):
-- Four slash commands exist: /ehr, /meds, /labs, /pubmed. Nothing else.
-- /ehr renders the headings its evidence supports and reports the readmission probability.
-  *Presentation & diagnosis* is required on every inpatient briefing; *Hospital course &
-  procedures*, *Discharge plan & medications* and *Readmission risk & trajectory* are
-  required only when their supporting evidence was retrieved. Discharge details that appear
-  only inside `brief_hospital_course` are reported under *Hospital course & procedures*, and
-  omitting *Discharge plan & medications* there is correct.
-- /meds emits one deterministic provenance sentence as the answer, plus the extracted
-  medication rows published under it (the `RENDERED MEDICATION TABLE` the judge is shown).
-  The sentence names the extracted drugs, and `must_contain` is checked across both the
-  sentence and the rows. A dose or a frequency the note does not state is left as an empty
-  cell rather than invented or transposed, so the prose is not required to say in words
-  that a dose or a frequency is undocumented. Equipment and supplies (compression
-  stockings, home oxygen) are classified separately from drugs by the answer writer.
-- /labs renders a panel table and publishes NO citation markers; /pubmed answers from
-  retrieved abstracts with PMID markers.
-- Probability and threshold are published at one decimal (`7.5%`, `11.0%`), and stating the
-  raw float as well (`0.0751`) is equally correct. Counts, days and laboratory values are
-  stated at the precision the tool returns, with hospital days and administrative counts as
-  whole numbers.
-- Granular drill-downs, such as a multi-step taper, belong to the follow-up chips the turn
-  proposes, not to the overview prose.
-- The judge sees: each turn's question and answer, the rendered medication rows, the cited
-  passages with their numbers, and raw tool evidence. It does not see components, follow-up
-  chips or the verified flag.
-- must_not_disclose is a substring check over the whole conversation. Use it only for a word
-  no correct answer would ever contain. A word the question itself names, and which a
-  refutation must repeat, belongs in forbidden_claims as a claim, never in must_not_disclose.
-"""
-
-
-def _with_backoff(call: Any, *, attempts: int = 5, base: float = 4.0) -> Any:
-    """Run one reviewer call, waiting out a quota window rather than losing the item.
-
-    Four items went unreviewed in round 1 because the endpoint answered 429 and the loop
-    simply recorded an error. A 429 is a wait, not an answer: nothing about the item was
-    read, so treating it as anything other than "try again later" leaves the audit
-    incomplete while looking finished. Backoff is exponential from `base` seconds with
-    upward jitter, inside the round's spend cap because a retried call is the same call.
-    """
-    import random
-    import time
-
-    last: Exception | None = None
-    for attempt in range(attempts):
-        try:
-            return call()
-        except Exception as exc:  # noqa: BLE001 — classified below, re-raised on the last try
-            status = getattr(exc, "status_code", None)
-            text = f"{type(exc).__name__} {exc}"
-            limited = status == 429 or "429" in text or "RESOURCE_EXHAUSTED" in text
-            if not limited or attempt == attempts - 1:
-                last = exc
-                break
-            wait = base * (2 ** attempt) * (1.0 + random.random() * 0.25)
-            print(f"    429 — waiting {wait:.1f}s (attempt {attempt + 1}/{attempts})",
-                  flush=True)
-            time.sleep(wait)
-    assert last is not None
-    raise last
-
-
-def _critic(client: Any, row: dict[str, Any]) -> dict[str, Any]:
-    """One reviewer call, with the reviewer's own reply shape.
-
-    Deliberately not `judge_client.judge`: that function validates the reply against the
-    rubric schema, where a verdict is six dimension scores. The critic answers a different
-    question and returns a different object, so it is asked for one here and the answer is
-    read as JSON. Anything that is not JSON, or not PASS/DEFECT, is reported as an ERROR
-    rather than guessed at — a reviewer whose words cannot be read has not reviewed.
-
-    A 429 is retried with exponential backoff and jitter, and every call is paced, because
-    four items went unreviewed in round 1 on a quota window: an unreviewed item is neither a
-    pass nor a defect, and a loop that treats it as either is not an audit.
-    """
-    schema = {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["status", "defects"],
-        "properties": {
-            "status": {"type": "string", "enum": ["PASS", "DEFECT"]},
-            "defects": {"type": "array", "items": {"type": "string"}},
-        },
-    }
-    try:
-        completion = _with_backoff(
-            lambda: client.chat.completions.create(
-                model="xai/grok-4.7",
-                temperature=0,
-                # Low effort: this reviewer decides four yes/no questions about one item,
-                # and the questions it has to reason through are satisfiability and
-                # discrimination. The high setting spent its budget on prose about items
-                # it had already judged, and a reviewer that never answers in time is an
-                # unreviewed item.
-                reasoning_effort="low",
-                messages=[{"role": "system", "content": CRITIC_SYSTEM},
-                          {"role": "user", "content": critic_prompt(row, RULES)}],
-                response_format={"type": "json_schema", "json_schema": {
-                    "name": "defect_report", "strict": True, "schema": schema}},
-            ))
-    except Exception as exc:  # noqa: BLE001 — a failed reviewer is reported, not raised
-        return {"status": "ERROR", "defects": [f"{type(exc).__name__}: {exc}"], "usage": None}
-
-    usage = getattr(completion, "usage", None)
-    usage_block = None
-    if usage is not None:
-        usage_block = {"input": getattr(usage, "prompt_tokens", None),
-                       "output": getattr(usage, "completion_tokens", None),
-                       "total": getattr(usage, "total_tokens", None)}
-    choices = getattr(completion, "choices", None) or []
-    text = ""
-    if choices:
-        message = getattr(choices[0], "message", None)
-        text = str(getattr(message, "content", "") or "")
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        return {"status": "ERROR", "defects": [f"unreadable reply: {text[:200]}"],
-                "usage": usage_block}
-    status = "DEFECT" if str(parsed.get("status", "")).upper() == "DEFECT" else "PASS"
-    return {"status": status,
-            "defects": [str(d) for d in (parsed.get("defects") or [])],
-            "usage": usage_block}
-
-
-def run_critic(rows: list[dict[str, Any]], *, pace_seconds: float = 3.0) -> dict[str, Any]:
-    """One reviewer pass over every item, paced so a quota window is not hit in the first place.
-
-    Sequential rather than concurrent on purpose: the endpoint's limit is per minute, and
-    sixteen calls spread over a minute finish, while sixteen calls issued at once fill the
-    window and four of them come back as 429 — which is what happened in round 1.
-    """
-    import time
-
-    from evaluation.platform import judge_call
-
-    client = judge_call.judge_client_instance()
-    results: dict[str, Any] = {}
-    for index, row in enumerate(rows):
-        result = _critic(client, row)
-        results[str(row["id"])] = result
-        print(f"  critic {row['id']}: {result['status']}"
-              + (f" {result['defects']}" if result["defects"] else ""), flush=True)
-        if index < len(rows) - 1 and pace_seconds:
-            time.sleep(pace_seconds)
-    return {"items": results, "rounds": 1}
-
-
 def audit_dev(args: argparse.Namespace) -> int:
     """The Dev gate: the row contract, then the matrix, then the artefact checks.
 
@@ -647,11 +454,12 @@ def audit_dev(args: argparse.Namespace) -> int:
             DEV_AUDIT_PATH.write_text(json.dumps({
                 "dataset_sha256": sha256(dev_suite.DEV_SUITE_PATH),
                 "generated_at": datetime.now(timezone.utc).isoformat(),
-                "critic_rounds": 0,
                 "defects": defects,
                 "items": {},
             }, indent=1), encoding="utf-8")
-            print(f"wrote {DEV_AUDIT_PATH.relative_to(REPO)}")
+            shown = (DEV_AUDIT_PATH.relative_to(REPO)
+                     if DEV_AUDIT_PATH.is_relative_to(REPO) else DEV_AUDIT_PATH)
+            print(f"wrote {shown}")
     return 1 if defects else 0
 
 
@@ -661,10 +469,6 @@ def main(argv: list[str] | None = None) -> int:
                     default="selection",
                     help="which dataset to audit; the selection slice is the default so "
                          "this CLI and its attestation are unchanged")
-    ap.add_argument("--critic", action="store_true", help="also run the grok reviewer")
-    ap.add_argument("--items", default="",
-                    help="comma-separated item ids to review; the rest are carried "
-                         "forward from the existing attestation")
     ap.add_argument("--write-audit", action="store_true",
                     help="record the attestation in evaluation/audits/")
     args = ap.parse_args(argv)
@@ -683,25 +487,6 @@ def main(argv: list[str] | None = None) -> int:
         for problem in problems:
             print(f"  {item}: {problem}")
 
-    if args.critic:
-        wanted = {name.strip() for name in args.items.split(",") if name.strip()}
-        subset = [row for row in rows if not wanted or str(row["id"]) in wanted]
-        if wanted:
-            unknown = wanted - {str(row["id"]) for row in rows}
-            if unknown:
-                raise SystemExit(f"no such item(s): {sorted(unknown)}")
-            print(f"reviewing {len(subset)} of {len(rows)} item(s); the rest are carried "
-                  "forward from the previous attestation")
-        critic = run_critic(subset)
-        if wanted and AUDIT_PATH.exists():
-            previous = json.loads(AUDIT_PATH.read_text(encoding="utf-8")).get("items") or {}
-            merged = {**previous, **critic["items"]}
-            critic["items"] = merged
-        for item, result in sorted(critic["items"].items()):
-            print(f"  critic {item}: {result['status']} {result['defects']}")
-    else:
-        critic = {"items": {}, "rounds": 0}
-
     if args.write_audit:
         if defects:
             # An attestation is a statement that every item passed. Writing one over a
@@ -715,11 +500,12 @@ def main(argv: list[str] | None = None) -> int:
             AUDIT_PATH.write_text(json.dumps({
                 "dataset_sha256": sha256(SLICE),
                 "generated_at": datetime.now(timezone.utc).isoformat(),
-                "critic_rounds": critic.get("rounds", 0),
                 "defects": defects,
-                "items": critic.get("items", {}),
+                "items": {},
             }, indent=1), encoding="utf-8")
-            print(f"wrote {AUDIT_PATH.relative_to(REPO)}")
+            shown = (AUDIT_PATH.relative_to(REPO)
+                     if AUDIT_PATH.is_relative_to(REPO) else AUDIT_PATH)
+            print(f"wrote {shown}")
     return 1 if defects else 0
 
 

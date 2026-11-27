@@ -338,10 +338,23 @@ class SessionEvidenceState:
             section = str(unit.get("section") or "").strip() or None
             text = str(unit.get("text") or "")
             passage_id = str(unit.get("id") or "").strip()
-            key = (
-                f"note:{passage_id}" if passage_id
-                else f"note:{self.hadm_id}:{section}:{_digest(text)}"
-            )
+            normalized_body = " ".join(text.split())
+            body_digest = _digest(normalized_body)
+            if passage_id:
+                base_key = f"note:{passage_id}"
+                existing_ref = self._dedup_index.get(base_key)
+                if existing_ref is not None and " ".join(
+                    self.items[existing_ref].text.split()
+                ) != normalized_body:
+                    # A shorter semantic chunk (`rag_search`, *_1) and a full section
+                    # (`discharge_medications`) can share the same synthetic id. Keep
+                    # canonical `note:{passage_id}` on the first registration while giving
+                    # distinct text its own slot instead of discarding the full passage.
+                    key = f"{base_key}:{body_digest}"
+                else:
+                    key = base_key
+            else:
+                key = f"note:{self.hadm_id}:{section}:{body_digest}"
             metadata = {"section": section or ""}
             if passage_id:
                 metadata["passage_id"] = passage_id
@@ -582,7 +595,9 @@ class SessionEvidenceState:
         """
         return len(self.items)
 
-    def position_of_note_passage(self, passage_id: str) -> int | None:
+    def position_of_note_passage(
+        self, passage_id: str, *, text: str | None = None
+    ) -> int | None:
         """The position a note passage holds, by the tool's own id, or None.
 
         The lookup a caller uses when it must name the position of a passage it knows by
@@ -598,7 +613,20 @@ class SessionEvidenceState:
         cleaned = str(passage_id or "").strip()
         if not cleaned:
             return None
-        return self._dedup_index.get(f"note:{cleaned}")
+        base_key = f"note:{cleaned}"
+        if text is not None:
+            digest = _digest(" ".join(str(text).split()))
+            specific = self._dedup_index.get(f"{base_key}:{digest}")
+            if specific is not None:
+                return specific
+            return self._dedup_index.get(base_key)
+        matches = [
+            item for item in self.items.values()
+            if item.ref_id is not None and item.metadata.get("passage_id") == cleaned
+        ]
+        if len(matches) > 1:
+            return max(matches, key=lambda item: (len(item.text), item.ref_id or 0)).ref_id
+        return self._dedup_index.get(base_key)
 
     # -- rendering ---------------------------------------------------------------
 

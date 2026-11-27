@@ -36,10 +36,14 @@ from evaluation.platform.dev_suite import (  # noqa: E402
     validate_rows,
 )
 
-DATASET = "ecc-tier2-dev-suite_v2"
+DATASET = "ecc-tier2-dev-suite_v3"
+#: Langfuse dataset item ids are unique per project across datasets, so prefixing `v3_`
+#: keeps historical `ecc-tier2-dev-suite_v2` items untouched while `input.scenario_id`
+#: and `metadata.scenario_id` retain the bare `dev_*` identifier.
+ITEM_ID_PREFIX = "v3_"
 DESCRIPTION = ("Tier 2 stratified behavioral dev suite: 40 scenarios, 12 dev records, "
                "5x5 depth-by-modality matrix")
-RUBRIC_VERSION = "v8"
+RUBRIC_VERSION = "v9"
 EXPECTED_ITEMS = 40
 
 
@@ -49,7 +53,8 @@ def _manifest_provider():
     return manifest_from_bigquery
 
 
-def build_items(*, manifests: dict[int, dict]) -> list[dict]:
+def build_items(*, manifests: dict[int, dict],
+                id_prefix: str = ITEM_ID_PREFIX) -> list[dict]:
     """Every row as a Langfuse item payload: input, expected_output, metadata.
 
     The manifest travels in `input` because it is pre-flight context the service gives
@@ -68,7 +73,7 @@ def build_items(*, manifests: dict[int, dict]) -> list[dict]:
             "trajectory_index": TRAJECTORIES[row["trajectory"]],
         })
         payloads.append({
-            "id": row["id"],
+            "id": f"{id_prefix}{row['id']}",
             "input": {
                 "scenario_id": row["id"],
                 # `patient_id` is the field the task reads the record from, and the

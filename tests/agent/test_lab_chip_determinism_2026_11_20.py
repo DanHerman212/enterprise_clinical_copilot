@@ -332,11 +332,14 @@ def test_a_cell_count_is_written_the_way_a_laboratory_writes_it(feature, value, 
 def test_a_present_flag_is_stated_by_the_factors_own_name():
     from services.agent.engine.mcp_client import _presented_factor
 
-    assert "value" not in _presented_factor(
-        {"feature": "oncology_flag", "direction": "increases", "value": 1})
+    assert _presented_factor(
+        {"feature": "oncology_flag", "direction": "increases", "value": 1})["value"] \
+        == "present"
     assert _presented_factor(
         {"feature": "oncology_flag", "direction": "increases", "value": 0})["value"] \
         == "not present"
+    assert "value" not in _presented_factor(
+        {"feature": "oncology_flag", "direction": "increases", "value": None})
 
 
 def test_the_guardrail_accepts_both_spellings_of_a_cell_count():

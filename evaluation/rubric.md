@@ -1,4 +1,23 @@
-# Evaluation Rubric v8 — answer quality (LLM-as-judge)
+# Evaluation Rubric v9 — answer quality (LLM-as-judge)
+
+**Version 9, 2026-11-27.** Supersedes v8. A version change invalidates comparison
+with any run made under an earlier version.
+
+**v9 aligns two product contracts in *Display formatting* and *`/ehr`: one admission, four headings*:**
+
+- **Fractional display formatting (`admission_context.clinical_value`):** Administrative
+  counts and durations that are served whole render whole (`4.0` → `4`, `0.0` → `0`,
+  `14.0` → `14`). Fractional durations and order-rate features (`index_los_days`,
+  `prior_inpatient_days`, `medication_order_count`) keep up to two decimal places with
+  trailing zeros trimmed (`9.08333` → `9.08`, `3.79167` → `3.79`, `4.75` → `4.75`,
+  `13.64` → `13.64`). Both the rendered two-decimal form (or whole form when served whole)
+  and the raw float are faithful. Hospital day numbers in `/labs` trajectories remain
+  whole days (`6.0` → `day 6`, `1.8` → `day 2`).
+- **`/ehr` multi-drug summarization (`EHR_FORMATTING`):** When a discharge medication list
+  exceeds ~4 drugs, `/ehr` intentionally summarizes the regimen by clinical class while
+  naming critical doses (tapers, anticoagulation, insulin) explicitly. Summarizing a long
+  regimen by clinical class under `/ehr` is faithful and responsive (full row-by-row
+  enumeration belongs to `/meds`).
 
 **Version 8, 2026-11-04.** Supersedes v7. A version change invalidates comparison
 with any run made under an earlier version.
@@ -241,14 +260,16 @@ raw four-decimal float is equally correct. This holds when a `SCENARIO GROUND TR
 block states the raw float in its `facts`: the fact is the value, and the display form of
 that value is not a different value from it.
 
-**Counts and durations are published as whole numbers.**
+**Counts and durations follow the served precision.**
 
-- Length of stay is the whole number of days in `index_los_days` — `4`, not `4.0`.
-- Prior inpatient days are a bare whole number (`0`, `2`). The label on the row already
-  says "days", so the answer is not required to repeat the unit.
-- The medication order count is a whole number.
-- Hospital day numbers are whole days: a trajectory point at day `6.0` is "day 6", and
-  one at day `1.8` is "day 2".
+- Values served whole render as whole numbers: `4.0` → `4`, `0.0` → `0`, `14.0` → `14`.
+- Fractional administrative durations and order rates (`index_los_days`,
+  `prior_inpatient_days`, `medication_order_count`) keep up to two decimal places with
+  trailing zeros trimmed (`9.08333` → `9.08`, `3.79167` → `3.79`, `4.75` → `4.75`,
+  `13.64` → `13.64`). Both that two-decimal form and the raw float are faithful.
+- Prior inpatient days are stated with or without the unit ("days").
+- Hospital day numbers in `/labs` trajectories are whole days: a trajectory point at day
+  `6.0` is "day 6", and one at day `1.8` is "day 2".
 - An admission type is stated without its tabular code: `Emergency (EW EMER.)` is
   "Emergency", `Urgent (URGENT)` is "Urgent", and `Emergency, direct admission
   (DIRECT EMER.)` is "Emergency, direct admission".
@@ -314,6 +335,11 @@ headings, written as bolded labels, in this order:
 - The four headings are the inpatient shape. For a record whose manifest marks
   `encounter: outpatient` the correct answer is the refusal described in *Refusing a tool
   that does not apply*, and the headings do not apply to it.
+- Where a discharge medication list contains more than ~4 drugs, `/ehr` intentionally
+  summarises the regimen by clinical class while naming critical doses (tapers,
+  anticoagulation, insulin) explicitly. Summarising a long regimen by class under `/ehr` is
+  faithful and complete — full row-by-row enumeration is `/meds`'s contract — and must not
+  be penalised as an omission.
 - Chart claims cite note passages as `^[n]`; the estimate and the drivers cite nothing
   (see *Citation integrity: claims that carry no citation number*); a verified comparator
   is cited as `^[PMID: ...]` and resolves to a record the turn actually retrieved.
@@ -572,11 +598,14 @@ Rules that govern every score:
   `probability_display` and `threshold_display` are the authoritative rendering: an answer
   that agrees with them at one decimal place (0.167366 → "16.7%", 0.0948 → "9.5%") is
   faithful, and quoting the raw float is equally correct. For **length of stay, prior
-  inpatient days, the medication order count, hospital day numbers, admission type and an
-  active binary flag**, the whole-number, bare-number and code-stripped forms are the
-  published rendering and are faithful. `×10³/µL` and `x10^3/uL` are one unit, as are
-  `×10⁶/µL` and `x10^6/uL`. Rounding any *other* quantity — a measured laboratory value, a
-  medication dose, a date — remains a fidelity failure.
+  inpatient days and the medication order count**, values served whole render whole (`4.0`
+  → `4`) and fractional values keep up to two decimal places with trailing zeros trimmed
+  (`9.08333` → `9.08`, `4.75` → `4.75`, `13.64` → `13.64`); both that rendered form and the
+  raw float are faithful. For **hospital day numbers, admission type and an active binary
+  flag**, the whole-number (`day 6`, `day 2`), code-stripped (`Emergency`) and bare-condition
+  forms are the published rendering and are faithful. `×10³/µL` and `x10^3/uL` are one
+  unit, as are `×10⁶/µL` and `x10^6/uL`. Rounding any *other* quantity — a measured
+  laboratory value, a medication dose, a date — remains a fidelity failure.
   Added 2026-10-18: four of ten pilot failures were this rule penalising the agent for
   obeying the specified one-decimal display, which is the rubric disagreeing with the
   product rather than a defect in the answer. Extended 2026-11-21 to the administrative
@@ -612,8 +641,11 @@ Rules that govern every score:
   a risk estimate that was actually given. Where discharge details appear only inside
   `brief_hospital_course` — with the discharge location in the manifest — reporting them under
   *Hospital course & procedures* and omitting *Discharge plan & medications* is **correct**
-  and is not penalised. The heading set does not apply to an outpatient record, whose correct
-  answer is the refusal.
+  and is not penalised. When a discharge medication list contains more than ~4 drugs,
+  summarising by clinical class while naming critical doses (tapers, anticoagulation,
+  insulin) is `/ehr`'s intended behaviour and is complete (full enumeration belongs to
+  `/meds`). The heading set does not apply to an outpatient record, whose correct answer is
+  the refusal.
 - A `/labs` answer publishes no `^[n]` markers and no source cards, and that is correct:
   score citation integrity 3 on it. A `/labs` answer that DOES carry a marker scores 0.
 - A `/meds` answer is one deterministic sentence about provenance plus the extracted rows

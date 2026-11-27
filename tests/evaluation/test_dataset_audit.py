@@ -119,10 +119,3 @@ def test_the_audit_records_a_hash_of_the_file_it_checked():
     assert dataset_audit.sha256(dataset_audit.SLICE) == dataset_audit.sha256(
         selection_slice.SELECTION_SLICE_PATH)
     assert len(dataset_audit.sha256(dataset_audit.SLICE)) == 64
-
-
-def test_the_critic_may_only_answer_pass_or_defect():
-    """The reviewer's vocabulary is two words; anything else is a harness fault."""
-    assert "PASS" in dataset_audit.CRITIC_SYSTEM
-    assert "DEFECT" in dataset_audit.CRITIC_SYSTEM
-    assert "never rewrite" in dataset_audit.CRITIC_SYSTEM.lower()

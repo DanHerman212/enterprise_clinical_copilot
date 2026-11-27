@@ -58,6 +58,7 @@ MODEL_TIMEOUT_SECONDS = gateway.MODEL_TIMEOUT_SECONDS
 #: module's job is to state the bound and to make sure it is passed — see
 #: `tests/agent/test_model_bounds.py`, which reads it back off the constructed client.
 MODEL_MAX_RETRIES = gateway.MODEL_MAX_RETRIES
+MODEL_MAX_ATTEMPTS = gateway.MODEL_MAX_ATTEMPTS
 
 #: The call profiles, re-exported for the same reason as the two bounds above: the call
 #: sites that name one live in `deterministic.py` and `graph.py`, and neither should have

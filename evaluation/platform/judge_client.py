@@ -181,6 +181,38 @@ def _usage_of(completion) -> dict:
     return pricing.normalise_usage(usage if isinstance(usage, dict) else None)
 
 
+def _wire_model(model_id: str) -> str:
+    """Wire model id expected by the Meta Responses API (`muse-spark-1.3`)."""
+    cleaned = str(model_id or "").strip()
+    if cleaned.lower().startswith("meta/"):
+        return cleaned.split("/", 1)[1]
+    return cleaned
+
+
+def _uses_responses_api(model_id: str, client: Any) -> bool:
+    """Use the OpenAI Responses API for Meta Muse models or Responses-only clients."""
+    lowered = str(model_id or "").strip().lower()
+    if lowered.startswith(("meta/", "muse-spark")):
+        return hasattr(client, "responses")
+    return hasattr(client, "responses") and not hasattr(client, "chat")
+
+
+def _extract_responses_text_and_refusal(response: Any) -> tuple[str, str]:
+    """Extract output text and any strict-schema refusal from a Responses API reply."""
+    text = str(getattr(response, "output_text", "") or "").strip()
+    refusal = ""
+    for item in getattr(response, "output", None) or []:
+        for part in getattr(item, "content", None) or []:
+            part_type = getattr(part, "type", "")
+            part_refusal = getattr(part, "refusal", "")
+            if part_type == "refusal" or part_refusal:
+                refusal = str(part_refusal or getattr(part, "text", "") or "").strip()
+                break
+        if refusal:
+            break
+    return text, refusal
+
+
 def _judge_once(client, system: str, user: str, *, multi_turn: bool = False) -> dict:
     """One synchronous grading call on GCP's OpenAI-compatible endpoint.
 
@@ -189,26 +221,40 @@ def _judge_once(client, system: str, user: str, *, multi_turn: bool = False) -> 
     a second endpoint call. The key is prefixed because the reply itself is schema-closed
     and a provider field called `usage` would collide with it.
 
-    `temperature=0` and `reasoning_effort` are sent on every call. The effort is explicit
-    because grok defaults to `"high"` when the field is omitted, and at `high` the
-    reasoning alone can outlast the endpoint's output-token budget for a grading pass.
+    Supports both Vertex Meta Responses API (`meta/muse-spark-1.3`) and OpenAI-compatible
+    Chat Completions (`xai/grok-4.7`), always at `temperature=0`, explicit
+    `reasoning_effort`, and strict JSON schema enforcement.
     """
-    completion = client.chat.completions.create(
-        model=JUDGE_MODEL,
-        messages=[{"role": "system", "content": system},
-                  {"role": "user", "content": user}],
-        temperature=0,
-        reasoning_effort=JUDGE_REASONING_EFFORT,
-        response_format={"type": "json_schema", "json_schema": reply_schema()},
-    )
-    usage = _usage_of(completion)
-    choices = getattr(completion, "choices", None) or []
-    text = ""
-    refusal = ""
-    if choices:
-        message = getattr(choices[0], "message", None)
-        text = str(getattr(message, "content", "") or "").strip()
-        refusal = str(getattr(message, "refusal", "") or "").strip()
+    if _uses_responses_api(JUDGE_MODEL, client):
+        response = client.responses.create(
+            model=_wire_model(JUDGE_MODEL),
+            instructions=system,
+            input=user,
+            temperature=0,
+            reasoning={"effort": JUDGE_REASONING_EFFORT},
+            text={"format": {"type": "json_schema", **reply_schema()}},
+        )
+        usage = _usage_of(response)
+        text, refusal = _extract_responses_text_and_refusal(response)
+        served_model = str(getattr(response, "model", "") or "") or JUDGE_MODEL
+    else:
+        completion = client.chat.completions.create(
+            model=JUDGE_MODEL,
+            messages=[{"role": "system", "content": system},
+                      {"role": "user", "content": user}],
+            temperature=0,
+            reasoning_effort=JUDGE_REASONING_EFFORT,
+            response_format={"type": "json_schema", "json_schema": reply_schema()},
+        )
+        usage = _usage_of(completion)
+        choices = getattr(completion, "choices", None) or []
+        text = ""
+        refusal = ""
+        if choices:
+            message = getattr(choices[0], "message", None)
+            text = str(getattr(message, "content", "") or "").strip()
+            refusal = str(getattr(message, "refusal", "") or "").strip()
+        served_model = str(getattr(completion, "model", "") or "") or JUDGE_MODEL
     if not text and refusal:
         # Strict structured output has a second way to fail: the model declines and the
         # answer arrives as a `refusal` with no content rather than as malformed JSON.
@@ -240,7 +286,7 @@ def _judge_once(client, system: str, user: str, *, multi_turn: bool = False) -> 
     # What actually answered, when the endpoint says. Reported beside the pin so a
     # verification run can show the served id without a second call, and so an endpoint
     # that silently served a different model is visible rather than inferred.
-    graded["_served_model"] = str(getattr(completion, "model", "") or "") or JUDGE_MODEL
+    graded["_served_model"] = served_model
     return graded
 
 

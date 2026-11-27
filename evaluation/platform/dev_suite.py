@@ -293,9 +293,9 @@ def validate_dev_matrix(rows: list[dict[str, Any]]) -> dict[str, list[str]]:
         if depth in DEPTH_TIERS and axis in MODALITY_AXES:
             cells[(depth, axis)] += 1
 
-        if str(metadata.get("rubric_version")) != "v8":
+        if str(metadata.get("rubric_version")) != "v9":
             add(item, f"rubric_version {metadata.get('rubric_version')!r}, "
-                      "expected 'v8'")
+                      "expected 'v9'")
 
         # The declared command is what the harness binds; Turn 1 is what the reader sees.
         # A row whose two disagree measures a command it does not send.

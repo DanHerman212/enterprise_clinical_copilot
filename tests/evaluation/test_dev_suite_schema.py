@@ -431,11 +431,11 @@ def test_the_rubric_covers_the_three_refusal_classes_the_suite_tests():
 
 
 def test_the_rubric_version_is_recorded_so_runs_stay_comparable():
-    assert RUBRIC.startswith("# Evaluation Rubric v8")
+    assert RUBRIC.startswith("# Evaluation Rubric v9")
     assert "Version 7, 2026-10-29" in RUBRIC
     from evaluation.platform.sync_dev_suite import RUBRIC_VERSION  # noqa: PLC0415
 
-    assert RUBRIC_VERSION == "v8"
+    assert RUBRIC_VERSION == "v9"
 
 
 def test_a_blank_later_turn_is_a_structural_failure():

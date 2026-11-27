@@ -106,6 +106,115 @@ def test_a_route_the_model_stated_is_kept_beside_the_one_it_misplaced():
     assert rows[0]["route"] == "p.o."
 
 
+def test_parse_medications_strips_transposed_duration_on_90000015():
+    """`dev_d1_slash_02`: `for two weeks` from trazodone/Ativan cannot bleed onto Percocet."""
+    note = (
+        "On transfer, Celebrex, Coumadin, Colace, Synthroid, Lovenox, Percocet, "
+        "Toprol XL, niacin, and trazodone.\n"
+        "The patient is advised to continue taking the following medications: "
+        "Celebrex 200 mg daily, for one month, Colace 100 mg b.i.d. for one month, "
+        "Protonix 40 mg b.i.d. for one month, Synthroid 137 mcg daily, Diprosone "
+        "cream 0.05% cream b.i.d. to the right arm and right abdomen, oxycodone SR "
+        "20 mg p.o. q.12h. for five days, then decrease to oxycodone SR 10 mg p.o. "
+        "q.12h. for five days, Percocet 5/325 mg one to two tablets q.6h. to be used "
+        "p.r.n. for breakthrough pain, trazodone 50 mg p.o. at bedtime p.r.n. for two "
+        "weeks, Ativan 0.25 mg b.i.d. for two weeks, and Toprol-XL 50 mg daily. "
+        "At the present time, the patient is taking Coumadin 7 mg daily. She will "
+        "remain on Coumadin for 30 days."
+    )
+    output = json.dumps({"medications": [
+        {"medication": "Celebrex", "dosage": "200 mg", "frequency": "daily, for one month", "route": "", "setting": "discharge"},
+        {"medication": "Coumadin", "dosage": "7 mg", "frequency": "daily for 30 days", "route": "", "setting": "discharge"},
+        {"medication": "Colace", "dosage": "100 mg", "frequency": "b.i.d. for one month", "route": "", "setting": "discharge"},
+        {"medication": "Synthroid", "dosage": "137 mcg", "frequency": "daily", "route": "", "setting": "discharge"},
+        {"medication": "Percocet", "dosage": "5/325 mg", "frequency": "one to two tablets q.6h. p.r.n. for two weeks", "route": "", "setting": "discharge"},
+        {"medication": "Toprol XL", "dosage": "50 mg", "frequency": "daily", "route": "", "setting": "discharge"},
+        {"medication": "trazodone", "dosage": "50 mg", "frequency": "at bedtime p.r.n. for two weeks", "route": "p.o.", "setting": "discharge"},
+        {"medication": "Protonix", "dosage": "40 mg", "frequency": "b.i.d. for one month", "route": "", "setting": "discharge"},
+        {"medication": "Diprosone cream 0.05% cream", "dosage": "", "frequency": "b.i.d.", "route": "to the right arm and right abdomen", "setting": "discharge"},
+        {"medication": "oxycodone SR", "dosage": "20 mg / 10 mg", "frequency": "q.12h. for five days, then decrease to oxycodone sr 10 mg q.12h. for five days", "route": "p.o.", "setting": "discharge"},
+        {"medication": "Ativan", "dosage": "0.25 mg", "frequency": "b.i.d. for two weeks", "route": "", "setting": "discharge"},
+    ]})
+    flags: list[str] = []
+
+    rows, dropped = parse_medications(output, note, flags=flags)
+
+    assert dropped == []
+    by_name = {row["medication"].lower(): row for row in rows}
+    assert by_name["percocet"]["frequency"] == "one to two tablets q.6h. p.r.n."
+    assert flags == ["med_duration_unsupported:Percocet:for two weeks"]
+    assert by_name["celebrex"]["frequency"] == "daily, for one month"
+    assert by_name["coumadin"]["frequency"] == "daily for 30 days"
+    assert by_name["colace"]["frequency"] == "b.i.d. for one month"
+    assert by_name["protonix"]["frequency"] == "b.i.d. for one month"
+    assert by_name["trazodone"]["frequency"] == "at bedtime p.r.n. for two weeks"
+    assert by_name["ativan"]["frequency"] == "b.i.d. for two weeks"
+    assert "for five days" in by_name["oxycodone sr"]["frequency"]
+
+
+def test_parse_medications_accepts_digit_word_duration_equivalence_and_catches_single_drug():
+    note = "DISCHARGE INSTRUCTIONS: trazodone 50 mg p.o. at bedtime for two weeks."
+    output = json.dumps({"medications": [
+        {"medication": "trazodone", "dosage": "50 mg",
+         "frequency": "at bedtime for 2 weeks", "route": "p.o.", "setting": "discharge"},
+    ]})
+    flags: list[str] = []
+    rows, _ = parse_medications(output, note, flags=flags)
+    assert rows[0]["frequency"] == "at bedtime for 2 weeks"
+    assert flags == []
+
+    single_note = "DISCHARGE MEDICATIONS: Plavix 75 mg daily."
+    single_out = json.dumps({"medications": [
+        {"medication": "Plavix", "dosage": "75 mg",
+         "frequency": "daily for 6 months", "route": "", "setting": "discharge"},
+    ]})
+    single_flags: list[str] = []
+    single_rows, _ = parse_medications(single_out, single_note, flags=single_flags)
+    assert single_rows[0]["frequency"] == "daily"
+    assert single_flags == ["med_duration_unsupported:Plavix:for 6 months"]
+
+
+def test_meds_command_surfaces_duration_guardrail_flag():
+    from unittest.mock import patch
+    from services.agent.engine import deterministic
+
+    note = "DISCHARGE INSTRUCTIONS: Percocet 5/325 mg q.6h. p.r.n., Ativan 0.25 mg b.i.d. for two weeks."
+    extraction = json.dumps({"medications": [
+        {"medication": "Percocet", "dosage": "5/325 mg",
+         "frequency": "q.6h. p.r.n. for two weeks", "route": "", "setting": "discharge"},
+        {"medication": "Ativan", "dosage": "0.25 mg",
+         "frequency": "b.i.d. for two weeks", "route": "", "setting": "discharge"},
+    ]})
+
+    class _Box:
+        async def call(self, name, args):
+            return {
+                "hadm_id": 90000015, "returned": 1,
+                "passages": [{"id": "n1", "section": "discharge_instructions", "text": note}],
+            }
+
+        async def preflight_profile(self, hadm_id):
+            return ""
+
+    class _FakeLLM:
+        async def ainvoke(self, messages, config=None):
+            from langchain_core.messages import AIMessage
+            return AIMessage(content=extraction)
+
+    with patch.object(deterministic, "_formatting_client", return_value=_FakeLLM()):
+        state = asyncio.run(deterministic.run_command(
+            _Box(),
+            routing.command_for("meds"),
+            90000015,
+            question="/meds",
+            model="gemini-4-hydrogen",
+        ))
+
+    assert "med_duration_unsupported:Percocet:for two weeks" in state.get("guardrail_flags", [])
+    percocet = next(r for r in state["command_payload"]["medications"] if r["medication"] == "Percocet")
+    assert percocet["frequency"] == "q.6h. p.r.n."
+
+
 # ------------------------------------------------------- 2. the /ehr discharge heading
 
 
@@ -130,6 +239,7 @@ def test_a_record_with_a_discharge_section_keeps_the_heading():
         has_discharge_section=True)
     # The default composition is the one every non-live caller reads, so it keeps it too.
     assert "**Discharge plan & medications.**" in prompts.EHR_FORMATTING
+    assert "NEVER merge them into one combined list" in prompts.EHR_FORMATTING
 
 
 # ------------------------------------------------------------ 3. the driver caveat

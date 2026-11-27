@@ -101,22 +101,26 @@ def test_the_retry_ladder_fits_inside_the_ask_deadline():
 
 
 def test_the_client_is_built_with_the_retry_bound():
-    """Read back off the constructed client, not off the source.
+    """Read back off the constructed client and built SDK config, not off the source.
 
     A source check passes on a keyword that is written and then shadowed; the client is
-    what the SDK actually uses.
+    what the SDK actually uses. `ChatGoogleGenerativeAI` forwards `max_retries` into
+    `HttpRetryOptions.attempts` (total attempts = 1 + retries), so we verify `attempts == 3`.
     """
+    from langchain_core.messages import HumanMessage
+
     llm = model_gateway.build_llm(graph.MODEL_ID)
 
-    assert llm.max_retries == model_gateway.MODEL_MAX_RETRIES
-    assert llm.max_retries >= 2
+    assert llm.max_retries == model_gateway.MODEL_MAX_ATTEMPTS == 3
+    req = llm._prepare_request([HumanMessage(content="ping")])
+    assert req["config"].http_options.retry_options.attempts == 3
 
 
 def test_the_extraction_client_carries_the_same_bound():
     """One construction, so the two thresholds cannot diverge in the retry policy either."""
     llm = model_gateway.build_extraction_llm(graph.MODEL_ID)
 
-    assert llm.max_retries == model_gateway.MODEL_MAX_RETRIES
+    assert llm.max_retries == model_gateway.MODEL_MAX_ATTEMPTS
 
 
 def test_streamed_turn_retries_once_on_pre_first_chunk_504(monkeypatch):

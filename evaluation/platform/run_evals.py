@@ -43,17 +43,21 @@ from services.mcp.config import JUDGE_MODEL  # noqa: E402
 #: items assert an envelope and nothing else, and the judge was never shown an answer key.
 #: A bare `run_evals` would then have reported a pass rate over the suites that measure the
 #: least, while the suites that measure the product sat behind a flag.
-DATASETS = ("ecc-tier2-dev-suite_v2", "ecc-tier2-holdout-suite")
+DATASETS = ("ecc-tier2-dev-suite_v3", "ecc-tier2-holdout-suite")
 
 #: The Tier 2 dev suite (Phase 04). A gated target rather than a routine one: its
-#: canary is named, and the full 26 run needs the Architect's sign-off, so it is
-#: reached by `--datasets ecc-tier2-dev-suite_v2` and not by the default.
-DEV_SUITE_DATASET = "ecc-tier2-dev-suite_v2"
+#: canary is named, and the full 40 run needs sign-off, so it is
+#: reached by `--datasets ecc-tier2-dev-suite_v3` and not by the default.
+DEV_SUITE_DATASET = "ecc-tier2-dev-suite_v3"
+
+#: Historical Dev suite version kept allowed for archival lookups.
+LEGACY_DEV_SUITE_DATASET = "ecc-tier2-dev-suite_v2"
 
 #: The Tier 2 blind holdout suite (Phase 05). Same gate, opposite cohort: 15 scenarios
 #: over four records the dev suite never names (`dev_suite.HOLDOUT_HADM_IDS`). Seeded by
 #: `evaluation/platform/sync_holdout_suite.py`; reached the same way, by naming it.
 HOLDOUT_SUITE_DATASET = "ecc-tier2-holdout-suite"
+HOLDOUT_SUITE_V2_DATASET = "ecc-tier2-holdout-suite_v2"
 
 #: The multi-model selection slice, v2. Sixteen scenarios and 32 turns over seven records
 #: that neither Tier 2 suite uses, seeded by `sync_selection_slice.py` — which owns the
@@ -77,12 +81,10 @@ CANARY_SCENARIOS = ("dev_d1_slash_01", "dev_d3_fup_01", "dev_d2_adv_01")
 #: the census is a deliberate, announced step with its own gate — naming it must be an
 #: act, not a typo away from `--datasets`. `--allow-full-census` is that act.
 FULL_CENSUS_DATASET = "clinical-census-full-v1"
-#: Two, not five. `gemini-2.5-pro` on us-east1 has a markedly tighter per-minute quota
-#: than the flash models, and five concurrent items meant five concurrent judge calls in
-#: the same window: the 2026-10-21 suite-2 run logged "judge retry 1/6 after ClientError:
-#: 429 RESOURCE_EXHAUSTED" and then lost five items to it. Judge concurrency is the knob
-#: that matters here — the agent round-trips are unaffected by lowering it.
-MAX_CONCURRENCY = int(os.environ.get("EVAL_MAX_CONCURRENCY", "2"))
+#: Six concurrent scenarios. Previously capped at 2 for Grok's tight 21,000 OTPM ceiling;
+#: `meta/muse-spark-1.3` handles 6+ concurrent grading calls without throttling while Cloud
+#: Run agent supports 20 concurrent requests per instance (`EVAL_MAX_CONCURRENCY` overrides).
+MAX_CONCURRENCY = int(os.environ.get("EVAL_MAX_CONCURRENCY", "6"))
 #: `MIN_PASS_RATE` is `schemas`', and `gate_verdict` is `evaluators`' (`00d8` Rows 3, 4).
 #:
 #: A local copy of the five-term verdict lived in this module after `structural_failures`
@@ -481,9 +483,15 @@ def _record_costs(client: Any, outcomes: list[Any], *,
     # because these traces are already being fetched for the price: one read, two facts.
     trace_signals: list[Any] = []
 
+    from concurrent.futures import ThreadPoolExecutor
+
     print(f"\n--- cost: {dataset_name} ---", flush=True)
-    for outcome in outcomes:
-        usage = trace_export.scenario_usage(client, outcome.output or {})
+    with ThreadPoolExecutor(max_workers=min(8, max(1, len(outcomes)))) as pool:
+        usages = list(pool.map(
+            lambda o: trace_export.scenario_usage(client, o.output or {}),
+            outcomes,
+        ))
+    for outcome, usage in zip(outcomes, usages):
         agent_cost = usage.get("cost_usd")
         judge = _judge_channel(outcome)
 
@@ -693,7 +701,8 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     targets = tuple(args.datasets) if args.datasets else DATASETS
-    allowed = (*DATASETS, DEV_SUITE_DATASET, HOLDOUT_SUITE_DATASET,
+    allowed = (*DATASETS, DEV_SUITE_DATASET, LEGACY_DEV_SUITE_DATASET,
+               HOLDOUT_SUITE_DATASET, HOLDOUT_SUITE_V2_DATASET,
                SELECTION_SLICE_DATASET)
     if args.allow_full_census:
         allowed = (*allowed, FULL_CENSUS_DATASET)

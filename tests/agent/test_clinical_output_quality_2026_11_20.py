@@ -99,18 +99,20 @@ def test_a_lab_backed_null_driver_reaches_the_model_with_no_number_to_quote():
 def test_a_database_flag_reaches_the_model_as_words():
     """`oncology_flag` is 1 because the row is one column of an encoding.
 
-    A flag that is ON states nothing the factor's own name has not said, so it carries no
-    value at all: "oncology history increases…" is the sentence, and "(present)" after it
-    read like a database row (2026-11-20). An OFF flag keeps its words, because absence is
-    the one thing the name cannot say.
+    A flag that is ON reaches the model as `"present"` (so it is never confused with a
+    `None` missing value in `<session_evidence_state>`). An OFF flag keeps `"not present"`,
+    and a genuinely null input omits `value`.
     """
     present = _presented_factor(
         {"feature": "oncology_flag", "direction": "increases", "value": 1})
     absent = _presented_factor(
         {"feature": "oncology_flag", "direction": "decreases", "value": 0})
+    missing = _presented_factor(
+        {"feature": "oncology_flag", "direction": "decreases", "value": None})
 
-    assert "value" not in present
+    assert present["value"] == "present"
     assert absent["value"] == "not present"
+    assert "value" not in missing
 
 
 def test_a_predicate_column_without_a_flag_suffix_reaches_the_model_as_words():
@@ -121,8 +123,39 @@ def test_a_predicate_column_without_a_flag_suffix_reaches_the_model_as_words():
         {"feature": "has_procedure", "direction": "decreases", "value": 0})
 
     assert performed["feature"] == "having a procedure"
-    assert "value" not in performed
+    assert performed["value"] == "present"
     assert none_done["value"] == "not present"
+
+
+def test_binary_flag_present_and_null_distinguished_in_driver_formatting():
+    from services.agent.postprocess import answer
+    from services.agent.postprocess.evidence_state import SessionEvidenceState
+
+    projected = _presented_for_model("predict_readmission", {
+        "probability": 0.1759,
+        "threshold": 0.11,
+        "decision": 1,
+        "top_factors": [
+            {"feature": "oncology_flag", "direction": "increases", "value": 1},
+            {"feature": "rdw_max", "direction": "increases", "value": None},
+        ],
+    })
+    assert projected["top_factors"][0]["value"] == "present"
+    assert "value" not in projected["top_factors"][1]
+
+    state = SessionEvidenceState(hadm_id=90000108)
+    state.ingest_tool_output("predict_readmission", {"hadm_id": 90000108}, projected)
+    rendered = state.render_for_prompt()
+    assert "feature=oncology history | direction=increases | value=present" in rendered
+
+    assert answer._format_driver(projected["top_factors"][0]) == "oncology history"
+    assert (
+        answer._format_driver(
+            projected["top_factors"][1],
+            raw_factor={"feature": "rdw_max", "direction": "increases", "value": None},
+        )
+        == "red cell distribution width (RDW) (no recorded value on the scored row)"
+    )
 
 
 def test_a_procedure_count_is_still_a_number():

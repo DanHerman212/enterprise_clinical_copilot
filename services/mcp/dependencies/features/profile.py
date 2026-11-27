@@ -82,7 +82,7 @@ COUNT_FIELDS: tuple[tuple[str, str], ...] = (
     ("age", "Age (years)"),
     ("prior_admission_count", "Prior admissions"),
     ("prior_inpatient_days", "Prior inpatient days"),
-    ("recent_ed_visits", "ED visits in the prior year"),
+    ("recent_ed_visits", "Recent ED visits"),
     ("index_los_days", "Length of stay (days)"),
 )
 

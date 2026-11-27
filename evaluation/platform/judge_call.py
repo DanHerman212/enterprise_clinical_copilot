@@ -33,8 +33,10 @@ RUBRIC = (Path(__file__).resolve().parents[1] / "rubric.md").read_text()
 
 # --- The GCP OpenAI-compatible endpoint ---------------------------------------------
 #
-# `xai/grok-4.7` is served on Vertex AI's MaaS endpoint, not on `generateContent`. The
-# hostname is a function of the location, and the three cases are not interchangeable:
+# `meta/muse-spark-1.3` is served on Vertex AI's Meta OpenAI-compatible Responses
+# endpoint (`.../publishers/meta/v1`), whereas MaaS chat models (such as `xai/grok-4.7`)
+# use `.../endpoints/openapi`. The hostname is a function of the location, and the three
+# cases are not interchangeable:
 #
 #   * `global` pools quota across a multi-region pool and is the default;
 #   * `us` and `eu` are multi-region pools with their own `rep.` hostnames;
@@ -60,12 +62,9 @@ _token_lock = threading.Lock()
 _token_cache: dict[str, Any] = {"token": "", "expires_at": 0.0}
 
 
-def endpoint_url(project: str | None = None, location: str | None = None) -> str:
-    """The OpenAI-compatible base URL for this project and location.
-
-    Trailing path included: the SDK appends `/chat/completions`, and the MaaS endpoint's
-    root is `.../endpoints/openapi` rather than `/v1`.
-    """
+def endpoint_url(project: str | None = None, location: str | None = None,
+                 *, model: str | None = None) -> str:
+    """The OpenAI-compatible base URL for this project, location, and judge model."""
     place = (location or JUDGE_LOCATION or "global").strip() or "global"
     if place == "global":
         host = "https://aiplatform.googleapis.com"
@@ -73,6 +72,10 @@ def endpoint_url(project: str | None = None, location: str | None = None) -> str
         host = f"https://aiplatform.{place}.rep.googleapis.com"
     else:
         host = f"https://{place}-aiplatform.googleapis.com"
+    target = (model or judge_client.JUDGE_MODEL or "").strip().lower()
+    if target.startswith("meta/") or target.startswith("muse-spark"):
+        return (f"{host}/v1/projects/{project or PROJECT}/locations/{place}"
+                "/publishers/meta/v1")
     return (f"{host}/v1/projects/{project or PROJECT}/locations/{place}"
             "/endpoints/openapi")
 
@@ -151,12 +154,14 @@ MANIFEST_RULES = (
     "model, not clinical evidence that an admission occurred. Never use it to "
     "contradict `encounter`, and never treat it as proof of an inpatient stay.\n"
     "  * The values in this block are raw, and the assistant renders them in their "
-    "published display form. Check the QUANTITY, not its spelling: a length of stay of "
-    "`4.0` is correctly stated as `4` days, prior inpatient days of `0.0` as `0`, a "
-    "`medication_order_count` of `7.0` as `7`, and `admission_type` `Emergency "
-    "(EW EMER.)` as `Emergency`. A whole-number or code-stripped rendering of a field "
-    "in this block is faithful and is not a fidelity defect. Measured laboratory values "
-    "and medication doses are the exception, and are checked at the precision given.\n"
+    "published display form. Check the QUANTITY, not its spelling: values served whole "
+    "render whole (`4.0` as `4`, `0.0` as `0`, `14.0` as `14`), fractional administrative "
+    "durations and order rates (`index_los_days`, `prior_inpatient_days`, "
+    "`medication_order_count`) keep up to two decimal places with trailing zeros trimmed "
+    "(`9.08333` as `9.08`, `3.79167` as `3.79`, `4.75` as `4.75`, `13.64` as `13.64`), and "
+    "`admission_type` `Emergency (EW EMER.)` renders as `Emergency`. Both the rendered "
+    "form and the raw float are faithful and are not a fidelity defect. Measured laboratory "
+    "values and medication doses are the exception, and are checked at the precision given.\n"
 )
 
 
@@ -182,9 +187,10 @@ GROUND_TRUTH_RULES = (
     "answer does something else.\n"
     "  * A `facts` entry written at full precision may be restated in the display form "
     "the product publishes, and that is faithful: a `probability` of `0.0948` stated as "
-    "`9.5%`, a fractional `length_of_stay_days` stated as a whole number of days, a "
-    "count stated as a whole number, a trajectory day of `6.0` stated as `day 6`, and a "
-    "cell count written `×10³/µL` where the fact writes `x10^3/uL`. Compare the "
+    "`9.5%`, a fractional `length_of_stay_days` / `prior_inpatient_days` / "
+    "`medication_order_count` stated up to two decimal places (`9.08333` as `9.08`, `4.75` "
+    "as `4.75`, or whole when served whole), a trajectory day of `6.0` stated as `day 6`, "
+    "and a cell count written `×10³/µL` where the fact writes `x10^3/uL`. Compare the "
     "quantity, not the spelling. Measured laboratory values and medication doses are the "
     "exception: those are checked at the precision the fact states, and a difference "
     "there is a fidelity failure.\n"

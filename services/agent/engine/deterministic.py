@@ -279,7 +279,7 @@ def meds_formatting_for(sections: tuple[str, ...]) -> str:
 
 
 def parse_medications(
-    model_output: str, source_text: str
+    model_output: str, source_text: str, *, flags: list[str] | None = None
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     """The extracted rows, and the rows refused because the note does not say them.
 
@@ -290,6 +290,11 @@ def parse_medications(
     about substance: a name that is nowhere in the text is dropped, because a
     medication the note does not mention is the one error that reads as
     authoritative.
+
+    Any explicit duration phrase (`for two weeks`, `for 30 days`) in a row's
+    schedule is also checked against that medication's own clause window(s) in
+    the note so adjacent durations cannot bleed onto the wrong drug; unsupported
+    durations are stripped and recorded in `flags` when provided.
     """
     payload = _extract_json_object(model_output)
     rows = payload.get("medications") if isinstance(payload, dict) else None
@@ -339,6 +344,17 @@ def parse_medications(
                 str(row.get("route") or "").strip(), moved, source),
             "setting": setting,
         })
+    if verified:
+        all_names = [row["medication"] for row in verified]
+        for row in verified:
+            clause = _medication_clause_windows(row["medication"], all_names, source)
+            cleaned_freq, row_flags = _verify_row_durations(
+                row["medication"], row["frequency"], clause
+            )
+            if row_flags:
+                row["frequency"] = cleaned_freq
+                if flags is not None:
+                    flags.extend(row_flags)
     return verified, dropped
 
 
@@ -377,6 +393,101 @@ _CALENDAR_NUMBER = re.compile(
 #: Fillers that mean nothing once the route or indication they introduced has moved.
 _FILLER_IN_CELL = re.compile(
     r"\b(?:to be used|to be taken|to be applied|as directed)\b", re.IGNORECASE)
+
+#: Explicit duration clauses (`for one month`, `for two weeks`, `for 30 days`).
+_DURATION_PHRASE_RE = re.compile(
+    r"\bfor\s+(?:a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\d+)"
+    r"\s+(?:day|days|week|weeks|month|months|hour|hours|minute|minutes|dose|doses|dosing|time|times)\b",
+    re.IGNORECASE,
+)
+
+_WORD_TO_DIGIT: dict[str, str] = {
+    "a": "1", "an": "1", "one": "1", "two": "2", "three": "3", "four": "4",
+    "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
+    "ten": "10", "eleven": "11", "twelve": "12",
+}
+
+
+def _canon_duration_phrase(phrase: str) -> str:
+    """Normalize `for two weeks` and `for 2 week(s)` to one canonical token."""
+    tokens = [tok.lower() for tok in re.findall(r"[A-Za-z0-9]+", phrase)]
+    if len(tokens) < 3 or tokens[0] != "for":
+        return " ".join(tokens)
+    qty = _WORD_TO_DIGIT.get(tokens[1], tokens[1])
+    unit = tokens[2].rstrip("s")
+    return f"for {qty} {unit}"
+
+
+def _med_name_pattern(name: str) -> re.Pattern[str] | None:
+    """Boundary-aware regex for a medication name, tolerating hyphen vs. space."""
+    parts = [re.escape(part) for part in re.split(r"[\s\-]+", name.strip()) if part]
+    if not parts:
+        return None
+    joined = r"[\s\-]+".join(parts)
+    return re.compile(rf"(?<![A-Za-z0-9]){joined}(?![A-Za-z0-9])", re.IGNORECASE)
+
+
+def _medication_clause_windows(name: str, all_names: list[str], source: str) -> str:
+    """Slice `source` spans owned by `name`, bounded at the next distinct medication."""
+    norm_name = _normalise(name)
+    pat = _med_name_pattern(norm_name)
+    if pat is None or len(norm_name) < 3 or not source:
+        return ""
+    hyphen_fold = re.sub(r"[\s\-]+", " ", norm_name)
+    other_starts: list[int] = []
+    for candidate in dict.fromkeys(_normalise(item) for item in all_names if item):
+        if len(candidate) < 3 or candidate == norm_name:
+            continue
+        cand_fold = re.sub(r"[\s\-]+", " ", candidate)
+        if cand_fold in hyphen_fold or hyphen_fold in cand_fold:
+            continue
+        other_pat = _med_name_pattern(candidate)
+        if other_pat is None:
+            continue
+        other_starts.extend(m.start() for m in other_pat.finditer(source))
+    other_starts.sort()
+
+    windows: list[str] = []
+    for match in pat.finditer(source):
+        end = len(source)
+        for boundary in other_starts:
+            if boundary >= match.end():
+                end = boundary
+                break
+        windows.append(source[match.start():end])
+    return "\n".join(windows)
+
+
+def _verify_row_durations(
+    medication: str, frequency: str, clause_text: str
+) -> tuple[str, list[str]]:
+    """Strip explicit durations not supported within this medication's own note clause."""
+    if not frequency or not clause_text:
+        return frequency, []
+    matches = list(_DURATION_PHRASE_RE.finditer(frequency))
+    if not matches:
+        return frequency, []
+    supported = {
+        _canon_duration_phrase(m.group(0))
+        for m in _DURATION_PHRASE_RE.finditer(clause_text)
+    }
+    flags: list[str] = []
+    out: list[str] = []
+    cursor = 0
+    for match in matches:
+        if _canon_duration_phrase(match.group(0)) in supported:
+            continue
+        out.append(frequency[cursor:match.start()])
+        cursor = match.end()
+        flags.append(f"med_duration_unsupported:{medication}:{match.group(0).strip()}")
+    if not flags:
+        return frequency, []
+    out.append(frequency[cursor:])
+    cleaned = "".join(out)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"\s+([,;])", r"\1", cleaned)
+    cleaned = cleaned.strip(" ,;")
+    return cleaned, flags
 
 
 def _is_duration_phrase(phrase: str) -> bool:
@@ -2115,7 +2226,10 @@ async def run_command(
 
     if command.wire == "meds":
         source = _source_text(recorded)
-        verified, dropped = parse_medications(text, source)
+        med_flags: list[str] = []
+        verified, dropped = parse_medications(text, source, flags=med_flags)
+        if med_flags:
+            state.setdefault("guardrail_flags", []).extend(med_flags)
         returned = _passage_count(recorded)
         # `sections` was read above, where it chose the instruction this turn was given;
         # the narrative reports the same sections rather than re-reading them.

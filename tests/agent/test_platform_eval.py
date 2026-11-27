@@ -237,10 +237,16 @@ def test_runner_targets_the_tier2_suites_and_never_the_full_census():
     """
     from evaluation.platform import run_evals
 
-    assert set(run_evals.DATASETS) == {"ecc-tier2-dev-suite_v2",
+    assert set(run_evals.DATASETS) == {"ecc-tier2-dev-suite_v3",
                                        "ecc-tier2-holdout-suite"}
     assert "clinical-census-full-v1" not in run_evals.DATASETS
     assert run_evals.FULL_CENSUS_DATASET == "clinical-census-full-v1"
+
+
+def test_default_min_pass_rate_is_ninety_percent():
+    from evaluation.platform import schemas
+
+    assert schemas.MIN_PASS_RATE == pytest.approx(0.90)
 
 
 def test_the_full_census_needs_the_explicit_flag(monkeypatch, capsys):

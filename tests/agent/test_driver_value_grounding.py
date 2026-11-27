@@ -231,8 +231,9 @@ def test_a_flag_is_stated_as_words_rather_than_as_the_encoding():
     presented = mcp_client._presented_factor(
         {"feature": "oncology_flag", "direction": "increases", "value": 1})
 
-    # On is the factor's own name; only absence needs saying (2026-11-20).
-    assert "value" not in presented
+    # Positive binary flags emit `"present"` so `<session_evidence_state>` never collapses
+    # them with `None` (`dev_d3_risk_01`); absent flags emit `"not present"`.
+    assert presented["value"] == "present"
     absent = mcp_client._presented_factor(
         {"feature": "oncology_flag", "direction": "decreases", "value": 0})
     assert absent["value"] == "not present"

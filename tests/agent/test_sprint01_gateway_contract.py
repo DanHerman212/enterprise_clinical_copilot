@@ -85,7 +85,8 @@ def test_an_unset_agent_model_is_the_existing_pin():
 def test_the_default_client_is_the_gemini_client_with_its_bounds():
     llm = model_turn.build_llm(config.AGENT_MODEL)
     assert type(llm).__name__ == "ChatGoogleGenerativeAI"
-    assert llm.max_retries == gateway.MODEL_MAX_RETRIES
+    # ChatGoogleGenerativeAI maps `max_retries` directly to `HttpRetryOptions.attempts`.
+    assert llm.max_retries == gateway.MODEL_MAX_ATTEMPTS
     assert llm.timeout == gateway.MODEL_TIMEOUT_SECONDS
 
 

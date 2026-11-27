@@ -1138,16 +1138,21 @@ def _format_driver(
 ) -> str:
     """Format one projected SHAP driver (`feature`, optional `value`) verbatim.
 
-    `_presented_value` intentionally omits `value` for both `None` inputs and truthy
-    binary flags (`oncology_flag == 1`). When `raw_factor` is available, distinguish a
-    genuinely null input (rendered as ``(no recorded value on the scored row)``) from a
-    positive binary indicator (rendered cleanly as the feature name alone).
+    `_presented_value` emits `"present"` or `"not present"` for binary flags
+    (`oncology_flag`) and omits `value` when the raw input is `None`. Keep
+    deterministic `/ehr` driver phrasing crisp: a truthy `"present"` binary
+    indicator renders cleanly as the feature name alone, while a genuinely null
+    input renders as ``(no recorded value on the scored row)``.
     """
     name = str(factor.get("feature") or "").strip()
     if not name:
         return ""
-    if "value" in factor and factor["value"] is not None and str(factor["value"]).strip() != "":
-        return f"{name} ({factor['value']})"
+    if "value" in factor and factor["value"] is not None:
+        raw_val = str(factor["value"]).strip()
+        if raw_val:
+            if raw_val.lower() == "present":
+                return name
+            return f"{name} ({raw_val})"
     if isinstance(raw_factor, dict) and "value" in raw_factor:
         if raw_factor["value"] is None:
             return f"{name} (no recorded value on the scored row)"

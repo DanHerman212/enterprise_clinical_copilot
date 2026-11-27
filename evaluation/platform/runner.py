@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -43,7 +44,8 @@ AGENT_URL = "https://agent-jamycsjjzq-ue.a.run.app"
 #: runner that refused the suite its sibling grades would be a second, stale scope.
 ALLOWED_DATASETS = ("clinical-census-pilot-v2", "suite2-adversarial-v1",
                     "ecc-tier2-dev-suite", "ecc-tier2-dev-suite_v2",
-                    "ecc-tier2-holdout-suite",
+                    "ecc-tier2-dev-suite_v3",
+                    "ecc-tier2-holdout-suite", "ecc-tier2-holdout-suite_v2",
                     "ecc-model-selection-slice-v2")
 
 
@@ -119,6 +121,33 @@ def validate_body(body: dict[str, Any]) -> None:
     parse_agent_request(body, max_question_chars=4000)
 
 
+_http_client_lock = threading.Lock()
+_http_client: Any = None
+_http_client_cls: Any = None
+
+
+def _get_pooled_client(httpx_mod: Any, timeout: Any) -> Any | None:
+    """Return a shared pooled `httpx.Client` unless `httpx.Client` is test-patched."""
+    global _http_client, _http_client_cls
+    client_cls = httpx_mod.Client
+    if client_cls.__module__ != "httpx":
+        return None
+    with _http_client_lock:
+        if (
+            _http_client is None
+            or _http_client_cls is not client_cls
+            or getattr(_http_client, "is_closed", False)
+        ):
+            _http_client = client_cls(
+                timeout=timeout,
+                limits=httpx_mod.Limits(
+                    max_connections=20, max_keepalive_connections=10
+                ),
+            )
+            _http_client_cls = client_cls
+        return _http_client
+
+
 def http_ask(*, question: str | None, hadm_id: int, run_tag: str,
              turns: list[dict[str, Any]] | None = None,
              session_id: str | None = None,
@@ -138,25 +167,40 @@ def http_ask(*, question: str | None, hadm_id: int, run_tag: str,
     """
     import httpx
 
-    from evaluation.platform.http_auth import identity_token  # noqa: PLC0415
+    from evaluation.platform import http_auth  # noqa: PLC0415
 
     body = build_body(question=question, hadm_id=hadm_id, run_tag=run_tag, turns=turns,
                       follow_ups=follow_ups, intent=intent, chip=chip)
     validate_body(body)
-    headers = {"Authorization": f"Bearer {identity_token(AGENT_URL)}"}
+    headers = {"Authorization": f"Bearer {http_auth.identity_token(AGENT_URL)}"}
     timeout = httpx.Timeout(connect=15.0, read=135.0, write=30.0, pool=15.0)
     backoff_delays = (5.0, 15.0)
     attempts = len(backoff_delays) + 1
     last_error: Exception | None = None
+    pooled = _get_pooled_client(httpx, timeout)
+    refreshed_auth = False
+
+    def _post() -> Any:
+        if pooled is not None:
+            return pooled.post(f"{AGENT_URL}/ask", json=body, headers=headers)
+        with httpx.Client(timeout=timeout) as client:
+            return client.post(f"{AGENT_URL}/ask", json=body, headers=headers)
+
     for attempt in range(attempts):
         if attempt:
             time.sleep(backoff_delays[attempt - 1])
         try:
-            with httpx.Client(timeout=timeout) as client:
-                response = client.post(f"{AGENT_URL}/ask", json=body, headers=headers)
+            response = _post()
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             last_error = exc
             continue
+        if response.status_code == 401 and not refreshed_auth:
+            clear_fn = getattr(http_auth, "clear_token_cache", None)
+            if callable(clear_fn):
+                clear_fn()
+            headers = {"Authorization": f"Bearer {http_auth.identity_token(AGENT_URL)}"}
+            refreshed_auth = True
+            response = _post()
         if response.status_code in (502, 503, 504) and attempt + 1 < attempts:
             last_error = httpx.HTTPStatusError(
                 f"gateway status {response.status_code}",
@@ -180,6 +224,7 @@ def run(names: list[str], *, run_tag: str, max_concurrency: int = 5) -> dict[str
     from evaluation.platform import evaluators as ev  # noqa: PLC0415
     from evaluation.platform.experiment import record_run_scores, run_linked  # noqa: PLC0415
     from evaluation.platform.judge_call import make_judge_fn, RUBRIC  # noqa: PLC0415
+    from evaluation.platform.schemas import MIN_PASS_RATE  # noqa: PLC0415
     from evaluation.platform.task import make_task  # noqa: PLC0415
 
     client = Langfuse()
@@ -187,7 +232,7 @@ def run(names: list[str], *, run_tag: str, max_concurrency: int = 5) -> dict[str
                      new_session_id=lambda: uuid.uuid4().hex[:12])
     quality = ev.make_quality_evaluator(make_judge_fn())
     composite = ev.make_composite_evaluator()
-    run_evaluators = ev.make_run_evaluators(min_pass_rate=0.85)
+    run_evaluators = ev.make_run_evaluators(min_pass_rate=MIN_PASS_RATE)
 
     summary: dict[str, Any] = {}
     for name in names:

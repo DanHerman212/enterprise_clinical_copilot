@@ -76,7 +76,7 @@ _FIELDS: tuple[tuple[str, str], ...] = (
     ("race", "race"),
     ("prior_admission_count", "prior_admissions"),
     ("prior_inpatient_days", "prior_inpatient_days"),
-    ("recent_ed_visits", "ed_visits_prior_year"),
+    ("recent_ed_visits", "recent_ed_visits"),
     ("index_los_days", "length_of_stay_days"),
 )
 

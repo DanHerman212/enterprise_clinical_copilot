@@ -1728,3 +1728,25 @@ def test_a_marker_free_deterministic_sentence_does_not_take_the_map():
 
     assert settled.display == {"1": 1}, settled.display
 
+
+def test_chunk_and_full_section_with_same_passage_id_do_not_collide():
+    """A full section arriving after a truncated semantic chunk with the same id keeps its own slot."""
+    chunk_text = "Part one ending at cholangiogram."
+    full_text = chunk_text + " Postop given iron 325 mg p.o. t.i.d. and Lortab elixir 15 cc q.4 h."
+    chunk = _note_passage("MT-2193-DS_brief_hospital_course_1", "brief_hospital_course", chunk_text)
+    full = _note_passage("MT-2193-DS_brief_hospital_course_1", "brief_hospital_course", full_text)
+
+    state = SessionEvidenceState(hadm_id=HADM)
+    t1 = state.ingest_tool_output("rag_search", {"hadm_id": HADM}, _rag_payload(chunk))
+    t2 = state.ingest_tool_output("rag_search", {"hadm_id": HADM}, _rag_payload(chunk))
+    t3 = state.ingest_tool_output("discharge_medications", {"hadm_id": HADM}, _rag_payload(full))
+
+    assert t1.assigned == (1,)
+    assert t2.assigned == ()
+    assert t2.reused == (1,)
+    assert t3.assigned == (2,)
+    assert t3.reused == ()
+    assert state.items[1].text == chunk_text
+    assert state.items[2].text == full_text
+    assert state.position_of_note_passage("MT-2193-DS_brief_hospital_course_1") == 2
+

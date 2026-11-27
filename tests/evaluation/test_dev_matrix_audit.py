@@ -77,7 +77,7 @@ def _row(**overrides):
         "metadata": {
             "depth_tier": "2_turn",
             "modality_axis": "followup_chip",
-            "rubric_version": "v8",
+            "rubric_version": "v9",
             "turn1_follow_ups": True,
         },
     }
@@ -138,14 +138,14 @@ def test_a_risk_chip_must_name_a_driver_the_matrix_lists(artefacts):
     facts, matrix = artefacts
     listed = ("How does Prior Inpatient Days affect this patient's readmission risk?")
     good = _row(metadata={"depth_tier": "2_turn", "modality_axis": "risk_chip",
-                          "rubric_version": "v8"},
+                          "rubric_version": "v9"},
                 command=None,
                 turns=["/ehr", {"prompt": listed, "intent": "risk_driver"}])
     assert dataset_audit.dev_deterministic_defects(
         [good], fact_sheet=facts, matrix_doc=matrix) == {}
 
     invented = _row(metadata={"depth_tier": "2_turn", "modality_axis": "risk_chip",
-                              "rubric_version": "v8"},
+                              "rubric_version": "v9"},
                     command=None,
                     turns=["/ehr", {"prompt": "Why is this patient high risk?",
                                     "intent": "risk_driver"}])
@@ -280,3 +280,30 @@ def test_a_marker_that_addresses_nothing_still_fails():
                      second_answer="See ^[1] and ^[9].")
     failures = evaluators._citation_marker_failures("PMID", output)
     assert failures and "turn 2" in failures[0]
+
+
+def test_audit_dev_writes_deterministic_attestation_and_blocks_on_defect(
+    tmp_path, monkeypatch
+):
+    import argparse
+
+    attestation = tmp_path / "dev_suite.audit.json"
+    monkeypatch.setattr(dataset_audit, "DEV_AUDIT_PATH", attestation)
+    monkeypatch.setattr(dataset_audit, "dev_deterministic_defects", lambda rows: {})
+    monkeypatch.setattr(dev_suite, "validate_dev_matrix", lambda rows: {})
+    monkeypatch.setattr(dev_suite, "validate_rows", lambda rows: None)
+    monkeypatch.setattr(dev_suite, "read_rows", lambda: [_row()])
+
+    rc = dataset_audit.audit_dev(argparse.Namespace(write_audit=True))
+    assert rc == 0
+    saved = json.loads(attestation.read_text(encoding="utf-8"))
+    assert saved["defects"] == {}
+    assert saved["items"] == {}
+
+    monkeypatch.setattr(
+        dataset_audit,
+        "dev_deterministic_defects",
+        lambda rows: {"dev_synthetic_01": ["bad"]},
+    )
+    rc_fail = dataset_audit.audit_dev(argparse.Namespace(write_audit=True))
+    assert rc_fail == 1

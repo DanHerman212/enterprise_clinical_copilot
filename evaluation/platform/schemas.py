@@ -69,7 +69,7 @@ def pass_dimensions_for(turn_count: int) -> tuple[str, ...]:
 
 #: The suite-level pass rate a dataset run must reach. `EVAL_MIN_PASS_RATE` overrides it
 #: for an exploratory run; the gate reads the value it was given, never its own copy.
-MIN_PASS_RATE = float(os.environ.get("EVAL_MIN_PASS_RATE", "0.85"))
+MIN_PASS_RATE = float(os.environ.get("EVAL_MIN_PASS_RATE", "0.90"))
 
 
 class DeterministicExpectations(BaseModel):

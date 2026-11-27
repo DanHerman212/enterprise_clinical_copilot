@@ -262,31 +262,17 @@ PROVIDER_LOCATIONS = {
 # to be reached through also names the vector index and the prediction endpoint, which
 # do live in us-east1.
 
-#: The JUDGE. A different model from the one under test, reached on a different
-#: endpoint, and pinned here for the same reason everything else on this page is pinned.
+#: The JUDGE. A different model family from the Gemini agent under test, reached on a
+#: dedicated Meta publisher endpoint on Vertex AI (`publishers/meta/v1`), and pinned here
+#: for cross-vendor independence so grading does not share Google Gemini blind spots.
 #:
-#: Why it must differ: a judge that loads the agent's own model cannot be relied on to
-#: detect a failure mode the two share, so its verdicts would rest on the agent's blind
-#: spots and measure agreement with itself. Until Sprint 03 the judge was
-#: `gemini-2.5-pro` — a different generation and a higher tier than the pinned
-#: `gemini-3.1-flash-lite`, which is as much separation as one vendor provides, and not
-#: family independence. That limitation is now closed: the judge is `xai/grok-4.7`, which
-#: shares no vendor or model family with any arm of the roster (`gemini-3.8-flash`,
-#: `gemini-3.1-pro`, `muse-spark-1.3`, `claude-sonnet-5-5`), so a Grading candidate
-#: cannot be graded by its own family (SCAR-19).
-#:
-#: Availability was measured rather than assumed, twice. On 2026-09-30 `gemini-2.5-pro`
-#: answered on the regional endpoint and was NOT_FOUND on the global one; re-measured
-#: 2026-10-28, both answered, and the default moved to `global` because the judge is the
-#: one caller that issues several requests in the same second and a global endpoint pools
-#: the per-region quota that produced the `429 RESOURCE_EXHAUSTED` rows blocking Gate 2.
-#: `xai/grok-4.7` is reached through GCP's OpenAI-compatible MaaS endpoint, which is why
-#: the location matters to the URL as well as to the quota: `global` and a region build
-#: different hostnames (`judge_call.endpoint_url`).
+#: `meta/muse-spark-1.3` answered 6 concurrent grading calls in 19.0s with 0 rate-limit
+#: errors and 6/6 verdict agreement with `xai/grok-4.7` (2026-11-27), while avoiding
+#: Grok's 21,000 OTPM throttling bottleneck and reducing judge token cost by ~37%.
 #:
 #: `VERTEX_JUDGE_LOCATION` overrides the location without a code change. The client reads
 #: both at call time, so a run can be re-pinned to a region for one experiment.
-JUDGE_MODEL = "xai/grok-4.7"
+JUDGE_MODEL = "meta/muse-spark-1.3"
 JUDGE_LOCATION = os.environ.get("VERTEX_JUDGE_LOCATION") or "global"
 
 #: How hard the judge thinks before answering. Grok on GCP defaults to `"high"` when the

@@ -34,65 +34,65 @@ SAMPLE = {"verdict": "PASS", "dimensions": {"fidelity": 3, "grounding": 3, "cita
           "reasoning": "Fine."}
 
 
-class _Message:
-    def __init__(self, text: str, refusal: str = "") -> None:
-        self.content = text
+class _OutputBlock:
+    def __init__(self, *, type_: str = "output_text", text: str = "",
+                 refusal: str = "") -> None:
+        self.type = type_
+        self.text = text
         self.refusal = refusal
 
 
-class _Choice:
-    def __init__(self, text: str, refusal: str = "") -> None:
-        self.message = _Message(text, refusal)
-        self.finish_reason = "stop"
+class _OutputItem:
+    def __init__(self, content: list[_OutputBlock]) -> None:
+        self.content = content
 
 
 class _Usage:
     def __init__(self, prompt: int = 900, completion: int = 120,
                  cached: int = 0) -> None:
-        self.prompt_tokens = prompt
-        self.completion_tokens = completion
-        self.prompt_tokens_details = type("D", (), {"cached_tokens": cached})()
-        self.completion_tokens_details = type("D", (), {"reasoning_tokens": 40})()
+        self.input_tokens = prompt
+        self.output_tokens = completion
+        self.input_tokens_details = type("D", (), {"cached_tokens": cached})()
+        self.output_tokens_details = type("D", (), {"reasoning_tokens": 40})()
 
     def model_dump(self) -> dict:
-        return {"input": self.prompt_tokens, "output": self.completion_tokens,
-                "prompt_tokens_details":
-                    {"cached_tokens": self.prompt_tokens_details.cached_tokens},
-                "completion_tokens_details":
+        return {"input_tokens": self.input_tokens, "output_tokens": self.output_tokens,
+                "input_tokens_details":
+                    {"cached_tokens": self.input_tokens_details.cached_tokens},
+                "output_tokens_details":
                     {"reasoning_tokens": 40}}
 
 
-class _Completion:
+class _Response:
     def __init__(self, text: str, usage: _Usage | None = None,
                  refusal: str = "") -> None:
-        self.choices = [_Choice(text, refusal)]
+        self.output_text = text
+        self.output = (
+            [_OutputItem([_OutputBlock(type_="refusal", refusal=refusal)])]
+            if refusal else []
+        )
         self.usage = usage if usage is not None else _Usage()
-        self.model = "xai/grok-4.7"
+        self.model = "meta/muse-spark-1.3"
 
 
-class _Completions:
-    """The `chat.completions` half of the OpenAI-compatible client."""
+class _Responses:
+    """The `responses` half of the Vertex Meta OpenAI-compatible client."""
 
     def __init__(self, text: str, seen: dict | None = None) -> None:
         self._text = text
         self.seen = seen
 
-    def create(self, **kwargs) -> _Completion:
+    def create(self, **kwargs) -> _Response:
         if self.seen is not None:
             self.seen.update(kwargs)
-        return _Completion(self._text)
-
-
-class _Chat:
-    def __init__(self, text: str, seen: dict | None = None) -> None:
-        self.completions = _Completions(text, seen)
+        return _Response(self._text)
 
 
 class _Client:
-    """Shaped like `openai.OpenAI`, because that is what the call is made on."""
+    """Shaped like `openai.OpenAI` Responses API (`client.responses.create`)."""
 
     def __init__(self, text: str, seen: dict | None = None) -> None:
-        self.chat = _Chat(text, seen)
+        self.responses = _Responses(text, seen)
 
 
 def _once(text: str) -> dict:
@@ -106,7 +106,7 @@ def test_a_bare_object_is_returned_as_is():
     # reading of the trace.
     assert result["_usage"]["input"] == 900
     assert result["_usage"]["output"] == 120
-    assert result["_model"] == "xai/grok-4.7"
+    assert result["_model"] == "meta/muse-spark-1.3"
 
 
 def test_the_judge_call_declares_a_strict_json_schema():
@@ -158,29 +158,26 @@ def test_the_config_passed_to_the_model_carries_the_schema():
     judge_client._judge_once(_Client(__import__("json").dumps(SAMPLE), seen),
                              "system", "user")
 
-    assert seen["model"] == judge_client.JUDGE_MODEL
+    assert seen["model"] == judge_client._wire_model(judge_client.JUDGE_MODEL)
     assert seen["temperature"] == 0
-    assert seen["reasoning_effort"] == judge_client.JUDGE_REASONING_EFFORT
-    assert seen["response_format"]["type"] == "json_schema"
-    assert seen["response_format"]["json_schema"]["strict"] is True
-    roles = [message["role"] for message in seen["messages"]]
-    assert roles == ["system", "user"]
+    assert seen["reasoning"] == {"effort": judge_client.JUDGE_REASONING_EFFORT}
+    assert seen["text"]["format"]["type"] == "json_schema"
+    assert seen["text"]["format"]["strict"] is True
+    assert seen["instructions"] == "system"
+    assert seen["input"] == "user"
 
 
 def test_a_refusal_is_an_error_not_an_empty_reply():
     """Strict structured output has a second way to fail: the model declines."""
 
-    class _Refusing(_Completions):
-        def create(self, **kwargs) -> _Completion:
-            return _Completion("", refusal="I cannot evaluate this.")
+    class _Refusing(_Responses):
+        def create(self, **kwargs) -> _Response:
+            return _Response("", refusal="I cannot evaluate this.")
 
-    class _Chat:
-        completions = _Refusing("")
+    class _RefusalClient:
+        responses = _Refusing("")
 
-    class _Client:
-        chat = _Chat()
-
-    result = judge_client._judge_once(_Client(), "system", "user")
+    result = judge_client._judge_once(_RefusalClient(), "system", "user")
 
     assert "error" in result
     assert "refused" in result["error"]

@@ -10,10 +10,21 @@ collector uses.
 from __future__ import annotations
 
 import subprocess
+import threading
+import time
+
+_TOKEN_TTL_SECONDS = 2700  # 45 minutes (ID tokens last 60 minutes)
+_token_lock = threading.Lock()
+_token_cache: dict[str, tuple[str, float]] = {}
 
 
-def identity_token(audience: str) -> str:
-    """An ID token valid for `audience`, or raise with the reason."""
+def clear_token_cache() -> None:
+    """Drop cached identity tokens (used on 401 refresh and in tests)."""
+    with _token_lock:
+        _token_cache.clear()
+
+
+def _fetch_identity_token(audience: str) -> str:
     try:  # works with ADC (local user credentials, or a service account)
         import google.auth.transport.requests as google_requests
         from google.oauth2 import id_token
@@ -30,4 +41,16 @@ def identity_token(audience: str) -> str:
                 "could not mint an identity token: "
                 f"{(result.stderr or '').strip()[:200]}"
             ) from None
+        return token
+
+
+def identity_token(audience: str) -> str:
+    """An ID token valid for `audience`, cached in-process across concurrent turns."""
+    now = time.monotonic()
+    with _token_lock:
+        cached = _token_cache.get(audience)
+        if cached and now < cached[1]:
+            return cached[0]
+        token = _fetch_identity_token(audience)
+        _token_cache[audience] = (token, time.monotonic() + _TOKEN_TTL_SECONDS)
         return token

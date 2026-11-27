@@ -78,6 +78,16 @@ MODEL_TIMEOUT_SECONDS = timeout_chain().model
 #: answer (`dev_d4_risk_01` turns 3-4, `dev_d5_fup_01` turn 4).
 MODEL_MAX_RETRIES = 2
 
+#: Total call attempts (`1` initial + `MODEL_MAX_RETRIES` retries).
+#: `langchain-google-genai` passes its `max_retries` argument directly into
+#: `google.genai.types.HttpRetryOptions(attempts=max_retries)` — treating it as
+#: TOTAL attempts rather than retries. Passing `MODEL_MAX_RETRIES` (2) gave only
+#: 1 retry (2 attempts, failing at ~58 s on consecutive 28 s Vertex 504s with 50 s
+#: of unused ask deadline). `ChatOpenAI` treats `max_retries=2` as 2 retries (3
+#: attempts), so `_google_client` passes `MODEL_MAX_ATTEMPTS` here to normalize the
+#: provider quirk at the gateway boundary.
+MODEL_MAX_ATTEMPTS = MODEL_MAX_RETRIES + 1
+
 #: Every configurable content filter off, for the extraction turns only.
 #:
 #: The served path keeps the product's thresholds and should: that is a control on what
@@ -1088,7 +1098,7 @@ def _google_client(profile_: ModelProfile, *, safety_profile: str, effort: str,
         "temperature": 0,
         "max_output_tokens": config.GEMINI_MAX_OUTPUT_TOKENS,
         **construction_parameters(profile_, effort),
-        "max_retries": MODEL_MAX_RETRIES,
+        "max_retries": MODEL_MAX_ATTEMPTS,
         "timeout": MODEL_TIMEOUT_SECONDS,
         "safety_settings": dict(safety),
     }

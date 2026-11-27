@@ -167,12 +167,12 @@ def http_ask(*, question: str | None, hadm_id: int, run_tag: str,
     """
     import httpx
 
-    from evaluation.platform import http_auth  # noqa: PLC0415
+    from evaluation.platform.http_auth import identity_token  # noqa: PLC0415
 
     body = build_body(question=question, hadm_id=hadm_id, run_tag=run_tag, turns=turns,
                       follow_ups=follow_ups, intent=intent, chip=chip)
     validate_body(body)
-    headers = {"Authorization": f"Bearer {http_auth.identity_token(AGENT_URL)}"}
+    headers = {"Authorization": f"Bearer {identity_token(AGENT_URL)}"}
     timeout = httpx.Timeout(connect=15.0, read=135.0, write=30.0, pool=15.0)
     backoff_delays = (5.0, 15.0)
     attempts = len(backoff_delays) + 1
@@ -195,10 +195,16 @@ def http_ask(*, question: str | None, hadm_id: int, run_tag: str,
             last_error = exc
             continue
         if response.status_code == 401 and not refreshed_auth:
-            clear_fn = getattr(http_auth, "clear_token_cache", None)
+            clear_fn = getattr(
+                sys.modules.get("evaluation.platform.http_auth"),
+                "clear_token_cache",
+                None,
+            )
             if callable(clear_fn):
                 clear_fn()
-            headers = {"Authorization": f"Bearer {http_auth.identity_token(AGENT_URL)}"}
+            from evaluation.platform.http_auth import identity_token as refresh_token  # noqa: PLC0415
+
+            headers = {"Authorization": f"Bearer {refresh_token(AGENT_URL)}"}
             refreshed_auth = True
             response = _post()
         if response.status_code in (502, 503, 504) and attempt + 1 < attempts:

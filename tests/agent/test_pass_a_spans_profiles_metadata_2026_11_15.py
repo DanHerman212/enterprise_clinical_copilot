@@ -189,17 +189,17 @@ def test_the_two_profiles_are_the_low_level_and_the_baseline():
         assert gateway.call_profile(name).max_output_tokens is None
 
 
-def test_minimal_is_not_a_level_this_table_can_ask_for():
-    """`gemini-3.8-flash` and `gemini-3.1-pro` reject it with an HTTP 400.
+def test_minimal_is_reserved_strictly_for_helper_table():
+    """`gemini-3.8-flash`, `gemini-4-hydrogen`, and `gemini-3.1-pro` reject `minimal`.
 
-    A profile that named `minimal` bought a refused call through `_BudgetFallback` and then
-    the same answer at `low`, so the level is gone rather than merely unused: the wasted
-    round trip was the cheapest thing it ever cost.
+    `CALL_PROFILE_MINIMAL` exists strictly for `HELPER_MODEL = "gemini-3.5-flash"`.
+    No primary command formatting profile or free-text route uses `minimal`.
     """
     levels = {profile.thinking_level for profile in gateway.CALL_PROFILES.values()}
 
-    assert "minimal" not in levels
-    assert levels == {None, "low"}
+    assert levels == {None, "low", "minimal"}
+    assert set(model_gateway.FORMATTING_PROFILES.values()) == {gateway.CALL_PROFILE_LOW}
+    assert graph._call_profile_for(None) == gateway.CALL_PROFILE_LOW
 
 
 def test_an_unknown_profile_name_is_the_default_rather_than_an_error():
@@ -663,3 +663,44 @@ def test_the_free_text_run_config_carries_the_metadata(monkeypatch):
     assert _GraphConfig.last["lab_driver"] is False
     assert _GraphConfig.last["follow_up_declared"] is False
     assert _GraphConfig.last["risk_score"] is False
+
+
+def test_gemini_35_flash_helper_profile_uses_minimal_thinking():
+    """`gemini-3.5-flash` accepts `thinking_level='minimal'` and `temperature=0` cleanly."""
+    import warnings
+
+    profile = gateway.profile(config.HELPER_MODEL)
+    minimal = gateway.call_profile(gateway.CALL_PROFILE_MINIMAL)
+    extra = gateway.call_profile_parameters(profile, minimal)
+    assert extra == {"thinking_level": "minimal"}
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        client = gateway._google_client(
+            profile,
+            safety_profile=gateway.SAFETY_EXTRACTION,
+            effort=gateway.EFFORT_EXTRACTION,
+            extra=extra,
+        )
+    assert client.reasoning_effort == "minimal"
+    assert client.thinking_budget is None
+
+
+def test_the_ehr_helper_steps_route_default_pin_to_fast_helper_model(monkeypatch):
+    """On `GEMINI_MODEL`, `/ehr` helper steps use `HELPER_MODEL` at `CALL_PROFILE_MINIMAL`."""
+    seen: dict = {}
+
+    def _build(model, **kwargs):
+        seen["model"] = model
+        seen.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(deterministic, "extraction_llm_factory",
+                        deterministic._DEFAULT_EXTRACTION_FACTORY)
+    monkeypatch.setattr(model_gateway, "build_extraction_llm", _build)
+    deterministic._ehr_helper_llm(config.GEMINI_MODEL)
+
+    assert seen == {
+        "model": config.HELPER_MODEL,
+        "call_profile": gateway.CALL_PROFILE_MINIMAL,
+    }

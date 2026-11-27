@@ -98,6 +98,10 @@ _LEGACY_JUDGE = Rate("gemini-2.5-pro", "legacy judge",
                      input=1.25, cached_read=0.125, cache_write=0.0, output=10.00)
 _register(_LEGACY_JUDGE)
 
+_HELPER_FLASH = Rate("gemini-3.5-flash", "fast extraction helper",
+                     input=0.50, cached_read=0.05, cache_write=0.0, output=3.00)
+_register(_HELPER_FLASH)
+
 #: The order a report lists the roster in. Named rather than taken from the dict, so a
 #: table in a report does not reorder itself when an alias is added.
 ROSTER: tuple[str, ...] = (

@@ -64,6 +64,7 @@ MODEL_MAX_RETRIES = gateway.MODEL_MAX_RETRIES
 #: to import the adapter to say "this is the least thinking a turn can buy".
 CALL_PROFILE_DEFAULT = gateway.CALL_PROFILE_DEFAULT
 CALL_PROFILE_LOW = gateway.CALL_PROFILE_LOW
+CALL_PROFILE_MINIMAL = gateway.CALL_PROFILE_MINIMAL
 CALL_PROFILES = gateway.CALL_PROFILES
 call_profile = gateway.call_profile
 resolved_thinking_level = gateway.resolved_thinking_level
@@ -283,19 +284,21 @@ async def propose_followups(
     signal_packet: str,
     *,
     model: str,
+    call_profile: str = gateway.CALL_PROFILE_LOW,
     timeout: float = 20.0,
 ) -> str:
     """Propose readmission-risk follow-up questions as a bounded JSON helper call.
 
-    Runs on `EFFORT_EXTRACTION` + `CALL_PROFILE_LOW` with `json_mode=True` and returns
-    `""` on any timeout or provider error so a turn is never delayed past its bound.
+    Runs on `EFFORT_EXTRACTION` + `call_profile` (default `CALL_PROFILE_LOW`) with
+    `json_mode=True` and returns `""` on any timeout or provider error so a turn is never
+    delayed past its bound.
     """
     try:
         llm = gateway.chat_model(
             model,
             safety_profile=gateway.SAFETY_EXTRACTION,
             effort=gateway.EFFORT_EXTRACTION,
-            call_profile_name=gateway.CALL_PROFILE_LOW,
+            call_profile_name=call_profile,
         )
         bound = gateway.bind(llm, {"json_mode": True, "max_output_tokens": 4096})
         reply = await asyncio.wait_for(

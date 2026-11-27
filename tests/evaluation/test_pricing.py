@@ -72,6 +72,16 @@ def test_the_published_rate_table_is_what_the_code_says():
             price_in, cached, write, price_out), model_id
 
 
+def test_helper_flash_model_has_valid_pricing_rate():
+    """The pinned helper model has a valid rate so telemetry traces never report unattributed."""
+    rate = pricing.rate_for("gemini-3.5-flash")
+    assert rate.model_id == "gemini-3.5-flash"
+    assert pricing.known("gemini-3.5-flash") is True
+    assert pricing.cost_usd("gemini-3.5-flash", {
+        "input": 1000, "cached": 0, "cache_write": 0, "output": 200, "thinking": 0,
+    }) > 0.0
+
+
 class TestNoDoubleCounting:
     def test_thinking_inside_output_is_not_added_again(self):
         """The Gemini measurement: input 32, output 160, total 192, thinking 153.

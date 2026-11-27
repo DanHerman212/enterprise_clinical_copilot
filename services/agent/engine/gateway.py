@@ -345,6 +345,17 @@ def _build_registry(google_location: str, anthropic_location: str,
             construction=construction, call=per_call, json_mode="mime",
         ))
 
+    # Fast structured-JSON helper profile: accepts `thinking_level="minimal"` and
+    # `temperature=0` without warnings, used only by non-prose background helpers.
+    flash_construction, flash_per_call = _google_thinking(
+        served_effort, "minimal", call="minimal")
+    add(ModelProfile(
+        name="gemini-3.5-flash", family=GOOGLE,
+        wire_model="gemini-3.5-flash",
+        location=google_location,
+        construction=flash_construction, call=flash_per_call, json_mode="mime",
+    ))
+
     # Anthropic on Vertex. Three wire facts, each reported as an HTTP 400 when got wrong:
     # no sampling temperature, thinking expressed as a mode rather than an effort level,
     # and tool choice limited to auto/none.
@@ -656,18 +667,16 @@ def bind(model: Any, request: Mapping[str, Any]) -> Any:
 
 CALL_PROFILE_DEFAULT = "default"
 CALL_PROFILE_LOW = "low"
+CALL_PROFILE_MINIMAL = "minimal"
 
 #: The level the low profile asks for, in the Gemini family's own vocabulary.
 #:
-#: `minimal` is deliberately not a value here. `gemini-3.8-flash` and `gemini-3.1-pro`
-#: reject `THINKING_LEVEL_MINIMAL` with `400 INVALID_ARGUMENT`, so a profile that named it
-#: bought a refused call through `_BudgetFallback` and then the same answer at `low` — one
-#: wasted round trip per helper step, per command, on every turn (measured 2026-11-15
-#: against the live endpoint). `low` is the floor these models accept, and it is the level
-#: at which a Gemini 3 model may still plan before writing, which a JSON row list and a
-#: four-section briefing both have to do: at `minimal` the medication reply came back as
-#: JSON that did not parse (measured 2026-11-15 on revision `8b01115`).
+#: `minimal` is deliberately not used for primary served/formatting turns: `gemini-3.8-flash`,
+#: `gemini-4-hydrogen`, and `gemini-3.1-pro` reject `THINKING_LEVEL_MINIMAL` with
+#: `400 INVALID_ARGUMENT`. Only the pinned fast structured-JSON helper model
+#: (`gemini-3.5-flash`) uses `CALL_PROFILE_MINIMAL`.
 THINKING_LOW = "low"
+THINKING_MINIMAL = "minimal"
 
 
 @dataclass(frozen=True)
@@ -717,6 +726,9 @@ CALL_PROFILES: dict[str, CallProfile] = {
     # cheaper, it was a refused request followed by this same level.
     CALL_PROFILE_LOW: CallProfile(
         name=CALL_PROFILE_LOW, thinking_level=THINKING_LOW,
+    ),
+    CALL_PROFILE_MINIMAL: CallProfile(
+        name=CALL_PROFILE_MINIMAL, thinking_level=THINKING_MINIMAL,
     ),
 }
 

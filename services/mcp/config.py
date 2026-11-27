@@ -227,6 +227,12 @@ NCBI_TIMEOUT_SECONDS = positive_int_env("NCBI_TIMEOUT_SECONDS", 10)
 # while `gemini-4-hydrogen` completed in 5.6-7.8s and passed the 3-scenario live canary 3/3.
 GEMINI_MODEL = "gemini-4-hydrogen"
 
+# Fast structured-JSON helper model for non-prose background steps on the default pin
+# (`derive_target`, `extract_comparators` across all 5 abstracts, and `propose_followups`).
+# Reversible 1-line pin: accepts `thinking_level="minimal"` and `temperature=0` with no
+# warnings (~2-5s vs 13-23s on `gemini-4-hydrogen`), keeping clinical prose on `GEMINI_MODEL`.
+HELPER_MODEL = "gemini-3.5-flash"
+
 # Which model the agent asks for, which is the pin above unless a deployment names
 # another. It is read from the environment rather than pinned because the whole point of
 # the multi-model programme is to run the SAME code against several models and compare;

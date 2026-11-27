@@ -219,6 +219,94 @@ def test_the_literature_synthesis_streams_too():
     assert model.used == ["astream"]
 
 
+def test_formatting_turn_falls_back_to_ainvoke_on_first_token_timeout(monkeypatch):
+    """If `astream` stalls before emitting its first chunk, fall back once to `ainvoke`."""
+    from services.agent.engine import deterministic
+
+    class _StalledStreamLLM:
+        def __init__(self) -> None:
+            self.used: list[str] = []
+
+        async def astream(self, prompt, config=None):
+            self.used.append("astream")
+            await asyncio.sleep(1.0)
+            yield AIMessageChunk(content="never")
+
+        async def ainvoke(self, prompt, config=None):
+            self.used.append("ainvoke")
+            return AIMessage(content="Recovered via blocking invoke.")
+
+    monkeypatch.setattr(deterministic, "STREAM_FIRST_TOKEN_TIMEOUT_S", 0.05)
+    llm = _StalledStreamLLM()
+    announced: list[str] = []
+
+    reply = asyncio.run(deterministic._formatting_turn(
+        llm, [], config=None, announce=announced.append,
+    ))
+
+    assert llm.used == ["astream", "ainvoke"]
+    assert announced == ["Recovered via blocking invoke."]
+    assert text_of(reply.content) == "Recovered via blocking invoke."
+
+
+def test_formatting_turn_falls_back_on_pre_first_chunk_transport_error():
+    """Pre-first-chunk `ReadTimeout` falls back once to `ainvoke` rather than failing at 63s."""
+    from services.agent.engine import deterministic
+
+    class _TransportFailStreamLLM:
+        def __init__(self) -> None:
+            self.used: list[str] = []
+
+        async def astream(self, prompt, config=None):
+            self.used.append("astream")
+            raise TimeoutError("httpx.ReadTimeout")
+            yield  # pragma: no cover — marks async generator
+
+        async def ainvoke(self, prompt, config=None):
+            self.used.append("ainvoke")
+            return AIMessage(content="Fallback prose.")
+
+    llm = _TransportFailStreamLLM()
+    announced: list[str] = []
+
+    reply = asyncio.run(deterministic._formatting_turn(
+        llm, [], config=None, announce=announced.append,
+    ))
+
+    assert llm.used == ["astream", "ainvoke"]
+    assert announced == ["Fallback prose."]
+    assert text_of(reply.content) == "Fallback prose."
+
+
+def test_formatting_turn_does_not_fall_back_after_emitting_a_chunk():
+    """Once chunks have been announced, a mid-stream failure raises without duplicating text."""
+    from services.agent.engine import deterministic
+
+    class _MidStreamFailLLM:
+        def __init__(self) -> None:
+            self.used: list[str] = []
+
+        async def astream(self, prompt, config=None):
+            self.used.append("astream")
+            yield AIMessageChunk(content="First sentence. ")
+            raise TimeoutError("mid-stream ReadTimeout")
+
+        async def ainvoke(self, prompt, config=None):
+            self.used.append("ainvoke")
+            return AIMessage(content="Should never run")
+
+    llm = _MidStreamFailLLM()
+    announced: list[str] = []
+
+    with pytest.raises(TimeoutError):
+        asyncio.run(deterministic._formatting_turn(
+            llm, [], config=None, announce=announced.append,
+        ))
+
+    assert llm.used == ["astream"]
+    assert announced == ["First sentence. "]
+
+
 # --- the swap, decided here ----------------------------------------------------
 
 def test_a_settled_verdict_names_the_swap_the_client_owes():

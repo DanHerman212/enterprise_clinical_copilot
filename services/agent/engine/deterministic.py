@@ -68,6 +68,7 @@ from services.agent.engine import gateway
 from services.agent.engine import model as model_gateway
 from services.agent.engine import model as model_turn
 from services.agent.engine import prompts
+from services.mcp import config as mcp_config
 from services.agent.telemetry.stages import emit as _emit
 from services.agent.engine.mcp_client import (
     MCPToolbox,
@@ -1185,6 +1186,12 @@ async def _retrying(call: Callable[[], Any], *, what: str,
     raise AssertionError("unreachable: the loop returns or raises")
 
 
+#: Guard against a stalled SSE stream (`astream` hanging past first token). When the
+#: first chunk does not arrive within this bound (or hits a pre-first-chunk transport error),
+#: `_formatting_turn` falls back once to blocking `ainvoke` instead of failing after 63s.
+STREAM_FIRST_TOKEN_TIMEOUT_S = 18.0
+
+
 async def _formatting_turn(
     llm: Any,
     prompt: list[Any],
@@ -1212,8 +1219,8 @@ async def _formatting_turn(
 
     A capacity refusal is retried, because this is the call the reader is waiting on and
     it is 83% of an `/ehr` turn (64.16 s of 77.18 s, `826289ea`, 2026-11-08). Streaming
-    is retried only BEFORE the first frame: once a piece has been announced, a second
-    attempt would print the prose twice.
+    is retried or fallen back to non-streaming `ainvoke` ONLY BEFORE the first chunk: once
+    a piece has arrived, retrying or falling back would duplicate text on screen.
     """
     if announce is None:
         return await _retrying(lambda: llm.ainvoke(prompt, config=config),
@@ -1223,22 +1230,56 @@ async def _formatting_turn(
     while True:
         turn: Any = None
         try:
-            async for chunk in llm.astream(prompt, config=config):
-                turn = chunk if turn is None else turn + chunk
-                # The chunk's own text, not its repr: Gemini answers in content blocks, so
-                # announcing `str(chunk.content)` would put the envelope on screen instead
-                # of the summary (see `model_turn.text_of`).
-                piece = text_of(chunk.content)
+            stream = llm.astream(prompt, config=config).__aiter__()
+            try:
+                while True:
+                    try:
+                        coro = stream.__anext__()
+                        chunk = await (
+                            asyncio.wait_for(coro, timeout=STREAM_FIRST_TOKEN_TIMEOUT_S)
+                            if turn is None
+                            else coro
+                        )
+                    except StopAsyncIteration:
+                        break
+                    turn = chunk if turn is None else turn + chunk
+                    # The chunk's own text, not its repr: Gemini answers in content blocks, so
+                    # announcing `str(chunk.content)` would put the envelope on screen instead
+                    # of the summary (see `model_turn.text_of`).
+                    piece = text_of(chunk.content)
+                    if piece:
+                        announce(piece)
+            finally:
+                aclose = getattr(stream, "aclose", None)
+                if callable(aclose):
+                    try:
+                        await aclose()
+                    except Exception:  # noqa: BLE001 — ignore stream close errors
+                        pass
+        except Exception as exc:
+            # Safe to retry or fall back only while nothing has arrived; see docstring.
+            if turn is not None:
+                raise
+            if attempt < RETRY_MAX_ATTEMPTS and _rate_limited(exc):
+                await _pause_before_retry(attempt, "the formatting turn")
+                attempt += 1
+                continue
+            if (isinstance(exc, (TimeoutError, asyncio.TimeoutError))
+                    or gateway.classify_error(exc) == gateway.TRANSPORT):
+                logger.warning(
+                    "formatting stream stalled or hit transport error before first chunk (%s); "
+                    "falling back once to non-streaming ainvoke",
+                    exc,
+                )
+                reply = await _retrying(
+                    lambda: llm.ainvoke(prompt, config=config),
+                    what="the formatting turn",
+                )
+                piece = text_of(getattr(reply, "content", None))
                 if piece:
                     announce(piece)
-        except Exception as exc:
-            # Safe to retry only while nothing has been announced; see the docstring.
-            if (turn is not None or attempt >= RETRY_MAX_ATTEMPTS
-                    or not _rate_limited(exc)):
-                raise
-            await _pause_before_retry(attempt, "the formatting turn")
-            attempt += 1
-            continue
+                return reply
+            raise
         if turn is None:
             raise RuntimeError("the formatting model returned no chunks")
         return turn
@@ -1261,19 +1302,23 @@ extraction_llm_factory: Callable[[str], Any] = _DEFAULT_EXTRACTION_FACTORY
 def _ehr_helper_llm(model: str) -> Any:
     """The client the two `/ehr` PubMed helper calls run on.
 
-    Both steps write a sentence or two out of text already in front of them — a query and
-    a few anchor phrases, then a rate and the sentence stating it — so they run at the
-    pipeline's low level rather than at the deployment's own. At the deployment's level
-    the first of them spent fifteen to thirty seconds per call before writing a
-    twenty-token object (`gateway.CALL_PROFILES`).
+    Both steps return small JSON read out of text already in front of them — a query and
+    a few anchor phrases, then a rate and the sentence stating it. On the default pin
+    (`GEMINI_MODEL`), route to `HELPER_MODEL` at `minimal` thinking so they finish in a few
+    seconds ahead of clinical prose. Non-default models (test doubles or multi-model eval
+    arms) stay on their own model at `low`.
 
-    The seam is respected before the profile is applied: if a test has replaced
+    The seam is respected before routing is applied: if a test has replaced
     `extraction_llm_factory`, that replacement is what runs, including the `None` that
-    means "no extraction in this environment". Only the production seam — the module-level
-    default this file was imported with — asks for the profile.
+    means "no extraction in this environment".
     """
     if extraction_llm_factory is not _DEFAULT_EXTRACTION_FACTORY:
         return extraction_llm_factory(model)
+    if model == mcp_config.GEMINI_MODEL:
+        return model_gateway.build_extraction_llm(
+            mcp_config.HELPER_MODEL,
+            call_profile=model_gateway.CALL_PROFILE_MINIMAL,
+        )
     return model_gateway.build_extraction_llm(
         model, call_profile=model_gateway.CALL_PROFILE_LOW)
 
@@ -1925,6 +1970,7 @@ async def run_command(
     # cohort), deterministic cited prose is generated from the ranked abstracts so
     # Sections 1–3 never have to block on literature extraction.
     if command.wire == "summarize" and str(text).strip():
+        had_readmission_section = bool(answer_text.extract_readmission_body(text))
         fallback_body = (
             answer_text.extract_readmission_body(text)
             or _deterministic_fallback_literature_prose(command_extras.get("fallback_literature"))
@@ -1940,6 +1986,8 @@ async def run_command(
         if risk_section:
             text = answer_text.attach_readmission_section(text, risk_section)
             response = _with_response_text(response, text)
+            if streams and command.prose_is_model_output and not had_readmission_section:
+                _announce(f"\n\n{risk_section}")
 
     state: dict[str, Any] = {
         "messages": [

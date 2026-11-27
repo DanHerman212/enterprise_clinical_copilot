@@ -185,7 +185,8 @@ def test_ehr_run_command_streams_sections_and_attaches_deterministic_risk_sectio
         ev.get("text", "") for ev in events if ev.get("stage") == "answer_delta"
     )
     assert "Presentation & diagnosis" in streamed
-    assert "^[PMID:" not in streamed
+    assert "**Readmission risk & trajectory.**" in streamed
+    assert "9.0%, which falls below the decision threshold of 11.0%." in streamed
     reviewing = [ev for ev in events if ev.get("stage") == "reviewing"]
     assert reviewing
     assert reviewing[-1]["cite_labels"]["1"] == "History of Present Illness"

@@ -37,9 +37,10 @@ PRO_CANDIDATE = "gemini-3.1-pro"
 CLAUDE = "claude-sonnet-5-5"
 MUSE = "muse-spark-1.3"
 
-#: The five ids the programme can serve. `gemini-3.1-flash-lite` was
-#: retired on 2026-11-13 and is deliberately absent from the registry, so it is not here.
+#: The five ids the programme evaluates as primary arms (`gemini-3.1-flash-lite` retired
+#: 2026-11-13) plus the pinned fast structured-JSON helper model (`HELPER_FLASH`).
 ALL_FIVE = (PIN, FLASH_CANDIDATE, PRO_CANDIDATE, CLAUDE, MUSE)
+HELPER_FLASH = "gemini-3.5-flash"
 
 
 def _turn(text="", **metadata):
@@ -47,12 +48,12 @@ def _turn(text="", **metadata):
 
 
 # --------------------------------------------------------------------------------------
-# 1. The registry: five ids, one table, no substring guessing.
+# 1. The registry: evaluated ids + fast helper model, one table, no substring guessing.
 # --------------------------------------------------------------------------------------
 
 
 def test_every_planned_model_has_a_profile():
-    assert set(gateway.PROFILES) == set(ALL_FIVE)
+    assert set(gateway.PROFILES) == set(ALL_FIVE) | {HELPER_FLASH}
 
 
 def test_a_canonical_id_and_its_wire_id_are_both_recorded():

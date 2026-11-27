@@ -51,6 +51,7 @@ from services.agent.postprocess.guardrail import guard_answer
 from services.agent.engine.mcp_client import MCP_TRANSPORT, MCP_URL, toolbox
 from services.agent.engine.model import finish_reason
 from services.agent.ingress.contracts import is_served
+from services.mcp import config as mcp_config
 
 logger = logging.getLogger(__name__)
 
@@ -251,7 +252,14 @@ def _signal_tags(signals: dict) -> list[str]:
 
 
 async def _propose_followups(signal_packet: str) -> str:
-    """Generate bespoke readmission-risk follow-up JSON on the pinned model."""
+    """Generate bespoke readmission-risk follow-up JSON on the fast helper or override arm."""
+    if chain.MODEL_ID == mcp_config.GEMINI_MODEL:
+        return await model_turn.propose_followups(
+            prompts.FOLLOWUP_SYNTHESIS_PROMPT,
+            signal_packet,
+            model=mcp_config.HELPER_MODEL,
+            call_profile=model_turn.CALL_PROFILE_MINIMAL,
+        )
     return await model_turn.propose_followups(
         prompts.FOLLOWUP_SYNTHESIS_PROMPT,
         signal_packet,

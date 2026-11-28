@@ -27,6 +27,7 @@ if str(REPO) not in sys.path:
 
 from evaluation.platform import dev_suite  # noqa: E402
 from evaluation.platform import selection_slice  # noqa: E402
+from evaluation.platform import sync_holdout_suite  # noqa: E402
 
 SLICE = selection_slice.SELECTION_SLICE_PATH
 AUDIT_PATH = REPO / "evaluation" / "audits" / "selection_slice.audit.json"
@@ -38,6 +39,11 @@ DEV_AUDIT_PATH = REPO / "evaluation" / "audits" / "dev_suite.audit.json"
 DEV_FACT_SHEET = REPO / "evaluation" / "dev_cohort_fact_sheet.md"
 DEV_MATRIX_DOC = REPO / "evaluation" / "dev_followup_matrix.md"
 
+#: The Holdout suite's own attestation and artefacts.
+HOLDOUT_AUDIT_PATH = REPO / "evaluation" / "audits" / "holdout_suite.audit.json"
+HOLDOUT_FACT_SHEET = REPO / "evaluation" / "holdout_cohort_fact_sheet.md"
+HOLDOUT_MATRIX_DOC = REPO / "evaluation" / "holdout_followup_matrix.md"
+
 #: A contribution magnitude as the raw estimate returns it. The projection withholds it
 #: from the model and from the reader, so an expectation that quotes one is asserting a
 #: number no answer may contain.
@@ -45,10 +51,15 @@ RAW_CONTRIBUTION = re.compile(r"[+-\u2212]?\s?0\.\d{4}\b")
 
 #: The suite name to its attestation and its dataset file. One table, so a guard reads the
 #: pair that belongs to the suite it was asked about.
-AUDIT_PATHS: dict[str, Path] = {"selection": AUDIT_PATH, "dev": DEV_AUDIT_PATH}
+AUDIT_PATHS: dict[str, Path] = {
+    "selection": AUDIT_PATH,
+    "dev": DEV_AUDIT_PATH,
+    "holdout": HOLDOUT_AUDIT_PATH,
+}
 AUDIT_SOURCES: dict[str, Path] = {
     "selection": SLICE,
     "dev": dev_suite.DEV_SUITE_PATH,
+    "holdout": sync_holdout_suite.HOLDOUT_SUITE_PATH,
 }
 
 #: The allocation the Architect approved: 5 / 4 / 3 / 4. Written here rather than derived
@@ -421,23 +432,26 @@ def audit_guard(suite: str = "selection") -> None:
                          f"to publish: {failed}")
 
 
-def audit_dev(args: argparse.Namespace) -> int:
-    """The Dev gate: the row contract, then the matrix, then the artefact checks.
-
-    Three passes and no model. The row contract is what the sync script would refuse
-    anyway; the matrix is whether the set is the one that was designed; the artefact
-    checks are whether each claim traces to the record it names and each chip to a slot
-    the product fills.
-    """
-    rows = dev_suite.read_rows()
+def _audit_matrix_suite(
+    *,
+    rows: list[dict[str, Any]],
+    validate_rows_fn,
+    row_error_type: type[Exception],
+    validate_matrix_fn,
+    deterministic_fn,
+    audit_path: Path,
+    source_path: Path,
+    write_audit: bool,
+) -> int:
+    """Shared deterministic gate and attestation writer for 5x5 matrix suites (Dev/Holdout)."""
     defects: dict[str, list[str]] = {}
     try:
-        dev_suite.validate_rows(rows)
-    except dev_suite.DevSuiteError as exc:
+        validate_rows_fn(rows)
+    except row_error_type as exc:
         defects.setdefault("__matrix__", []).append(str(exc))
-    for item, problems in dev_suite.validate_dev_matrix(rows).items():
+    for item, problems in validate_matrix_fn(rows).items():
         defects.setdefault(item, []).extend(problems)
-    for item, problems in dev_deterministic_defects(rows).items():
+    for item, problems in deterministic_fn(rows).items():
         defects.setdefault(item, []).extend(problems)
 
     print(f"deterministic: {len(defects)} item(s)/set check(s) with defects")
@@ -445,22 +459,52 @@ def audit_dev(args: argparse.Namespace) -> int:
         for problem in problems:
             print(f"  {item}: {problem}")
 
-    if args.write_audit:
+    if write_audit:
         if defects:
             print("refusing to write the attestation: the deterministic checks found "
                   f"{len(defects)} defect(s); fix them and re-run")
         else:
-            DEV_AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
-            DEV_AUDIT_PATH.write_text(json.dumps({
-                "dataset_sha256": sha256(dev_suite.DEV_SUITE_PATH),
+            audit_path.parent.mkdir(parents=True, exist_ok=True)
+            audit_path.write_text(json.dumps({
+                "dataset_sha256": sha256(source_path),
                 "generated_at": datetime.now(timezone.utc).isoformat(),
                 "defects": defects,
                 "items": {},
             }, indent=1), encoding="utf-8")
-            shown = (DEV_AUDIT_PATH.relative_to(REPO)
-                     if DEV_AUDIT_PATH.is_relative_to(REPO) else DEV_AUDIT_PATH)
+            shown = (audit_path.relative_to(REPO)
+                     if audit_path.is_relative_to(REPO) else audit_path)
             print(f"wrote {shown}")
     return 1 if defects else 0
+
+
+def audit_dev(args: argparse.Namespace) -> int:
+    """The Dev gate: row contract, matrix allocation, fact sheet & affordance checks."""
+    return _audit_matrix_suite(
+        rows=dev_suite.read_rows(),
+        validate_rows_fn=dev_suite.validate_rows,
+        row_error_type=dev_suite.DevSuiteError,
+        validate_matrix_fn=dev_suite.validate_dev_matrix,
+        deterministic_fn=lambda rows: dev_deterministic_defects(rows),
+        audit_path=DEV_AUDIT_PATH,
+        source_path=dev_suite.DEV_SUITE_PATH,
+        write_audit=bool(args.write_audit),
+    )
+
+
+def audit_holdout(args: argparse.Namespace) -> int:
+    """The Holdout gate: row contract, matrix allocation, fact sheet & affordance checks."""
+    return _audit_matrix_suite(
+        rows=sync_holdout_suite.read_rows(),
+        validate_rows_fn=sync_holdout_suite.validate_rows,
+        row_error_type=sync_holdout_suite.HoldoutSuiteError,
+        validate_matrix_fn=sync_holdout_suite.validate_holdout_matrix,
+        deterministic_fn=lambda rows: dev_deterministic_defects(
+            rows, fact_sheet=HOLDOUT_FACT_SHEET, matrix_doc=HOLDOUT_MATRIX_DOC
+        ),
+        audit_path=HOLDOUT_AUDIT_PATH,
+        source_path=sync_holdout_suite.HOLDOUT_SUITE_PATH,
+        write_audit=bool(args.write_audit),
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -475,6 +519,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.suite == "dev":
         return audit_dev(args)
+    if args.suite == "holdout":
+        return audit_holdout(args)
 
     rows = read_rows()
     selection_slice.validate_rows(rows)

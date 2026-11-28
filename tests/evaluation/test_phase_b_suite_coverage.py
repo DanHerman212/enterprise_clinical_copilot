@@ -52,18 +52,17 @@ def _chip(turn) -> str | None:
 
 def test_the_scenario_counts_and_ids_are_the_ones_the_directive_pins():
     assert len(DEV) == 40
-    assert len(HOLDOUT) == 15
+    assert len(HOLDOUT) == 30
     assert len({row["id"] for row in DEV}) == 40
-    # The Dev file is the matrix, so its ids name the depth and the surface rather than a
-    # trajectory, and every id agrees with the depth its turns actually have.
+    assert len({row["id"] for row in HOLDOUT}) == 30
+    # Both matrix files name depth and surface rather than trajectory, and every id agrees
+    # with the depth its turns actually have.
     for row in DEV:
         assert row["id"].startswith("dev_d"), row["id"]
         assert row["metadata"]["depth_tier"] == f"{len(row['turns'])}_turn", row["id"]
-    assert [row["id"] for row in HOLDOUT] == [
-        "holdout_t1_01", "holdout_t1_02", "holdout_t1_03", "holdout_t2_01",
-        "holdout_t2_02", "holdout_t3_01", "holdout_t3_02", "holdout_t3_03",
-        "holdout_t4_01", "holdout_t4_02", "holdout_t5_01", "holdout_t5_02",
-        "holdout_t6_01", "holdout_t6_02", "holdout_t7_01"]
+    for row in HOLDOUT:
+        assert row["id"].startswith("holdout_d"), row["id"]
+        assert row["metadata"]["depth_tier"] == f"{len(row['turns'])}_turn", row["id"]
 
 
 @pytest.mark.parametrize("rows", [DEV, HOLDOUT], ids=["dev", "holdout"])
@@ -74,12 +73,12 @@ def test_the_seven_trajectories_keep_their_stratification(rows):
         "t3_analytical_drilldown", "t4_cross_domain_synthesis",
         "t5_freetext_cold_start", "t6_adversarial_false_premise",
         "t7_adversarial_boundaries"}
-    assert counts["t4_cross_domain_synthesis"] == (11 if rows is DEV else 2)
+    assert counts["t4_cross_domain_synthesis"] == (11 if rows is DEV else 10)
 
 
 @pytest.mark.parametrize(
     ("rows", "expected_version"),
-    [(DEV, "v9"), (HOLDOUT, "v8")],
+    [(DEV, "v9"), (HOLDOUT, "v9")],
     ids=["dev", "holdout"],
 )
 def test_every_row_is_stamped_with_its_expected_rubric_version(rows, expected_version):
@@ -91,7 +90,7 @@ def test_the_turn_depth_distribution_is_what_the_phase_deepened_to():
         return dict(sorted(Counter(len(row["turns"]) for row in rows).items()))
 
     assert depths(DEV) == {1: 8, 2: 8, 3: 8, 4: 8, 5: 8}
-    assert depths(HOLDOUT) == {1: 3, 2: 6, 3: 6}
+    assert depths(HOLDOUT) == {1: 6, 2: 6, 3: 6, 4: 6, 5: 6}
 
 
 @pytest.mark.parametrize("rows", [DEV, HOLDOUT], ids=["dev", "holdout"])
@@ -112,11 +111,13 @@ def _driver_rows(rows) -> set[str]:
             if any(_intent(turn) == "risk_driver" for turn in row["turns"])}
 
 
-def test_seven_dev_and_one_holdout_scenario_declare_a_risk_driver_click():
+def test_seven_dev_and_five_holdout_scenarios_declare_a_risk_driver_click():
     assert _driver_rows(DEV) == {
         "dev_d2_risk_01", "dev_d2_risk_02", "dev_d3_risk_01", "dev_d4_risk_01",
         "dev_d4_risk_02", "dev_d5_risk_01", "dev_d5_risk_02"}
-    assert _driver_rows(HOLDOUT) == {"holdout_t3_03"}
+    assert _driver_rows(HOLDOUT) == {
+        "holdout_d2_risk_01", "holdout_d3_risk_01", "holdout_d4_risk_01",
+        "holdout_d5_risk_01", "holdout_d5_risk_02"}
 
 
 @pytest.mark.parametrize("scenario", ["dev_d2_risk_01", "dev_d2_risk_02"])
@@ -143,17 +144,13 @@ def test_a_driver_click_is_the_wire_the_console_sends(scenario):
 
 
 def test_the_holdout_driver_click_sits_in_a_thread_that_starts_with_ehr():
-    """Holdout coverage is the declaration itself, on a thread with an estimate to drill.
-
-    The shorthand turn it already carried ("where'd she go when she left?") is that
-    scenario's own purpose, so the declared click follows it rather than replacing it.
-    """
-    row = BY_ID["holdout_t3_03"]
+    """Holdout coverage is the declaration itself, on a thread with an estimate to drill."""
+    row = BY_ID["holdout_d5_risk_02"]
     assert _prompt(row["turns"][0]) == "/ehr"
     driver = row["turns"][2]
     assert _intent(driver) == "risk_driver"
     assert _chip(driver) is None
-    assert "lowest hemoglobin" in _prompt(driver)
+    assert "lowest hemoglobin" in _prompt(driver).lower()
 
 
 # ------------------------------------------------ (b) follow_up chip + a typed turn 3
@@ -168,7 +165,9 @@ def test_every_loop_back_scenario_carries_a_chip_turn_and_a_typed_turn():
     assert _loop_back_rows(DEV) == {
         "dev_d2_fup_01", "dev_d2_fup_02", "dev_d3_fup_01", "dev_d3_fup_02",
         "dev_d4_fup_01", "dev_d5_fup_01", "dev_d5_fup_02", "dev_d5_risk_01"}
-    assert _loop_back_rows(HOLDOUT) == {"holdout_t2_01", "holdout_t2_02"}
+    assert _loop_back_rows(HOLDOUT) == {
+        "holdout_d2_fup_01", "holdout_d3_fup_01", "holdout_d4_fup_01",
+        "holdout_d4_fup_02", "holdout_d5_fup_01"}
     for scenario in _loop_back_rows(DEV) | _loop_back_rows(HOLDOUT):
         row = BY_ID[scenario]
         chip_turns = [index for index, turn in enumerate(row["turns"])
@@ -201,8 +200,8 @@ def test_both_suites_ask_about_the_published_comparator_from_the_thread():
     """The 2026-11-04 defect: a follow-up with a comparator in the thread answered that
     the notes documented none, because the replay had dropped it. Nothing measured it."""
     assert _comparator_rows(DEV) == {"dev_d3_fup_01"}
-    assert _comparator_rows(HOLDOUT) == {"holdout_t2_01"}
-    for scenario in ("dev_d3_fup_01", "holdout_t2_01"):
+    assert _comparator_rows(HOLDOUT) == {"holdout_d3_fup_01"}
+    for scenario in ("dev_d3_fup_01", "holdout_d3_fup_01"):
         claims = " ".join(BY_ID[scenario]["expected_output"]["forbidden_claims"])
         assert ("no published evidence" in claims
                 or "no peer-reviewed research" in claims), scenario
@@ -214,19 +213,19 @@ def test_both_suites_ask_about_the_published_comparator_from_the_thread():
 
 
 def test_both_suites_carry_a_labs_thread_that_leaves_the_laboratory():
-    for scenario in ("dev_d3_adv_01", "holdout_t3_02"):
+    for scenario in ("dev_d3_adv_01", "holdout_d3_slash_01"):
         row = BY_ID[scenario]
         assert _prompt(row["turns"][0]) == "/labs"
         assert len(row["turns"]) == 3
         assert "labs" == row["command"]
     assert "leak" in _prompt(BY_ID["dev_d3_adv_01"]["turns"][2]).lower()
-    assert "chemotherapy" in _prompt(BY_ID["holdout_t3_02"]["turns"][2])
+    assert "surgical course" in _prompt(BY_ID["holdout_d3_slash_01"]["turns"][2])
 
 
 # --------------------------------------------------- (e) pronoun / ellipsis traps
 
 ELLIPSIS = ("dev_d3_fup_01", "dev_d4_risk_01", "dev_d5_risk_02",
-            "holdout_t2_02", "holdout_t3_02")
+            "holdout_d3_free_01", "holdout_d5_risk_02")
 
 
 @pytest.mark.parametrize("scenario", ELLIPSIS)
@@ -251,13 +250,13 @@ def test_the_timeframe_scenarios_record_both_ends_of_the_series():
     assert "6.1 g/dL" in facts["nadir"]
     assert "10.0 g/dL" in facts["discharge"]
     assert "10.8" in facts["discharge"], "the note's own prose value is named too"
-    other = BY_ID["holdout_t2_02"]["expected_output"]["facts"]
+    other = BY_ID["holdout_d4_fup_01"]["expected_output"]["facts"]
     assert other["hemoglobin_admission"] == 11.9
     assert other["hemoglobin_nadir"] == 7.2
     assert other["hemoglobin_discharge"] == 11.2
     # The conflation the holdout row exists to catch.
     assert any("nadir" in claim and "discharge" in claim
-               for claim in BY_ID["holdout_t2_02"]["expected_output"][
+               for claim in BY_ID["holdout_d4_fup_01"]["expected_output"][
                    "forbidden_claims"])
 
 
@@ -281,7 +280,8 @@ def test_a_scenario_asserts_a_complication_the_chart_does_not_contain():
 @pytest.mark.parametrize("rows,expected",
                          [(DEV, {"dev_d1_adv_01", "dev_d1_free_02", "dev_d2_adv_01",
                                   "dev_d3_free_01"}),
-                          (HOLDOUT, {"holdout_t7_01"})],
+                          (HOLDOUT, {"holdout_d1_free_02", "holdout_d1_adv_01",
+                                     "holdout_d2_adv_02"})],
                          ids=["dev", "holdout"])
 def test_both_suites_exercise_the_outpatient_boundary(rows, expected):
     outpatients = {row["id"] for row in rows
@@ -300,6 +300,6 @@ def test_both_suites_exercise_the_outpatient_boundary(rows, expected):
 
 def test_the_holdout_outpatient_keeps_its_hold_the_discharge_directive():
     """Step 3.4: the boundary test must not cost the adversarial coverage it already had."""
-    turns = BY_ID["holdout_t7_01"]["turns"]
+    turns = BY_ID["holdout_d2_adv_02"]["turns"]
     assert any("hold her discharge" in _prompt(turn) for turn in turns)
-    assert BY_ID["holdout_t7_01"]["expected_output"]["facts"]["discharge_medications"] == 0
+    assert BY_ID["holdout_d2_adv_02"]["expected_output"]["facts"]["discharge_medications"] == 0

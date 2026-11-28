@@ -252,20 +252,27 @@ def followup_slots(turn: Any) -> list[tuple[int, int]]:
                 r"\{\{turn_(\d+)\.follow_ups\[(\d+)\]\}\}", _turn_text(turn))]
 
 
-def validate_dev_matrix(rows: list[dict[str, Any]]) -> dict[str, list[str]]:
-    """Every way the set can claim a shape it does not have. Pure: no file, no model.
+def validate_matrix(
+    rows: list[dict[str, Any]],
+    *,
+    matrix: dict[tuple[str, str], int],
+    required_hadm_ids: frozenset[str],
+    outpatient_hadm_ids: frozenset[str],
+    cohort_label: str = "dev",
+) -> dict[str, list[str]]:
+    """Every way a 5x5 matrix suite can claim a shape it does not have. Pure: no file, no model.
 
     `validate_rows` asks whether a row is runnable. This asks whether the set is the one
     that was designed: each row declares its depth and its modality in metadata, and the
-    allocation is compared cell by cell. Returns defects keyed by scenario id, plus
-    `"__matrix__"` for the set-level ones, so a caller can print both without having to
-    merge two shapes.
-
-    Nothing here raises. A file that is a hundred rows out of shape is a report to read,
-    not an exception that hides the other ninety-nine findings.
+    allocation is compared cell by cell against `matrix`. Returns defects keyed by
+    scenario id, plus `"__matrix__"` for set-level ones.
     """
+    expected_items = sum(matrix.values())
+    expected_turns = sum(
+        count * DEPTH_TIERS[depth] for (depth, _axis), count in matrix.items()
+    )
     found: dict[str, list[str]] = {}
-    cells = {cell: 0 for cell in DEV_MATRIX}
+    cells = {cell: 0 for cell in matrix}
     turns_total = 0
     records: set[str] = set()
     commands_seen: set[str] = set()
@@ -368,30 +375,41 @@ def validate_dev_matrix(rows: list[dict[str, Any]]) -> dict[str, list[str]]:
             else:
                 perturbations[kind] += 1
 
-    matrix: list[str] = []
-    if len(rows) != EXPECTED_ITEMS:
-        matrix.append(f"{len(rows)} scenario(s), expected {EXPECTED_ITEMS}")
-    if turns_total != EXPECTED_TURNS:
-        matrix.append(f"{turns_total} turn(s), expected {EXPECTED_TURNS}")
-    for (depth, axis), wanted in DEV_MATRIX.items():
+    issues: list[str] = []
+    if len(rows) != expected_items:
+        issues.append(f"{len(rows)} scenario(s), expected {expected_items}")
+    if turns_total != expected_turns:
+        issues.append(f"{turns_total} turn(s), expected {expected_turns}")
+    for (depth, axis), wanted in matrix.items():
         if cells[(depth, axis)] != wanted:
-            matrix.append(f"{depth}/{axis}: {cells[(depth, axis)]} item(s), "
+            issues.append(f"{depth}/{axis}: {cells[(depth, axis)]} item(s), "
                           f"expected {wanted}")
-    missing_records = sorted(REQUIRED_HADM_IDS - records)
+    missing_records = sorted(required_hadm_ids - records)
     if missing_records:
-        matrix.append(f"dev records never exercised: {missing_records}")
-    missing_outpatients = sorted(OUTPATIENT_HADM_IDS - records)
+        issues.append(f"{cohort_label} records never exercised: {missing_records}")
+    missing_outpatients = sorted(outpatient_hadm_ids - records)
     if missing_outpatients:
-        matrix.append(f"outpatient records never exercised: {missing_outpatients}")
+        issues.append(f"outpatient records never exercised: {missing_outpatients}")
     for name, count in perturbations.items():
         if count < 1:
-            matrix.append(f"perturbation {name} is never exercised")
+            issues.append(f"perturbation {name} is never exercised")
     missing_commands = sorted(COMMAND_WIRES - commands_seen)
     if missing_commands:
-        matrix.append(f"commands never exercised: {missing_commands}")
-    if matrix:
-        found.setdefault("__matrix__", []).extend(matrix)
+        issues.append(f"commands never exercised: {missing_commands}")
+    if issues:
+        found.setdefault("__matrix__", []).extend(issues)
     return found
+
+
+def validate_dev_matrix(rows: list[dict[str, Any]]) -> dict[str, list[str]]:
+    """Every way the Dev set can claim a shape it does not have. Pure: no file, no model."""
+    return validate_matrix(
+        rows,
+        matrix=DEV_MATRIX,
+        required_hadm_ids=REQUIRED_HADM_IDS,
+        outpatient_hadm_ids=OUTPATIENT_HADM_IDS,
+        cohort_label="dev",
+    )
 
 
 def item_payload(row: dict[str, Any], manifest: dict[str, Any]) -> dict[str, Any]:

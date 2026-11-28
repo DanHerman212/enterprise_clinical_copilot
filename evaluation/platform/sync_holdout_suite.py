@@ -1,15 +1,14 @@
 """Upload the Tier 2 holdout suite to Langfuse as one dataset, idempotently.
 
-The twin of `sync_dev_suite.py`, for the 15 rows in
+The twin of `sync_dev_suite.py`, for the 30 rows in
 `evaluation/datasets/holdout_suite.jsonl`. Separate rather than generalised because the
 two suites are validated against OPPOSITE record sets: `dev_suite.validate_rows` refuses
 any row whose record is a holdout, and this module refuses any row whose record is not
-one. One shared validator would have to be told which side it was checking, and the
-whole point of the split is that neither file can drift into the other's cohort by
-accident.
+one.
 
-Zero LLM calls: it reads the file, resolves each record's pre-flight manifest from
-BigQuery through the same decoder the service uses, and writes items.
+Zero LLM calls: it reads the file, enforces the holdout matrix and audit gate, resolves
+each record's pre-flight manifest from BigQuery through the same decoder the service
+uses, and writes items.
 
 Default is a dry validation; `--commit` performs the writes and then reads the dataset
 back to count what landed.
@@ -32,19 +31,66 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from evaluation.platform.dev_suite import (  # noqa: E402
+    COMMAND_WIRES,
+    DEPTH_TIERS,
     DEV_HADM_IDS,
+    DRIVER_QUESTION,
     HOLDOUT_HADM_IDS,
+    MODALITY_AXES,
+    PERTURBATIONS,
     TRAJECTORIES,
+    _leading_command,
+    _turn_text,
+    followup_slots,
     item_payload,
+    validate_matrix,
 )
 from evaluation.platform.schemas import MAX_TURNS  # noqa: E402
 
-DATASET = "ecc-tier2-holdout-suite"
+DATASET = "ecc-tier2-holdout-suite_v2"
+#: Langfuse dataset item ids are unique per project across datasets, so prefixing `h2_`
+#: keeps historical `ecc-tier2-holdout-suite` items untouched while `input.scenario_id`
+#: and `metadata.scenario_id` retain the bare `holdout_*` identifier.
+ITEM_ID_PREFIX = "h2_"
 HOLDOUT_SUITE_PATH = REPO / "evaluation" / "datasets" / "holdout_suite.jsonl"
-DESCRIPTION = ("Tier 2 blind holdout suite: 15 scenarios over 4 unseen records, "
-               "7 interaction and adversarial trajectories")
-RUBRIC_VERSION = "v8"
-EXPECTED_ITEMS = 15
+DESCRIPTION = ("Tier 2 blind holdout suite: 30 scenarios, 10 unseen holdout records, "
+               "5x5 depth-by-modality matrix")
+RUBRIC_VERSION = "v9"
+
+HOLDOUT_MATRIX: dict[tuple[str, str], int] = {
+    ("1_turn", "slash_command"): 2,
+    ("1_turn", "risk_chip"): 0,
+    ("1_turn", "followup_chip"): 0,
+    ("1_turn", "free_form"): 2,
+    ("1_turn", "adversarial_perturbation"): 2,
+    ("2_turn", "slash_command"): 1,
+    ("2_turn", "risk_chip"): 1,
+    ("2_turn", "followup_chip"): 1,
+    ("2_turn", "free_form"): 1,
+    ("2_turn", "adversarial_perturbation"): 2,
+    ("3_turn", "slash_command"): 1,
+    ("3_turn", "risk_chip"): 1,
+    ("3_turn", "followup_chip"): 1,
+    ("3_turn", "free_form"): 1,
+    ("3_turn", "adversarial_perturbation"): 2,
+    ("4_turn", "slash_command"): 1,
+    ("4_turn", "risk_chip"): 1,
+    ("4_turn", "followup_chip"): 2,
+    ("4_turn", "free_form"): 1,
+    ("4_turn", "adversarial_perturbation"): 1,
+    ("5_turn", "slash_command"): 1,
+    ("5_turn", "risk_chip"): 2,
+    ("5_turn", "followup_chip"): 1,
+    ("5_turn", "free_form"): 1,
+    ("5_turn", "adversarial_perturbation"): 1,
+}
+
+EXPECTED_ITEMS = sum(HOLDOUT_MATRIX.values())
+EXPECTED_TURNS = sum(count * DEPTH_TIERS[depth]
+                     for (depth, _axis), count in HOLDOUT_MATRIX.items())
+
+REQUIRED_HADM_IDS = frozenset(HOLDOUT_HADM_IDS)
+OUTPATIENT_HADM_IDS = frozenset({"90000028"})
 
 
 class HoldoutSuiteError(ValueError):
@@ -67,18 +113,7 @@ def read_rows(path: Path | None = None) -> list[dict[str, Any]]:
 
 
 def validate_rows(rows: list[dict[str, Any]]) -> None:
-    """The invariants that make the suite a HOLDOUT, checked before it is uploaded.
-
-    The two cohort rules are the point of the file, so they are enforced here rather
-    than left to review:
-
-    * every record is one of the reserved holdout ids;
-    * no record is one of the dev ids — the suites must not share a patient, or the
-      comparison between them measures memorisation instead of generalisation.
-
-    The rest mirror `dev_suite.validate_rows`: unique ids, a known trajectory, turns
-    that fit the workflow type, and an `expected_output` that is never absent.
-    """
+    """The invariants that make the suite a HOLDOUT, checked before it is uploaded."""
     if len(rows) != EXPECTED_ITEMS:
         raise HoldoutSuiteError(
             f"{len(rows)} row(s), expected {EXPECTED_ITEMS}")
@@ -114,10 +149,6 @@ def validate_rows(rows: list[dict[str, Any]]) -> None:
             raise HoldoutSuiteError(f"{scenario}: expected_output is mandatory")
 
         workflow = row.get("workflow_type")
-        # Same rule as `dev_suite.validate_rows`: a two-turn thread may be a command with
-        # its follow-up or a short multi-turn item, and three and above are always
-        # `multi_turn`. This file used to cap at three turns and index a dict by turn
-        # count, so a five-turn row raised KeyError instead of being refused.
         wanted = {"single_probe"} if len(turns) == 1 else (
             {"command_plus_followup", "multi_turn"} if len(turns) == 2
             else {"multi_turn"})
@@ -127,7 +158,19 @@ def validate_rows(rows: list[dict[str, Any]]) -> None:
                 f"got {workflow!r}")
 
 
-def build_items(*, manifests: dict[int, dict]) -> list[dict[str, Any]]:
+def validate_holdout_matrix(rows: list[dict[str, Any]]) -> dict[str, list[str]]:
+    """Every way the Holdout set can claim a shape it does not have."""
+    return validate_matrix(
+        rows,
+        matrix=HOLDOUT_MATRIX,
+        required_hadm_ids=REQUIRED_HADM_IDS,
+        outpatient_hadm_ids=OUTPATIENT_HADM_IDS,
+        cohort_label="holdout",
+    )
+
+
+def build_items(*, manifests: dict[int, dict],
+                id_prefix: str = ITEM_ID_PREFIX) -> list[dict[str, Any]]:
     """Every row as a Langfuse item payload. Same shape as the dev suite's."""
     rows = read_rows()
     validate_rows(rows)
@@ -142,7 +185,7 @@ def build_items(*, manifests: dict[int, dict]) -> list[dict[str, Any]]:
             "trajectory_index": TRAJECTORIES[row["trajectory"]],
         })
         payloads.append({
-            "id": row["id"],
+            "id": f"{id_prefix}{row['id']}",
             "input": {
                 "scenario_id": row["id"],
                 "patient_id": str(row["hadm_id"]),
@@ -204,6 +247,11 @@ def main(argv: list[str] | None = None) -> int:
     if overlap:
         raise SystemExit(f"dev records in the holdout suite: {overlap}")
 
+    if args.commit:
+        from evaluation.platform.dataset_audit import audit_guard  # noqa: PLC0415
+
+        audit_guard("holdout")
+
     from evaluation.platform.fixtures import manifest_from_bigquery  # noqa: PLC0415
 
     manifests = manifest_from_bigquery([int(hadm) for hadm in records])
@@ -229,14 +277,8 @@ def main(argv: list[str] | None = None) -> int:
         description=DESCRIPTION,
         metadata={"rubric_version": RUBRIC_VERSION, "workflow": "tier2-holdout-suite",
                   "source": "evaluation/datasets/holdout_suite.jsonl"},
-        # No input/expected_output schema, for the same reason the dev sync omits one:
-        # this dataset's expected output carries ground-truth facts and a behavioural
-        # expectation that no envelope model describes.
     )
 
-    # Every existing item, not only the ones this run rewrites — the same rule as the dev
-    # sync: an id the new file no longer contains would otherwise survive as an orphan and
-    # be scored by a run that believes it is measuring this file.
     existing = existing_item_ids(client, args.dataset)
     for item_id in existing:
         client.api.dataset_items.delete(item_id)
